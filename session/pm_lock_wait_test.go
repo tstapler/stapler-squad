@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func pmLockWaitTotal() uint64 {
@@ -21,7 +22,7 @@ func pmLockWaitTotal() uint64 {
 
 func TestInstancePM_should_RecordTheWaitOnlyWhenPmMuIsContended(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "pm-wait"}
+	inst := &instance.Instance{Title: "pm-wait"}
 	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
 	before := pmLockWaitTotal()
 

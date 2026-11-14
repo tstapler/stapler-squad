@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript
@@ -22,7 +23,7 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 	require.NoError(t, err)
 	defer file.Close()
 
-	reader := NewPiEventReader(file)
+	reader := instance.NewPiEventReader(file)
 
 	var (
 		events   []any
@@ -37,7 +38,7 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 		events = append(events, event)
 
 		if !sawFirst {
-			sessionEvent, ok := event.(PiSessionEvent)
+			sessionEvent, ok := event.(instance.PiSessionEvent)
 			require.True(t, ok, "first event must be a session header, got %T", event)
 			assert.Equal(t, 3, sessionEvent.Version)
 			assert.Equal(t, "01a065a6-28ae-7973-8b45-c633ab1b138f", sessionEvent.ID)
@@ -61,17 +62,17 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 	)
 	for _, event := range events {
 		switch event.(type) {
-		case PiAgentStartEvent:
+		case instance.PiAgentStartEvent:
 			sawAgentStart = true
-		case PiToolExecutionStartEvent:
+		case instance.PiToolExecutionStartEvent:
 			sawToolExecStart = true
-		case PiToolExecutionEndEvent:
+		case instance.PiToolExecutionEndEvent:
 			sawToolExecEnd = true
-		case PiMessageUpdateEvent:
+		case instance.PiMessageUpdateEvent:
 			sawMessageUpdate = true
-		case PiAgentEndEvent:
+		case instance.PiAgentEndEvent:
 			sawAgentEnd = true
-		case PiAgentSettledEvent:
+		case instance.PiAgentSettledEvent:
 			sawAgentSettled = true
 		}
 	}
@@ -97,7 +98,7 @@ func TestPiAdapter_ShouldNotSplitLine_WhenLineContainsEmbeddedU2028Character(t *
 	secondLine := `{"type":"agent_settled"}`
 	input := firstLine + "\n" + secondLine + "\n"
 
-	reader := NewPiEventReader(strings.NewReader(input))
+	reader := instance.NewPiEventReader(strings.NewReader(input))
 
 	var events []any
 	for {
@@ -110,10 +111,10 @@ func TestPiAdapter_ShouldNotSplitLine_WhenLineContainsEmbeddedU2028Character(t *
 	}
 
 	require.Len(t, events, 2, "a line with an embedded U+2028 must not be split into extra events")
-	first, ok := events[0].(PiAgentStartEvent)
+	first, ok := events[0].(instance.PiAgentStartEvent)
 	require.True(t, ok, "expected first event to decode as PiAgentStartEvent, got %T", events[0])
 	assert.Equal(t, "agent_start", first.Type)
-	second, ok := events[1].(PiAgentSettledEvent)
+	second, ok := events[1].(instance.PiAgentSettledEvent)
 	require.True(t, ok, "expected second event to decode as PiAgentSettledEvent, got %T", events[1])
 	assert.Equal(t, "agent_settled", second.Type)
 }

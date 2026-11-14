@@ -37,6 +37,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -308,7 +309,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("SessionHealthChecker started", "interval", sessionHealthCheckInterval)
 	}
 
-	srv.shutdownHooks = append(srv.shutdownHooks, session.StopWorktreeEnricher)
+	srv.shutdownHooks = append(srv.shutdownHooks, instance.StopWorktreeEnricher)
 
 	// Start HistoryLinker: detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
@@ -1095,7 +1096,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// adapters can't import services directly (services already imports
 	// adapters), so server.go is the one place that can wire the two together.
 	adapters.SetPiExtensionHealthResolver(func(sessionID, program string) sessionv1.PiExtensionHealth {
-		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !session.IsPi(program) {
+		if !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) || !instance.IsPi(program) {
 			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
 		}
 		switch piHealthTracker.HealthFor(sessionID) {
@@ -1113,7 +1114,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// wiring just above: session.Instance.Destroy() calls this closure via
 	// session.SetPiExtensionHealthForgetter, and server.go is the one place
 	// that can wire the two packages together.
-	session.SetPiExtensionHealthForgetter(func(sessionID string) {
+	instance.SetPiExtensionHealthForgetter(func(sessionID string) {
 		piHealthTracker.Forget(sessionID)
 	})
 	// Wire the same ApprovalHandler as the PermissionRequestHandler every

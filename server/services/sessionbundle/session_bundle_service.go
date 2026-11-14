@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	kzip "github.com/klauspost/compress/zip"
@@ -116,7 +117,7 @@ func (s *SessionBundleService) SetExternalDiscovery(disc *session.ExternalSessio
 
 // findInstance mirrors DiagnosticService.findInstance's poller ->
 // external-discovery fallback chain.
-func (s *SessionBundleService) findInstance(id string) *session.Instance {
+func (s *SessionBundleService) findInstance(id string) *instance.Instance {
 	if s.poller != nil {
 		if inst := s.poller.FindInstance(id); inst != nil {
 			return inst
@@ -199,7 +200,7 @@ func (c *bundleCollector) addMarshaled(name string, v any) {
 // inst must not be nil. maxScrollbackLines is capped at 500 internally.
 func (s *SessionBundleService) assembleBundle(
 	ctx context.Context,
-	inst *session.Instance,
+	inst *instance.Instance,
 	maxScrollbackLines int,
 	clientSpans []byte,
 ) ([]byte, BundleManifest, error) {
@@ -740,7 +741,7 @@ func RunDiagnosticsRetention(dir string, maxAge time.Duration) error {
 
 // ExportBundleForTest calls assembleBundle and exposes it for package-level tests
 // that cannot call the private method directly. It is not part of the public API.
-func (s *SessionBundleService) ExportBundleForTest(ctx context.Context, inst *session.Instance, maxScrollbackLines int, clientSpans []byte) ([]byte, BundleManifest, error) {
+func (s *SessionBundleService) ExportBundleForTest(ctx context.Context, inst *instance.Instance, maxScrollbackLines int, clientSpans []byte) ([]byte, BundleManifest, error) {
 	return s.assembleBundle(ctx, inst, maxScrollbackLines, clientSpans)
 }
 

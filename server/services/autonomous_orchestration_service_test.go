@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // instantDonePool is a HeadlessPoolClient that returns DONE on the first call,
@@ -40,9 +41,9 @@ func (p *instantDonePool) CallBlocking(
 }
 
 // addPausedAutonomousInstance inserts a paused session with AutonomousMode=true into storage.
-func addPausedAutonomousInstance(t *testing.T, storage *session.Storage, title string) *session.Instance {
+func addPausedAutonomousInstance(t *testing.T, storage *session.Storage, title string) *instance.Instance {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid-1234",
 		Path:           "/tmp/test",
@@ -96,7 +97,7 @@ func TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister(t *
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: "reg-test",
 		UUID:  "reg-uuid-5678",
 	}
@@ -125,7 +126,7 @@ func TestAutonomousOrchestrationService_DeleteSession_StopsRegisteredDriver(t *t
 	const title = "delete-driver-test"
 	addPausedAutonomousInstance(t, storage, title)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title,
 		UUID:  title + "-uuid-1234",
 	}
@@ -153,7 +154,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 
 	const title = "complete-driver-test"
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title,
 		UUID:  title + "-uuid-9999",
 	}
@@ -184,7 +185,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "notif-race-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -197,7 +198,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	require.NoError(t, storage.AddInstance(inst))
 	// Bypass the real ReviewQueuePoller (not wired in this unit test) and resolve the
 	// instance directly, matching what FindLiveInstance would return once wired.
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	// Item is already at 'review' — the triage-role transition below expects 'idea', so its
 	// precondition will fail and TransitionBacklogItemStatus must return an error.
@@ -210,7 +211,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleTriage,
+		SessionRole: instance.SessionRoleTriage,
 	})
 	require.NoError(t, err)
 
@@ -257,7 +258,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -268,7 +269,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck test item",
@@ -279,7 +280,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -306,7 +307,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-done-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -317,7 +318,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous done test item",
@@ -328,7 +329,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -378,7 +379,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 
 	const title = "premature-review-trigger-test"
 	inst := addPausedAutonomousInstance(t, storage, title)
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Mid-SDD-workflow work session, never called request_review",
@@ -389,7 +390,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -421,13 +422,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "not-linked-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	buf := svctest.CaptureLogs(t)
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
@@ -451,13 +452,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "dangling-item-session-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	// Create a real backlog item + item session (FK-valid), then delete the backlog item —
 	// simulating an operator deleting an item while its autonomous session is still running.
@@ -471,7 +472,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleTriage,
+		SessionRole: instance.SessionRoleTriage,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.DeleteBacklogItem(ctx, item.ID))
@@ -503,13 +504,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "unrecognized-role-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Unrecognized role test item",
@@ -569,7 +570,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-resolves-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -580,7 +581,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck resolves test item",
@@ -591,7 +592,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -628,7 +629,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-review-resolves-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -639,7 +640,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck review resolves test item",
@@ -650,7 +651,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -686,7 +687,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "autonomous-stuck-still-stuck-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -697,7 +698,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous still-stuck test item",
@@ -708,7 +709,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -738,7 +739,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "review-stuck-already-moved-on-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -749,7 +750,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	// Item has already been reopened to in_progress by the time this stuck
 	// review exit is processed (simulates bouncing's autoReopenWithBackoffGate
@@ -763,7 +764,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -799,7 +800,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "review-stuck-still-stuck-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -810,7 +811,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Review stuck, still stuck test item",
@@ -821,7 +822,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 	require.Nil(t, is.EndedAt, "precondition: the review ItemSession is still active (autonomous driver never ended it)")
@@ -863,13 +864,13 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "triage-stuck-metadata-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Triage stuck metadata test item",
@@ -880,7 +881,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleTriage,
+		SessionRole: instance.SessionRoleTriage,
 	})
 	require.NoError(t, err)
 
@@ -923,7 +924,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "hidden-generic-notif-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -935,7 +936,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	installOnGate(eventBus, deliverygate.Entry{UUID: inst.UUID, Title: title, Hidden: true, Kind: deliverygate.KindOther})
 
@@ -973,7 +974,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 	t.Cleanup(func() { svc.Shutdown() })
 
 	const title = "generic-notif-metadata-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
@@ -985,7 +986,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 		UpdatedAt:      time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Generic notif metadata test item",
@@ -1153,13 +1154,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	svc.SetAutonomousStuckRespawner(&fakeFailingAutonomousStuckRespawner{err: respawnErr})
 
 	const title = "autonomous-respawn-failure-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous respawn failure test item",
@@ -1169,7 +1170,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1215,12 +1216,12 @@ func TestOnAutonomousDriverComplete_should_WriteExactlyOneStatusOnlyForTriageDon
 		wantStatus domain.BacklogStatus
 		wantWrites int
 	}{
-		{"triage done", session.SessionRoleTriage, domain.BacklogStatusIdea, doneOutcome, domain.BacklogStatusReady, 1},
-		{"triage stuck", session.SessionRoleTriage, domain.BacklogStatusIdea, stallOutcome, domain.BacklogStatusIdea, 0},
-		{"work done", session.SessionRoleWork, domain.BacklogStatusInProgress, doneOutcome, domain.BacklogStatusInProgress, 0},
-		{"work stall", session.SessionRoleWork, domain.BacklogStatusInProgress, stallOutcome, domain.BacklogStatusInProgress, 0},
-		{"review done", session.SessionRoleReview, domain.BacklogStatusReview, doneOutcome, domain.BacklogStatusReview, 0},
-		{"review stall", session.SessionRoleReview, domain.BacklogStatusReview, stallOutcome, domain.BacklogStatusReview, 0},
+		{"triage done", instance.SessionRoleTriage, domain.BacklogStatusIdea, doneOutcome, domain.BacklogStatusReady, 1},
+		{"triage stuck", instance.SessionRoleTriage, domain.BacklogStatusIdea, stallOutcome, domain.BacklogStatusIdea, 0},
+		{"work done", instance.SessionRoleWork, domain.BacklogStatusInProgress, doneOutcome, domain.BacklogStatusInProgress, 0},
+		{"work stall", instance.SessionRoleWork, domain.BacklogStatusInProgress, stallOutcome, domain.BacklogStatusInProgress, 0},
+		{"review done", instance.SessionRoleReview, domain.BacklogStatusReview, doneOutcome, domain.BacklogStatusReview, 0},
+		{"review stall", instance.SessionRoleReview, domain.BacklogStatusReview, stallOutcome, domain.BacklogStatusReview, 0},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

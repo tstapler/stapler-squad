@@ -10,8 +10,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -137,6 +137,6 @@ func observeScheduleWakeup(ctx context.Context, roles scheduleWakeupRoles, sessi
 
 // noteOperatorOpen is called when a web terminal stream attaches to an agent
 // session's pane.
-func NoteOperatorOpen(inst *session.Instance) {
+func NoteOperatorOpen(inst *instance.Instance) {
 	defaultReopenTracker.attached(inst.GetStableID(), inst.GetTitle())
 }

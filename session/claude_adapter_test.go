@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestReadCanonicalTurnsFromFile_TolersTrailingPartialLine_When_FileCaughtMidWrite
@@ -30,9 +31,9 @@ func TestReadCanonicalTurnsFromFile_TolersTrailingPartialLine_When_FileCaughtMid
 	turns, err := ReadCanonicalTurnsFromFile(path)
 	require.NoError(t, err)
 	require.Len(t, turns, 3)
-	assert.Equal(t, RoleUser, turns[0].Role)
-	assert.Equal(t, RoleAssistant, turns[1].Role)
-	assert.Equal(t, RoleUser, turns[2].Role)
+	assert.Equal(t, instance.RoleUser, turns[0].Role)
+	assert.Equal(t, instance.RoleAssistant, turns[1].Role)
+	assert.Equal(t, instance.RoleUser, turns[2].Role)
 }
 
 func TestReadCanonicalTurnsFromFile_ReturnsError_When_FileDoesNotExist(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // The AfterExport methods live here, not in each adapter file, so the shared history.jsonl
@@ -17,7 +18,7 @@ import (
 // PostExporter is an optional HistoryAdapter hook run after a successful Export so the
 // target CLI's own post-switch bookkeeping lives with its adapter, not in PortSessionHistory.
 type PostExporter interface {
-	AfterExport(ctx context.Context, inst *Instance) error
+	AfterExport(ctx context.Context, inst *instance.Instance) error
 }
 
 // appendHistoryJSONL appends one JSON line to a CLI's history.jsonl under the user's home.
@@ -52,7 +53,7 @@ func appendHistoryJSONL(path, cli string, entry map[string]interface{}) error {
 }
 
 // AfterExport appends the Antigravity history.jsonl entry.
-func (a *AgyAdapter) AfterExport(_ context.Context, inst *Instance) error {
+func (a *AgyAdapter) AfterExport(_ context.Context, inst *instance.Instance) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -60,19 +61,19 @@ func (a *AgyAdapter) AfterExport(_ context.Context, inst *Instance) error {
 	return appendHistoryJSONL(filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"), "agy", map[string]interface{}{
 		"display":        fmt.Sprintf("Ported from Claude: %s", inst.Title),
 		"timestamp":      time.Now().UnixMilli(),
-		"workspace":      inst.GetWorkingDirectory(),
+		"workspace":      inst.ActiveDir(),
 		"conversationId": inst.GetClaudeConversationUUID(),
 	})
 }
 
 // AfterExport appends the Claude history.jsonl entry and records the ported session data.
-func (a *ClaudeAdapter) AfterExport(_ context.Context, inst *Instance) error {
+func (a *ClaudeAdapter) AfterExport(_ context.Context, inst *instance.Instance) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 	uuidStr := inst.GetClaudeConversationUUID()
-	workspace := inst.GetWorkingDirectory()
+	workspace := inst.ActiveDir()
 	if err := appendHistoryJSONL(filepath.Join(home, ".claude", "history.jsonl"), "claude", map[string]interface{}{
 		"display":        fmt.Sprintf("Ported from Antigravity: %s", inst.Title),
 		"pastedContents": map[string]interface{}{},
@@ -87,7 +88,7 @@ func (a *ClaudeAdapter) AfterExport(_ context.Context, inst *Instance) error {
 }
 
 // AfterExport records the ported session data (opencode has no history.jsonl).
-func (a *OpencodeAdapter) AfterExport(_ context.Context, inst *Instance) error {
-	inst.RecordPortedClaudeSession(inst.GetClaudeConversationUUID(), inst.GetWorkingDirectory())
+func (a *OpencodeAdapter) AfterExport(_ context.Context, inst *instance.Instance) error {
+	inst.RecordPortedClaudeSession(inst.GetClaudeConversationUUID(), inst.ActiveDir())
 	return nil
 }

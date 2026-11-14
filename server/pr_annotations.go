@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
@@ -106,7 +106,7 @@ func resolveSessionRepo(snap *domain.InstanceSnapshot, enterpriseHosts []string)
 		}
 	}
 	if !repoRef.IsValid() && snap.GitHub.GitHubPRURL != "" {
-		if parsed, err := session.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
+		if parsed, err := instance.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
 			repoRef, _ = githubpkg.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
 			if prNumber == 0 {
 				prNumber = parsed.PRNumber
@@ -130,7 +130,7 @@ func confirmLegacyHost(snap *domain.InstanceSnapshot, stored githubpkg.RepoRef, 
 		return remote, false
 	}
 	if snap.GitHub.GitHubPRURL != "" {
-		if parsed, err := session.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
+		if parsed, err := instance.ParseGitHubURLWithHosts(snap.GitHub.GitHubPRURL, enterpriseHosts); err == nil {
 			withHost, _ := githubpkg.NewRepoRefWithHost(stored.Owner(), stored.Repo(), parsed.Host)
 			return withHost, false
 		}

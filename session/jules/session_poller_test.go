@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- fakes ---
@@ -242,7 +243,7 @@ func (f *fakeJulesPollerStorage) noteCount() int {
 func testEntry(itemID, sessionUUID string) backlogdto.ItemSessionBacklogEntry {
 	return backlogdto.ItemSessionBacklogEntry{
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 		ItemID:      itemID,
 		ItemTitle:   "test item " + itemID,
 		ItemStatus:  string(domain.BacklogStatusInProgress),
@@ -467,7 +468,7 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
 
@@ -846,7 +847,7 @@ func TestJulesSessionPoller_tick_should_FailAbandonedReservation_When_PendingOld
 	require.NoError(t, err)
 	is, err := storage.GetEntClient().ItemSession.Create().
 		SetSessionUUID(pendingUUID).
-		SetSessionRole(session.SessionRoleJulesWork).
+		SetSessionRole(instance.SessionRoleJulesWork).
 		SetBacklogItemID(parsedItemID).
 		SetCreatedAt(time.Now().Add(-15 * time.Minute)).
 		Save(ctx)

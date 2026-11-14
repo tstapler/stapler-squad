@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -47,7 +48,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Create test instance with worktree
 	now := time.Now()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:       "test-uncommitted-changes",
 		Path:        repoPath,
 		Branch:      branchName,
@@ -60,7 +61,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Create review queue infrastructure
 	queue := queuepkg.NewReviewQueue()
-	statusManager := NewInstanceStatusManager()
+	statusManager := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
 	poller.AddInstance(inst)
 
@@ -221,7 +222,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 	t.Parallel()
 	// Create test instance WITHOUT worktree (directory session)
 	now := time.Now()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:       "test-no-worktree",
 		Path:        "/tmp/test-path",
 		Branch:      "",
@@ -234,7 +235,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 
 	// Create review queue infrastructure
 	queue := queuepkg.NewReviewQueue()
-	statusManager := NewInstanceStatusManager()
+	statusManager := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
 	poller.AddInstance(inst)
 
@@ -285,7 +286,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 
 	// Create instance
 	now := time.Now()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:       "integration-test",
 		Path:        repoPath,
 		Branch:      branchName,
@@ -298,7 +299,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 
 	// Create review queue with poller
 	queue := queuepkg.NewReviewQueue()
-	statusManager := NewInstanceStatusManager()
+	statusManager := instance.NewInstanceStatusManager()
 	pollerCfg := DefaultReviewQueuePollerConfig()
 	pollerCfg.PollInterval = 100 * time.Millisecond
 	pollerCfg.SlowPollInterval = 100 * time.Millisecond

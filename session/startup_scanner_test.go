@@ -7,19 +7,20 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 )
 
 // fakeStatusProvider is a test double for StatusProvider that returns predetermined statuses.
 type fakeStatusProvider struct {
-	statuses map[string]InstanceStatusInfo
+	statuses map[string]instance.InstanceStatusInfo
 }
 
-func (f *fakeStatusProvider) GetStatus(inst *Instance) InstanceStatusInfo {
+func (f *fakeStatusProvider) GetStatus(inst *instance.Instance) instance.InstanceStatusInfo {
 	if s, ok := f.statuses[inst.Title]; ok {
 		return s
 	}
-	return InstanceStatusInfo{}
+	return instance.InstanceStatusInfo{}
 }
 
 func (f *fakeStatusProvider) GetController(instanceTitle string) (*claudectl.ClaudeController, bool) {
@@ -31,7 +32,7 @@ type fakeContentProvider struct {
 	content map[string]string
 }
 
-func (f *fakeContentProvider) GetContent(inst *Instance, _ InstanceStatusInfo, _ map[string]time.Time) string {
+func (f *fakeContentProvider) GetContent(inst *instance.Instance, _ instance.InstanceStatusInfo, _ map[string]time.Time) string {
 	return f.content[inst.Title]
 }
 
@@ -43,13 +44,13 @@ func newFakeContentProvider(content map[string]string) *fakeContentProvider {
 	return &fakeContentProvider{content: content}
 }
 
-func newFakeStatusProvider(statuses map[string]InstanceStatusInfo) *fakeStatusProvider {
+func newFakeStatusProvider(statuses map[string]instance.InstanceStatusInfo) *fakeStatusProvider {
 	return &fakeStatusProvider{statuses: statuses}
 }
 
 // makeStartedInstance creates a minimal started Instance for StartupScanner tests.
-func makeStartedInstance(title string) *Instance {
-	inst := &Instance{
+func makeStartedInstance(title string) *instance.Instance {
+	inst := &instance.Instance{
 		Title:  title,
 		UUID:   "uuid-" + title,
 		Status: domain.Active,
@@ -67,7 +68,7 @@ func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
 	inst := makeStartedInstance("session-with-approval")
 	approvalContent := "Do you want to allow reading /etc/hosts?\nYes, allow once\nNo"
 
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 		inst.Title: {IsControllerActive: false},
 	})
 	contentProvider := newFakeContentProvider(map[string]string{
@@ -76,7 +77,7 @@ func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{inst}, queue)
+	added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 	if added == 0 {
 		t.Fatal("expected session with approval prompt to be added to review queue")
@@ -101,7 +102,7 @@ func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 	inst.LastMeaningfulOutput = now // prevents staleness threshold (2min)
 	inst.SyncAtomicTimestamps()     // keep atomic shadow in sync — Determine() reads it lock-free
 
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 		inst.Title: {IsControllerActive: false},
 	})
 	contentProvider := newFakeContentProvider(map[string]string{
@@ -110,7 +111,7 @@ func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{inst}, queue)
+	added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 	if added != 0 {
 		t.Errorf("expected 0 sessions added for recently-active session, got %d (false positive)", added)
@@ -124,21 +125,21 @@ func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 // are not evaluated during startup scan.
 func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "paused-session",
 		Status: domain.Paused,
 	}
 	inst.MarkStarted()
 
 	approvalContent := "Yes, allow once"
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{})
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{})
 	contentProvider := newFakeContentProvider(map[string]string{
 		inst.Title: approvalContent,
 	})
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{inst}, queue)
+	added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 	if added != 0 {
 		t.Errorf("paused session must not be scanned, got %d additions", added)
@@ -151,7 +152,7 @@ func TestStartupScanner_Scan_ControllerActiveWithApproval(t *testing.T) {
 	t.Parallel()
 	inst := makeStartedInstance("controller-approval-session")
 
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 		inst.Title: {
 			IsControllerActive: true,
 			ClaudeStatus:       detection.StatusNeedsApproval,
@@ -163,7 +164,7 @@ func TestStartupScanner_Scan_ControllerActiveWithApproval(t *testing.T) {
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{inst}, queue)
+	added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 	if added == 0 {
 		t.Fatal("session with active controller reporting NeedsApproval must be added to queue")
@@ -191,7 +192,7 @@ func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
 	activeSession.SyncAtomicTimestamps() // keep atomic shadow in sync — Determine() reads it lock-free
 	inputRequired := makeStartedInstance("input-required")
 
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 		needsApproval.Title: {IsControllerActive: false},
 		activeSession.Title: {IsControllerActive: false},
 		inputRequired.Title: {IsControllerActive: false},
@@ -204,7 +205,7 @@ func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{needsApproval, activeSession, inputRequired}, queue)
+	added := scanner.Scan([]*instance.Instance{needsApproval, activeSession, inputRequired}, queue)
 
 	if added < 1 {
 		t.Errorf("expected at least 1 session added, got %d", added)
@@ -230,7 +231,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 		inst := makeStartedInstance("hidden-task-complete")
 		inst.Hidden = true
 
-		statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+		statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 			inst.Title: {
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusSuccess,
@@ -242,7 +243,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 
 		queue := queuepkg.NewReviewQueue()
 		scanner := NewStartupScanner(statusProvider, contentProvider)
-		added := scanner.Scan([]*Instance{inst}, queue)
+		added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 		if added != 0 {
 			t.Errorf("expected 0 sessions added for Hidden instance with TaskComplete-shaped status, got %d", added)
@@ -257,7 +258,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 		inst := makeStartedInstance("hidden-error-state")
 		inst.Hidden = true
 
-		statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+		statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 			inst.Title: {
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusError,
@@ -269,7 +270,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 
 		queue := queuepkg.NewReviewQueue()
 		scanner := NewStartupScanner(statusProvider, contentProvider)
-		added := scanner.Scan([]*Instance{inst}, queue)
+		added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 		if added != 1 {
 			t.Errorf("expected 1 session added for Hidden instance with ErrorState-shaped status (safety net), got %d", added)
@@ -300,7 +301,7 @@ func TestStartupScanner_Scan_SkipsArchivedInstance(t *testing.T) {
 	inst.LastMeaningfulOutput = archivedAt
 	inst.SyncAtomicTimestamps()
 
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 		inst.Title: {IsControllerActive: false},
 	})
 	contentProvider := newFakeContentProvider(map[string]string{
@@ -309,7 +310,7 @@ func TestStartupScanner_Scan_SkipsArchivedInstance(t *testing.T) {
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{inst}, queue)
+	added := scanner.Scan([]*instance.Instance{inst}, queue)
 
 	if added != 0 {
 		t.Errorf("expected 0 sessions added for archived instance, got %d", added)
@@ -322,12 +323,12 @@ func TestStartupScanner_Scan_SkipsArchivedInstance(t *testing.T) {
 // TestStartupScanner_Scan_EmptyInstanceList verifies graceful handling of an empty list.
 func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
 	t.Parallel()
-	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{})
+	statusProvider := newFakeStatusProvider(map[string]instance.InstanceStatusInfo{})
 	contentProvider := newFakeContentProvider(map[string]string{})
 
 	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
-	added := scanner.Scan([]*Instance{}, queue)
+	added := scanner.Scan([]*instance.Instance{}, queue)
 
 	if added != 0 {
 		t.Errorf("expected 0 added for empty list, got %d", added)
@@ -336,7 +337,7 @@ func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
 
 func TestStartupScanner_Should_ReadOptionsFromSamePerCycleSourceAsPoller_When_FirstCycleRuns(t *testing.T) {
 	t.Parallel()
-	insts := []*Instance{makeStartedInstance("scan-opts-a"), makeStartedInstance("scan-opts-b")}
+	insts := []*instance.Instance{makeStartedInstance("scan-opts-a"), makeStartedInstance("scan-opts-b")}
 	rec := &optsRecordingDeterminer{}
 	scanner := NewStartupScanner(newFakeStatusProvider(nil), newFakeContentProvider(nil))
 	scanner.determiner = rec

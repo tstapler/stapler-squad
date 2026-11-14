@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // defaultTriggerSyncTimeout bounds a single manual TriggerSync RPC call. The
@@ -111,7 +112,7 @@ func (s *BacklogService) AttachSessionToItem(
 	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:         item.ID,
 		SessionUUID:    req.Msg.SessionUuid,
-		SessionRole:    session.SessionRoleWork,
+		SessionRole:    instance.SessionRoleWork,
 		BranchName:     attachedBranchName,
 		AcSnapshot:     acSnapshot,
 		ClaimantHostID: s.claimantHostID(),
@@ -148,7 +149,7 @@ func (s *BacklogService) AttachSessionToItem(
 				// Persist synchronously so the review gate's worktree lookup (by session
 				// UUID) doesn't race the next periodic SaveInstances sweep — same fix as
 				// SpawnSessionFromItem.
-				if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
+				if saveErr := s.storage.SaveInstances([]*instance.Instance{inst}); saveErr != nil {
 					log.WarningLog().Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 				}
 				break
@@ -161,7 +162,7 @@ func (s *BacklogService) AttachSessionToItem(
 	if s.engine.CanTransition(domain.BacklogStatus(item.Status), domain.BacklogStatusInProgress, backlogdto.BuildStageConfigSnapshotFallback(item)) {
 		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerAttachSessionToItem, ItemID: item.ID, To: domain.BacklogStatusInProgress,
-			TriggeredBy: session.TriggeredBySystem, Unconditional: true,
+			TriggeredBy: instance.TriggeredBySystem, Unconditional: true,
 		}); transErr != nil {
 			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real

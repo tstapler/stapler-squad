@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 )
 
@@ -27,7 +28,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 	require.NoError(t, git.InitializeProjectDirectory(repoDir))
 
 	title := fmt.Sprintf("guard-structural-ok-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",
@@ -61,7 +62,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 	require.NoError(t, git.InitializeProjectDirectory(repoDir))
 
 	title := fmt.Sprintf("guard-collision-ok-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",

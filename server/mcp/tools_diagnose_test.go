@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func setupDiagnoseSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID string) {
@@ -31,7 +32,7 @@ func setupDiagnoseSession(t *testing.T, storage *session.Storage) (itemID, sessi
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessUUID,
-		SessionRole: session.SessionRoleDiagnose,
+		SessionRole: instance.SessionRoleDiagnose,
 	})
 	require.NoError(t, err)
 
@@ -239,8 +240,8 @@ func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	pm := &recordingPM{}
-	target := session.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
-	live := &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"target-1": target}}
+	target := instance.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
+	live := &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{"target-1": target}}
 	dh := &diagnoseHandlers{storage: storage, live: live}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

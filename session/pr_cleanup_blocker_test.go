@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -49,10 +50,10 @@ func (f *fakeGateSource) FindInstanceDataByID(id string) (*domain.InstanceData, 
 }
 
 func workSession(uuid, item string) backlogdto.ItemSessionSummary {
-	return backlogdto.ItemSessionSummary{ID: uuid, SessionUUID: uuid, BacklogItemID: item, Role: SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch}
+	return backlogdto.ItemSessionSummary{ID: uuid, SessionUUID: uuid, BacklogItemID: item, Role: instance.SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch}
 }
 
-func gateWith(src *fakeGateSource, probe LiveWorkProbe, live bool) *PRCleanupGate {
+func gateWith(src *fakeGateSource, probe instance.LiveWorkProbe, live bool) *PRCleanupGate {
 	return NewPRCleanupGate(src, probe, func() bool { return live })
 }
 
@@ -97,7 +98,7 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 func TestPRCleanupGate_Blocked_ShouldIgnoreNonWorkSessions_AndSupersededRoundStillHolds(t *testing.T) {
 	t.Parallel()
 	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {fixturetest.PrRow(t, 30, domain.PRStateOpen, "")}}}
-	review := backlogdto.ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: SessionRoleReview}
+	review := backlogdto.ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: instance.SessionRoleReview}
 	_, blocked := gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{review}, GateOptions{})
 	assert.False(t, blocked, "only work-role links count")
 

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SanitizeForAgentContext strips HTML tags from s and truncates to maxLen,
@@ -78,7 +79,7 @@ func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSumma
 	var out []bool
 	for i := len(priorSessions) - 1; i >= 0; i-- {
 		s := priorSessions[i]
-		if s.Role == session.SessionRoleReview {
+		if s.Role == instance.SessionRoleReview {
 			out = append(out, s.ReviewVerdict != nil)
 		}
 	}

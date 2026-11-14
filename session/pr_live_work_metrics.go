@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 type liveWorkMetricSet struct {
-	results *counterByLabel
+	results *instance.CounterByLabel
 	otel    metric.Int64Counter
 
 	probeWired atomic.Int64
@@ -37,7 +38,7 @@ type liveWorkMetricSet struct {
 var liveWorkMetrics = newLiveWorkMetricSet()
 
 func newLiveWorkMetricSet() *liveWorkMetricSet {
-	m := &liveWorkMetricSet{results: newCounterByLabel()}
+	m := &liveWorkMetricSet{results: instance.NewCounterByLabel()}
 	meter := telemetry.GetMeter()
 	m.otel, _ = meter.Int64Counter(MetricPRLiveWorkHoldTotal)
 	m.wiredGauge, _ = meter.Int64Gauge(MetricLiveWorkProbeWired)

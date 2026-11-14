@@ -11,5 +11,5 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	gotool.Setup(t)
-	analysistest.Run(t, analysistest.TestData(), noarchivedrevival.Analyzer, "session", "other", "server/wakes", "server/services")
+	analysistest.Run(t, analysistest.TestData(), noarchivedrevival.Analyzer, "session", "session/instance", "other", "server/wakes", "server/services")
 }

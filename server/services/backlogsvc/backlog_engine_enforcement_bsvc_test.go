@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const enfOverride = "ship per owner"
@@ -176,7 +177,7 @@ func TestEnforcement_GraphBypassStaysWithinItsLimits(t *testing.T) {
 	})
 	t.Run("an agent never gets the graph bypass", func(t *testing.T) {
 		item := enfItemAt(t, storage, domain.BacklogStatusDone)
-		ctx := services.WithTransitionActor(t.Context(), session.TriggeredByAgent)
+		ctx := services.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
 		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), session.ErrTransitionNotAllowed)
 		assert.Equal(t, string(domain.BacklogStatusDone), storedStatus(t, storage, item.ID))
 	})

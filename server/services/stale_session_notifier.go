@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // staleSessionNotifierCheckInterval is how often the sweeper re-evaluates every live
@@ -140,7 +141,7 @@ func (n *StaleSessionNotifier) checkAll() {
 // notify publishes an operator-facing WARNING/MEDIUM notification event for inst going
 // stale. Called outside n.mu -- eventBus.Publish does its own synchronization and must
 // never run while n.mu is held.
-func (n *StaleSessionNotifier) notify(inst *session.Instance, idle time.Duration) {
+func (n *StaleSessionNotifier) notify(inst *instance.Instance, idle time.Duration) {
 	if n.eventBus == nil {
 		return
 	}

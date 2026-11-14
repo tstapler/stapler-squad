@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestCreateCheckpoint_LegitimateTitle_WritesUnderConfigDir is the control
@@ -22,12 +23,12 @@ func TestCreateCheckpoint_LegitimateTitle_WritesUnderConfigDir(t *testing.T) {
 
 	workspace := t.TempDir()
 	const convUUID = "conv-checkpoint-legit-test"
-	projectDir := filepath.Join(fakeHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	projectDir := filepath.Join(fakeHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, convUUID+".jsonl"), []byte{}, 0o644))
 
 	const legitTitle = "checkpoint-legit-title"
-	inst := &Instance{Title: legitTitle, Program: "claude", Path: workspace}
+	inst := &instance.Instance{Title: legitTitle, Program: "claude", Path: workspace}
 	inst.MarkStarted()
 	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: convUUID})
 

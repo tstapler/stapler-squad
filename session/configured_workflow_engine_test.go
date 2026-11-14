@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestConfiguredWorkflowEngine_should_MatchDomainValidTransitions_When_DatabaseIsFreshlySeeded
@@ -645,7 +646,7 @@ func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine,
 	})
 	require.NoError(t, err)
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus(fromStage.Slug), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus(fromStage.Slug), nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	require.NoError(t, client.BacklogStage.DeleteOneID(fromStage.ID).Exec(ctx))

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // supersededFixture builds the exact live shape of the incident: a repo whose
@@ -58,7 +59,7 @@ func supersededItem(t *testing.T, storage *session.Storage, repoPath, baseSHA st
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "bug047-work-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -80,7 +81,7 @@ func attachWorktree(t *testing.T, storage *session.Storage, repoPath, branch, he
 	inst := newTestInstance("bug047-instance")
 	inst.UUID = "bug047-work-session"
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "bug047-instance", branch, headSHA)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 }
 
 func failingCIChecker() *fakePRPendingChecker {
@@ -272,7 +273,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 		// Must match attachWorktree's hardcoded instance UUID below so
 		// GetWorktreeDataBySessionUUID actually finds this session's worktree.
 		SessionUUID: "bug047-work-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// BaseCommitSha intentionally left unset (empty) — the exact gap this test
@@ -364,7 +365,7 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "backdated-commit-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 

@@ -10,12 +10,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func (f *stallNudgeFixture) inspect(state domain.ObservedState) StaleWorkDisposition {
-	f.svc.AutonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot { return snapshotFor(state) }
+	f.svc.AutonomousSvc.staleSnapshot = func(*instance.Instance) domain.StopSnapshot { return snapshotFor(state) }
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	if err != nil {
 		panic(err)
@@ -71,7 +71,7 @@ func TestInspectStaleWork_should_skip_When_StallRecoveryLive(t *testing.T) {
 	_, release := f.svc.AutonomousSvc.beginRecovery(f.title)
 	defer release()
 	captured := false
-	f.svc.AutonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot {
+	f.svc.AutonomousSvc.staleSnapshot = func(*instance.Instance) domain.StopSnapshot {
 		captured = true
 		return snapshotFor(domain.ObservedIdlePrompt)
 	}

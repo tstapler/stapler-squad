@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
@@ -55,7 +56,7 @@ type SessionSpawnOptions struct {
 // SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
-func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
+func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error) {
 	inst, err := s.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
 		Title:   uniqueDispatchTitle("review", item.ID),
 		Prompt:  prompt,
@@ -66,7 +67,7 @@ func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdt
 	if err != nil {
 		return nil, fmt.Errorf("spawn review session: %w", err)
 	}
-	inst.SetCategory(session.CategoryBacklog)
+	inst.SetCategory(instance.CategoryBacklog)
 	return inst, nil
 }
 
@@ -105,7 +106,7 @@ const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 // services.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
 // session's MCP tool surface via diagnosticSessionAllowedTools — see that
 // constant's doc comment for why this alone isn't the real enforcement.
-func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*session.Instance, error) {
+func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error) {
 	inst, err := s.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
 		Title:        uniqueDispatchTitle("diagnose", item.ID),
 		Prompt:       prompt,
@@ -117,7 +118,7 @@ func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backl
 	if err != nil {
 		return nil, fmt.Errorf("spawn diagnostic session: %w", err)
 	}
-	inst.SetCategory(session.CategoryBacklog)
+	inst.SetCategory(instance.CategoryBacklog)
 	return inst, nil
 }
 
@@ -127,18 +128,18 @@ func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backl
 // poller, and returns the Instance. opts.AllowedTools == "" (CreateDirectorySession's
 // own callers, i.e. everyone but SpawnDiagnosticSession) preserves unrestricted
 // tool access.
-func (s *SessionService) CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*session.Instance, error) {
+func (s *SessionService) CreateDirectorySession(ctx context.Context, path string, opts SessionSpawnOptions) (*instance.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, path, "")
 	program := resolved.Program
 	if opts.ProgramOverride != "" {
 		program = opts.ProgramOverride
 	}
-	instOpts := session.InstanceOptions{
+	instOpts := instance.InstanceOptions{
 		Title:            opts.Title,
 		Path:             path,
 		Program:          program,
-		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
+		PermissionMode:   instance.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
 		SessionType:      domain.SessionTypeDirectory,
 		Prompt:           opts.Prompt,
 		Tags:             opts.Tags,
@@ -151,9 +152,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		// Backend consults the session-name override map (tymux-bundled-integration
 		// Epic 4.4.2) so a canary override applies through this entry point too;
 		// there's no per-request override concept for this internal creator.
-		Backend: session.ResolveSessionBackendForTitle(cfg, opts.Title, ""),
+		Backend: instance.ResolveSessionBackendForTitle(cfg, opts.Title, ""),
 	}
-	instance, err := session.NewInstance(instOpts)
+	instance, err := instance.NewInstance(instOpts)
 	if err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession: %w", err)
 	}
@@ -198,18 +199,18 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 // CreateWorktreeSession satisfies the services.SessionCreator interface.
 // It spawns a session that uses an already-created git worktree at worktreePath.
 // repoPath is the parent repo (for program resolution). worktreePath must exist on disk.
-func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*session.Instance, error) {
+func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts SessionSpawnOptions) (*instance.Instance, error) {
 	cfg := config.LoadConfig()
 	resolved := config.ResolveDefaults(cfg, repoPath, "")
 	program := resolved.Program
 	if opts.ProgramOverride != "" {
 		program = opts.ProgramOverride
 	}
-	instOpts := session.InstanceOptions{
+	instOpts := instance.InstanceOptions{
 		Title:            opts.Title,
 		Path:             repoPath,
 		Program:          program,
-		PermissionMode:   session.PermissionModeAuto,
+		PermissionMode:   instance.PermissionModeAuto,
 		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: worktreePath,
 		Prompt:           opts.Prompt,
@@ -222,9 +223,9 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		// Backend consults the session-name override map (tymux-bundled-integration
 		// Epic 4.4.2) so a canary override applies through this entry point too;
 		// there's no per-request override concept for this internal creator.
-		Backend: session.ResolveSessionBackendForTitle(cfg, opts.Title, ""),
+		Backend: instance.ResolveSessionBackendForTitle(cfg, opts.Title, ""),
 	}
-	instance, err := session.NewInstance(instOpts)
+	instance, err := instance.NewInstance(instOpts)
 	if err != nil {
 		return nil, fmt.Errorf("CreateWorktreeSession: %w", err)
 	}

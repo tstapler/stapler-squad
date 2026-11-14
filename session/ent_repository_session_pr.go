@@ -17,6 +17,7 @@ import (
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
 	"github.com/tstapler/stapler-squad/session/ent/sessionprtombstone"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Repository for PullRequestState (one row per PR), SessionPR (links) and
@@ -67,7 +68,7 @@ func (o PROwner) isSession() bool { return o.SessionUUID != "" }
 
 func checkPRIdentity(owner PROwner, ref domain.PRRef) error {
 	if ref.IsZero() {
-		return ErrZeroPRRef
+		return instance.ErrZeroPRRef
 	}
 	return owner.validate()
 }
@@ -106,7 +107,7 @@ func refPredicate(ref domain.PRRef) predicate.PullRequestState {
 // never modifies an existing row.
 func (r *EntRepository) EnsureState(ctx context.Context, ref domain.PRRef, initial domain.PRInitial) (int, error) {
 	if ref.IsZero() {
-		return 0, ErrZeroPRRef
+		return 0, instance.ErrZeroPRRef
 	}
 	return clientEnsureState(ctx, r.Client.PullRequestState, ref, initial)
 }
@@ -235,12 +236,12 @@ func (r *EntRepository) withPRTx(ctx context.Context, op string, fn func(*ent.Tx
 // for an empty uuid and ErrSessionNotPersisted when the session row does not exist
 // yet (the first full save then writes the set). A tombstoned PR writes nothing
 // and reports Tombstoned. Failure at any step rolls everything back.
-func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror PRMirror) (domain.PRLinkResult, error) {
+func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror instance.PRMirror) (domain.PRLinkResult, error) {
 	if sessionUUID == "" {
 		return domain.PRLinkResult{}, domain.ErrNoSessionUUID
 	}
 	if ref.IsZero() {
-		return domain.PRLinkResult{}, ErrZeroPRRef
+		return domain.PRLinkResult{}, instance.ErrZeroPRRef
 	}
 	var res domain.PRLinkResult
 	err := r.withPRTx(ctx, "attach session pr", func(tx *ent.Tx) error {
@@ -266,7 +267,7 @@ func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string,
 // PersistPRMirror writes the legacy scalar PR columns of the session with this
 // uuid, including clearing them (number 0, empty URL, terminal false), which the
 // full-save set-only path cannot. It returns ErrSessionNotPersisted when no row matches.
-func (r *EntRepository) PersistPRMirror(ctx context.Context, sessionUUID string, mirror PRMirror) error {
+func (r *EntRepository) PersistPRMirror(ctx context.Context, sessionUUID string, mirror instance.PRMirror) error {
 	if sessionUUID == "" {
 		return domain.ErrNoSessionUUID
 	}
@@ -281,7 +282,7 @@ func (r *EntRepository) PersistPRMirror(ctx context.Context, sessionUUID string,
 	})
 }
 
-func setMirrorTx(ctx context.Context, tx *ent.Tx, rowID int, m PRMirror) error {
+func setMirrorTx(ctx context.Context, tx *ent.Tx, rowID int, m instance.PRMirror) error {
 	err := tx.Session.UpdateOneID(rowID).
 		SetGithubPrURL(m.URL).SetGithubPrNumber(m.Number).SetGithubPrStatusTerminal(m.Terminal).Exec(ctx)
 	if err != nil {
@@ -299,7 +300,7 @@ func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data domain.InstanceD
 	}
 	owner := SessionPROwner(data.UUID)
 	for _, v := range data.PRs {
-		link := domain.PRLink{Role: v.Role, Source: v.AttachSource, Initial: prInitialOf(v), AttachedAt: v.AttachedAt}
+		link := domain.PRLink{Role: v.Role, Source: v.AttachSource, Initial: instance.PrInitialOf(v), AttachedAt: v.AttachedAt}
 		if _, err := upsertSessionPRTx(ctx, tx, owner, v.Ref, link); err != nil {
 			if isDeterministicPRImportError(err) {
 				// A bad link must not roll back the rest of the session save.
@@ -429,7 +430,7 @@ func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) 
 // Rows are not checked against live sessions; the caller filters orphans.
 func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error) {
 	if ref.IsZero() {
-		return nil, ErrZeroPRRef
+		return nil, instance.ErrZeroPRRef
 	}
 	stateID, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).OnlyID(ctx)
 	if ent.IsNotFound(err) {
@@ -541,7 +542,7 @@ func (r *EntRepository) ListPollableStates(ctx context.Context) ([]domain.PRView
 // GetPullRequestState returns one PR's state columns (no owner fields).
 func (r *EntRepository) GetPullRequestState(ctx context.Context, ref domain.PRRef) (domain.PRView, error) {
 	if ref.IsZero() {
-		return domain.PRView{}, ErrZeroPRRef
+		return domain.PRView{}, instance.ErrZeroPRRef
 	}
 	st, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
 	if err != nil {
@@ -758,7 +759,7 @@ func (r *EntRepository) PRObservationDropCounts() PRObservationDrops {
 //	open -> unknown                        only via the 5-counted-failure rule
 func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs PRObservation) (PRObservationResult, error) {
 	if ref.IsZero() {
-		return PRObservationResult{}, ErrZeroPRRef
+		return PRObservationResult{}, instance.ErrZeroPRRef
 	}
 	if err := obs.validate(); err != nil {
 		return PRObservationResult{}, err
@@ -983,7 +984,7 @@ func (r *EntRepository) ResetVerifyCounters(ctx context.Context) (int, error) {
 
 // ListPRMirrors returns the stored legacy PR columns of every session that has a
 // uuid, keyed by uuid: one narrow query for the mirror reconciler.
-func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
+func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]instance.PRMirror, error) {
 	var rows []struct {
 		UUID     string `json:"uuid"`
 		URL      string `json:"github_pr_url"`
@@ -996,9 +997,9 @@ func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]PRMirror,
 	if err != nil {
 		return nil, fmt.Errorf("list pr mirrors: %w", err)
 	}
-	out := make(map[string]PRMirror, len(rows))
+	out := make(map[string]instance.PRMirror, len(rows))
 	for _, row := range rows {
-		out[row.UUID] = PRMirror{URL: row.URL, Number: row.Number, Terminal: row.Terminal}
+		out[row.UUID] = instance.PRMirror{URL: row.URL, Number: row.Number, Terminal: row.Terminal}
 	}
 	return out, nil
 }

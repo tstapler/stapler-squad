@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -86,7 +87,7 @@ type SearchService struct {
 
 	// getInstances is wired after construction so ListClaudeHistory can
 	// cross-reference live sessions for session_status enrichment.
-	getInstances func() []*session.Instance
+	getInstances func() []*instance.Instance
 
 	// resolveConversationUUID converts a tmux session UUID to a Claude conversation UUID.
 	// Used by GetClaudeHistoryMessages to look up history for backlog sessions.
@@ -117,7 +118,7 @@ func NewSearchService(
 
 // SetInstanceProvider wires the live-instance provider after SessionService
 // is fully constructed. Must be called before the first ListClaudeHistory.
-func (ss *SearchService) SetInstanceProvider(fn func() []*session.Instance) {
+func (ss *SearchService) SetInstanceProvider(fn func() []*instance.Instance) {
 	ss.getInstances = fn
 }
 

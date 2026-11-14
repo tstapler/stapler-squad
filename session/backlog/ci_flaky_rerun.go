@@ -9,7 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ciRerunClient is the slice of GitHub Actions access maybeFlakyCheckRerun
@@ -23,7 +23,7 @@ type ciRerunClient interface {
 type ghCIRerunClient struct{}
 
 func (ghCIRerunClient) ref(repoPath string) (github.RepoRef, error) {
-	return github.GetOwnerRepoFromRemote(repoPath, session.EnterpriseHostsForRemoteParsing())
+	return github.GetOwnerRepoFromRemote(repoPath, instance.EnterpriseHostsForRemoteParsing())
 }
 
 func (c ghCIRerunClient) ChangedFiles(ctx context.Context, repoPath string, prNumber int) ([]string, error) {

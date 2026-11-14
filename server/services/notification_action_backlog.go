@@ -10,9 +10,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/notifications"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // notification_action_backlog.go delegates BACKLOG_DECISION choices to the
@@ -183,7 +183,7 @@ func (f storageSessionFinder) LatestWorkSession(ctx context.Context, itemID stri
 		return "", fmt.Errorf("list item sessions: %w", err)
 	}
 	for i := len(rows) - 1; i >= 0; i-- { // oldest first, so scan from the end
-		if rows[i].Role == string(session.SessionRoleWork) {
+		if rows[i].Role == string(instance.SessionRoleWork) {
 			return rows[i].SessionUUID, nil
 		}
 	}

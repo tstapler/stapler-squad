@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 
@@ -135,7 +136,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "recovery-test",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; read'",
@@ -221,7 +222,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	defer os.RemoveAll(tempRepo)
 
 	// Create two instances using new API with cleanup
-	instance1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
+	instance1, cleanup1, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-session-1",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
@@ -235,7 +236,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		}
 	}()
 
-	instance2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
+	instance2, cleanup2, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-session-2",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
@@ -344,7 +345,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-changes-session",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
@@ -479,7 +480,7 @@ func testExistingSessionResumption(t *testing.T, tempRepo string) {
 	require.True(t, tmuxSession.DoesSessionExist(), "Tmux session should exist after start")
 
 	// Now try to create an instance with the same session name - this would previously fail
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionName,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo resumed && sleep 30'",
@@ -522,7 +523,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 	sessionName := "existing-worktree-test"
 
 	// Create first instance to set up the worktree
-	instance1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
+	instance1, cleanup1, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionName + "-1",
 		Path:             tempRepo,
 		Program:          "bash -c 'echo first && sleep 30'",
@@ -553,7 +554,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 	worktreePath1 := gitWorktree1.GetWorktreePath()
 
 	// Now try to create a second instance with the same branch - this would previously fail
-	instance2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
+	instance2, cleanup2, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionName + "-2",
 		Path:             tempRepo,
 		Program:          "bash -c 'echo second && sleep 30'",
@@ -630,7 +631,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 	t.Logf("Testing full resumption scenario with session '%s' and branch '%s'", sessionTitle, branchName)
 
 	// Create initial session (first attempt)
-	instance1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
+	instance1, cleanup1, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionTitle,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo initial session && sleep 30'",
@@ -663,7 +664,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 
 	// Now simulate the user trying to create the session again (second attempt)
 	// This should reuse both the existing tmux session and worktree
-	instance2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
+	instance2, cleanup2, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionTitle, // Same title
 		Path:             tempRepo,     // Same path
 		Program:          "bash -c 'echo resumed session && sleep 30'",
@@ -744,7 +745,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sessionTitle := fmt.Sprintf("bench-session-%d", i)
 
-		instance, err := NewInstance(InstanceOptions{
+		instance, err := instance.NewInstance(instance.InstanceOptions{
 			Title:   sessionTitle,
 			Path:    tempRepo,
 			Program: "echo 'benchmark test'",

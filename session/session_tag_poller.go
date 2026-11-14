@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SessionTagPollerConfig contains configuration for SessionTagClassificationPoller,
@@ -94,7 +95,7 @@ type cachedTagResult struct {
 // headless.GenerateSessionTagsBatch call. Mirrors PRStatusPoller's
 // shape (build-vs-buy.md 4a) rather than forking a new poller idiom.
 type SessionTagClassificationPoller struct {
-	instances []*Instance
+	instances []*instance.Instance
 	config    SessionTagPollerConfig
 	pool      headless.PoolClient
 	// engine is stored (not a derived vocabulary field) so the vocabulary is recomputed from
@@ -119,7 +120,7 @@ func NewSessionTagClassificationPoller(pool headless.PoolClient, engine *classif
 // NewSessionTagClassificationPollerWithConfig creates a poller with custom configuration.
 func NewSessionTagClassificationPollerWithConfig(pool headless.PoolClient, engine *classifier.TaggingEngine, config SessionTagPollerConfig) *SessionTagClassificationPoller {
 	return &SessionTagClassificationPoller{
-		instances: make([]*Instance, 0),
+		instances: make([]*instance.Instance, 0),
 		config:    config,
 		pool:      pool,
 		engine:    engine,
@@ -128,14 +129,14 @@ func NewSessionTagClassificationPollerWithConfig(pool headless.PoolClient, engin
 }
 
 // SetInstances replaces the full list of monitored instances.
-func (p *SessionTagClassificationPoller) SetInstances(instances []*Instance) {
+func (p *SessionTagClassificationPoller) SetInstances(instances []*instance.Instance) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.instances = instances
 }
 
 // AddInstance adds a single instance to monitor.
-func (p *SessionTagClassificationPoller) AddInstance(inst *Instance) {
+func (p *SessionTagClassificationPoller) AddInstance(inst *instance.Instance) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.instances = append(p.instances, inst)
@@ -143,10 +144,10 @@ func (p *SessionTagClassificationPoller) AddInstance(inst *Instance) {
 
 // Instances returns a snapshot copy of the currently monitored instances, mirroring
 // HistoryLinker.Instances().
-func (p *SessionTagClassificationPoller) Instances() []*Instance {
+func (p *SessionTagClassificationPoller) Instances() []*instance.Instance {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	snap := make([]*Instance, len(p.instances))
+	snap := make([]*instance.Instance, len(p.instances))
 	copy(snap, p.instances)
 	return snap
 }
@@ -156,7 +157,7 @@ func (p *SessionTagClassificationPoller) Instances() []*Instance {
 func (p *SessionTagClassificationPoller) RemoveInstance(title string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	filtered := make([]*Instance, 0, len(p.instances))
+	filtered := make([]*instance.Instance, 0, len(p.instances))
 	for _, inst := range p.instances {
 		if !inst.MatchesID(title) {
 			filtered = append(filtered, inst)
@@ -244,8 +245,8 @@ func currentVocabulary(engine *classifier.TaggingEngine) []string {
 		seen[rule.OutputTag] = true
 		vocabulary = append(vocabulary, rule.OutputTag)
 	}
-	if !seen[UnclassifiedTag] {
-		vocabulary = append(vocabulary, UnclassifiedTag)
+	if !seen[instance.UnclassifiedTag] {
+		vocabulary = append(vocabulary, instance.UnclassifiedTag)
 	}
 	return vocabulary
 }
@@ -253,7 +254,7 @@ func currentVocabulary(engine *classifier.TaggingEngine) []string {
 // pendingClassification is one session that cleared the classify-once gate and awaits the
 // tick's single batch call.
 type pendingClassification struct {
-	inst *Instance
+	inst *instance.Instance
 	meta classifier.SessionTaggingContext
 }
 
@@ -264,7 +265,7 @@ type pendingClassification struct {
 // one haiku call per PollInterval regardless of fleet size or churn.
 func (p *SessionTagClassificationPoller) pollOnce() {
 	p.mu.RLock()
-	instances := make([]*Instance, len(p.instances))
+	instances := make([]*instance.Instance, len(p.instances))
 	copy(instances, p.instances)
 	ctx := p.ctx
 	p.mu.RUnlock()
@@ -326,7 +327,7 @@ func metaForSession(snap *domain.InstanceSnapshot) classifier.SessionTaggingCont
 // classificationNeeded enforces classify-once: an applied cache entry is never reclassified
 // automatically. It returns the pending classification (skip == "") or the skip reason:
 // "suspended", "already_classified", or "cooldown" (degraded entry inside the retry backoff).
-func (p *SessionTagClassificationPoller) classificationNeeded(inst *Instance, now time.Time) (*pendingClassification, string) {
+func (p *SessionTagClassificationPoller) classificationNeeded(inst *instance.Instance, now time.Time) (*pendingClassification, string) {
 	snap := inst.Snapshot()
 	if snap.Status.IsSuspended() {
 		return nil, "suspended"
@@ -348,7 +349,7 @@ func (p *SessionTagClassificationPoller) classificationNeeded(inst *Instance, no
 // poller. It errors when no session matches title or the classification degraded.
 func (p *SessionTagClassificationPoller) ClassifyNow(ctx context.Context, title string) error {
 	p.mu.RLock()
-	instances := make([]*Instance, len(p.instances))
+	instances := make([]*instance.Instance, len(p.instances))
 	copy(instances, p.instances)
 	pollerCtx := p.ctx
 	p.mu.RUnlock()
@@ -407,7 +408,7 @@ func (p *SessionTagClassificationPoller) classifyBatch(ctx context.Context, batc
 			continue
 		}
 		log.Info("session tag poller: LLM classification", "session", b.meta.Name, "outcome", "applied", "tags", res.Tags)
-		b.inst.ApplyLLMTagResult(res.Tags, llmSentinelRuleID)
+		b.inst.ApplyLLMTagResult(res.Tags, instance.LlmSentinelRuleID)
 		p.cache.Store(b.meta.Name, cachedTagResult{tags: res.Tags, classifiedAt: now, applied: true})
 	}
 	return degraded

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
@@ -29,18 +30,20 @@ func enrichWaitUntil(t *testing.T, cond func() bool) {
 	require.Eventually(t, cond, 5*time.Second, time.Millisecond)
 }
 
-func okInfo() *WorktreeInfo { return &WorktreeInfo{GitHubOwner: "o", GitHubRepo: "r"} }
+func okInfo() *instance.WorktreeInfo {
+	return &instance.WorktreeInfo{GitHubOwner: "o", GitHubRepo: "r"}
+}
 
 // startEnricher builds and starts an enricher. When register is true it is also
 // the process-wide enricher until the test ends; callers must not use t.Parallel.
-func startEnricher(t *testing.T, cfg WorktreeEnricherConfig, register bool) *WorktreeEnricher {
+func startEnricher(t *testing.T, cfg instance.WorktreeEnricherConfig, register bool) *instance.WorktreeEnricher {
 	t.Helper()
-	e := NewWorktreeEnricher(cfg)
+	e := instance.NewWorktreeEnricher(cfg)
 	e.Start(context.Background())
 	t.Cleanup(e.Stop)
 	if register {
-		SetWorktreeEnricher(e)
-		t.Cleanup(func() { SetWorktreeEnricher(nil) })
+		instance.SetWorktreeEnricher(e)
+		t.Cleanup(func() { instance.SetWorktreeEnricher(nil) })
 	}
 	return e
 }
@@ -65,22 +68,22 @@ func loadData(title, path string, status domain.Status, worktree string) domain.
 	return d
 }
 
-func ghOwner(i *Instance) string { return i.Snapshot().GitHub.GitHubOwner }
+func ghOwner(i *instance.Instance) string { return i.Snapshot().GitHub.GitHubOwner }
 
 // The missing-worktree pause stays synchronous on every load path, with or
 // without an enricher registered.
 func TestLoad_PausesMissingWorktreeOnAllPaths(t *testing.T) {
 	for _, withEnricher := range []bool{false, true} {
 		if withEnricher {
-			startEnricher(t, WorktreeEnricherConfig{Probe: func(string) (*WorktreeInfo, error) { select {} }}, true)
+			startEnricher(t, instance.WorktreeEnricherConfig{Probe: func(string) (*instance.WorktreeInfo, error) { select {} }}, true)
 		}
 		data := loadData("gone", "/repo", domain.Active, "/gone/worktree")
 
-		inst, err := FromInstanceData(data)
+		inst, err := instance.FromInstanceData(data)
 		require.NoError(t, err)
 		require.True(t, inst.Paused(), "FromInstanceData enricher=%v", withEnricher)
 
-		inst, err = FromInstanceDataDeferred(data)
+		inst, err = instance.FromInstanceDataDeferred(data)
 		require.NoError(t, err)
 		require.True(t, inst.Paused(), "FromInstanceDataDeferred enricher=%v", withEnricher)
 
@@ -98,10 +101,10 @@ func TestLoad_PausesMissingWorktreeOnAllPaths(t *testing.T) {
 func TestLoadInstances_BlockedProbeDoesNotStallLoad(t *testing.T) {
 	release := make(chan struct{})
 	var stuckProbes atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Workers: 2, Deadline: 20 * time.Millisecond, BackoffMin: time.Hour,
 		AfterFunc: func(time.Duration, func()) {},
-		Probe: func(path string) (*WorktreeInfo, error) {
+		Probe: func(path string) (*instance.WorktreeInfo, error) {
 			if path == "/stuck" {
 				stuckProbes.Add(1)
 				<-release
@@ -121,14 +124,14 @@ func TestLoadInstances_BlockedProbeDoesNotStallLoad(t *testing.T) {
 	for _, d := range []domain.InstanceData{loadData("stuck", "/stuck", domain.Paused, ""), loadData("a", "/a", domain.Paused, ""), loadData("b", "/b", domain.Paused, "")} {
 		require.NoError(t, storage.CreateInstanceData(context.Background(), d))
 	}
-	byTitle := func() map[string]*Instance {
-		var loaded []*Instance
+	byTitle := func() map[string]*instance.Instance {
+		var loaded []*instance.Instance
 		enrichWatchdog(t, func() {
 			var err error
 			loaded, err = storage.LoadInstances()
 			require.NoError(t, err)
 		})
-		m := map[string]*Instance{}
+		m := map[string]*instance.Instance{}
 		for _, i := range loaded {
 			m[i.Title] = i
 		}
@@ -162,10 +165,10 @@ func TestLoadInstances_BlockedProbeDoesNotStallLoad(t *testing.T) {
 // Stuck paths cannot exhaust the worker pool.
 func TestWorktreeEnricher_StuckPathsDoNotStarveHealthyOnes(t *testing.T) {
 	release := make(chan struct{})
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Workers: 2, Deadline: 20 * time.Millisecond, BackoffMin: time.Hour,
 		AfterFunc: func(time.Duration, func()) {},
-		Probe: func(path string) (*WorktreeInfo, error) {
+		Probe: func(path string) (*instance.WorktreeInfo, error) {
 			if path[1] == 's' {
 				<-release
 			}
@@ -190,10 +193,10 @@ func TestWorktreeEnricher_RetryJoinsBlockedProbe(t *testing.T) {
 	clock := &enrichClock{}
 	var probes, afterCalls atomic.Int32
 	var retry atomic.Pointer[func()]
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Deadline: 20 * time.Millisecond, BackoffMin: time.Second, Now: clock.Now,
 		AfterFunc: func(_ time.Duration, f func()) { afterCalls.Add(1); retry.Store(&f) },
-		Probe:     func(string) (*WorktreeInfo, error) { probes.Add(1); <-release; return okInfo(), nil },
+		Probe:     func(string) (*instance.WorktreeInfo, error) { probes.Add(1); <-release; return okInfo(), nil },
 	}, false)
 	t.Cleanup(func() { close(release) })
 
@@ -212,10 +215,10 @@ func TestWorktreeEnricher_NoDoubleRetryChain(t *testing.T) {
 	release := make(chan struct{})
 	clock := &enrichClock{}
 	var afterCalls atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Deadline: 20 * time.Millisecond, BackoffMin: time.Second, Now: clock.Now,
 		AfterFunc: func(time.Duration, func()) { afterCalls.Add(1) },
-		Probe:     func(string) (*WorktreeInfo, error) { <-release; return okInfo(), nil },
+		Probe:     func(string) (*instance.WorktreeInfo, error) { <-release; return okInfo(), nil },
 	}, false)
 	t.Cleanup(func() { close(release) })
 
@@ -231,10 +234,10 @@ func TestWorktreeEnricher_NoDoubleRetryChain(t *testing.T) {
 func TestWorktreeEnricher_BackoffSuppressesEarlyRetry(t *testing.T) {
 	release := make(chan struct{})
 	clock := &enrichClock{}
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Deadline: 20 * time.Millisecond, BackoffMin: time.Hour, Now: clock.Now,
 		AfterFunc: func(time.Duration, func()) {},
-		Probe:     func(string) (*WorktreeInfo, error) { <-release; return okInfo(), nil },
+		Probe:     func(string) (*instance.WorktreeInfo, error) { <-release; return okInfo(), nil },
 	}, false)
 	t.Cleanup(func() { close(release) })
 	e.Request("/p")
@@ -260,7 +263,7 @@ func TestWorktreeEnricher_SlowReadinessReleasesWorker(t *testing.T) {
 	blocked, release, fast := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	deadline := make(chan time.Time, 1)
 	var probes atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Workers: 1,
 		Ready: func(path string) bool {
 			if path == "/slow" {
@@ -272,7 +275,7 @@ func TestWorktreeEnricher_SlowReadinessReleasesWorker(t *testing.T) {
 		},
 		Timer:     func(time.Duration) (<-chan time.Time, func()) { return deadline, func() {} },
 		AfterFunc: func(time.Duration, func()) {},
-		Probe:     func(string) (*WorktreeInfo, error) { probes.Add(1); close(fast); return okInfo(), nil },
+		Probe:     func(string) (*instance.WorktreeInfo, error) { probes.Add(1); close(fast); return okInfo(), nil },
 	}, false)
 	t.Cleanup(func() { close(release) })
 	e.Request("/slow")
@@ -288,7 +291,7 @@ func TestWorktreeEnricher_StopWhileReadyPreventsProbe(t *testing.T) {
 	t.Parallel()
 	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var probes atomic.Int32
-	e := NewWorktreeEnricher(WorktreeEnricherConfig{Ready: func(string) bool { close(entered); <-release; return true }, Probe: func(string) (*WorktreeInfo, error) { probes.Add(1); return okInfo(), nil }})
+	e := instance.NewWorktreeEnricher(instance.WorktreeEnricherConfig{Ready: func(string) bool { close(entered); <-release; return true }, Probe: func(string) (*instance.WorktreeInfo, error) { probes.Add(1); return okInfo(), nil }})
 	go func() { defer close(returned); _, _ = e.ProbeForTest("/protected") }()
 	waitEnrichmentSignal(t, entered)
 	e.Stop()
@@ -302,7 +305,7 @@ func TestWorktreeEnricher_UnparkDuringReadiness(t *testing.T) {
 	checked, release := make(chan struct{}), make(chan struct{})
 	var ready atomic.Bool
 	var calls atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Ready: func(string) bool {
 			allowed := ready.Load()
 			if calls.Add(1) == 1 {
@@ -311,7 +314,7 @@ func TestWorktreeEnricher_UnparkDuringReadiness(t *testing.T) {
 			}
 			return allowed
 		},
-		Probe: func(string) (*WorktreeInfo, error) { return okInfo(), nil },
+		Probe: func(string) (*instance.WorktreeInfo, error) { return okInfo(), nil },
 	}, false)
 	e.Request("/protected/repo")
 	waitEnrichmentSignal(t, checked)
@@ -326,9 +329,13 @@ func TestWorktreeEnricher_ConsentGateIntegration(t *testing.T) {
 	saved := false
 	gate := tcc.NewConsentGate(func(string) tcc.Result { return tcc.Result{Protected: true, Root: "/protected"} }, nil, func(string) error { saved = true; return nil })
 	var probes atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Ready: gate.Ready,
-		Probe: func(string) (*WorktreeInfo, error) { require.True(t, saved); probes.Add(1); return okInfo(), nil },
+		Probe: func(string) (*instance.WorktreeInfo, error) {
+			require.True(t, saved)
+			probes.Add(1)
+			return okInfo(), nil
+		},
 	}, false)
 	e.Request("/protected/repo")
 	enrichWaitUntil(t, func() bool { return e.QueueProcessedForTest() == 1 })
@@ -345,9 +352,9 @@ func TestWorktreeEnricher_ConsentGateIntegration(t *testing.T) {
 func TestWorktreeEnricher_ParkedPathWaitsForUnpark(t *testing.T) {
 	var ready atomic.Bool
 	var probes, readyChecks atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Ready: func(string) bool { readyChecks.Add(1); return ready.Load() },
-		Probe: func(string) (*WorktreeInfo, error) { probes.Add(1); return okInfo(), nil },
+		Probe: func(string) (*instance.WorktreeInfo, error) { probes.Add(1); return okInfo(), nil },
 	}, false)
 	e.Request("/parked")
 	e.Request("/parked2")
@@ -364,17 +371,17 @@ func TestWorktreeEnricher_StopCancelsRetriesAndDeregisters(t *testing.T) {
 	release := make(chan struct{})
 	var probes atomic.Int32
 	var retry atomic.Pointer[func()]
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Deadline: 20 * time.Millisecond, BackoffMin: time.Second,
 		AfterFunc: func(_ time.Duration, f func()) { retry.Store(&f) },
-		Probe:     func(string) (*WorktreeInfo, error) { probes.Add(1); <-release; return okInfo(), nil },
+		Probe:     func(string) (*instance.WorktreeInfo, error) { probes.Add(1); <-release; return okInfo(), nil },
 	}, true)
 	t.Cleanup(func() { close(release) })
 	e.Request("/p")
 	enrichWaitUntil(t, func() bool { return e.Stats().TimedOut == 1 })
 
-	StopWorktreeEnricher()
-	require.Nil(t, ActiveWorktreeEnricher())
+	instance.StopWorktreeEnricher()
+	require.Nil(t, instance.ActiveWorktreeEnricher())
 	(*retry.Load())()
 	e.Request("/new")
 	require.Equal(t, 0, e.QueuePendingForTest(), "stopped enricher accepts no work")
@@ -383,9 +390,9 @@ func TestWorktreeEnricher_StopCancelsRetriesAndDeregisters(t *testing.T) {
 
 func TestWorktreeEnricher_CountsProbeErrorsAndExpiresResults(t *testing.T) {
 	clock := &enrichClock{}
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Now: clock.Now, ResultTTL: time.Minute,
-		Probe: func(string) (*WorktreeInfo, error) { return nil, errors.New("boom") },
+		Probe: func(string) (*instance.WorktreeInfo, error) { return nil, errors.New("boom") },
 	}, false)
 	e.Request("/e")
 	enrichWaitUntil(t, func() bool { return e.Stats().Completed == 1 })
@@ -400,14 +407,14 @@ func TestWorktreeEnricher_CountsProbeErrorsAndExpiresResults(t *testing.T) {
 
 // A cached probe error is never applied to the instance.
 func TestLoad_CachedErrorResultLeavesInstanceUntouched(t *testing.T) {
-	e := startEnricher(t, WorktreeEnricherConfig{
-		Probe: func(string) (*WorktreeInfo, error) {
-			return &WorktreeInfo{GitHubOwner: "x", GitHubRepo: "y"}, errors.New("boom")
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
+		Probe: func(string) (*instance.WorktreeInfo, error) {
+			return &instance.WorktreeInfo{GitHubOwner: "x", GitHubRepo: "y"}, errors.New("boom")
 		},
 	}, true)
 	e.Request("/err")
 	enrichWaitUntil(t, func() bool { _, ok := e.Result("/err"); return ok })
-	inst, err := FromInstanceDataDeferred(loadData("err", "/err", domain.Paused, ""))
+	inst, err := instance.FromInstanceDataDeferred(loadData("err", "/err", domain.Paused, ""))
 	require.NoError(t, err)
 	require.Empty(t, ghOwner(inst))
 }
@@ -415,23 +422,23 @@ func TestLoad_CachedErrorResultLeavesInstanceUntouched(t *testing.T) {
 // A cached "no .git" result must not be applied: a recreated worktree within the
 // TTL would otherwise flip a persisted IsWorktree to false.
 func TestLoad_CachedEmptyDetectionIsNotApplied(t *testing.T) {
-	e := startEnricher(t, WorktreeEnricherConfig{
-		Probe: func(string) (*WorktreeInfo, error) { return &WorktreeInfo{}, nil },
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
+		Probe: func(string) (*instance.WorktreeInfo, error) { return &instance.WorktreeInfo{}, nil },
 	}, true)
 	e.Request("/gone")
 	enrichWaitUntil(t, func() bool { _, ok := e.Result("/gone"); return ok })
 	data := loadData("wt", "/gone", domain.Paused, "")
 	data.IsWorktree = true
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	require.True(t, inst.IsWorktree, "empty cached result must not overwrite IsWorktree")
 }
 
 func TestWorktreeEnricher_EvictsOldestBeyondCap(t *testing.T) {
 	clock := &enrichClock{}
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Workers: 1, MaxResults: 2, Now: clock.Now,
-		Probe: func(string) (*WorktreeInfo, error) { return okInfo(), nil },
+		Probe: func(string) (*instance.WorktreeInfo, error) { return okInfo(), nil },
 	}, false)
 	for _, p := range []string{"/1", "/2", "/3"} {
 		e.Request(p)
@@ -447,8 +454,8 @@ func TestWorktreeEnricher_EvictsOldestBeyondCap(t *testing.T) {
 
 func TestWorktreeEnricher_PanickingProbeBecomesErrorResult(t *testing.T) {
 	var calls atomic.Int32
-	e := startEnricher(t, WorktreeEnricherConfig{
-		Probe: func(path string) (*WorktreeInfo, error) {
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
+		Probe: func(path string) (*instance.WorktreeInfo, error) {
 			if path == "/boom" {
 				panic("bad probe")
 			}
@@ -472,7 +479,7 @@ func TestWorktreeEnricher_RetriesOfStuckPathsAreCapped(t *testing.T) {
 	clock := &enrichClock{}
 	var mu sync.Mutex
 	var fire []chan time.Time
-	e := startEnricher(t, WorktreeEnricherConfig{
+	e := startEnricher(t, instance.WorktreeEnricherConfig{
 		Workers: 2, BackoffMin: time.Second, Now: clock.Now,
 		AfterFunc: func(time.Duration, func()) {},
 		Timer: func(time.Duration) (<-chan time.Time, func()) {
@@ -482,7 +489,7 @@ func TestWorktreeEnricher_RetriesOfStuckPathsAreCapped(t *testing.T) {
 			mu.Unlock()
 			return c, func() {}
 		},
-		Probe: func(string) (*WorktreeInfo, error) { <-release; return okInfo(), nil },
+		Probe: func(string) (*instance.WorktreeInfo, error) { <-release; return okInfo(), nil },
 	}, false)
 	t.Cleanup(func() { close(release) })
 	timers := func() []chan time.Time { mu.Lock(); defer mu.Unlock(); return append([]chan time.Time(nil), fire...) }

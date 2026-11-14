@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -26,10 +27,10 @@ func writtenBeforeEnter(t *testing.T, fake *fixturetest.FakePaneSubmitter) strin
 	t.Helper()
 	var got strings.Builder
 	for _, c := range fake.SendCalls {
-		if c == EnterKeySequence {
+		if c == instance.EnterKeySequence {
 			break
 		}
-		assert.LessOrEqual(t, len(c), maxInlinePromptBytes)
+		assert.LessOrEqual(t, len(c), instance.MaxInlinePromptBytes)
 		got.WriteString(c)
 	}
 	return got.String()
@@ -57,7 +58,7 @@ func TestParseDriverPrompt_DeliveredIntactAtEverySize(t *testing.T) {
 					return
 				}
 				fake := fixturetest.NewFakePaneSubmitter()
-				require.NoError(t, SubmitDriverContent(context.Background(), fake, newFakeLease(t), p.Keys(), time.Millisecond, 5*time.Second))
+				require.NoError(t, instance.SubmitDriverContent(context.Background(), fake, newFakeLease(t), p.Keys(), time.Millisecond, 5*time.Second))
 				assert.True(t, writtenBeforeEnter(t, fake) == want, "bytes written differ from the prompt")
 			})
 		}
@@ -72,12 +73,12 @@ func TestParseDriverPrompt_PasteTerminatorFailsLoudly(t *testing.T) {
 
 func TestSubmitInitialPrompt_UndeliverableWritesNothingAndReleasesLease(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{UUID: fixturetest.FakeLeaseOwner}
-	lease, ok := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	inst := &instance.Instance{UUID: fixturetest.FakeLeaseOwner}
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 	err := submitInitialPrompt(context.Background(), inst, lease, "x\x1b[201~y")
 	require.ErrorIs(t, err, ErrPromptUndeliverable)
-	again, ok := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	again, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	assert.True(t, ok, "lease must be released when the prompt is refused")
 	again.Release()
 }
@@ -86,7 +87,7 @@ func TestSendKeysChunked_PartialFailureReportsProgress(t *testing.T) {
 	t.Parallel()
 	fake := fixturetest.NewFakePaneSubmitter()
 	fake.FailOnCall = 1
-	err := sendKeysChunked(context.Background(), fake, strings.Repeat("a", 3*maxInlinePromptBytes))
+	err := instance.SendKeysChunked(context.Background(), fake, strings.Repeat("a", 3*instance.MaxInlinePromptBytes))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed after 4096 of 12288 bytes")
 }
@@ -101,7 +102,7 @@ func TestDriverPrompt_RealPTYReceivesLargePromptIntact(t *testing.T) {
 	checkPTYAvailable(t)
 
 	out := filepath.Join(t.TempDir(), "received")
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "driver-prompt-pty",
 		Program:     "sh",
 		Args:        []string{"-c", "stty raw -echo; exec cat > " + out},
@@ -115,7 +116,7 @@ func TestDriverPrompt_RealPTYReceivesLargePromptIntact(t *testing.T) {
 	p, err := ParseDriverPrompt(promptOfSize("it's a \"quoted\"\tline \x1b[1mbold\x1b[0m é\n", 100<<10))
 	require.NoError(t, err)
 
-	require.NoError(t, sendKeysChunked(context.Background(), ptyKeySender{mgr}, p.Keys()))
+	require.NoError(t, instance.SendKeysChunked(context.Background(), ptyKeySender{mgr}, p.Keys()))
 
 	require.Eventually(t, func() bool {
 		b, readErr := os.ReadFile(out)

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type GeminiAdapter struct{}
@@ -38,7 +39,7 @@ type rawGeminiMessage struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
-func (a *GeminiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
+func (a *GeminiAdapter) Import(ctx context.Context, inst *instance.Instance) ([]instance.CanonicalTurn, error) {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
 		inst.TryExtractConversationUUID()
@@ -67,7 +68,7 @@ func (a *GeminiAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 	}
 	defer file.Close()
 
-	var turns []CanonicalTurn
+	var turns []instance.CanonicalTurn
 	reader := bufio.NewReader(file)
 	turnIdx := 0
 
@@ -81,9 +82,9 @@ func (a *GeminiAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 		if lineStr != "" {
 			var raw rawGeminiMessage
 			if jsonErr := json.Unmarshal([]byte(lineStr), &raw); jsonErr == nil {
-				role := RoleUser
+				role := instance.RoleUser
 				if raw.Role == "model" || raw.Role == "assistant" {
-					role = RoleAssistant
+					role = instance.RoleAssistant
 				}
 
 				tTime, parseErr := time.Parse(time.RFC3339, raw.Timestamp)
@@ -91,10 +92,10 @@ func (a *GeminiAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 					tTime = time.Now()
 				}
 
-				turn := CanonicalTurn{
+				turn := instance.CanonicalTurn{
 					Role: role,
-					Blocks: []CanonicalBlock{
-						NewTextBlock(raw.Content),
+					Blocks: []instance.CanonicalBlock{
+						instance.NewTextBlock(raw.Content),
 					},
 					Timestamp: tTime,
 					TurnIndex: turnIdx,
@@ -114,7 +115,7 @@ func (a *GeminiAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 	return turns, nil
 }
 
-func (a *GeminiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
+func (a *GeminiAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, inst *instance.Instance) error {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
 		uuidStr = uuid.New().String()
@@ -141,13 +142,13 @@ func (a *GeminiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 
 	for _, turn := range turns {
 		roleStr := "user"
-		if turn.Role == RoleAssistant {
+		if turn.Role == instance.RoleAssistant {
 			roleStr = "model"
 		}
 
 		var textParts []string
 		for _, b := range turn.Blocks {
-			if b.Kind == BlockKindText {
+			if b.Kind == instance.BlockKindText {
 				textParts = append(textParts, b.Text)
 			}
 		}

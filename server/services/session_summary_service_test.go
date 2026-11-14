@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -81,10 +82,10 @@ func (f *fakePoolClient) lastUserPrompt() string {
 
 // fakeLiveInstanceFinder is a trivial liveInstanceFinder test double.
 type fakeLiveInstanceFinder struct {
-	instances map[string]*session.Instance
+	instances map[string]*instance.Instance
 }
 
-func (f *fakeLiveInstanceFinder) FindLiveInstance(sessionID string) *session.Instance {
+func (f *fakeLiveInstanceFinder) FindLiveInstance(sessionID string) *instance.Instance {
 	if f.instances == nil {
 		return nil
 	}
@@ -316,14 +317,14 @@ func TestRegenerateSessionSummary_should_RefreshDiffAndGoalFromLiveInstance_When
 	_, err := entClient.SessionSummary.UpdateOne(priorRow).SetGeneratedAt(time.Now().Add(-time.Hour)).Save(context.Background())
 	require.NoError(t, err)
 
-	liveInst := &session.Instance{
+	liveInst := &instance.Instance{
 		Title:     "fresh live title",
 		UUID:      sessionID,
 		CreatedAt: time.Now().Add(-time.Hour), // old enough that isTrivialSession's duration check doesn't skip the LLM call
 	}
-	liveInst.SetSessionGoalCached(&session.SessionGoalData{Goal: "a very particular live goal"})
+	liveInst.SetSessionGoalCached(&instance.SessionGoalData{Goal: "a very particular live goal"})
 
-	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{instances: map[string]*session.Instance{sessionID: liveInst}})
+	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{sessionID: liveInst}})
 
 	before := time.Now()
 	resp, err := svc.RegenerateSessionSummary(context.Background(), connect.NewRequest(&sessionv1.RegenerateSessionSummaryRequest{SessionId: sessionID}))
@@ -377,8 +378,8 @@ func TestRegenerateSessionSummary_should_DispatchWithBackgroundContext_When_Requ
 	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 
 	sessionID := "sess-detached-ctx"
-	liveInst := &session.Instance{Title: "t", UUID: sessionID, CreatedAt: time.Now()}
-	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{instances: map[string]*session.Instance{sessionID: liveInst}})
+	liveInst := &instance.Instance{Title: "t", UUID: sessionID, CreatedAt: time.Now()}
+	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{sessionID: liveInst}})
 
 	reqCtx, reqCancel := context.WithCancel(context.Background())
 	resp, err := svc.RegenerateSessionSummary(reqCtx, connect.NewRequest(&sessionv1.RegenerateSessionSummaryRequest{SessionId: sessionID}))

@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -157,12 +158,12 @@ type fakeGitHubResolver struct {
 	err       error
 }
 
-func (f *fakeGitHubResolver) resolve(input string) (string, *session.GitHubRef, error) {
+func (f *fakeGitHubResolver) resolve(input string) (string, *instance.GitHubRef, error) {
 	f.calls = append(f.calls, input)
 	if f.err != nil {
 		return "", nil, f.err
 	}
-	return f.localPath, &session.GitHubRef{}, nil
+	return f.localPath, &instance.GitHubRef{}, nil
 }
 
 // mockSessionCreator records CreateDirectorySession calls for inspection.
@@ -271,14 +272,14 @@ func (m *mockSessionSteerer) calls() []mockSteerCall {
 
 // fakeAutonomousDriverStarter records StartAutonomousDriverForInstance calls for inspection.
 type fakeAutonomousDriverStarter struct {
-	calls []*session.Instance
+	calls []*instance.Instance
 }
 
-func (f *fakeAutonomousDriverStarter) StartAutonomousDriverForInstance(inst *session.Instance) {
+func (f *fakeAutonomousDriverStarter) StartAutonomousDriverForInstance(inst *instance.Instance) {
 	f.calls = append(f.calls, inst)
 }
 
-func (f *fakeAutonomousDriverStarter) StartAutonomousDriverWithTimeout(inst *session.Instance, _ time.Duration) {
+func (f *fakeAutonomousDriverStarter) StartAutonomousDriverWithTimeout(inst *instance.Instance, _ time.Duration) {
 	f.calls = append(f.calls, inst)
 }
 
@@ -301,14 +302,14 @@ type mockCreateCall struct {
 	// tests can inspect post-return mutations (e.g. SetCategory) that the
 	// production code performs on the instance after CreateDirectorySession/
 	// CreateWorktreeSession returns it.
-	inst *session.Instance
+	inst *instance.Instance
 	// programOverride captures the trailing programOverride argument (Epic 2.4) so
 	// tests can assert a work-stage executor override reached instance creation via
 	// this same call, rather than a later SwitchProgram/Restart-style call.
 	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts services.SessionSpawnOptions) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts services.SessionSpawnOptions) (*instance.Instance, error) {
 	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
@@ -337,7 +338,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path stri
 	if program == "" {
 		program = "claude"
 	}
-	inst := &session.Instance{Title: title, Path: path, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	inst := &instance.Instance{Title: title, Path: path, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        path,
@@ -354,7 +355,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path stri
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts services.SessionSpawnOptions) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts services.SessionSpawnOptions) (*instance.Instance, error) {
 	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
@@ -377,7 +378,7 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktre
 	if program == "" {
 		program = "claude"
 	}
-	inst := &session.Instance{Title: title, Path: worktreePath, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	inst := &instance.Instance{Title: title, Path: worktreePath, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        worktreePath,
@@ -1042,7 +1043,7 @@ func TestGetBacklogItem_should_EmitBudgetWarningLogLine_When_LiveCostCrossesThre
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "work-session-over-budget",
-		SessionRole:      string(session.SessionRoleWork),
+		SessionRole:      string(instance.SessionRoleWork),
 		EstimatedCostUsd: 5.20,
 	})
 	require.NoError(t, err)
@@ -1466,7 +1467,7 @@ func TestRejectPlan_ClearsExistingApproval(t *testing.T) {
 
 	// Move the item to ready so the spawn-gate precondition check below is the
 	// planning gate itself, not the earlier status gate.
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
@@ -1666,7 +1667,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 
 	// 5b. Backlog work sessions must be categorized "Backlog" so they group
 	// correctly in the session list UI instead of falling into "Uncategorized".
-	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+	assert.Equal(t, instance.CategoryBacklog, creator.calls[0].inst.Category,
 		"backlog work session should have Category == Backlog")
 
 	// 6. Item should have advanced to in_progress after spawn.
@@ -1801,9 +1802,9 @@ func TestSpawnSessionFromItem_Reopen_SetsBacklogCategory(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	assert.Contains(t, creator.calls[0].tags, session.TagBacklogRevision,
+	assert.Contains(t, creator.calls[0].tags, instance.TagBacklogRevision,
 		"reopen spawn should carry the revision tag")
-	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+	assert.Equal(t, instance.CategoryBacklog, creator.calls[0].inst.Category,
 		"backlog revision-reopen session should have Category == Backlog")
 }
 
@@ -2339,13 +2340,13 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "dead-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// TransitionBacklogItemStatus above already moved the item to "ready"; put it back
 	// to "in_progress" the way a real reopen scenario would leave it (dead session, but
 	// item still shows as actively worked).
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Before the fix, this would fail with CodeAlreadyExists forever.
@@ -2359,7 +2360,7 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	for _, is := range sessions {
 		if is.SessionUUID == "dead-work-session-uuid" {
 			deadEnded = is.EndedAt != nil
-		} else if is.Role == string(session.SessionRoleWork) {
+		} else if is.Role == string(instance.SessionRoleWork) {
 			newOpen = is.EndedAt == nil
 		}
 	}
@@ -2394,10 +2395,10 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2412,7 +2413,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	for _, is := range sessions {
 		if is.SessionUUID == "stale-work-session-uuid" {
 			staleEnded = is.EndedAt != nil
-		} else if is.Role == string(session.SessionRoleWork) {
+		} else if is.Role == string(instance.SessionRoleWork) {
 			newOpen = is.EndedAt == nil
 		}
 	}
@@ -2456,7 +2457,7 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "unrelated-wrongly-tombstoned",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	unrelated, err := storage.ListItemSessions(t.Context(), itemID)
@@ -2467,10 +2468,10 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2505,10 +2506,10 @@ func TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPendin
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2552,10 +2553,10 @@ func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_Activ
 	createdIS, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	var (
@@ -2612,7 +2613,7 @@ func TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress(t *te
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// Left in "ready" (createReadyItemForSpawn's terminal status), not
@@ -2644,10 +2645,10 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "live-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -2717,7 +2718,7 @@ func TestSpawnSessionFromItem_ConcurrentSpawns_OnlyOneWorkSessionCreated(t *test
 	require.NoError(t, err)
 	openWork := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork && is.EndedAt == nil {
+		if is.Role == instance.SessionRoleWork && is.EndedAt == nil {
 			openWork++
 		}
 	}
@@ -2749,11 +2750,11 @@ func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
 	priorSession, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "round-1-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorSession.ID, endedAt))
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -2799,7 +2800,7 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	priorIS, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "prior-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorIS.ID, time.Now().Add(-time.Hour)))
@@ -2810,7 +2811,7 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	// AttachSessionToItem's storage.LoadInstances() lookup.
 	sessionDir := t.TempDir()
 	const attachUUID = "attach-session-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "attach-target",
 		UUID:  attachUUID,
 		Path:  sessionDir,
@@ -2876,7 +2877,7 @@ func TestAttachSessionToItem_RejectsWhenSessionPathIsItemSharedRepoCheckout(t *t
 	// The hazard: a session whose Path IS the item's own RepoPath, not a
 	// dedicated worktree or directory.
 	const attachUUID = "shared-checkout-session-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title:     "shared-checkout-session",
 		UUID:      attachUUID,
 		Path:      repoPath,
@@ -3271,7 +3272,7 @@ func TestTriggerReReview_SetsBacklogCategory(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+	assert.Equal(t, instance.CategoryBacklog, creator.calls[0].inst.Category,
 		"re-review session should have Category == Backlog")
 }
 
@@ -3341,7 +3342,7 @@ func TestTriggerReReview_EmptyDiff_UsesWorkDirAndCodebaseAccessPrompt(t *testing
 	call := pool.firstCall()
 	assert.Equal(t, repoDir, call.workDir, "empty-diff re-review must be granted WorkDir access to the codebase")
 	assert.Equal(t, headless.CodebaseReadAllowedTools, call.allowedTools)
-	assert.Equal(t, session.PermissionModeBypassPermissions, call.permissionMode)
+	assert.Equal(t, instance.PermissionModeBypassPermissions, call.permissionMode)
 	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), call.systemPrompt)
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
@@ -3375,7 +3376,7 @@ func TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt(t *testing.T) {
 	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "prior-review-1",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictUnverifiable,
 		Summary:        "prior attempt could not locate satisfying evidence",
@@ -3764,7 +3765,7 @@ func TestTriggerTriage_DoubleTriggerGuard(t *testing.T) {
 	is, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: liveUUID,
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 	// Mark it as started so the orphan guard treats it as genuinely live.
@@ -3798,7 +3799,7 @@ func TestItemSessionToProto_MapsTriageResult(t *testing.T) {
 	isData := backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "00000000-0000-0000-0000-000000000002",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	}
 	is, isErr := storage.CreateItemSession(t.Context(), isData)
 	require.NoError(t, isErr)
@@ -3838,7 +3839,7 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 	isData := backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "00000000-0000-0000-0000-000000000003",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	}
 	is, isErr := storage.CreateItemSession(t.Context(), isData)
 	require.NoError(t, isErr)
@@ -3860,11 +3861,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ services.SessionSpawnOptions) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ services.SessionSpawnOptions) (*instance.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ services.SessionSpawnOptions) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ services.SessionSpawnOptions) (*instance.Instance, error) {
 	return nil, e.err
 }
 
@@ -3931,7 +3932,7 @@ func TestTriggerTriage_Success(t *testing.T) {
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
-	assert.Equal(t, string(session.SessionRoleTriage), resp.Msg.ItemSession.SessionRole)
+	assert.Equal(t, string(instance.SessionRoleTriage), resp.Msg.ItemSession.SessionRole)
 
 	// Goroutine runs asynchronously — poll until item transitions to "ready".
 	wait.RequireEventually(t, func() bool {
@@ -4574,7 +4575,7 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	require.NoError(t, trigErr)
 
 	// Move the item off 'idea' while the delayed headless call is still in flight.
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	release()
 
@@ -4840,7 +4841,7 @@ func TestTriggerTriage_AlreadyExists_LiveSession(t *testing.T) {
 	_, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "live-triage-uuid",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 
@@ -4873,7 +4874,7 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	_, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-00000000-dead-beef-0000-000000000000",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 
@@ -4922,7 +4923,7 @@ func TestTriggerTriage_AlreadyExists_LiveHeadlessSession(t *testing.T) {
 	_, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-11111111-live-0000-000000000000",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 

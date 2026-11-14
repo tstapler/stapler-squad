@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func newTestMcpProofs(t *testing.T) (*McpProofs, string) {
@@ -31,7 +31,7 @@ func TestMcpProofs_Verify_should_AcceptOnlyOwnSessionProof(t *testing.T) {
 	assert.False(t, m.Verify(a, "garbage"))
 	assert.False(t, m.Verify("", m.HeaderValue("")))
 	assert.False(t, m.Verify("../etc", m.HeaderValue("../etc")))
-	assert.True(t, strings.HasPrefix(m.HeaderValue(a), session.MCPProofValuePrefix))
+	assert.True(t, strings.HasPrefix(m.HeaderValue(a), instance.MCPProofValuePrefix))
 }
 
 func TestMcpProofs_HeaderValue_should_NotBeAHookProof(t *testing.T) {

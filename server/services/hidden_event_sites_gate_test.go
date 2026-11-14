@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // newCountingGateService is a SessionService whose delivery gate is attached
@@ -32,13 +33,13 @@ func newCountingGateService(t *testing.T) (*SessionService, *pkgevents.EventBus,
 
 // newHiddenSiteEnv builds a gated service and seeds one hidden session. flagOn
 // pins the global flag explicitly so each test states the state it asserts.
-func newHiddenSiteEnv(t *testing.T, flagOn bool, inst *session.Instance) *crashEnv {
+func newHiddenSiteEnv(t *testing.T, flagOn bool, inst *instance.Instance) *crashEnv {
 	t.Helper()
 	e := newCrashEnv(t, true)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.HiddenSessionGateFeatureFlag, flagOn))
 	gate := e.svc.DeliveryGate()
 	gate.Flags().Reload()
-	gate.SeedFromInstances([]*session.Instance{inst})
+	gate.SeedFromInstances([]*instance.Instance{inst})
 	return e
 }
 
@@ -47,7 +48,7 @@ func newHiddenSiteEnv(t *testing.T, flagOn bool, inst *session.Instance) *crashE
 // for a hidden session, and the routine WARNING/INFO events are dropped by the
 // gate. The session-state sync events still fire.
 func TestHiddenSessionEvents_ShouldDeliverOnlyRecoveryFailure_WhenGateOn(t *testing.T) {
-	inst := &session.Instance{Title: "hidden-sites", UUID: "hidden-sites-uuid", Hidden: true}
+	inst := &instance.Instance{Title: "hidden-sites", UUID: "hidden-sites-uuid", Hidden: true}
 	e := newHiddenSiteEnv(t, true, inst)
 
 	e.svc.onColdRestoreLostHistory(inst)
@@ -72,7 +73,7 @@ func TestHiddenSessionEvents_ShouldDeliverOnlyRecoveryFailure_WhenGateOn(t *test
 // Rollback: with the gate off every site delivers for a hidden session and the
 // shadow counters record what would have been suppressed.
 func TestHiddenSessionEvents_ShouldDeliverEverything_WhenGateOff(t *testing.T) {
-	inst := &session.Instance{Title: "hidden-sites-off", UUID: "hidden-sites-off-uuid", Hidden: true}
+	inst := &instance.Instance{Title: "hidden-sites-off", UUID: "hidden-sites-off-uuid", Hidden: true}
 	e := newHiddenSiteEnv(t, false, inst)
 
 	e.svc.onColdRestoreLostHistory(inst)
@@ -98,14 +99,14 @@ func TestHiddenSessionEvents_ShouldDeliverEverything_WhenGateOff(t *testing.T) {
 // "Autonomous fix complete" is routine INFO and is dropped by the gate.
 func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGateOn(t *testing.T) {
 	const title = "hidden-generic-gated"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test", Status: domain.Paused,
 		Program: "claude", AutonomousMode: true, Hidden: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	e := newHiddenSiteEnv(t, true, inst)
 	require.NoError(t, e.svc.storage.AddInstance(inst))
-	e.svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	e.svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
 	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "all good"})
@@ -121,7 +122,7 @@ func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGa
 // The capacity monitor's guardrail stop is a hard stop: its WARNING carries the
 // failure stamp so a hidden session's termination still delivers.
 func TestCapacityGuardrailStop_ShouldDeliverForHiddenSession_WhenGateOn(t *testing.T) {
-	inst := &session.Instance{Title: "hidden-capacity", UUID: "hidden-capacity-uuid", Hidden: true}
+	inst := &instance.Instance{Title: "hidden-capacity", UUID: "hidden-capacity-uuid", Hidden: true}
 	e := newHiddenSiteEnv(t, true, inst)
 	m := NewCapacityMonitor(CapacityMonitorParams{EventBus: e.bus})
 

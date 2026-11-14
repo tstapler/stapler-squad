@@ -15,9 +15,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"go.opentelemetry.io/otel/metric"
@@ -89,7 +89,7 @@ func (f browseFilter) keeps(rec *sessionv1.ArtifactRecordProto, pr *sessionv1.Se
 
 // pullRequestFor resolves a PR record against the session's own PR entries; a PR the
 // session only saw gets a minimal entry in state "unknown".
-func pullRequestFor(inst *session.Instance, rec *sessionv1.ArtifactRecordProto) (*sessionv1.SessionPullRequest, string) {
+func pullRequestFor(inst *instance.Instance, rec *sessionv1.ArtifactRecordProto) (*sessionv1.SessionPullRequest, string) {
 	r := rec.GetPr()
 	ref, err := domain.NewPRRef(r.GetHost(), r.GetOwner(), r.GetRepo(), int(r.GetNumber()))
 	if err == nil {

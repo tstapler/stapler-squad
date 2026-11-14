@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -29,7 +30,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		t.Parallel()
 		// Create a simple directory session with a command that stays alive
 		// Using sleep to keep the session alive long enough for tmux to register it
-		instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+		instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 			Title:            "test-session-no-hang",
 			Path:             tempDir,
 			Program:          "bash -c 'echo test session created; sleep 1'",
@@ -72,7 +73,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 	t.Run("ClaudeSessionCreation", func(t *testing.T) {
 		t.Parallel()
 		// Test with Claude program (but use a simple command instead of actual claude)
-		instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+		instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 			Title:            "test-claude-session",
 			Path:             tempDir,
 			Program:          "bash -c 'echo \"Starting claude session\"; sleep 1; echo \"Ready\"'",
@@ -148,7 +149,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 				return
 			}
 
-			instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+			instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 				Title:            "test-" + strings.ToLower(tc.name) + "-real",
 				Path:             tempDir,
 				Program:          tc.program,
@@ -195,7 +196,7 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-worktree-session",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; echo Worktree session ready; sleep 1'",

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
@@ -22,7 +23,7 @@ func TestWaitForPaneUpdate_ReturnsTrue_AsSoonAsChangeObserved(t *testing.T) {
 	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{false, false, true}}
 
 	start := time.Now()
-	updated := waitForPaneUpdate(context.Background(), checker, 5*time.Millisecond, time.Second)
+	updated := instance.WaitForPaneUpdate(context.Background(), checker, 5*time.Millisecond, time.Second)
 	elapsed := time.Since(start)
 
 	if !updated {
@@ -40,7 +41,7 @@ func TestWaitForPaneUpdate_ReturnsFalse_When_PaneNeverChanges(t *testing.T) {
 	t.Parallel()
 	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{false}}
 
-	if waitForPaneUpdate(context.Background(), checker, time.Millisecond, 20*time.Millisecond) {
+	if instance.WaitForPaneUpdate(context.Background(), checker, time.Millisecond, 20*time.Millisecond) {
 		t.Error("waitForPaneUpdate returned true even though the pane never reported a change")
 	}
 }
@@ -54,7 +55,7 @@ func TestWaitForPaneUpdate_ReturnsFalse_When_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if waitForPaneUpdate(ctx, checker, time.Millisecond, time.Second) {
+	if instance.WaitForPaneUpdate(ctx, checker, time.Millisecond, time.Second) {
 		t.Error("waitForPaneUpdate returned true after context was already cancelled")
 	}
 }

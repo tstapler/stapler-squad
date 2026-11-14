@@ -10,13 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeSwitchWorkspaceProcessManager is a ProcessManager double that records the
 // kill/restart calls SwitchWorkspace makes, so the test needs no real tmux.
 // Embeds a nil ProcessManager so any unanticipated call panics loudly.
 type fakeSwitchWorkspaceProcessManager struct {
-	ProcessManager
+	instance.ProcessManager
 	mu     sync.Mutex
 	closes int
 	starts int
@@ -29,7 +30,7 @@ func (f *fakeSwitchWorkspaceProcessManager) counts() (closes, starts int) {
 	return f.closes, f.starts
 }
 
-func (f *fakeSwitchWorkspaceProcessManager) WireLaunch(LaunchSpec) {}
+func (f *fakeSwitchWorkspaceProcessManager) WireLaunch(instance.LaunchSpec) {}
 
 func (f *fakeSwitchWorkspaceProcessManager) AppendLaunchEnv(...string) {}
 
@@ -101,7 +102,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	}
 
 	// Wrap in LiveInstance so the actor goroutine is present (production-realistic).
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	// Swap the real tmux backend for a fake: the restart path would otherwise
@@ -119,8 +120,8 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 		defer close(done)
 		// No VCS in the temp dir, so SwitchWorkspace takes the directory-fallback
 		// path and calls startLocked from inside the actor command.
-		_, _ = li.SwitchWorkspace(WorkspaceSwitchRequest{
-			Type:   SwitchTypeRevision,
+		_, _ = li.SwitchWorkspace(instance.WorkspaceSwitchRequest{
+			Type:   instance.SwitchTypeRevision,
 			Target: "some-branch",
 		})
 	}()

@@ -674,7 +674,7 @@ var dfltKnownLiteralSites = map[string]bool{
 // registry default is true, so an unset flag reads false there and true elsewhere.
 // Changing the read is a behavior change and needs an owner decision.
 var dfltKnownPlainReadDisagreements = map[string]bool{
-	"session/instance_tmux.go|" + TerminalResyncExecGateFastLaneFlagName: true,
+	"session/instance/instance_tmux.go|" + TerminalResyncExecGateFastLaneFlagName: true,
 }
 
 type dfltFile struct {

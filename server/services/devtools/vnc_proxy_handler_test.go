@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // buildVNCRequest builds a GET request for the VNC proxy endpoint with the
@@ -18,7 +18,7 @@ func buildVNCRequest(sessionID string) *http.Request {
 }
 
 // newTestInstanceForVNC creates a minimal *session.Instance for VNC proxy handler tests.
-func newTestInstanceForVNC(t *testing.T) *session.Instance {
+func newTestInstanceForVNC(t *testing.T) *instance.Instance {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "vnc-handler-test-*")
 	if err != nil {
@@ -26,7 +26,7 @@ func newTestInstanceForVNC(t *testing.T) *session.Instance {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "test-vnc",
 		Path:  dir,
 	})

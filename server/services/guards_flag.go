@@ -9,7 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // hiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary
@@ -85,7 +85,7 @@ func (g *guardBypassState) note() (warn bool) {
 // steer to a non-qualifying hidden target goes through (guards off). With the
 // sink down the write is refused: the flag exists to restore the review
 // composer, not to open writes to triage, diagnose and other sessions blind.
-func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *session.Instance, msg string) (AuditLine, error) {
+func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) (AuditLine, error) {
 	line := s.steerAuditLine(withSteerRequestFacts(ctx, d.facts), inst, msg)
 	line.Kind = auditKindGuardBypass
 	line.Phase = auditPhaseRequest

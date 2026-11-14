@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // IT-002: in_progress → review via onSessionExited (lifecycle listener)
@@ -164,7 +164,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 	require.Len(t, fetchedItem.StatusEvents, 1)
 	require.Equal(t, string(domain.BacklogStatusInProgress), fetchedItem.StatusEvents[0].FromStatus)
 	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.StatusEvents[0].ToStatus)
-	require.Equal(t, session.TriggeredBySystem, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, instance.TriggeredBySystem, fetchedItem.StatusEvents[0].TriggeredBy)
 }
 
 // IT-006: Review session exit does NOT transition item (recursion guard)

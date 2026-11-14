@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -24,10 +25,10 @@ import (
 // global (set at package init to BackendTmux and never empty in production) is always
 // checked first. See plan.md Epic 2.1 Story 2.1.3 for why defaultBackend's precedence
 // position is otherwise unchanged.
-func NewProcessManager(_ context.Context, defaultBackend domain.ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
+func NewProcessManager(_ context.Context, defaultBackend domain.ProcessManagerBackend, opts instance.ProcessManagerOptions) (instance.ProcessManager, error) {
 	backend := opts.Backend
 	if backend == "" {
-		backend = getSelectedBackend()
+		backend = instance.GetSelectedBackend()
 	}
 	if backend == "" {
 		backend = defaultBackend
@@ -62,7 +63,7 @@ func NewProcessManager(_ context.Context, defaultBackend domain.ProcessManagerBa
 // ultimately need the identical DaemonConfig.Addr to agree.
 //
 // opts.Program, if set, is applied via SetCommand here (mirrors newTmuxBackendFromOpts below).
-func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
+func newTymuxBackendFromOpts(opts instance.ProcessManagerOptions) *TymuxBackend {
 	b := NewTymuxBackend(newTymuxSessionFn())
 	if cmd := opts.LaunchCommand(); cmd != nil {
 		b.TymuxManager().SetCommand(cmd)
@@ -81,7 +82,7 @@ var newTymuxSessionFn = func() tymux.TymuxManager {
 // newTmuxBackendFromOpts constructs a TmuxProcessManager from ProcessManagerOptions
 // and wraps it in a TmuxBackend. When no program/opts are provided, returns an
 // empty-backed TmuxBackend that callers populate via SetSession() (initTmuxSession).
-func newTmuxBackendFromOpts(opts ProcessManagerOptions) *TmuxBackend {
+func newTmuxBackendFromOpts(opts instance.ProcessManagerOptions) *TmuxBackend {
 	mgr := &TmuxProcessManager{}
 	if opts.SessionName != "" && opts.Program != "" {
 		var sess *tmux.TmuxSession
@@ -109,4 +110,4 @@ func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) 
 	tb.Cleanup(func() { newTymuxSessionFn = orig })
 }
 
-func init() { processManagerFactoryHook = NewProcessManager }
+func init() { instance.ProcessManagerFactoryHook = NewProcessManager }

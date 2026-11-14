@@ -14,9 +14,9 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- report_pr_created ---
@@ -217,7 +217,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	if errRes != nil {
 		return errRes, nil
 	}
-	if itemSession.Role != session.SessionRoleWork {
+	if itemSession.Role != instance.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a created PR", itemSession.Role), ""), nil
 	}
 
@@ -286,7 +286,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		// failure below — this is the one check the tool description
 		// promises has no override, so an unparseable stored PrURL must
 		// never silently skip it and let the reassignment through.
-		curRef, curParseErr := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
+		curRef, curParseErr := instance.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
 		if curParseErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf(
 				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
@@ -318,7 +318,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 			return errResult(ErrInvalidArgument, "pr_url must be an http(s) GitHub PR URL", ""), nil
 		}
 	}
-	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
+	ref, parseErr := instance.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
 	}
@@ -434,7 +434,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	}
 
 	if setErr := h.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
+		Caller: domain.CallerMCPReportPRCreated, Observed: item, TriggeredBy: instance.TriggeredByAgent,
 	}, backlogdto.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: domain.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
 			return transitionDeniedResult(setErr, domain.BacklogStatus(item.Status), domain.BacklogStatusPRPending), nil
@@ -497,7 +497,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 // anchor could be resolved, which callers treat as "not in the item's repo".
 func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *backlogdto.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
 	if item.PrURL != "" {
-		cur, err := session.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
+		cur, err := instance.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
 		if err != nil {
 			return githubpkg.RepoRef{}, fmt.Errorf("tracked PR URL %q is unparseable: %w", item.PrURL, err)
 		}
@@ -514,7 +514,7 @@ func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (
 		return h.resolveSessionRepo(ctx, sessionUUID)
 	}
 	if wt, err := h.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID); err == nil && wt.RepoPath != "" {
-		if owner, repo, host, ok := session.OriginGitHubRepo(wt.RepoPath); ok {
+		if owner, repo, host, ok := instance.OriginGitHubRepo(wt.RepoPath); ok {
 			return githubpkg.NewRepoRefWithHost(owner, repo, host)
 		}
 	}

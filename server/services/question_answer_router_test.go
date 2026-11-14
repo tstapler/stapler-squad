@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -61,11 +62,11 @@ func newRouterEnv(t *testing.T) *routerEnv {
 }
 
 // addVisible registers a visible session whose pane shows the colour dialog.
-func (e *routerEnv) addVisible(title string, tweak ...func(*session.Instance)) (*session.Instance, *replyPM) {
+func (e *routerEnv) addVisible(title string, tweak ...func(*instance.Instance)) (*instance.Instance, *replyPM) {
 	e.t.Helper()
 	dialog := strings.ReplaceAll(replyDialogFixture(e.t, "question_single_select_3opts.txt"), "2. Green", "2. "+replyColorLabel)
 	pm := &replyPM{dialog: dialog, after: "● User answered Claude's questions\n❯ \n"}
-	inst := session.NewStartedInstanceForTest(e.t, title, namedPM{replyPM: pm, name: "ssq_" + title})
+	inst := instance.NewStartedInstanceForTest(e.t, title, namedPM{replyPM: pm, name: "ssq_" + title})
 	inst.UUID = title + "-uuid"
 	inst.Path = e.t.TempDir()
 	inst.Status = domain.Active
@@ -79,7 +80,7 @@ func (e *routerEnv) addVisible(title string, tweak ...func(*session.Instance)) (
 }
 
 // hookRow stores a hook-mirrored row for dialog d and registers it as pending.
-func (e *routerEnv) hookRow(inst *session.Instance, d panereply.QuestionDialog) string {
+func (e *routerEnv) hookRow(inst *instance.Instance, d panereply.QuestionDialog) string {
 	e.t.Helper()
 	opts := make([]domain.Option, len(d.Labels))
 	for i, l := range d.Labels {
@@ -102,7 +103,7 @@ func (e *routerEnv) hookRow(inst *session.Instance, d panereply.QuestionDialog) 
 }
 
 // agentRow stores an agent-created session-scope question.
-func (e *routerEnv) agentRow(inst *session.Instance) string {
+func (e *routerEnv) agentRow(inst *instance.Instance) string {
 	e.t.Helper()
 	row, err := e.fix.storage.CreateGuidanceRequest(context.Background(), session.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: inst.UUID, QuestionText: "Which cache?",
@@ -119,7 +120,7 @@ func (e *routerEnv) row(id string) *session.GuidanceRequestData {
 	return row
 }
 
-func (e *routerEnv) answer(inst *session.Instance, qid, label string) ActionResult {
+func (e *routerEnv) answer(inst *instance.Instance, qid, label string) ActionResult {
 	e.t.Helper()
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: label, ReplyID: "r-" + uuid.NewString()})
 	require.NoError(e.t, err)
@@ -265,8 +266,8 @@ func TestAnswerRouter_ShouldDelegateToTheHiddenHandler_WhenSessionIsHidden(t *te
 func TestAnswerRouter_ShouldReportTheRouteOfEachSessionState(t *testing.T) {
 	e := newRouterEnv(t)
 	visible, _ := e.addVisible("rt-visible")
-	stopped, _ := e.addVisible("rt-stopped", func(i *session.Instance) { i.Status = domain.Stopped })
-	archived, _ := e.addVisible("rt-archived", func(i *session.Instance) {
+	stopped, _ := e.addVisible("rt-stopped", func(i *instance.Instance) { i.Status = domain.Stopped })
+	archived, _ := e.addVisible("rt-archived", func(i *instance.Instance) {
 		now := time.Now()
 		i.ArchivedAt = &now
 	})
@@ -299,7 +300,7 @@ func TestAnswerRouter_ShouldReportTheRouteOfEachSessionState(t *testing.T) {
 }
 
 // lifecycleUntouched asserts an answer neither revived nor wrote to the session.
-func lifecycleUntouched(t *testing.T, inst *session.Instance, pm *replyPM, status domain.Status, archived bool) {
+func lifecycleUntouched(t *testing.T, inst *instance.Instance, pm *replyPM, status domain.Status, archived bool) {
 	t.Helper()
 	assert.Equal(t, status, inst.Snapshot().Status, "no Start, RecoverFromStopped, restart or transition to Active")
 	assert.Equal(t, archived, inst.IsArchived())
@@ -308,7 +309,7 @@ func lifecycleUntouched(t *testing.T, inst *session.Instance, pm *replyPM, statu
 
 func TestAnswerRouter_ShouldOnlyStoreTheAnswer_WhenSessionIsStopped(t *testing.T) {
 	e := newRouterEnv(t)
-	inst, pm := e.addVisible("stopped-store", func(i *session.Instance) { i.Status = domain.Stopped })
+	inst, pm := e.addVisible("stopped-store", func(i *instance.Instance) { i.Status = domain.Stopped })
 	qid := e.agentRow(inst)
 
 	res := e.answer(inst, qid, "Redis")
@@ -325,7 +326,7 @@ func TestAnswerRouter_ShouldOnlyStoreTheAnswer_WhenSessionIsStopped(t *testing.T
 
 func TestAnswerRouter_ShouldOnlyStoreTheAnswer_WhenSessionIsArchived(t *testing.T) {
 	e := newRouterEnv(t)
-	inst, pm := e.addVisible("archived-store", func(i *session.Instance) {
+	inst, pm := e.addVisible("archived-store", func(i *instance.Instance) {
 		now := time.Now()
 		i.ArchivedAt = &now
 		i.Status = domain.Stopped
@@ -345,7 +346,7 @@ func TestAnswerRouter_ShouldOnlyStoreTheAnswer_WhenSessionIsArchived(t *testing.
 
 func TestAnswerRouter_ShouldReportAlreadyResolvedWithTheStoredValue_WhenAnsweredTwice(t *testing.T) {
 	e := newRouterEnv(t)
-	inst, _ := e.addVisible("stopped-twice", func(i *session.Instance) { i.Status = domain.Stopped })
+	inst, _ := e.addVisible("stopped-twice", func(i *instance.Instance) { i.Status = domain.Stopped })
 	qid := e.agentRow(inst)
 	require.Equal(t, outApplied, e.answer(inst, qid, "Redis").Outcome)
 
@@ -358,7 +359,7 @@ func TestAnswerRouter_ShouldReportAlreadyResolvedWithTheStoredValue_WhenAnswered
 
 func TestAnswerRouter_ShouldReportSessionEnded_WhenTheReaperCancelledAHookRow(t *testing.T) {
 	e := newRouterEnv(t)
-	inst, pm := e.addVisible("stopped-hook", func(i *session.Instance) { i.Status = domain.Stopped })
+	inst, pm := e.addVisible("stopped-hook", func(i *instance.Instance) { i.Status = domain.Stopped })
 	qid := e.hookRow(inst, colorDialog)
 	_, err := e.fix.storage.CancelGuidanceRequest(context.Background(), uuid.MustParse(qid), domain.CancelReasonSessionEnded.String())
 	require.NoError(t, err)
@@ -372,7 +373,7 @@ func TestAnswerRouter_ShouldReportSessionEnded_WhenTheReaperCancelledAHookRow(t 
 
 func TestAnswerRouter_ShouldRefuseTheDurableRoute_WhenStageIsOff(t *testing.T) {
 	e := newRouterEnv(t)
-	inst, _ := e.addVisible("stopped-off", func(i *session.Instance) { i.Status = domain.Stopped })
+	inst, _ := e.addVisible("stopped-off", func(i *instance.Instance) { i.Status = domain.Stopped })
 	qid := e.agentRow(inst)
 	e.flags.answerOff = true
 
@@ -384,7 +385,7 @@ func TestAnswerRouter_ShouldRefuseTheDurableRoute_WhenStageIsOff(t *testing.T) {
 
 func TestAnswerRouter_ShouldRefuseAnAnswerOutsideTheOptions_WhenSessionIsStopped(t *testing.T) {
 	e := newRouterEnv(t)
-	inst, _ := e.addVisible("stopped-bad-option", func(i *session.Instance) { i.Status = domain.Stopped })
+	inst, _ := e.addVisible("stopped-bad-option", func(i *instance.Instance) { i.Status = domain.Stopped })
 	qid := e.agentRow(inst)
 
 	res := e.answer(inst, qid, "Hazelcast")

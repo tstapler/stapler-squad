@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -53,8 +54,8 @@ func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
 	}
 }
 
-func redrawInstance(mgr tymux.TymuxManager, status domain.Status) *Instance {
-	inst := &Instance{Title: "redraw", UUID: "uuid-redraw", Status: status}
+func redrawInstance(mgr tymux.TymuxManager, status domain.Status) *instance.Instance {
+	inst := &instance.Instance{Title: "redraw", UUID: "uuid-redraw", Status: status}
 	inst.SetProcessManagerForTest(NewTymuxBackend(mgr))
 	inst.MarkStarted()
 	return inst
@@ -122,7 +123,7 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 	t.Parallel()
 	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, domain.Active)
 	notStarted.SetStartedForTest(false)
-	cases := map[string]*Instance{
+	cases := map[string]*instance.Instance{
 		"not started": notStarted,
 		"paused":      redrawInstance(&redrawManager{ok: true}, domain.Paused),
 	}
@@ -140,7 +141,7 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingPane_When_BackendHasNoCapability(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Active}
+	inst := &instance.Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Active}
 	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
 	inst.MarkStarted()
 

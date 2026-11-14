@@ -20,13 +20,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // nudgeGateTestInstance wires cc as inst's controller via the unexported
 // controllerManager field (same-package test helper) so CheckNudgeEligible's
 // inst.GetController() call resolves to a controllable, non-tmux controller.
-func nudgeGateTestInstance(cc *claudectl.ClaudeController) *Instance {
-	inst := &Instance{Title: "nudge-gate-test", UUID: uuid.New().String()}
+func nudgeGateTestInstance(cc *claudectl.ClaudeController) *instance.Instance {
+	inst := &instance.Instance{Title: "nudge-gate-test", UUID: uuid.New().String()}
 	inst.SetControllerForTest(cc)
 	return inst
 }

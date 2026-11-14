@@ -13,6 +13,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeSweepPRSource wraps the real storage and lets a test replace or break any
@@ -62,19 +63,19 @@ func newPRSweeper(fix *forkTestFixture) (*SessionRetentionSweeper, *fakeSweepPRS
 func oldArchive() time.Time { return time.Now().AddDate(0, 0, -20) }
 
 // addArchivedWithUUID adds an archived session past retention with a fixed uuid.
-func addArchivedWithUUID(t *testing.T, fix *forkTestFixture, title, uuid string, opts ...func(*session.Instance)) {
+func addArchivedWithUUID(t *testing.T, fix *forkTestFixture, title, uuid string, opts ...func(*instance.Instance)) {
 	t.Helper()
-	addArchivedInstance(t, fix, title, oldArchive(), append([]func(*session.Instance){func(i *session.Instance) { i.UUID = uuid }}, opts...)...)
+	addArchivedInstance(t, fix, title, oldArchive(), append([]func(*instance.Instance){func(i *instance.Instance) { i.UUID = uuid }}, opts...)...)
 }
 
 // linkPR links number to the session. State rows are shared by PR identity, so
 // each test uses PR numbers no other test session in the same fixture uses.
 func linkPR(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool) {
 	t.Helper()
-	linkPRKeepingMirror(t, fix, uuid, number, state, terminal, session.PRMirror{})
+	linkPRKeepingMirror(t, fix, uuid, number, state, terminal, instance.PRMirror{})
 }
 
-func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool, mirror session.PRMirror) {
+func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool, mirror instance.PRMirror) {
 	t.Helper()
 	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
@@ -106,8 +107,8 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLegacyNumberAndNoLinkRows(t *test
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	addArchivedWithUUID(t, fix, "flag-false", "u-f", func(i *session.Instance) { i.GitHubPRNumber, i.GitHubPRStatusTerminal = 9, false })
-	addArchivedWithUUID(t, fix, "flag-true", "u-t", func(i *session.Instance) { i.GitHubPRNumber, i.GitHubPRStatusTerminal = 9, true })
+	addArchivedWithUUID(t, fix, "flag-false", "u-f", func(i *instance.Instance) { i.GitHubPRNumber, i.GitHubPRStatusTerminal = 9, false })
+	addArchivedWithUUID(t, fix, "flag-true", "u-t", func(i *instance.Instance) { i.GitHubPRNumber, i.GitHubPRStatusTerminal = 9, true })
 
 	sweeper, _ := newPRSweeper(fix)
 	sweeper.sweep(context.Background())
@@ -217,15 +218,15 @@ func TestRetentionSweeper_ShouldFailClosed_WhenRepresentationMismatch(t *testing
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	legacy := func(terminal bool) func(*session.Instance) {
-		return func(i *session.Instance) {
+	legacy := func(terminal bool) func(*instance.Instance) {
+		return func(i *instance.Instance) {
 			i.GitHubPRNumber, i.GitHubOwner, i.GitHubRepo, i.GitHubPRStatusTerminal = 32, "acme", "app", terminal
 		}
 	}
 	addArchivedWithUUID(t, fix, "unrepresented", "u-m", legacy(false))
-	linkPRKeepingMirror(t, fix, "u-m", 31, domain.PRStateMerged, true, session.PRMirror{Number: 32})
+	linkPRKeepingMirror(t, fix, "u-m", 31, domain.PRStateMerged, true, instance.PRMirror{Number: 32})
 	addArchivedWithUUID(t, fix, "unrepresented-safe", "u-ms", legacy(true))
-	linkPRKeepingMirror(t, fix, "u-ms", 31, domain.PRStateMerged, true, session.PRMirror{Number: 32, Terminal: true})
+	linkPRKeepingMirror(t, fix, "u-ms", 31, domain.PRStateMerged, true, instance.PRMirror{Number: 32, Terminal: true})
 	addArchivedWithUUID(t, fix, "bad-item-ref", "u-b")
 
 	sweeper, fake := newPRSweeper(fix)

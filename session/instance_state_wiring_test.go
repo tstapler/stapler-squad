@@ -5,13 +5,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // Snapshot pointer identity stands in for a counting build hook: each rebuild stores a new pointer.
 func TestUpdateTimestamps_Should_RebuildSnapshotOncePerMeaningfulFrameAndZeroOtherwise_When_CountingHook(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{Title: "touch-frames", Path: "/tmp/test", Program: "claude"})
+	inst, err := instance.NewInstance(instance.InstanceOptions{Title: "touch-frames", Path: "/tmp/test", Program: "claude"})
 	require.NoError(t, err)
 	inst.SetTmuxSession(tmux.NewTmuxSession("touch-frames", "claude"))
 

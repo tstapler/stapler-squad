@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -22,7 +23,7 @@ import (
 // it into a bare *Instance the same way that test does, then stamps the pane's
 // STAPLER_SESSION_UUID env var to envUUID — independent of instUUID, the
 // Instance's own identity, so the two can be set to match or mismatch per test.
-func newRealTmuxInstanceForNudgeTest(t *testing.T, instUUID, envUUID string) *Instance {
+func newRealTmuxInstanceForNudgeTest(t *testing.T, instUUID, envUUID string) *instance.Instance {
 	t.Helper()
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
@@ -37,7 +38,7 @@ func newRealTmuxInstanceForNudgeTest(t *testing.T, instUUID, envUUID string) *In
 	})
 	require.NoError(t, tmuxSession.Start(t.TempDir()))
 
-	inst := &Instance{Title: name, UUID: instUUID}
+	inst := &instance.Instance{Title: name, UUID: instUUID}
 	_ = inst.PMForTest() // lazily initializes processManager as *TmuxBackend before SetTmuxSession
 	inst.SetTmuxSession(tmuxSession)
 
@@ -64,7 +65,7 @@ func TestVerifyPaneOwnershipBeforeWrite_RejectsOnIdentityMismatch(t *testing.T) 
 	otherUUID := uuid.New().String()
 	inst := newRealTmuxInstanceForNudgeTest(t, instUUID, otherUUID)
 
-	err := VerifyPaneOwnershipBeforeWrite(context.Background(), inst)
+	err := instance.VerifyPaneOwnershipBeforeWrite(context.Background(), inst)
 
 	require.Error(t, err, "must refuse to write when the pane's live owner marker no longer matches this Instance's UUID")
 	require.Contains(t, err.Error(), "pane ownership mismatch")
@@ -77,7 +78,7 @@ func TestVerifyPaneOwnershipBeforeWrite_AllowsMatchingIdentity(t *testing.T) {
 	instUUID := uuid.New().String()
 	inst := newRealTmuxInstanceForNudgeTest(t, instUUID, instUUID)
 
-	err := VerifyPaneOwnershipBeforeWrite(context.Background(), inst)
+	err := instance.VerifyPaneOwnershipBeforeWrite(context.Background(), inst)
 
 	require.NoError(t, err)
 }

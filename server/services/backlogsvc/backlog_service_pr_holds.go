@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // attachPRSet fills the item detail's pull_requests (the derived set) and pr_holds
@@ -80,7 +81,7 @@ func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogIt
 func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, inSet map[domain.PRRef]bool) []*sessionv1.PrHold {
 	var uuids []string
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork && is.SessionUUID != "" {
+		if is.Role == instance.SessionRoleWork && is.SessionUUID != "" {
 			uuids = append(uuids, is.SessionUUID)
 		}
 	}
@@ -114,10 +115,10 @@ func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdt
 			continue
 		}
 		kind := sessionv1.PrHold_KIND_SESSION_ACTIVE
-		if start := session.LiveWorkHoldStart(prs, time.Time{}); session.LiveWorkHoldExpired(now, start, session.LiveWorkMaxHold) {
+		if start := instance.LiveWorkHoldStart(prs, time.Time{}); instance.LiveWorkHoldExpired(now, start, instance.LiveWorkMaxHold) {
 			kind = sessionv1.PrHold_KIND_MAX_HOLD
 		}
-		return []*sessionv1.PrHold{{Kind: kind, OwnerSessionId: is.SessionUUID, IdleWindowSeconds: int32(session.LiveWorkIdleWindow / time.Second)}}
+		return []*sessionv1.PrHold{{Kind: kind, OwnerSessionId: is.SessionUUID, IdleWindowSeconds: int32(instance.LiveWorkIdleWindow / time.Second)}}
 	}
 	return nil
 }

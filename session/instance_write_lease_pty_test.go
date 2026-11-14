@@ -14,6 +14,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"golang.org/x/term"
 )
 
@@ -62,16 +63,16 @@ func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsW
 				stuckDialogProcessManager: &stuckDialogProcessManager{dialogText: "idle"},
 				master:                    master, slave: slave, closeSlave: tc.closeSlave,
 			}
-			inst := (&Instance{Title: "wedged-" + tc.name, Status: domain.Active, Permissions: domain.GetManagedPermissions()}).WithProcessManagerForTest(pm)
+			inst := (&instance.Instance{Title: "wedged-" + tc.name, Status: domain.Active, Permissions: domain.GetManagedPermissions()}).WithProcessManagerForTest(pm)
 			inst.MarkStarted()
-			inst.SetLeaseFlag(&LeaseFlag{})
+			inst.SetLeaseFlag(&instance.LeaseFlag{})
 
-			lease, ok := inst.TryTerminalWriteLease(LeaseWriterSteer)
+			lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 			require.True(t, ok)
-			err = SendKeysWithTimeout(context.Background(), inst, lease, strings.Repeat("x", 4<<20), 100*time.Millisecond)
+			err = instance.SendKeysWithTimeout(context.Background(), inst, lease, strings.Repeat("x", 4<<20), 100*time.Millisecond)
 			require.ErrorIs(t, err, context.DeadlineExceeded, "the write must wedge on the unread PTY")
 
-			_, ok = inst.TryTerminalWriteLease(LeaseWriterDriver)
+			_, ok = inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 			require.False(t, ok, "no forced release: the wedged write still holds the lease")
 
 			// Pause (which closes the PTY) completes while the write is wedged.
@@ -95,7 +96,7 @@ func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsW
 			}
 
 			// Observed, not asserted: whether the closes above woke the write.
-			if l, free := inst.TryTerminalWriteLease(LeaseWriterOther); free {
+			if l, free := inst.TryTerminalWriteLease(instance.LeaseWriterOther); free {
 				l.Release()
 				t.Logf("%s: the PTY close woke the blocked write", tc.name)
 			} else {

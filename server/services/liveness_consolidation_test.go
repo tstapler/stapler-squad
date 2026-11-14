@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -58,7 +59,7 @@ func (e *livenessProbeExecutor) Output(_ *exec.Cmd) ([]byte, error) {
 // tmux server. session.NewInstance (not a struct literal) is required:
 // SetTmuxSession type-asserts i.processManager to *TmuxBackend, which only the
 // constructor wires.
-func newLiveProbeInstance(t *testing.T, title, paneCWD string) *session.Instance {
+func newLiveProbeInstance(t *testing.T, title, paneCWD string) *instance.Instance {
 	t.Helper()
 	return newProbeInstance(t, title, paneCWD, tmux.NewSessionName(title, tmux.TmuxPrefix).String())
 }
@@ -66,14 +67,14 @@ func newLiveProbeInstance(t *testing.T, title, paneCWD string) *session.Instance
 // newDeadProbeInstance is newLiveProbeInstance's counterpart whose tmux session
 // reports absent, so IsBackendProcessAlive() is false however plausible the
 // instance's persisted cwd looks.
-func newDeadProbeInstance(t *testing.T, title, paneCWD string) *session.Instance {
+func newDeadProbeInstance(t *testing.T, title, paneCWD string) *instance.Instance {
 	t.Helper()
 	return newProbeInstance(t, title, paneCWD, "")
 }
 
-func newProbeInstance(t *testing.T, title, paneCWD, liveSessionName string) *session.Instance {
+func newProbeInstance(t *testing.T, title, paneCWD, liveSessionName string) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir()})
+	inst, err := instance.NewInstance(instance.InstanceOptions{Title: title, Path: t.TempDir()})
 	require.NoError(t, err)
 
 	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(
@@ -95,9 +96,9 @@ func newProbeInstance(t *testing.T, title, paneCWD, liveSessionName string) *ses
 func TestFindConfirmedLiveInstance_MapHit_ReturnsWithoutStorageFallback(t *testing.T) {
 	t.Parallel()
 
-	inst := &session.Instance{Title: "map-hit", UUID: "uuid-map-hit", Path: "/tmp/test", Status: domain.Active}
+	inst := &instance.Instance{Title: "map-hit", UUID: "uuid-map-hit", Path: "/tmp/test", Status: domain.Active}
 	poller := svctest.NewEmptyPoller()
-	poller.SetInstances([]*session.Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 
 	svc := &SessionService{ReviewQueuePoller: poller} // concStorage deliberately nil
 
@@ -130,7 +131,7 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsDead_ReturnsNil(t *test
 
 	storage := svctest.CreateTestStorage(t)
 	const uuid = "uuid-shadow-dead"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title:  "shadow-dead-" + t.Name(),
 		UUID:   uuid,
 		Path:   t.TempDir(),
@@ -168,7 +169,7 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance(t
 
 	storage := svctest.CreateTestStorage(t)
 	const uuid = "uuid-shadow-alive"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title:            title,
 		UUID:             uuid,
 		Path:             t.TempDir(),
@@ -209,7 +210,7 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 	const uuid = "uuid-kill-pane-dereg"
 	socket := svctest.StartRealTmuxSession(t, title)
 
-	inst, err := session.FromInstanceDataDeferred(domain.InstanceData{
+	inst, err := instance.FromInstanceDataDeferred(domain.InstanceData{
 		Title:            title,
 		UUID:             uuid,
 		Path:             t.TempDir(),
@@ -223,7 +224,7 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	poller := svctest.NewEmptyPoller()
-	poller.SetInstances([]*session.Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 	svc := &SessionService{ReviewQueuePoller: poller}
 
 	require.True(t, svc.IsSessionLive(uuid), "precondition: instance is genuinely alive in tmux and registered in the poller")
@@ -276,7 +277,7 @@ func TestOtherLiveSessionInsideWorktree_LiveSiblingInsideWorktree_Blocks(t *test
 	require.NoError(t, os.MkdirAll(siblingCWD, 0o755))
 	sibling := newLiveProbeInstance(t, "live-sibling-"+t.Name(), siblingCWD)
 	poller := svctest.NewEmptyPoller()
-	poller.SetInstances([]*session.Instance{sibling})
+	poller.SetInstances([]*instance.Instance{sibling})
 	svc := &SessionService{ReviewQueuePoller: poller}
 
 	blockingUUID, blocked := svc.OtherLiveSessionInsideWorktree("uuid-target", worktree)
@@ -302,7 +303,7 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 
 	cases := []struct {
 		name        string
-		inst        *session.Instance
+		inst        *instance.Instance
 		excludeUUID string
 	}{
 		{"target session itself is excluded", self, self.UUID},
@@ -313,7 +314,7 @@ func TestOtherLiveSessionInsideWorktree_ExcludedAndUnrelatedAndDead_NotBlocked(t
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			poller := svctest.NewEmptyPoller()
-			poller.SetInstances([]*session.Instance{tc.inst})
+			poller.SetInstances([]*instance.Instance{tc.inst})
 			svc := &SessionService{ReviewQueuePoller: poller}
 
 			blockingUUID, blocked := svc.OtherLiveSessionInsideWorktree(tc.excludeUUID, worktree)
@@ -347,7 +348,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		sibling := newLiveProbeInstance(t, "owner-"+t.Name(), sharedPath)
 		sibling.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
 		poller := svctest.NewEmptyPoller()
-		poller.SetInstances([]*session.Instance{sibling})
+		poller.SetInstances([]*instance.Instance{sibling})
 		svc := &SessionService{ReviewQueuePoller: poller}
 
 		ownerUUID, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
@@ -361,7 +362,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		self := newLiveProbeInstance(t, "self-"+t.Name(), sharedPath)
 		self.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
 		poller := svctest.NewEmptyPoller()
-		poller.SetInstances([]*session.Instance{self})
+		poller.SetInstances([]*instance.Instance{self})
 		svc := &SessionService{ReviewQueuePoller: poller}
 
 		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: self.UUID, conversationUUID: conversationUUID, path: sharedPath})
@@ -374,7 +375,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		sibling := newLiveProbeInstance(t, "different-uuid-"+t.Name(), sharedPath)
 		sibling.SetHistoryInfo("11111111-1111-1111-1111-111111111111", filepath.Join(sharedPath, "other.jsonl"))
 		poller := svctest.NewEmptyPoller()
-		poller.SetInstances([]*session.Instance{sibling})
+		poller.SetInstances([]*instance.Instance{sibling})
 		svc := &SessionService{ReviewQueuePoller: poller}
 
 		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})
@@ -387,7 +388,7 @@ func TestConversationOwnedByOtherLiveSession_should_ReportOwnership_When_LiveSib
 		dead := newDeadProbeInstance(t, "dead-"+t.Name(), sharedPath)
 		dead.SetHistoryInfo(conversationUUID, filepath.Join(sharedPath, conversationUUID+".jsonl"))
 		poller := svctest.NewEmptyPoller()
-		poller.SetInstances([]*session.Instance{dead})
+		poller.SetInstances([]*instance.Instance{dead})
 		svc := &SessionService{ReviewQueuePoller: poller}
 
 		_, owned := svc.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{selfUUID: "self-uuid", conversationUUID: conversationUUID, path: sharedPath})

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // blockingCleaner blocks every CleanupTerminalItem until released and records the
@@ -76,7 +77,7 @@ func TestPRTerminalListener_ShouldCleanDoneItemOfTerminalState_AndSkipOpenItems(
 func TestPRTerminalListener_ShouldResolveSessionLinkOwnersToTheirItems(t *testing.T) {
 	t.Parallel()
 	l, f, _ := terminalFixture(t, domain.BacklogStatusDone)
-	sess := f.session(session.SessionRoleWork)
+	sess := f.session(instance.SessionRoleWork)
 	f.link(session.SessionPROwner(sess), 30, domain.PRStateMerged)
 	v, err := f.repo.GetPullRequestState(context.Background(), testRef(30))
 	require.NoError(t, err)

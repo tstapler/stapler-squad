@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -61,7 +62,7 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_RetryA
 	t.Cleanup(func() { svc.Shutdown() })
 
 	queue := queue.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -94,7 +95,7 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_Sessio
 	t.Cleanup(func() { svc.Shutdown() })
 
 	queue := queue.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -131,7 +132,7 @@ func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPer
 	t.Cleanup(func() { svc.Shutdown() })
 
 	queue := queue.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 

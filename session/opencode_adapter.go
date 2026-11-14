@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -48,7 +49,7 @@ type opencodePartJSON struct {
 	Snapshot string                 `json:"snapshot,omitempty"`
 }
 
-func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (string, error) {
+func resolveOpencodeUUID(ctx context.Context, inst *instance.Instance, dbPath string) (string, error) {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
 		inst.TryExtractConversationUUID()
@@ -61,7 +62,7 @@ func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (st
 			if err == nil {
 				var foundID string
 				query := `SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC LIMIT 1;`
-				if scanErr := db.QueryRowContext(ctx, query, inst.GetWorkingDirectory()).Scan(&foundID); scanErr == nil && foundID != "" {
+				if scanErr := db.QueryRowContext(ctx, query, inst.ActiveDir()).Scan(&foundID); scanErr == nil && foundID != "" {
 					uuidStr = foundID
 				}
 				_ = db.Close()
@@ -79,8 +80,8 @@ func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (st
 	return uuidStr, nil
 }
 
-func parseOpencodeBlocks(partRows *sql.Rows) []CanonicalBlock {
-	var blocks []CanonicalBlock
+func parseOpencodeBlocks(partRows *sql.Rows) []instance.CanonicalBlock {
+	var blocks []instance.CanonicalBlock
 	for partRows.Next() {
 		var partID, partDataStr string
 		if err := partRows.Scan(&partID, &partDataStr); err != nil {
@@ -95,7 +96,7 @@ func parseOpencodeBlocks(partRows *sql.Rows) []CanonicalBlock {
 		switch part.Type {
 		case "text", "reasoning":
 			if part.Text != "" {
-				blocks = append(blocks, NewTextBlock(part.Text))
+				blocks = append(blocks, instance.NewTextBlock(part.Text))
 			}
 		case "tool":
 			var argsJSON json.RawMessage
@@ -106,7 +107,7 @@ func parseOpencodeBlocks(partRows *sql.Rows) []CanonicalBlock {
 					}
 				}
 			}
-			blocks = append(blocks, NewToolUseBlock(part.CallID, part.Tool, argsJSON))
+			blocks = append(blocks, instance.NewToolUseBlock(part.CallID, part.Tool, argsJSON))
 		case "tool_result", "tool-result":
 			resultText := part.Text
 			if resultText == "" && part.Result != nil {
@@ -116,13 +117,13 @@ func parseOpencodeBlocks(partRows *sql.Rows) []CanonicalBlock {
 					resultText = string(b)
 				}
 			}
-			blocks = append(blocks, NewToolResultBlock(part.CallID, part.Tool, resultText, part.IsError))
+			blocks = append(blocks, instance.NewToolResultBlock(part.CallID, part.Tool, resultText, part.IsError))
 		}
 	}
 	return blocks
 }
 
-func (a *OpencodeAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
+func (a *OpencodeAdapter) Import(ctx context.Context, inst *instance.Instance) ([]instance.CanonicalTurn, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -166,7 +167,7 @@ func (a *OpencodeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonic
 		return nil, fmt.Errorf("error reading opencode message rows: %w", err)
 	}
 
-	var turns []CanonicalTurn
+	var turns []instance.CanonicalTurn
 	turnIdx := 0
 
 	for _, msg := range msgs {
@@ -184,9 +185,9 @@ func (a *OpencodeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonic
 			continue
 		}
 
-		role := RoleUser
+		role := instance.RoleUser
 		if msgMeta.Role == "assistant" {
-			role = RoleAssistant
+			role = instance.RoleAssistant
 		}
 
 		tTime := time.UnixMilli(msg.timeCreated)
@@ -194,7 +195,7 @@ func (a *OpencodeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonic
 			tTime = time.Now()
 		}
 
-		turn := CanonicalTurn{
+		turn := instance.CanonicalTurn{
 			Role:      role,
 			Blocks:    blocks,
 			Timestamp: tTime,
@@ -253,10 +254,10 @@ func initOpencodeSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func exportOpencodeTurn(ctx context.Context, tx *sql.Tx, turn CanonicalTurn, uuidStr string, now int64) error {
+func exportOpencodeTurn(ctx context.Context, tx *sql.Tx, turn instance.CanonicalTurn, uuidStr string, now int64) error {
 	msgID := fmt.Sprintf("msg_%04d_%s", turn.TurnIndex, uuidStr)
 	roleStr := "user"
-	if turn.Role == RoleAssistant {
+	if turn.Role == instance.RoleAssistant {
 		roleStr = "assistant"
 	}
 	turnTime := turn.Timestamp.UnixMilli()
@@ -286,12 +287,12 @@ func exportOpencodeTurn(ctx context.Context, tx *sql.Tx, turn CanonicalTurn, uui
 		var partData map[string]interface{}
 
 		switch block.Kind {
-		case BlockKindText:
+		case instance.BlockKindText:
 			partData = map[string]interface{}{
 				"type": "text",
 				"text": block.Text,
 			}
-		case BlockKindToolUse:
+		case instance.BlockKindToolUse:
 			var argsMap interface{}
 			if len(block.ToolArgs) > 0 {
 				_ = json.Unmarshal(block.ToolArgs, &argsMap)
@@ -304,7 +305,7 @@ func exportOpencodeTurn(ctx context.Context, tx *sql.Tx, turn CanonicalTurn, uui
 					"input": argsMap,
 				},
 			}
-		case BlockKindToolResult:
+		case instance.BlockKindToolResult:
 			callID := block.ToolResultID
 			if callID == "" {
 				callID = block.ToolID
@@ -333,7 +334,7 @@ func exportOpencodeTurn(ctx context.Context, tx *sql.Tx, turn CanonicalTurn, uui
 	return nil
 }
 
-func (a *OpencodeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
+func (a *OpencodeAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, inst *instance.Instance) error {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
 		uuidStr = "ses_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:16]
@@ -370,7 +371,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []CanonicalTurn, ins
 	}()
 
 	now := time.Now().UnixMilli()
-	workDir := inst.GetWorkingDirectory()
+	workDir := inst.ActiveDir()
 	projID := "proj_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:16]
 
 	var existingProjID string

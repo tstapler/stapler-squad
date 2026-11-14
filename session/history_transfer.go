@@ -5,15 +5,16 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
-func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
+func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *instance.Instance) error {
 	srcAdapter := i.HistoryRegistry().Resolve(oldProgram)
 	dstAdapter := i.HistoryRegistry().Resolve(newProgram)
 
 	if srcAdapter == nil || dstAdapter == nil {
-		return ErrNoHistoryAdapter
+		return instance.ErrNoHistoryAdapter
 	}
 	if srcAdapter.Name() == dstAdapter.Name() {
 		return nil
@@ -46,8 +47,8 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 }
 
 // Shim functions to keep backward compatibility with existing tests and server code.
-func portClaudeToAgy(i *Instance) error {
+func portClaudeToAgy(i *instance.Instance) error {
 	return PortSessionHistory(context.Background(), "claude", "agy", i)
 }
 
-func init() { historyPorterHook = PortSessionHistory }
+func init() { instance.HistoryPorterHook = PortSessionHistory }

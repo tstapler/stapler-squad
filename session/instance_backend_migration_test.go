@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -46,7 +47,7 @@ func TestMigrationFromTymux_RequiresDaemonReadyBeforeClosingOldSession(t *testin
 	})()
 	closeErr := errors.New("old session kill rejected")
 	fake := &migrationClosingManager{seamFakeTymux: seamFakeTymux{id: "old-daemon-session"}, closeErr: closeErr}
-	inst := &Instance{Title: "migration-unreachable", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTymux}
+	inst := &instance.Instance{Title: "migration-unreachable", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTymux}
 	inst.MarkStarted()
 	oldPM := NewTymuxBackend(fake)
 	inst.SetProcessManagerForTest(oldPM)
@@ -74,7 +75,7 @@ func TestMigrationToTymux_RegistersExitCallbackAndEnvironmentBeforeStart(t *test
 	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		return tymux.TymuxdReady{}, nil
 	})()
-	inst := &Instance{Title: "migration-callback", UUID: "migration-proof", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTmux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
+	inst := &instance.Instance{Title: "migration-callback", UUID: "migration-proof", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTmux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
 	inst.MarkStarted()
 	require.NoError(t, initializeBaselineForRestartTest(inst))
 

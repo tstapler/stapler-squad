@@ -4,18 +4,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
-type liveTimestampProcessManager struct{ ProcessManager }
+type liveTimestampProcessManager struct{ instance.ProcessManager }
 
 func (liveTimestampProcessManager) HasSession() bool { return true }
 
 func TestInstance_TymuxMeaningfulOutputAdvancesWithoutForce(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{Title: "tymux-activity-contract", Path: t.TempDir(), Program: "claude"})
+	inst, err := instance.NewInstance(instance.InstanceOptions{Title: "tymux-activity-contract", Path: t.TempDir(), Program: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,12 +38,12 @@ func TestInstance_TymuxMeaningfulOutputAdvancesWithoutForce(t *testing.T) {
 // TestInstance_UpdateTerminalTimestamps verifies that terminal timestamps are updated correctly
 func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-session",
 		Path:    "/tmp/test",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -125,12 +126,12 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 // TestInstance_GetTimeSinceMethods verifies the time-since helper methods
 func TestInstance_GetTimeSinceMethods(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-session-2",
 		Path:    "/tmp/test2",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -173,12 +174,12 @@ func TestInstance_GetTimeSinceMethods(t *testing.T) {
 // TestInstance_PreviewUpdatesTimestamps verifies that Preview() updates timestamps
 func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-preview",
 		Path:    "/tmp/testpreview",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -215,16 +216,16 @@ func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
 // production instance is wired (session.Registry.Register/Acquire).
 func TestInstance_TimestampConcurrency(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-concurrent",
 		Path:    "/tmp/testconcurrent",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	mockTmux := tmux.NewTmuxSession("testconcurrent", "claude")

@@ -12,7 +12,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // initGitRepo creates a temporary directory with an initialised git repository
@@ -72,8 +72,8 @@ func writeFile(t *testing.T, dir, name, content string) {
 }
 
 // newVCSInstance builds a minimal session.Instance pointing at repoDir.
-func newVCSInstance(title, repoDir string) *session.Instance {
-	inst := &session.Instance{}
+func newVCSInstance(title, repoDir string) *instance.Instance {
+	inst := &instance.Instance{}
 	inst.Title = title
 	inst.Path = repoDir
 	inst.Branch = "main"
@@ -96,7 +96,7 @@ func TestGetSessionDiff(t *testing.T) {
 	_ = safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "add", "-N", ".").Run()
 
 	inst := newVCSInstance("test-session", repoDir)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	vh := &vcsHandlers{store: store}
 
 	req := makeToolReq(map[string]interface{}{"session_id": "test-session"})
@@ -135,7 +135,7 @@ func TestGetSessionDiffTruncation(t *testing.T) {
 	writeFile(t, repoDir, "large.go", large.String())
 
 	inst := newVCSInstance("test-session", repoDir)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	vh := &vcsHandlers{store: store}
 
 	req := makeToolReq(map[string]interface{}{

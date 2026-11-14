@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestComputeBackgroundOutcome(t *testing.T) {
@@ -27,27 +28,27 @@ func TestComputeBackgroundOutcome(t *testing.T) {
 		want   BackgroundOutcome
 	}{
 		{"ComputeBackgroundOutcome_should_returnCompleted_When_reviewVerdictRecorded", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, ReviewVerdict: verdict}, BackgroundOutcomeCompleted},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleReview, ReviewVerdict: verdict}, BackgroundOutcomeCompleted},
 		{"completed_When_triageResultRecorded", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleTriage, TriageResult: `{"summary":"x"}`}, BackgroundOutcomeCompleted},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleTriage, TriageResult: `{"summary":"x"}`}, BackgroundOutcomeCompleted},
 		{"ComputeBackgroundOutcome_should_returnFailed_When_statusCrashed", domain.Crashed,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleReview}, BackgroundOutcomeFailed},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleReview}, BackgroundOutcomeFailed},
 		{"failed_When_crashedAndNoItemSession", domain.Crashed, nil, BackgroundOutcomeFailed},
 		{"ComputeBackgroundOutcome_should_returnUnknown_When_endReasonShutdown", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, EndReason: "shutdown"}, BackgroundOutcomeUnknown},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleReview, EndReason: "shutdown"}, BackgroundOutcomeUnknown},
 		{"ComputeBackgroundOutcome_should_returnUnknown_When_diagnoseRole", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleDiagnose}, BackgroundOutcomeUnknown},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleDiagnose}, BackgroundOutcomeUnknown},
 		{"unknown_When_diagnoseRoleEvenWithFailureReason", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleDiagnose, EndReason: "timeout"}, BackgroundOutcomeUnknown},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleDiagnose, EndReason: "timeout"}, BackgroundOutcomeUnknown},
 		{"ComputeBackgroundOutcome_should_returnUnknown_When_noItemSession", domain.Stopped, nil, BackgroundOutcomeUnknown},
 		{"ComputeBackgroundOutcome_should_treatTimeoutAsFailed", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, EndReason: "timeout"}, BackgroundOutcomeFailed},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleReview, EndReason: "timeout"}, BackgroundOutcomeFailed},
 		{"_JulesCompletedAsUnknown", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleJulesWork, EndReason: "jules_completed"}, BackgroundOutcomeUnknown},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleJulesWork, EndReason: "jules_completed"}, BackgroundOutcomeUnknown},
 		{"_UnlistedReasonAsUnknown", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, EndReason: "some_future_reason"}, BackgroundOutcomeUnknown},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleReview, EndReason: "some_future_reason"}, BackgroundOutcomeUnknown},
 		{"_VerdictBeatsFailureReason", domain.Stopped,
-			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, ReviewVerdict: verdict, EndReason: "timeout"}, BackgroundOutcomeCompleted},
+			&backlogdto.ItemSessionSummary{Role: instance.SessionRoleReview, ReviewVerdict: verdict, EndReason: "timeout"}, BackgroundOutcomeCompleted},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,10 +123,10 @@ func TestListItemSessionsBySessionUUIDs_should_returnNewestPerUUID_And_loadVerdi
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "batch"})
 	require.NoError(t, err)
 
-	review, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "u-review", SessionRole: SessionRoleReview})
+	review, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "u-review", SessionRole: instance.SessionRoleReview})
 	require.NoError(t, err)
 	require.NoError(t, storage.Repo.SaveReviewVerdict(ctx, review.ID, backlogdto.ReviewVerdictData{OverallOutcome: "PASS"}))
-	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "u-other", SessionRole: SessionRoleDiagnose})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "u-other", SessionRole: instance.SessionRoleDiagnose})
 	require.NoError(t, err)
 
 	got, err := storage.ListItemSessionsBySessionUUIDs(ctx, []string{"u-review", "u-other", "u-missing"})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 // buildJSONLFile writes a set of conversationMessage entries as a JSONL file
 // and returns the path.  Each msg is JSON-encoded on its own line.
-func buildJSONLFile(t *testing.T, msgs []conversationMessage) string {
+func buildJSONLFile(t *testing.T, msgs []instance.ConversationMessage) string {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "conv-*.jsonl")
 	if err != nil {
@@ -36,13 +37,13 @@ func buildJSONLFile(t *testing.T, msgs []conversationMessage) string {
 }
 
 // makeMsg builds a conversationMessage with the given type and text content.
-func makeMsg(typ, text string) conversationMessage {
+func makeMsg(typ, text string) instance.ConversationMessage {
 	ts := time.Now().UTC().Format(time.RFC3339)
 	role := "user"
 	if typ == "assistant" {
 		role = "assistant"
 	}
-	return conversationMessage{
+	return instance.ConversationMessage{
 		Type:      typ,
 		SessionID: "test-session",
 		Timestamp: ts,
@@ -58,8 +59,8 @@ func makeMsg(typ, text string) conversationMessage {
 }
 
 // makeToolUseMsg creates a non-user/non-assistant entry (tool_result, etc.)
-func makeToolUseMsg() conversationMessage {
-	return conversationMessage{
+func makeToolUseMsg() instance.ConversationMessage {
+	return instance.ConversationMessage{
 		Type:      "tool_result",
 		SessionID: "test-session",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -71,7 +72,7 @@ func makeToolUseMsg() conversationMessage {
 func TestExtractMsgContent_StringContent(t *testing.T) {
 	t.Parallel()
 	raw := makeMsg("user", "hello world")
-	msg, ok := extractMsgContent(raw)
+	msg, ok := instance.ExtractMsgContent(raw)
 	if !ok {
 		t.Fatal("expected ok=true for user message")
 	}
@@ -85,7 +86,7 @@ func TestExtractMsgContent_StringContent(t *testing.T) {
 
 func TestExtractMsgContent_ArrayContent(t *testing.T) {
 	t.Parallel()
-	raw := conversationMessage{
+	raw := instance.ConversationMessage{
 		Type:      "assistant",
 		SessionID: "s",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -102,7 +103,7 @@ func TestExtractMsgContent_ArrayContent(t *testing.T) {
 			},
 		},
 	}
-	msg, ok := extractMsgContent(raw)
+	msg, ok := instance.ExtractMsgContent(raw)
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
@@ -114,7 +115,7 @@ func TestExtractMsgContent_ArrayContent(t *testing.T) {
 func TestExtractMsgContent_NonMessageType(t *testing.T) {
 	t.Parallel()
 	raw := makeToolUseMsg()
-	_, ok := extractMsgContent(raw)
+	_, ok := instance.ExtractMsgContent(raw)
 	if ok {
 		t.Fatal("expected ok=false for tool_result entry")
 	}
@@ -125,7 +126,7 @@ func TestExtractMsgContent_NonMessageType(t *testing.T) {
 func TestReadAllMessagesFromFile_Empty(t *testing.T) {
 	t.Parallel()
 	path := buildJSONLFile(t, nil)
-	msgs, err := readAllMessagesFromFile(path)
+	msgs, err := instance.ReadAllMessagesFromFile(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,11 +137,11 @@ func TestReadAllMessagesFromFile_Empty(t *testing.T) {
 
 func TestReadAllMessagesFromFile_OnlyToolEntries(t *testing.T) {
 	t.Parallel()
-	path := buildJSONLFile(t, []conversationMessage{
+	path := buildJSONLFile(t, []instance.ConversationMessage{
 		makeToolUseMsg(),
 		makeToolUseMsg(),
 	})
-	msgs, err := readAllMessagesFromFile(path)
+	msgs, err := instance.ReadAllMessagesFromFile(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,14 +152,14 @@ func TestReadAllMessagesFromFile_OnlyToolEntries(t *testing.T) {
 
 func TestReadAllMessagesFromFile_MixedEntries(t *testing.T) {
 	t.Parallel()
-	path := buildJSONLFile(t, []conversationMessage{
+	path := buildJSONLFile(t, []instance.ConversationMessage{
 		makeMsg("user", "msg1"),
 		makeToolUseMsg(),
 		makeMsg("assistant", "reply1"),
 		makeToolUseMsg(),
 		makeMsg("user", "msg2"),
 	})
-	msgs, err := readAllMessagesFromFile(path)
+	msgs, err := instance.ReadAllMessagesFromFile(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +186,7 @@ func TestReadAllMessagesFromFile_MalformedLines(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	msgs, err := readAllMessagesFromFile(path)
+	msgs, err := instance.ReadAllMessagesFromFile(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestReadAllMessagesFromFile_MalformedLines(t *testing.T) {
 
 func TestReadAllMessagesFromFile_NonExistent(t *testing.T) {
 	t.Parallel()
-	_, err := readAllMessagesFromFile("/nonexistent/path/conv.jsonl")
+	_, err := instance.ReadAllMessagesFromFile("/nonexistent/path/conv.jsonl")
 	if err == nil {
 		t.Fatal("expected error for non-existent file")
 	}
@@ -206,12 +207,12 @@ func TestReadAllMessagesFromFile_NonExistent(t *testing.T) {
 
 func TestReadLastNMessages_LimitZeroReturnsAll(t *testing.T) {
 	t.Parallel()
-	path := buildJSONLFile(t, []conversationMessage{
+	path := buildJSONLFile(t, []instance.ConversationMessage{
 		makeMsg("user", "a"),
 		makeMsg("assistant", "b"),
 		makeMsg("user", "c"),
 	})
-	msgs, err := readLastNMessagesFromFile(path, 0)
+	msgs, err := instance.ReadLastNMessagesFromFile(path, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -222,10 +223,10 @@ func TestReadLastNMessages_LimitZeroReturnsAll(t *testing.T) {
 
 func TestReadLastNMessages_LimitExceedsCount(t *testing.T) {
 	t.Parallel()
-	path := buildJSONLFile(t, []conversationMessage{
+	path := buildJSONLFile(t, []instance.ConversationMessage{
 		makeMsg("user", "only one"),
 	})
-	msgs, err := readLastNMessagesFromFile(path, 10)
+	msgs, err := instance.ReadLastNMessagesFromFile(path, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -239,13 +240,13 @@ func TestReadLastNMessages_LimitExceedsCount(t *testing.T) {
 
 func TestReadLastNMessages_LimitAtExactCount(t *testing.T) {
 	t.Parallel()
-	msgs := make([]conversationMessage, 5)
+	msgs := make([]instance.ConversationMessage, 5)
 	for i := range msgs {
 		msgs[i] = makeMsg("user", fmt.Sprintf("msg%d", i))
 	}
 	path := buildJSONLFile(t, msgs)
 
-	got, err := readLastNMessagesFromFile(path, 5)
+	got, err := instance.ReadLastNMessagesFromFile(path, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -256,13 +257,13 @@ func TestReadLastNMessages_LimitAtExactCount(t *testing.T) {
 
 func TestReadLastNMessages_LimitReturnsLastN(t *testing.T) {
 	t.Parallel()
-	raw := make([]conversationMessage, 20)
+	raw := make([]instance.ConversationMessage, 20)
 	for i := range raw {
 		raw[i] = makeMsg("user", fmt.Sprintf("msg%d", i))
 	}
 	path := buildJSONLFile(t, raw)
 
-	got, err := readLastNMessagesFromFile(path, 5)
+	got, err := instance.ReadLastNMessagesFromFile(path, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,13 +282,13 @@ func TestReadLastNMessages_LimitReturnsLastN(t *testing.T) {
 func TestReadLastNMessages_ChronologicalOrder(t *testing.T) {
 	t.Parallel()
 	// Build 100 messages; request last 10.  Verify order is oldest-first.
-	raw := make([]conversationMessage, 100)
+	raw := make([]instance.ConversationMessage, 100)
 	for i := range raw {
 		raw[i] = makeMsg("user", fmt.Sprintf("item%03d", i))
 	}
 	path := buildJSONLFile(t, raw)
 
-	got, err := readLastNMessagesFromFile(path, 10)
+	got, err := instance.ReadLastNMessagesFromFile(path, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -305,7 +306,7 @@ func TestReadLastNMessages_ChronologicalOrder(t *testing.T) {
 func TestReadLastNMessages_EmptyFile(t *testing.T) {
 	t.Parallel()
 	path := buildJSONLFile(t, nil)
-	msgs, err := readLastNMessagesFromFile(path, 5)
+	msgs, err := instance.ReadLastNMessagesFromFile(path, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -317,7 +318,7 @@ func TestReadLastNMessages_EmptyFile(t *testing.T) {
 func TestReadLastNMessages_SkipsToolEntries(t *testing.T) {
 	t.Parallel()
 	// Interleave tool entries; the tail read must skip them and return user/assistant only.
-	raw := []conversationMessage{
+	raw := []instance.ConversationMessage{
 		makeMsg("user", "first"),
 		makeToolUseMsg(),
 		makeToolUseMsg(),
@@ -327,7 +328,7 @@ func TestReadLastNMessages_SkipsToolEntries(t *testing.T) {
 	}
 	path := buildJSONLFile(t, raw)
 
-	got, err := readLastNMessagesFromFile(path, 2)
+	got, err := instance.ReadLastNMessagesFromFile(path, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -344,13 +345,13 @@ func TestReadLastNMessages_LargeFile_SpansMultipleChunks(t *testing.T) {
 	// Create enough messages that the file exceeds one 64 KiB chunk.
 	// Each message content is ~200 bytes; 400 messages ≈ 80 KB → two chunks.
 	const total = 400
-	raw := make([]conversationMessage, total)
+	raw := make([]instance.ConversationMessage, total)
 	for i := range raw {
 		raw[i] = makeMsg("user", fmt.Sprintf("%04d: %s", i, strings.Repeat("x", 200)))
 	}
 	path := buildJSONLFile(t, raw)
 
-	got, err := readLastNMessagesFromFile(path, 10)
+	got, err := instance.ReadLastNMessagesFromFile(path, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -370,7 +371,7 @@ func TestReadLastNMessages_LargeFile_SpansMultipleChunks(t *testing.T) {
 func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
 	t.Parallel()
 	const total = 50
-	raw := make([]conversationMessage, total)
+	raw := make([]instance.ConversationMessage, total)
 	for i := range raw {
 		role := "user"
 		if i%2 == 1 {
@@ -380,13 +381,13 @@ func TestReadLastNMessages_MatchesForwardRead(t *testing.T) {
 	}
 	path := buildJSONLFile(t, raw)
 
-	allMsgs, err := readAllMessagesFromFile(path)
+	allMsgs, err := instance.ReadAllMessagesFromFile(path)
 	if err != nil {
 		t.Fatalf("readAllMessagesFromFile: %v", err)
 	}
 
 	for _, n := range []int{1, 5, 10, total, total + 10} {
-		got, err := readLastNMessagesFromFile(path, n)
+		got, err := instance.ReadLastNMessagesFromFile(path, n)
 		if err != nil {
 			t.Fatalf("readLastNMessagesFromFile(%d): %v", n, err)
 		}

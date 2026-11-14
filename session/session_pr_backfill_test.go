@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -45,7 +46,7 @@ func addLegacyItem(t *testing.T, repo *EntRepository, title, status string, numb
 
 func attachItemSession(t *testing.T, repo *EntRepository, itemID, sessionUUID string) {
 	t.Helper()
-	_, err := repo.CreateItemSession(context.Background(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: sessionUUID, SessionRole: SessionRoleWork})
+	_, err := repo.CreateItemSession(context.Background(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 }
 
@@ -588,7 +589,7 @@ func oldBinaryWritesLegacyNumber(t *testing.T, s *Storage, title string, n int) 
 		SetGithubPrNumber(n).SetGithubPrURL(fmt.Sprintf("https://github.com/acme/app/pull/%d", n)).Exec(context.Background()))
 }
 
-func rollbackSequence(t *testing.T, s *Storage, title string) *Instance {
+func rollbackSequence(t *testing.T, s *Storage, title string) *instance.Instance {
 	t.Helper()
 	require.NoError(t, s.RunPRStartupMaintenance(context.Background()))
 	inst := loadByTitle(t, s, title)
@@ -620,13 +621,13 @@ func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyO
 
 	snap := inst.Snapshot().GitHub
 	require.Len(t, snap.PRs, 2)
-	want, ok := ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
+	want, ok := instance.ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
 	require.True(t, ok)
 	row := sessionMirror(t, storage, "rolled-back")
 	assert.Equal(t, want.Number, row.GitHubPRNumber, "the stored columns read ActivePR of {11,12}")
 	assert.Equal(t, want.URL, row.GitHubPRURL)
 
-	corrected, _ := reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	corrected, _ := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 	assert.Zero(t, corrected, "the import is not drift")
 	assert.Equal(t, driftBefore, PRMirrorDriftCorrected())
 

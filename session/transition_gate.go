@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -146,7 +147,7 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 			ItemID:       c.ID,
 			To:           domain.BacklogStatusReview,
 			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "all work sessions ended"},
-			TriggeredBy:  TriggeredBySystem,
+			TriggeredBy:  instance.TriggeredBySystem,
 		}, s.writeGatedReconcile)
 		switch {
 		case err == nil:

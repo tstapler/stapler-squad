@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/taggingrule"
 	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -2371,7 +2372,7 @@ func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, da
 		SetCommand(data.Command).
 		SetNillableWorkingDir(nilIfEmpty(data.WorkingDir)).
 		SetTmuxSessionName(data.TmuxSessionName).
-		SetStatus(string(ShellStatusRunning)).
+		SetStatus(string(instance.ShellStatusRunning)).
 		SetOrderIndex(data.OrderIndex).
 		SetSessionID(sess.ID).
 		Save(ctx)
@@ -2417,7 +2418,7 @@ func (r *EntRepository) UpdateShellStatus(ctx context.Context, shellID, status s
 	if exitCode != nil {
 		upd = upd.SetExitCode(*exitCode)
 	}
-	if status != string(ShellStatusRunning) {
+	if status != string(instance.ShellStatusRunning) {
 		upd = upd.SetStoppedAt(time.Now())
 	}
 	if err := upd.Exec(ctx); err != nil {

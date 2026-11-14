@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
@@ -61,7 +62,7 @@ const (
 )
 
 // addTabbed registers a visible session whose pane replays frames.
-func (e *routerEnv) addTabbed(title string, frames []string) (*session.Instance, *replyPM) {
+func (e *routerEnv) addTabbed(title string, frames []string) (*instance.Instance, *replyPM) {
 	e.t.Helper()
 	inst, pm := e.addVisible(title)
 	pm.frames = frames
@@ -69,7 +70,7 @@ func (e *routerEnv) addTabbed(title string, frames []string) (*session.Instance,
 }
 
 // twoQuestionRow stores the hook-mirrored row of the two-question dialog.
-func (e *routerEnv) twoQuestionRow(inst *session.Instance, q1MultiSelect bool) string {
+func (e *routerEnv) twoQuestionRow(inst *instance.Instance, q1MultiSelect bool) string {
 	e.t.Helper()
 	opts := func(labels ...string) []domain.Option {
 		o := make([]domain.Option, len(labels))

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -58,7 +59,7 @@ func TestSeam_UnstartedRestoredInstanceKeepsStoredDaemonID(t *testing.T) {
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-77"
 
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.Equal(t, "d-77", inst.ToInstanceData().TymuxSessionID)
@@ -71,7 +72,7 @@ func TestSeam_KillSessionReleasesDaemonSessionOfUnrestoredRecord(t *testing.T) {
 	data := restoredPausedData(t, "kill-unrestored")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-78"
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	require.NoError(t, inst.KillSession())
@@ -86,7 +87,7 @@ func TestSeam_UnpinnedRecordWithDaemonIDRestoresOnTymux(t *testing.T) {
 	data := restoredPausedData(t, "unpinned-with-id")
 	data.TymuxSessionID = "d-79"
 
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.Equal(t, domain.BackendTymux, inst.Backend)
@@ -99,9 +100,9 @@ func TestSeam_UnpinnedRecordWithDaemonIDRestoresOnTymux(t *testing.T) {
 // Restored unpinned records deliberately keep following the live default.
 func TestSeam_NewInstancePinsResolvedBackend(t *testing.T) {
 	useSeamFake(t)
-	created, err := NewInstance(InstanceOptions{Title: "pin-new", Path: t.TempDir(), Program: "claude"})
+	created, err := instance.NewInstance(instance.InstanceOptions{Title: "pin-new", Path: t.TempDir(), Program: "claude"})
 	require.NoError(t, err)
-	want := processManagerBackendKey(created.ProcessManagerForTest())
+	want := instance.ProcessManagerBackendKey(created.ProcessManagerForTest())
 
 	assert.Equal(t, want, created.Backend)
 	assert.Equal(t, want, created.ToInstanceData().Backend)
@@ -115,7 +116,7 @@ func TestSeam_StaleDaemonIDOnTmuxBackendIsDropped(t *testing.T) {
 	data.Backend = domain.BackendTmux
 	data.TymuxSessionID = "stale"
 
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
@@ -145,7 +146,7 @@ func TestSeam_EntRepositoryClearsDaemonIDOnUpdate(t *testing.T) {
 // fresh Instance from InstanceOptions. If InstanceOptions ever gains a daemon-id
 // field, a copy could carry one Instance's session into another.
 func TestSeam_InstanceOptionsCannotCarryDaemonIdentity(t *testing.T) {
-	typ := reflect.TypeOf(InstanceOptions{})
+	typ := reflect.TypeOf(instance.InstanceOptions{})
 	for i := 0; i < typ.NumField(); i++ {
 		name := strings.ToLower(typ.Field(i).Name)
 		assert.False(t, strings.Contains(name, "tymux") || strings.Contains(name, "daemon"),
@@ -155,7 +156,7 @@ func TestSeam_InstanceOptionsCannotCarryDaemonIdentity(t *testing.T) {
 
 func TestSeam_NewInstanceStartsWithoutDaemonIdentity(t *testing.T) {
 	useSeamFake(t)
-	inst, err := NewInstance(InstanceOptions{Title: "fresh", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux})
+	inst, err := instance.NewInstance(instance.InstanceOptions{Title: "fresh", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux})
 	require.NoError(t, err)
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
 }
@@ -179,7 +180,7 @@ func TestSeam_ShadowLivenessUsesStoredDaemonSession(t *testing.T) {
 	data := restoredPausedData(t, "shadow-live")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-90"
-	shadow, err := FromInstanceDataDeferred(data)
+	shadow, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.True(t, shadow.IsLiveOrStoredSessionLive())
@@ -199,7 +200,7 @@ func TestSeam_IsBackendProcessAliveIgnoresStoredSessionOfUnrestoredView(t *testi
 	data := restoredPausedData(t, "unrestored-stream")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-91"
-	view, err := FromInstanceDataDeferred(data)
+	view, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.False(t, view.IsBackendProcessAlive())
@@ -228,7 +229,7 @@ func TestSeam_FailedStartOfUnrestoredRecordDoesNotKillStoredSession(t *testing.T
 	data := restoredPausedData(t, "failed-start-keeps-session")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-80"
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	require.Error(t, inst.Start(false))
@@ -249,7 +250,7 @@ func (f *releasingTymux) HasSession() bool            { return f.attached }
 func (f *releasingTymux) SetSessionLabel(l string)    { f.label = l }
 func (f *releasingTymux) ReleaseAdoptedSession() bool { f.released++; return true }
 
-func restoredTymuxWith(t *testing.T, fake tymux.TymuxManager, title string) *Instance {
+func restoredTymuxWith(t *testing.T, fake tymux.TymuxManager, title string) *instance.Instance {
 	t.Helper()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	orig := newTymuxSessionFn
@@ -258,7 +259,7 @@ func restoredTymuxWith(t *testing.T, fake tymux.TymuxManager, title string) *Ins
 	data := restoredPausedData(t, title)
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-81"
-	inst, err := FromInstanceDataDeferred(data)
+	inst, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	return inst
 }

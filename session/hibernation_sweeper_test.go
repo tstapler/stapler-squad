@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory/memorytest"
 )
 
@@ -94,10 +95,10 @@ func makeTestSweeper(t *testing.T, memReader *memorytest.FakeReader, threshold i
 }
 
 // makeIdleInstance creates an Instance with last meaningful output set in the past.
-func makeIdleInstance(t *testing.T, uuid, title string, idleFor time.Duration) *Instance {
+func makeIdleInstance(t *testing.T, uuid, title string, idleFor time.Duration) *instance.Instance {
 	t.Helper()
 	now := time.Now()
-	inst := &Instance{
+	inst := &instance.Instance{
 		UUID:      uuid,
 		Title:     title,
 		Path:      "/tmp/test",
@@ -139,7 +140,7 @@ func TestSweeper_sweepResourcePressure_should_notHibernate_When_BelowThreshold(t
 	defer cleanup()
 
 	inst := makeIdleInstance(t, "uuid-a", "test-session", 10*time.Minute)
-	instances := []*Instance{inst}
+	instances := []*instance.Instance{inst}
 
 	sweeper.sweepResourcePressure(context.Background(), instances)
 
@@ -156,7 +157,7 @@ func TestSweeper_sweepResourcePressure_should_skip_When_SystemPctIsZero(t *testi
 	defer cleanup()
 
 	inst := makeIdleInstance(t, "uuid-b", "test-session", 10*time.Minute)
-	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
+	sweeper.sweepResourcePressure(context.Background(), []*instance.Instance{inst})
 
 	assert.Equal(t, domain.Active, inst.Status)
 }
@@ -171,7 +172,7 @@ func TestSweeper_sweepResourcePressure_should_beSkipped_When_ThresholdIsZero(t *
 
 	inst := makeIdleInstance(t, "uuid-c", "test-session", 10*time.Minute)
 	// sweepResourcePressure should skip the pressure block when threshold=0
-	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
+	sweeper.sweepResourcePressure(context.Background(), []*instance.Instance{inst})
 
 	calls := reader.GetSystemMemoryCalls()
 	// SystemMemory should NOT be called if threshold=0 (entire block gated)
@@ -189,7 +190,7 @@ func TestSweeper_sweepResourcePressure_should_notHibernate_When_NoEligibleIdleSe
 
 	// Session idle only 2 min — within grace period.
 	inst := makeIdleInstance(t, "uuid-d", "recent-session", 2*time.Minute)
-	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
+	sweeper.sweepResourcePressure(context.Background(), []*instance.Instance{inst})
 
 	assert.Equal(t, domain.Active, inst.Status)
 }
@@ -213,7 +214,7 @@ func TestSweeper_sweepResourcePressure_should_hibernateOnlyOne_When_MultipleElig
 	require.NoError(t, storage.AddInstance(instB))
 	require.NoError(t, storage.AddInstance(instC))
 
-	instances := []*Instance{instA, instB, instC}
+	instances := []*instance.Instance{instA, instB, instC}
 	// Hibernate will fail (no real tmux), but the sweeper should not panic.
 	sweeper.sweepResourcePressure(context.Background(), instances)
 
@@ -267,7 +268,7 @@ func TestSweeper_warmRSSCache_should_populateCache_When_ActiveSession(t *testing
 	defer cleanup()
 
 	inst := makeIdleInstance(t, "uuid-rss", "rss-session", 10*time.Minute)
-	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
+	sweeper.warmRSSCache(context.Background(), []*instance.Instance{inst})
 
 	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "SessionsRSSMB should be called once for the batch")
 	assert.Equal(t, int64(128), sweeper.GetCachedRSSMB("uuid-rss"), "cache should be warm after warmRSSCache")
@@ -283,7 +284,7 @@ func TestSweeper_warmRSSCache_should_skipInactive_When_InstanceNotActive(t *test
 
 	inst := makeIdleInstance(t, "uuid-inactive", "paused-session", 10*time.Minute)
 	inst.Status = domain.Paused
-	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
+	sweeper.warmRSSCache(context.Background(), []*instance.Instance{inst})
 
 	assert.Equal(t, 0, reader.GetSessionRSSCalls(), "SessionsRSSMB should not be called when there are no active sessions")
 }
@@ -318,7 +319,7 @@ func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *tes
 	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
 	instC.Status = domain.Paused // inactive — should be excluded from the batch
 
-	sweeper.warmRSSCache(context.Background(), []*Instance{instA, instB, instC})
+	sweeper.warmRSSCache(context.Background(), []*instance.Instance{instA, instB, instC})
 
 	assert.Equal(t, 1, reader.GetSessionRSSCalls(), "all active sessions should be measured in a single batch call")
 	assert.ElementsMatch(t, []string{"tmux-a", "tmux-b"}, reader.LastRSSNames(), "only the two active sessions' names should be requested, not the inactive one")
@@ -339,7 +340,7 @@ func TestSweeper_warmRSSCache_should_preserveStaleCache_When_BatchFails(t *testi
 	sweeper.memCache.SetAll(map[string]int64{"uuid-a": 42}) // pre-existing warm value
 
 	inst := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
-	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
+	sweeper.warmRSSCache(context.Background(), []*instance.Instance{inst})
 
 	assert.Equal(t, int64(42), sweeper.GetCachedRSSMB("uuid-a"), "a failed batch must not clobber the existing cached value")
 }
@@ -365,14 +366,14 @@ func TestSweeper_sweepResourcePressure_should_respectGracePeriod_When_SessionHad
 
 	// 4 minutes 59 seconds idle — just under the grace period.
 	inst := makeIdleInstance(t, "uuid-h", "recent-session", 4*time.Minute+59*time.Second)
-	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
+	sweeper.sweepResourcePressure(context.Background(), []*instance.Instance{inst})
 
 	assert.Equal(t, domain.Active, inst.Status)
 }
 
-type terminalViewLiveProvider struct{ instances []*Instance }
+type terminalViewLiveProvider struct{ instances []*instance.Instance }
 
-func (p terminalViewLiveProvider) GetInstances() []*Instance { return p.instances }
+func (p terminalViewLiveProvider) GetInstances() []*instance.Instance { return p.instances }
 
 func TestSweeper_AttachedTerminalPreventsAutomaticHibernation(t *testing.T) {
 	t.Parallel()
@@ -386,9 +387,9 @@ func TestSweeper_AttachedTerminalPreventsAutomaticHibernation(t *testing.T) {
 			release, err := inst.AcquireTerminalView()
 			require.NoError(t, err)
 			defer release()
-			sweeper.SetLiveProvider(terminalViewLiveProvider{instances: []*Instance{inst}})
+			sweeper.SetLiveProvider(terminalViewLiveProvider{instances: []*instance.Instance{inst}})
 			if pressure {
-				sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
+				sweeper.sweepResourcePressure(context.Background(), []*instance.Instance{inst})
 			} else {
 				sweeper.cfg.Hibernation.IdleTimeoutMinutes = 20
 				sweeper.sweep(context.Background())

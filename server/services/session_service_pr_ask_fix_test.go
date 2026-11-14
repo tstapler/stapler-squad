@@ -12,8 +12,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type staticPRTokens map[string]string
@@ -25,7 +25,7 @@ func (m staticPRTokens) TokenForPR(k github.PRKey) (string, string, bool) {
 
 type askFixFixture struct {
 	svc     *SessionService
-	inst    *session.Instance
+	inst    *instance.Instance
 	fetcher *fakeFetcher
 	rec     *guardedSteerRecorder
 }
@@ -35,7 +35,7 @@ type askFixFixture struct {
 func newAskFixFixture(t *testing.T, status domain.Status) *askFixFixture {
 	t.Helper()
 	fix := setupForkTestFixture(t)
-	inst := &session.Instance{Title: "ask-fix", UUID: "uuid-ask-fix", Program: "claude", Status: status,
+	inst := &instance.Instance{Title: "ask-fix", UUID: "uuid-ask-fix", Program: "claude", Status: status,
 		CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	for _, n := range []int{11, 12} {
 		ref, err := domain.NewPRRef("", "acme", "app", n)

@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // answeredThenShowing answers a hook row once, then makes the pane show the
 // dialog again (frames[n] is the pane after n writes) and puts the row in state.
-func (e *routerEnv) answeredThenShowing(title string, state domain.DeliveryState, afterRetry string) (*session.Instance, *replyPM, string) {
+func (e *routerEnv) answeredThenShowing(title string, state domain.DeliveryState, afterRetry string) (*instance.Instance, *replyPM, string) {
 	e.t.Helper()
 	inst, pm := e.addVisible(title)
 	qid := e.hookRow(inst, colorDialog)
@@ -31,7 +31,7 @@ func (e *routerEnv) answeredThenShowing(title string, state domain.DeliveryState
 	return inst, pm, qid
 }
 
-func (e *routerEnv) retryAnyway(inst *session.Instance, qid string) ActionResult {
+func (e *routerEnv) retryAnyway(inst *instance.Instance, qid string) ActionResult {
 	e.t.Helper()
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
 		SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-" + uuid.NewString(), Confirm: true,

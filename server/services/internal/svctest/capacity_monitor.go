@@ -1,13 +1,13 @@
 package svctest
 
 import (
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type MockInstancePoller struct {
-	Instances []*session.Instance
+	Instances []*instance.Instance
 }
 
-func (m *MockInstancePoller) GetInstances() []*session.Instance {
+func (m *MockInstancePoller) GetInstances() []*instance.Instance {
 	return m.Instances
 }

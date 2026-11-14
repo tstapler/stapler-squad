@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -77,7 +78,7 @@ var testTmuxServerSocketCounter uint64
 type ReactiveQueueManager interface {
 	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
 	RemoveStreamClient(clientID string)
-	OnControllerStatusChange(inst *session.Instance, newStatus detection.DetectedStatus)
+	OnControllerStatusChange(inst *instance.Instance, newStatus detection.DetectedStatus)
 }
 
 // FeatureController is implemented by components that can be enabled/disabled at runtime.
@@ -93,7 +94,7 @@ type SessionService struct {
 	tccEnrichment     tccEnrichmentState
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
-	statusManager     *session.InstanceStatusManager
+	statusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
 	federation        *FederatedSessions // nil unless host gossip is running
 
@@ -117,7 +118,7 @@ type SessionService struct {
 	// replyPeerAddr and replyControllerActive are test seams; nil means
 	// req.Peer().Addr and "the instance has a started status controller".
 	replyPeerAddr         func(connect.AnyRequest) string
-	replyControllerActive func(*session.Instance) bool
+	replyControllerActive func(*instance.Instance) bool
 	// replyAfter injects the timer behind the send timeout and the closed-check
 	// polls (nil is time.After).
 	replyAfter func(time.Duration) <-chan time.Time
@@ -419,7 +420,7 @@ type SessionService struct {
 	// synchronously on the RPC path -- it runs in the trackCleanup-dispatched
 	// background goroutine, ahead of Start(). See project_plans/
 	// async-session-creation/implementation/plan.md Epic 2.1 Story 2.1.1.
-	githubResolver func(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *session.GitHubRef, err error)
+	githubResolver func(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *instance.GitHubRef, err error)
 
 	// creationResolutionTimeout bounds the Background Resolution Pipeline's
 	// (Epic 2.2) entire run end to end -- the Background Resolution
@@ -758,9 +759,9 @@ func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassif
 // overrides the floor (0 disables it entirely); unset defaults to 3000ms,
 // comfortably inside every existing e2e timeout that waits on this
 // transition (all >= 10s, most 30s).
-func testModeGitHubResolver() func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+func testModeGitHubResolver() func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 	if !config.IsIsolatedInstance() {
-		return session.ResolveGitHubInputCtxWithHosts
+		return instance.ResolveGitHubInputCtxWithHosts
 	}
 	minDelay := 3 * time.Second
 	if raw := os.Getenv("STAPLER_SQUAD_TEST_GITHUB_RESOLVE_MIN_MS"); raw != "" {
@@ -769,11 +770,11 @@ func testModeGitHubResolver() func(ctx context.Context, input string, enterprise
 		}
 	}
 	if minDelay == 0 {
-		return session.ResolveGitHubInputCtxWithHosts
+		return instance.ResolveGitHubInputCtxWithHosts
 	}
-	return func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	return func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		start := time.Now()
-		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, input, enterpriseHosts)
+		localPath, ref, err := instance.ResolveGitHubInputCtxWithHosts(ctx, input, enterpriseHosts)
 		if elapsed := time.Since(start); elapsed < minDelay {
 			select {
 			case <-time.After(minDelay - elapsed):
@@ -947,7 +948,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			}
 			return is.Role
 		}
-		capTerminator = func(ctx context.Context, inst *session.Instance, reason string) error {
+		capTerminator = func(ctx context.Context, inst *instance.Instance, reason string) error {
 			return stopGuardrailSession(ctx, concStorage, inst, reason)
 		}
 	}
@@ -1082,7 +1083,7 @@ func newPromptStore() *prompts.PromptStore {
 
 // loadInstancesWithWiring loads instances from storage and wires up dependencies.
 // This ensures instances have reviewQueue and statusManager set properly.
-func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) {
+func (s *SessionService) loadInstancesWithWiring() ([]*instance.Instance, error) {
 	instances, err := s.storage.LoadInstances()
 	if err != nil {
 		return nil, fmt.Errorf("loadInstancesWithWiring: %w", err)

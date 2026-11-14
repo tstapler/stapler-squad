@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestSwitchProgram_SameValue_NoOp verifies that requesting the program the instance
@@ -135,7 +136,7 @@ func TestSwitchProgram_ActiveStartedFalse_RestartErrorsCannotRestart(t *testing.
 
 	changed, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
 
-	require.ErrorIs(t, err, ErrCannotRestart)
+	require.ErrorIs(t, err, instance.ErrCannotRestart)
 	assert.True(t, changed, "program field change and persist still happen even though restart is rejected")
 	assert.Equal(t, "aider", inst.Program)
 }
@@ -184,19 +185,19 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 // file I/O against the adapters' backing stores and is out of scope here.
 func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "antigravity"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "antigravity", "claude"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "agy"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "opencode"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "agy"))
-	assert.False(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "aider"))
-	assert.False(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "opencode"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "antigravity"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "antigravity", "claude"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "agy"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "opencode"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "agy"))
+	assert.False(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "aider"))
+	assert.False(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "opencode"))
 
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "claude"))
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "antigravity"))
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "agy"))
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "opencode"))
-	assert.False(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "aider"))
+	assert.True(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "claude"))
+	assert.True(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "antigravity"))
+	assert.True(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "agy"))
+	assert.True(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "opencode"))
+	assert.False(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "aider"))
 }
 
 // TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies that gemini (the standalone Gemini CLI)
@@ -204,9 +205,9 @@ func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T)
 // while remaining excluded from AgyAdapter.CanHandle (session/agy_adapter.go).
 func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "gemini"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "gemini"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "gemini", "claude"))
+	assert.True(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "gemini"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "gemini"))
+	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "gemini", "claude"))
 	assert.False(t, NewAgyAdapter().CanHandle("gemini"))
 	assert.True(t, NewGeminiAdapter().CanHandle("gemini"))
 }

@@ -9,9 +9,9 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -26,7 +26,7 @@ var _ sessionv1connect.SessionSummaryServiceHandler = (*SessionSummaryService)(n
 // satisfies this structurally, and a trivial fake can stand in for tests without
 // constructing a full SessionService.
 type liveInstanceFinder interface {
-	FindLiveInstance(sessionID string) *session.Instance
+	FindLiveInstance(sessionID string) *instance.Instance
 }
 
 // SessionSummaryService implements the ConnectRPC SessionSummaryServiceHandler.
@@ -106,10 +106,10 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 		createdAt    time.Time
 		diffSnapshot summaries.DiffSnapshot
 		diffContent  string
-		sessionGoal  *session.SessionGoalData
+		sessionGoal  *instance.SessionGoalData
 	)
 
-	var liveInst *session.Instance
+	var liveInst *instance.Instance
 	if s.instances != nil {
 		liveInst = s.instances.FindLiveInstance(sessionID)
 	}

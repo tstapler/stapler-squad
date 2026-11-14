@@ -4,18 +4,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestRegistryRetain_PreservesExistingActorAndIdentity(t *testing.T) {
 	t.Parallel()
 	registry := NewRegistry(nil, nil)
 	defer registry.Shutdown()
-	canonical := &Instance{UUID: "canonical", Title: "legacy-title"}
-	actor := NewLiveInstance(canonical)
+	canonical := &instance.Instance{UUID: "canonical", Title: "legacy-title"}
+	actor := instance.NewLiveInstance(canonical)
 	release, err := registry.Register(actor)
 	require.NoError(t, err)
 
-	replacement := &Instance{UUID: canonical.UUID, Title: canonical.Title}
+	replacement := &instance.Instance{UUID: canonical.UUID, Title: canonical.Title}
 	require.Same(t, actor, registry.Retain(replacement))
 	require.Same(t, actor, registry.Retain(canonical))
 	release()
@@ -32,8 +33,8 @@ func TestRegistryRetain_AdoptsUnregisteredActor(t *testing.T) {
 	t.Parallel()
 	registry := NewRegistry(nil, nil)
 	defer registry.Shutdown()
-	inst := &Instance{UUID: "adopted"}
-	actor := NewLiveInstance(inst)
+	inst := &instance.Instance{UUID: "adopted"}
+	actor := instance.NewLiveInstance(inst)
 	require.Same(t, actor, registry.Retain(inst))
 	require.Same(t, actor, registry.Retain(inst))
 	require.Equal(t, 1, registry.Count())

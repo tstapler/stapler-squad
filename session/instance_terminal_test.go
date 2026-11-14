@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -21,7 +22,7 @@ import (
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	t.Parallel()
 	mock := &mockTmuxManager{capturePaneReturn: "tmux rendered screen"}
-	inst := (&Instance{Title: "tmux-preview-session", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst := (&instance.Instance{Title: "tmux-preview-session", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
 	inst.MarkStarted()
 
 	// Even if a stale claudectl.ClaudeController buffer exists, capture-pane must win.
@@ -49,7 +50,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
 	t.Parallel()
 	mock := &mockTmuxManager{capturePaneErr: fmt.Errorf("no such tmux session")}
-	inst := (&Instance{Title: "tmux-preview-fallback", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst := (&instance.Instance{Title: "tmux-preview-fallback", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
 	inst.MarkStarted()
 
 	buf := ptyio.NewCircularBuffer(1024)
@@ -76,7 +77,7 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 // *TmuxProcessManager (not the TmuxManager interface), so mockTmuxManager (used by the
 // Preview() tests above) can't exercise it — this real-session construction is required
 // instead, mirroring the technique in tmux_process_manager_test.go.
-func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *exec.Cmd) ([]byte, error)) *Instance {
+func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *exec.Cmd) ([]byte, error)) *instance.Instance {
 	t.Helper()
 	// sessionExists is filled in after ts is constructed below, so the
 	// CombinedOutputFunc closure (built first) reads it by reference rather
@@ -97,7 +98,7 @@ func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *ex
 	tpm := &TmuxProcessManager{}
 	tpm.SetSession(ts)
 
-	inst := (&Instance{Title: t.Name(), Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(tpm))
+	inst := (&instance.Instance{Title: t.Name(), Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(tpm))
 	inst.MarkStarted()
 	return inst
 }

@@ -13,11 +13,11 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
 
@@ -101,7 +101,7 @@ func vcsStatusFixture(t *testing.T, spy *statusSpyBackend) (*WorkspaceService, s
 		fix.svc.vcsFlights.wait()
 	})
 	dir, baseSHA, _ := svctest.NewVCSStatusTestRepo(t)
-	inst := &session.Instance{Title: "coalesce", Path: dir, Status: domain.Paused, Program: "claude"}
+	inst := &instance.Instance{Title: "coalesce", Path: dir, Status: domain.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
 	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 	return fix.svc, dir
@@ -368,7 +368,7 @@ func TestRefreshVCSStatusInBackground_SkippedWhenSaturated(t *testing.T) {
 	for i := 0; i < maxConcurrentVCSComputations; i++ {
 		svc.vcsFlights.slots <- struct{}{}
 	}
-	svc.refreshVCSStatusInBackground(context.Background(), &session.Instance{Path: dir}, dir)
+	svc.refreshVCSStatusInBackground(context.Background(), &instance.Instance{Path: dir}, dir)
 	assert.Zero(t, svc.vcsFlights.waiters(dir))
 	assert.Zero(t, spy.calls.Load())
 }

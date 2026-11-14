@@ -21,23 +21,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // makeStoppedShell returns a Shell in the Stopped state with closed channels so
 // that DeleteShell's watcherDone drain completes immediately.
-func makeStoppedShell(id, name string) *session.Shell {
+func makeStoppedShell(id, name string) *instance.Shell {
 	exitCh := make(chan struct{})
 	close(exitCh)
 	watcherDone := make(chan struct{})
 	close(watcherDone)
-	return &session.Shell{
+	return &instance.Shell{
 		ID:         id,
 		Name:       name,
 		Command:    "/bin/sh",
 		WorkingDir: "/tmp",
-		Status:     session.ShellStatusStopped,
+		Status:     instance.ShellStatusStopped,
 		OrderIndex: 0,
 		StartedAt:  time.Now(),
 	}
@@ -46,13 +46,13 @@ func makeStoppedShell(id, name string) *session.Shell {
 // makeRunningShell returns a Shell in the Running state.
 // watcherDone is left as nil — callers that need DeleteShell to drain
 // must close it or use makeStoppedShell.
-func makeRunningShell(id, name string) *session.Shell {
-	return &session.Shell{
+func makeRunningShell(id, name string) *instance.Shell {
+	return &instance.Shell{
 		ID:         id,
 		Name:       name,
 		Command:    "/bin/sh",
 		WorkingDir: "/tmp",
-		Status:     session.ShellStatusRunning,
+		Status:     instance.ShellStatusRunning,
 		OrderIndex: 0,
 		StartedAt:  time.Now(),
 	}
@@ -74,7 +74,7 @@ func setupShellsFixture(t *testing.T) *shellsFixture {
 
 // addLiveSession creates a paused session in storage (so ListInstanceData finds it)
 // and returns the loaded Instance registered with the poller.
-func (f *shellsFixture) addLiveSession(t *testing.T, title string) *session.Instance {
+func (f *shellsFixture) addLiveSession(t *testing.T, title string) *instance.Instance {
 	t.Helper()
 	addPausedSession(t, f.forkTestFixture, title)
 	// addPausedSession already calls addInstanceToPoller with the loaded instance.
@@ -88,7 +88,7 @@ func (f *shellsFixture) addLiveSession(t *testing.T, title string) *session.Inst
 // simulating a session that exists in the DB but has no live running instance.
 func (f *shellsFixture) addStorageOnlySession(t *testing.T, title string) {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
 		Status:    domain.Paused,
@@ -295,12 +295,12 @@ func TestDeleteShell_Success(t *testing.T) {
 	// Use a stopped shell. DeleteShell calls StopShell (no-op on already-stopped shells)
 	// and then checks sh.watcherDone — a nil watcherDone is safe (the nil guard is in
 	// DeleteShell itself). No real tmux interaction occurs.
-	inst.AddShellInMemory(&session.Shell{
+	inst.AddShellInMemory(&instance.Shell{
 		ID:         shellID,
 		Name:       "bash",
 		Command:    "/bin/sh",
 		WorkingDir: "/tmp",
-		Status:     session.ShellStatusStopped,
+		Status:     instance.ShellStatusStopped,
 		OrderIndex: 0,
 		StartedAt:  time.Now(),
 	})

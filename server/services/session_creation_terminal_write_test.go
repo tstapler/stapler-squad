@@ -11,14 +11,15 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // addCreatingSession inserts a Creating-status instance directly into storage
 // (via AddInstance) and returns the corresponding live *session.Instance so a
 // test can additionally exercise the in-memory actor path (TryForceStatusIfEpoch).
-func addCreatingSession(t *testing.T, storage *session.Storage, title, uuid string) *session.Instance {
+func addCreatingSession(t *testing.T, storage *session.Storage, title, uuid string) *instance.Instance {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		UUID:      uuid,
 		Path:      "/tmp/test",

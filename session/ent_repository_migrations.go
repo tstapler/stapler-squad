@@ -42,6 +42,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/migrations"
 )
 
@@ -89,7 +90,7 @@ func WithMigrations(ms ...Migration) RepositoryOption {
 func DefaultStartupMigrations() []Migration {
 	hooks := migrations.Hooks{
 		PRURL:               sessionPRURL,
-		ResolveMainRepoRoot: ResolveMainRepoRoot,
+		ResolveMainRepoRoot: instance.ResolveMainRepoRoot,
 	}
 	defaults := migrations.Default(hooks)
 	out := make([]Migration, 0, len(defaults))
@@ -116,9 +117,9 @@ func sessionPRURL(path, owner, repo string, prNumber int) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	host := hostFromClonedPath(path, ref)
+	host := instance.HostFromClonedPath(path, ref)
 	if host == "" {
 		return "", false
 	}
-	return (&GitHubRef{Host: host, Owner: ref.Owner(), Repo: ref.Repo(), PRNumber: prNumber}).PRURL(), true
+	return (&instance.GitHubRef{Host: host, Owner: ref.Owner(), Repo: ref.Repo(), PRNumber: prNumber}).PRURL(), true
 }

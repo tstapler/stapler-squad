@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/summaries"
@@ -186,7 +187,7 @@ func (s *SessionService) SetRegistry(r *session.Registry) {
 // per-session callbacks (review queue, status manager, rate limit, etc.) onto a freshly
 // constructed LiveInstance. Called exactly once per genuine construction in Acquire —
 // never on refcount++ hits, never on Register (CreateSession wires callbacks explicitly).
-func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
+func (s *SessionService) WireInstanceCallbacks(inst *instance.LiveInstance) {
 	inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
 	inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
 	if s.statusManager != nil {
@@ -305,7 +306,7 @@ func (s *SessionService) SetLifecycleContext(ctx context.Context) {
 
 // wireCallbacks wires all per-instance lifecycle callbacks on inst.
 // Consolidates the five wire* helpers that are always called together.
-func (s *SessionService) wireCallbacks(inst *session.Instance) {
+func (s *SessionService) wireCallbacks(inst *instance.Instance) {
 	// Tagging engine + fire-count recorder (session-classifier-pipeline Epic 3.3/Task
 	// 2.3.3d) — wired here, the single per-instance callback chokepoint every construction
 	// path (fresh CreateSession, CreateDirectorySession/CreateWorktreeSession, and every
@@ -327,7 +328,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 			return func() {}, nil
 		}
 		if _, loaded := s.inFlightWorktreeSpawns.LoadOrStore(cleanTarget, inst.UUID); loaded {
-			return nil, fmt.Errorf("%w: claimed by an in-flight spawn", session.ErrDirectoryCollision)
+			return nil, fmt.Errorf("%w: claimed by an in-flight spawn", instance.ErrDirectoryCollision)
 		}
 		return func() { s.inFlightWorktreeSpawns.Delete(cleanTarget) }, nil
 	})
@@ -340,7 +341,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 		if !blocked {
 			return nil
 		}
-		return fmt.Errorf("%w: blocked by session %s", session.ErrDirectoryCollision, blockingUUID)
+		return fmt.Errorf("%w: blocked by session %s", instance.ErrDirectoryCollision, blockingUUID)
 	})
 	// Cross-session conversation-ownership guard (worktree-envvars-hijack Story 1.4.2):
 	// prevents TryExtractConversationUUID's DetectByPath fallback from silently
@@ -399,13 +400,13 @@ func (s *SessionService) StopDriverForSession(sessionTitle string) {
 
 // StartAutonomousDriverForInstance satisfies the AutonomousDriverStarter interface.
 // Delegates to the autonomous orchestration service.
-func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance) {
+func (s *SessionService) StartAutonomousDriverForInstance(inst *instance.Instance) {
 	s.AutonomousSvc.StartAutonomousDriverForInstance(inst)
 }
 
 // StartAutonomousDriverWithTimeout is like StartAutonomousDriverForInstance but
 // uses a configurable startup timeout. Delegates to the autonomous orchestration service.
-func (s *SessionService) StartAutonomousDriverWithTimeout(inst *session.Instance, startupTimeout time.Duration) {
+func (s *SessionService) StartAutonomousDriverWithTimeout(inst *instance.Instance, startupTimeout time.Duration) {
 	s.AutonomousSvc.StartAutonomousDriverWithTimeout(inst, startupTimeout)
 }
 
@@ -464,7 +465,7 @@ func (s *SessionService) SetMemoryCacheReader(r session.MemoryCacheReader) {
 // SetStatusManager wires the InstanceStatusManager so that instances loaded via
 // loadInstancesWithWiring (e.g., fallback path in ListSessions) receive status tracking.
 // Must be called during server startup.
-func (s *SessionService) SetStatusManager(mgr *session.InstanceStatusManager) {
+func (s *SessionService) SetStatusManager(mgr *instance.InstanceStatusManager) {
 	s.statusManager = mgr
 }
 

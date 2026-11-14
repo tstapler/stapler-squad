@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"go.uber.org/goleak"
@@ -58,7 +59,7 @@ const trustDialogText = `Quick safety check: Is this a project you created or on
 ❯ 1. Yes, I trust this folder
   2. No, exit`
 
-func (m *stuckDialogProcessManager) WireLaunch(LaunchSpec)               {}
+func (m *stuckDialogProcessManager) WireLaunch(instance.LaunchSpec)      {}
 func (m *stuckDialogProcessManager) AppendLaunchEnv(...string)           {}
 func (m *stuckDialogProcessManager) Start(dir string) error              { return nil }
 func (m *stuckDialogProcessManager) RestoreWithWorkDir(dir string) error { return nil }
@@ -345,8 +346,8 @@ func TestIsOneShot(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{Title: "test", Tags: tc.tags}
-			got := IsOneShot(inst)
+			inst := &instance.Instance{Title: "test", Tags: tc.tags}
+			got := instance.IsOneShot(inst)
 			if got != tc.want {
 				t.Errorf("IsOneShot(%v) = %v, want %v", tc.tags, got, tc.want)
 			}
@@ -357,8 +358,8 @@ func TestIsOneShot(t *testing.T) {
 // UT-4: TestBuildContinuationPrompt_NoHistoryFile — empty HistoryFilePath returns generic fallback.
 func TestBuildContinuationPrompt_NoHistoryFile(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-session", HistoryFilePath: ""}
-	got := buildContinuationPrompt(inst)
+	inst := &instance.Instance{Title: "test-session", HistoryFilePath: ""}
+	got := instance.BuildContinuationPrompt(inst)
 	if got == "" {
 		t.Fatal("buildContinuationPrompt returned empty string")
 	}
@@ -370,8 +371,8 @@ func TestBuildContinuationPrompt_NoHistoryFile(t *testing.T) {
 // UT-5: TestBuildContinuationPrompt_MissingFile — non-existent file path returns graceful fallback.
 func TestBuildContinuationPrompt_MissingFile(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-session", HistoryFilePath: "/tmp/does-not-exist-stapler-squad-test.jsonl"}
-	got := buildContinuationPrompt(inst)
+	inst := &instance.Instance{Title: "test-session", HistoryFilePath: "/tmp/does-not-exist-stapler-squad-test.jsonl"}
+	got := instance.BuildContinuationPrompt(inst)
 	if got == "" {
 		t.Fatal("buildContinuationPrompt returned empty string for missing file")
 	}
@@ -385,7 +386,7 @@ func TestBuildContinuationPrompt_MissingFile(t *testing.T) {
 // starts one goroutine. The CAS guard in StartSessionDriver prevents a second spawn.
 func TestStartSessionDriver_Idempotent(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "test-idempotent",
 		Status: domain.Stopped,
 	}
@@ -427,7 +428,7 @@ func TestDriverConstants_Ordering(t *testing.T) {
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	t.Parallel()
 	rq := queue.NewReviewQueue()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "test-second-failure",
 		UUID:   "test-uuid-second-fail",
 		Status: domain.Stopped,
@@ -435,7 +436,7 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	inst.RetryAttempt = 1
 	inst.RetryMaxAttempts = 1 // already at cap — next failure is exhausted
 
-	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
+	policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 	handleDriverFailure(inst, "/tmp", policy, "unexpected exit", make(chan struct{}))
 
 	if inst.Status != domain.PermanentlyFailed {
@@ -470,7 +471,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 	// internal `started` atomic.Bool is false) makes SendKeys deterministically fail
 	// with "cannot send keys to instance that has not been started or is paused" —
 	// the same shape of permanent, non-retryable failure as a dead tmux pane.
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "test-nudge-failed-send",
 		Status: domain.Active,
 	}
@@ -493,7 +494,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 // non-zero regardless of send outcome.
 func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "test-nudge-rate-limit",
 		Status: domain.Active,
 	}
@@ -521,7 +522,7 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 func TestCleanDriverPromptText_stripsNullBytes(t *testing.T) {
 	t.Parallel()
 	input := "hello\x00world\x00"
-	got := cleanDriverPromptText(input)
+	got := instance.CleanDriverPromptText(input)
 	if strings.Contains(got, "\x00") {
 		t.Errorf("cleanDriverPromptText(%q) = %q, still contains null bytes", input, got)
 	}
@@ -535,7 +536,7 @@ func TestCleanDriverPromptText_stripsNullBytes(t *testing.T) {
 func TestCleanDriverPromptText_whitespaceOnlyFallsThrough(t *testing.T) {
 	t.Parallel()
 	input := "   \t  "
-	got := cleanDriverPromptText(input)
+	got := instance.CleanDriverPromptText(input)
 	if got != "" {
 		t.Errorf("cleanDriverPromptText(%q) = %q, want empty string (caller falls back to driverInitialPrompt)", input, got)
 	}
@@ -554,10 +555,10 @@ func TestCleanDriverPromptText_whitespaceOnlyFallsThrough(t *testing.T) {
 // resolveInitialPromptForTest re-implements the prompt-selection logic from
 // runSessionDriver (see NOTE M-14 above) so the three prompt-selection tests
 // below share one copy instead of repeating it.
-func resolveInitialPromptForTest(inst *Instance) string {
+func resolveInitialPromptForTest(inst *instance.Instance) string {
 	initialPrompt := driverInitialPrompt
 	if inst.InitialPrompt != "" {
-		sanitized := cleanDriverPromptText(inst.InitialPrompt)
+		sanitized := instance.CleanDriverPromptText(inst.InitialPrompt)
 		if sanitized != "" {
 			initialPrompt = sanitized
 		}
@@ -569,7 +570,7 @@ func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
 	t.Parallel()
 	// Verify the selection logic directly: if InitialPrompt is set, it should
 	// be used (after sanitization), not driverInitialPrompt.
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:         "test-custom-prompt",
 		InitialPrompt: "do the thing",
 		Status:        domain.Stopped,
@@ -583,7 +584,7 @@ func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
 
 func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:         "test-empty-prompt",
 		InitialPrompt: "",
 		Status:        domain.Stopped,
@@ -597,7 +598,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
 
 func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:         "test-whitespace-prompt",
 		InitialPrompt: "   ",
 		Status:        domain.Stopped,
@@ -630,7 +631,7 @@ func (f *fakeInitialPromptRepo) UpdateInitialPromptSentAt(_ context.Context, tit
 // the injected repo (so the NEXT process's driver can see it after a restart).
 func TestSetInitialPromptSentAt_persistsAndIsReadableViaSnapshot(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:         "test-initial-prompt-sent-at",
 		Path:          t.TempDir(),
 		Program:       "echo",
@@ -670,7 +671,7 @@ func TestSetInitialPromptSentAt_persistsAndIsReadableViaSnapshot(t *testing.T) {
 // workflow session getting its prompt retyped after `make install-service`).
 func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:         "test-persisted-sent-at",
 		Path:          t.TempDir(),
 		Program:       "echo",
@@ -711,7 +712,7 @@ func TestRunSessionDriver_persistedInitialPromptSentAt_skipsResend(t *testing.T)
 func TestParseClaudeSessionID_json(t *testing.T) {
 	t.Parallel()
 	output := `{"result":"ok","session_id":"abc-123","total_cost_usd":0.003}`
-	got := parseClaudeSessionID(output)
+	got := instance.ParseClaudeSessionID(output)
 	if got != "abc-123" {
 		t.Errorf("parseClaudeSessionID() = %q, want %q", got, "abc-123")
 	}
@@ -721,7 +722,7 @@ func TestParseClaudeSessionID_json(t *testing.T) {
 func TestParseClaudeSessionID_streamJson(t *testing.T) {
 	t.Parallel()
 	output := `{"type":"system","subtype":"init","data":{"session_id":"xyz-789"}}`
-	got := parseClaudeSessionID(output)
+	got := instance.ParseClaudeSessionID(output)
 	if got != "xyz-789" {
 		t.Errorf("parseClaudeSessionID() = %q, want %q", got, "xyz-789")
 	}
@@ -730,7 +731,7 @@ func TestParseClaudeSessionID_streamJson(t *testing.T) {
 // TestParseClaudeSessionID_empty verifies empty string returns "".
 func TestParseClaudeSessionID_empty(t *testing.T) {
 	t.Parallel()
-	got := parseClaudeSessionID("")
+	got := instance.ParseClaudeSessionID("")
 	if got != "" {
 		t.Errorf("parseClaudeSessionID(\"\") = %q, want empty string", got)
 	}
@@ -740,7 +741,7 @@ func TestParseClaudeSessionID_empty(t *testing.T) {
 func TestParseClaudeSessionID_noSessionId(t *testing.T) {
 	t.Parallel()
 	output := `{"result":"ok","cost":0.003}`
-	got := parseClaudeSessionID(output)
+	got := instance.ParseClaudeSessionID(output)
 	if got != "" {
 		t.Errorf("parseClaudeSessionID(%q) = %q, want empty string", output, got)
 	}
@@ -953,7 +954,7 @@ func shrinkDriverTiming(t *testing.T) driverTiming {
 
 func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDialogProcessManager, logMsg string) {
 	t.Helper()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:         title,
 		Status:        domain.Active,
 		InitialPrompt: driverInitialPrompt,
@@ -983,7 +984,7 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	// child — are confirmed gone before this test returns, instead of the
 	// old Status=Paused-and-hope-it-notices approach which could leak both
 	// goroutines past the test's own lifetime.
-	StopSessionDriver(inst)
+	instance.StopSessionDriver(inst)
 	if inst.DriverRunning() {
 		t.Fatal("driverRunning still true after StopSessionDriver returned")
 	}
@@ -1267,7 +1268,7 @@ func TestAnswerDialogOnce(t *testing.T) {
 // doc comment for why) — this test-only, package-private helper exists so
 // callers that need one can still clean up via the real StopSessionDriver,
 // rather than hand-rolling stop/done channels outside the Start/Stop wrapper.
-func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string, policy RetryPolicy) {
+func startSessionDriverForTest(inst *instance.Instance, allowedPath, initialPrompt string, policy instance.RetryPolicy) {
 	stop, err := inst.BeginDriverRun()
 	if err != nil {
 		return
@@ -1295,8 +1296,8 @@ func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string
 // for TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation:
 // RetryAttempt already at RetryMaxAttempts simulates "already retried once"
 // so the second-failure path fires directly.
-func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*Instance, RetryPolicy) {
-	inst := ((&Instance{
+func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*instance.Instance, instance.RetryPolicy) {
+	inst := ((&instance.Instance{
 		Title:  "dialog-give-up-escalation",
 		UUID:   "test-uuid-give-up-escalation",
 		Status: domain.Active,
@@ -1304,7 +1305,7 @@ func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*Inst
 	inst.MarkStarted()
 	inst.RetryAttempt = 1
 	inst.RetryMaxAttempts = 1
-	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
+	policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 	return inst, policy
 }
 
@@ -1326,7 +1327,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	// resolves RetryPolicy fresh from config — see its doc comment for why.
 	timing := shrinkDriverTiming(t)
 	startSessionDriverForTest(inst, "/tmp", driverInitialPrompt, policy)
-	defer StopSessionDriver(inst)
+	defer instance.StopSessionDriver(inst)
 
 	// The next SendKeys call after maxDialogAnswerAttempts dialog-answer
 	// failures is the initial-prompt send — proof the loop escaped the
@@ -1354,7 +1355,7 @@ func waitForSendKeysCountAbove(t *testing.T, fakePM *stuckDialogProcessManager, 
 
 // waitForDriverRunning blocks until inst.driverRunning is set (the driver
 // goroutine has reached its poll-loop select) or 1s elapses.
-func waitForDriverRunning(t *testing.T, inst *Instance) {
+func waitForDriverRunning(t *testing.T, inst *instance.Instance) {
 	t.Helper()
 	deadline := time.After(time.Second)
 	for !inst.DriverRunning() {
@@ -1368,17 +1369,17 @@ func waitForDriverRunning(t *testing.T, inst *Instance) {
 
 // stopSessionDriverConcurrently runs StopSessionDriver in its own goroutine
 // and asserts it returns within its bounded timeout.
-func stopSessionDriverConcurrently(t *testing.T, inst *Instance) {
+func stopSessionDriverConcurrently(t *testing.T, inst *instance.Instance) {
 	t.Helper()
 	stopDone := make(chan struct{})
 	go func() {
 		defer close(stopDone)
-		StopSessionDriver(inst)
+		instance.StopSessionDriver(inst)
 	}()
 
 	select {
 	case <-stopDone:
-	case <-time.After(driverStopTimeout + 2*time.Second):
+	case <-time.After(instance.DriverStopTimeout + 2*time.Second):
 		t.Fatal("StopSessionDriver did not return within its bounded timeout while racing an in-flight poll")
 	}
 }
@@ -1391,7 +1392,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
-	inst := ((&Instance{
+	inst := ((&instance.Instance{
 		Title:  "concurrent-stop-test",
 		UUID:   "test-uuid-concurrent-stop",
 		Status: domain.Active,
@@ -1431,8 +1432,8 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 // fields without republishing the snapshot, so GitHub() (and the API responses,
 // which read via Snapshot()) could never observe the auto-linked PR.
 func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
-	inst := &Instance{Title: "scan-pr-url-test", GitHubOwner: "octocat", GitHubRepo: "Hello-World"}
-	FinishInstanceConstruction(inst)
+	inst := &instance.Instance{Title: "scan-pr-url-test", GitHubOwner: "octocat", GitHubRepo: "Hello-World"}
+	instance.FinishInstanceConstruction(inst)
 
 	output := "remote: Create a pull request for 'foo' on GitHub by visiting:\nremote:      https://github.com/octocat/Hello-World/pull/42\n"
 	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, output)
@@ -1459,10 +1460,10 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 	t.Run("archived_restart_grace_is_not_restarted", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "archived-retry-test", Status: domain.Stopped, ArchivedAt: &archivedAt}
+		inst := &instance.Instance{Title: "archived-retry-test", Status: domain.Stopped, ArchivedAt: &archivedAt}
 		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
-		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
+		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
 		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "tmux_exited", make(chan struct{}))
 
 		if shouldContinue || !shouldReturn {
@@ -1482,12 +1483,12 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 	t.Run("not_archived_still_schedules_a_retry", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-retry-scheduled", Status: domain.Stopped}
+		inst := &instance.Instance{Title: "live-retry-scheduled", Status: domain.Stopped}
 		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.RetryAttempt = 0
 		inst.RetryMaxAttempts = 3
 
-		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}, InitialDelay: time.Second, MaxDelay: time.Minute}
+		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}, InitialDelay: time.Second, MaxDelay: time.Minute}
 		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
 
 		if !shouldContinue || shouldReturn {
@@ -1501,12 +1502,12 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 	t.Run("not_archived_still_marks_permanently_failed_when_exhausted", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-retry-exhausted", Status: domain.Stopped}
+		inst := &instance.Instance{Title: "live-retry-exhausted", Status: domain.Stopped}
 		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.RetryAttempt = 1
 		inst.RetryMaxAttempts = 1 // already at cap
 
-		policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed"}}
+		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed"}}
 		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
 
 		if got := inst.Snapshot().Status; got != domain.PermanentlyFailed {
@@ -1526,11 +1527,11 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 		t.Parallel()
 		archivedAt := time.Now()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "archived-pending-retry", Status: domain.Stopped, ArchivedAt: &archivedAt}
+		inst := &instance.Instance{Title: "archived-pending-retry", Status: domain.Stopped, ArchivedAt: &archivedAt}
 		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
 
-		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
 
 		if shouldContinue || !shouldReturn {
@@ -1547,11 +1548,11 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 	t.Run("not_archived_pending_but_not_elapsed_keeps_ticking", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-pending-retry", Status: domain.Stopped}
+		inst := &instance.Instance{Title: "live-pending-retry", Status: domain.Stopped}
 		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
 
-		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 		shouldContinue, shouldReturn := handleRetryPendingTick(inst, "/tmp", policy, make(chan struct{}))
 
 		if !shouldContinue || shouldReturn {

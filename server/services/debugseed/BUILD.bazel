@@ -14,6 +14,7 @@ go_library(
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",
+        "//session/instance",
         "@com_github_google_uuid//:uuid",
     ],
 )

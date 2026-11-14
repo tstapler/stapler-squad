@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func nudgeRows(t *testing.T, storage *session.Storage, itemID string) []session.FlowMarkerData {
@@ -35,7 +36,7 @@ func TestTransitionBacklogItemStatus_should_RecordManualNudge_When_ActorIsUser(t
 }
 
 func TestTransitionBacklogItemStatus_should_NotRecordManualNudge_When_ActorIsAgentOrSystem(t *testing.T) {
-	for _, actor := range []string{session.TriggeredByAgent, session.TriggeredBySystem} {
+	for _, actor := range []string{instance.TriggeredByAgent, instance.TriggeredBySystem} {
 		t.Run(actor, func(t *testing.T) {
 			svc, storage, _, _ := enfService(t)
 			item := enfItemAt(t, storage, domain.BacklogStatusIdea)

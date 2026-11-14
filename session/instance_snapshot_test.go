@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- Story 1.1: Construction guarantee ---
@@ -115,7 +116,7 @@ func TestSnapshotReflectsSetGitHubPRNumber(t *testing.T) {
 func TestCreationProgressActorRouted(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	inst.SetCreationProgress("Starting session...")
@@ -141,7 +142,7 @@ func TestCreationProgressActorRouted(t *testing.T) {
 func TestSetProgramActorRouted(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	inst.SetProgram("agy")
@@ -159,7 +160,7 @@ func TestSetProgramActorRouted(t *testing.T) {
 func TestSetAutonomousCompleteActorRouted(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	inst.AutonomousMode = true
@@ -270,9 +271,9 @@ func TestInstanceSnapshot_should_DeepCopySuppressedRuleTags_When_SnapshotTaken(t
 }
 
 // minimalInstance builds a bare Instance safe for unit tests (no tmux, no disk I/O).
-func minimalInstance(t *testing.T) *Instance {
+func minimalInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	i := &Instance{
+	i := &instance.Instance{
 		Title:       t.Name(),
 		Status:      domain.Creating,
 		Program:     "echo",
@@ -282,7 +283,7 @@ func minimalInstance(t *testing.T) *Instance {
 		Permissions: domain.GetManagedPermissions(),
 	}
 	i.InitTagManagerForTest()
-	FinishInstanceConstruction(i)
+	instance.FinishInstanceConstruction(i)
 	return i
 }
 

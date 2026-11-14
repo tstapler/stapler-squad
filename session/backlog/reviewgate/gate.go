@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ReviewGateSpawner can create a short-lived review session for a backlog item.
@@ -23,7 +24,7 @@ import (
 type ReviewGateSpawner interface {
 	// SpawnReviewSession creates a one-shot review session for item using prompt.
 	// itemSessionID is the UUID of the work ItemSession being reviewed.
-	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
+	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error)
 }
 
 // AutoReopenSpawner can automatically reopen a backlog item for rework after a
@@ -464,7 +465,7 @@ func (r *ReviewGateRunner) Run(
 	if _, createErr := r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:        item.ID,
 		SessionUUID:   reviewInst.UUID,
-		SessionRole:   session.SessionRoleReview,
+		SessionRole:   instance.SessionRoleReview,
 		AcSnapshot:    is.AcSnapshot,
 		DiffTruncated: truncated,
 	}); createErr != nil {

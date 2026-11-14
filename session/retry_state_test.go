@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 
@@ -47,23 +48,23 @@ func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
 
 func TestClassifyFailureReason_should_ReturnTmuxExited_When_ProcessManagerNotAlive(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{Title: "t"}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
-	if got := classifyFailureReason(inst); got != "tmux_exited" {
+	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
+	if got := instance.ClassifyFailureReason(inst); got != "tmux_exited" {
 		t.Errorf("classifyFailureReason = %q, want tmux_exited", got)
 	}
 }
 
 func TestClassifyFailureReason_should_ReturnCrashed_When_ProcessManagerAlive(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{Title: "t"}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
-	if got := classifyFailureReason(inst); got != "crashed" {
+	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
+	if got := instance.ClassifyFailureReason(inst); got != "crashed" {
 		t.Errorf("classifyFailureReason = %q, want crashed", got)
 	}
 }
 
 func TestRetryNow_should_ResetRetryStateAndTransitionToActive_When_CalledFromPermanentlyFailed(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
@@ -111,7 +112,7 @@ func TestRetryNow_should_ResetRetryStateAndTransitionToActive_When_CalledFromPer
 // i.started's prior value.
 func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPermanentlyFailedWithDeadSession(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
@@ -123,7 +124,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 	// ErrCannotRestart and Status is left untouched at PermanentlyFailed.
 
 	err := inst.RetryNow("/tmp")
-	if errors.Is(err, ErrCannotRestart) {
+	if errors.Is(err, instance.ErrCannotRestart) {
 		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the PermanentlyFailed/dead-session branch-selection bug has regressed", err)
 	}
 	if err != nil {
@@ -151,7 +152,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 // same as PermanentlyFailed/Stopped.
 func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFailed(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Failed,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
@@ -161,7 +162,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFaile
 	// ErrCannotRestart and Status is left untouched at Failed.
 
 	err := inst.RetryNow("/tmp")
-	if errors.Is(err, ErrCannotRestart) {
+	if errors.Is(err, instance.ErrCannotRestart) {
 		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the Failed/dead-session branch-selection bug has regressed", err)
 	}
 	if err != nil {
@@ -199,7 +200,7 @@ func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 		t.Fatalf("precondition failed: worktree directory still exists after RemoveAll: %v", statErr)
 	}
 
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 		Path:   repoPath,
@@ -231,7 +232,7 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 	wt := fixturetest.NewTestGitWorktree(repoPath, worktreePath)
 
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 		Path:   repoPath,
@@ -255,7 +256,7 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 // only exercised the PermanentlyFailed (exhausted) starting state.
 func TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Stopped,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
@@ -278,14 +279,14 @@ func TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait(t *
 
 func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
 	inst.SetRetryInFlightForTest(true) // simulate an in-flight restart
 
 	err := inst.RetryNow("/tmp")
-	if !errors.Is(err, ErrRetryInFlight) {
+	if !errors.Is(err, instance.ErrRetryInFlight) {
 		t.Errorf("RetryNow() err = %v, want ErrRetryInFlight", err)
 	}
 }
@@ -306,14 +307,14 @@ func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed
 func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetryInFlight(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Stopped,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{
 		alive:          true,
 		restoreRelease: release,
 	})
-	policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+	policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 
 	results := make(chan error, 2)
 	start := make(chan struct{})
@@ -330,7 +331,7 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 	var inFlightCount, otherCount int
 	for i := range 2 {
 		err := <-results
-		if errors.Is(err, ErrRetryInFlight) {
+		if errors.Is(err, instance.ErrRetryInFlight) {
 			inFlightCount++
 		} else {
 			otherCount++
@@ -346,10 +347,10 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 
 // newCrashLoopInstance builds the Instance/ReviewQueue/notifier fixture shared
 // by the crash-loop test's escalating-retry and exhaustion phases.
-func newCrashLoopInstance() (*Instance, *queue.ReviewQueue, *sessiontest.FakeNotifier) {
+func newCrashLoopInstance() (*instance.Instance, *queue.ReviewQueue, *sessiontest.FakeNotifier) {
 	rq := queue.NewReviewQueue()
 	notifier := &sessiontest.FakeNotifier{}
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "crash-loop",
 		UUID:   "test-uuid-crash-loop",
 		Status: domain.Active,
@@ -364,7 +365,7 @@ func newCrashLoopInstance() (*Instance, *queue.ReviewQueue, *sessiontest.FakeNot
 // scheduled backoff delay falls within the jittered window and grew over the
 // previous attempt's delay. It returns the delay so the caller can feed it
 // back in as prevDelay for the next attempt.
-func assertCrashRetryScheduled(t *testing.T, inst *Instance, attempt int, policy RetryPolicy, prevDelay time.Duration) time.Duration {
+func assertCrashRetryScheduled(t *testing.T, inst *instance.Instance, attempt int, policy instance.RetryPolicy, prevDelay time.Duration) time.Duration {
 	t.Helper()
 	before := time.Now()
 	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
@@ -418,7 +419,7 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 	t.Parallel()
 	inst, rq, notifier := newCrashLoopInstance()
 
-	policy := RetryPolicy{
+	policy := instance.RetryPolicy{
 		Enabled:      true,
 		MaxAttempts:  3,
 		RetryOn:      []string{"crashed"},
@@ -463,7 +464,7 @@ func TestRestart_should_RecoverAndActivate_When_PermanentlyFailedAndNotStarted(t
 	for _, status := range []domain.Status{domain.PermanentlyFailed, domain.Failed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := (&Instance{
+			inst := (&instance.Instance{
 				Title:  "t",
 				Path:   "/tmp",
 				Status: status,
@@ -489,8 +490,8 @@ func TestRestart_should_ReturnErrCannotRestart_When_NotStartedAndNotPermanentlyF
 	for _, status := range []domain.Status{domain.Stopped, domain.Active, domain.Paused} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := (&Instance{Title: "t", Path: "/tmp", Status: status}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
-			if err := inst.Restart(false, ""); !errors.Is(err, ErrCannotRestart) {
+			inst := (&instance.Instance{Title: "t", Path: "/tmp", Status: status}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
+			if err := inst.Restart(false, ""); !errors.Is(err, instance.ErrCannotRestart) {
 				t.Fatalf("Restart() err = %v, want ErrCannotRestart", err)
 			}
 			if inst.Status != status {
@@ -508,7 +509,7 @@ func (m *failingStartProcessManager) Start(string) error { return errors.New("bo
 
 func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Path:   "/tmp",
 		Status: domain.PermanentlyFailed,
@@ -528,7 +529,7 @@ func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *tes
 // else StartSessionDriver is a permanent no-op for the instance.
 func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
@@ -536,8 +537,8 @@ func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *tes
 	inst.RetryMaxAttempts = 3
 	require.NoError(t, inst.RetryNow("/tmp"))
 
-	StopSessionDriver(inst)
-	JoinSessionDriver(inst)
+	instance.StopSessionDriver(inst)
+	instance.JoinSessionDriver(inst)
 
 	require.False(t, SessionDriverRunningForTest(inst),
 		"driverRunning stays true after the retry continuation exited, blocking every later StartSessionDriver")
@@ -546,7 +547,7 @@ func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *tes
 // The in-loop handoff: a real driver fires its scheduled retry, hands off to a continuation and
 // exits; once the continuation exits too, a later StartSessionDriver must start a driver.
 func TestRunSessionDriver_should_AllowRestart_When_RetryContinuationExited(t *testing.T) {
-	inst := &Instance{Title: "handoff", Status: domain.Stopped}
+	inst := &instance.Instance{Title: "handoff", Status: domain.Stopped}
 	inst.NextRetryAt = time.Now().Add(-time.Minute)
 	inst.RetryAttempt = 1
 	// Mid-restart, mark the instance destroyed (without StopSessionDriver, which would set
@@ -556,40 +557,40 @@ func TestRunSessionDriver_should_AllowRestart_When_RetryContinuationExited(t *te
 	shrinkDriverTiming(t)
 
 	StartSessionDriver(inst, "/tmp")
-	JoinSessionDriver(inst)
+	instance.JoinSessionDriver(inst)
 
 	require.False(t, inst.IsRetryPending(), "the driver never fired the scheduled retry; the handoff did not happen")
 	require.False(t, SessionDriverRunningForTest(inst), "driverRunning left set after every driver goroutine exited")
 
 	inst.SetDestroyedForTest(false)
 	var started atomic.Int32
-	SetSessionDriverStartHookForTest(func(*Instance) { started.Add(1) })
+	SetSessionDriverStartHookForTest(func(*instance.Instance) { started.Add(1) })
 	t.Cleanup(func() { SetSessionDriverStartHookForTest(nil) })
 	StartSessionDriver(inst, "/tmp")
-	t.Cleanup(func() { StopSessionDriver(inst); JoinSessionDriver(inst) })
+	t.Cleanup(func() { instance.StopSessionDriver(inst); instance.JoinSessionDriver(inst) })
 	require.Equal(t, int32(1), started.Load(), "a later StartSessionDriver was refused after the continuation exited")
 }
 
 // restartForRetry after Destroy must not spawn a continuation that nothing will stop.
 func TestRestartForRetry_should_NotSpawnContinuation_When_DriverDestroyed(t *testing.T) {
 	t.Parallel()
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
 	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
-	StopSessionDriver(inst) // what Destroy does
+	instance.StopSessionDriver(inst) // what Destroy does
 	require.NoError(t, inst.RetryNow("/tmp"))
 
 	require.False(t, SessionDriverRunningForTest(inst))
 	require.Zero(t, inst.DriverGoroutinesForTest())
-	JoinSessionDriver(inst)
+	instance.JoinSessionDriver(inst)
 }
 
 // A driver that hands off to a continuation exits first; driverRunning must stay set until the
 // continuation exits too, or a second driver could start alongside it.
 func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRuns(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "t"}
+	inst := &instance.Instance{Title: "t"}
 	_, err := inst.BeginDriverRun()
 	require.NoError(t, err)
 
@@ -605,7 +606,7 @@ func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRu
 // A real StartSessionDriver followed by a continuation must count both goroutines, so the first
 // one to exit cannot clear driverRunning under the other.
 func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistered(t *testing.T) {
-	inst := (&Instance{Title: "count", Status: domain.Active}).WithProcessManagerForTest(&stuckDialogProcessManager{})
+	inst := (&instance.Instance{Title: "count", Status: domain.Active}).WithProcessManagerForTest(&stuckDialogProcessManager{})
 	inst.MarkStarted()
 	shrinkDriverTiming(t)
 
@@ -613,8 +614,8 @@ func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistere
 	release := make(chan struct{})
 	t.Cleanup(func() {
 		close(release)
-		StopSessionDriver(inst)
-		JoinSessionDriver(inst)
+		instance.StopSessionDriver(inst)
+		instance.JoinSessionDriver(inst)
 	})
 	_, ok := inst.RegisterDriverContinuation(nil)
 	require.True(t, ok)

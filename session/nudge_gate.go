@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"time"
 )
 
@@ -29,7 +30,7 @@ const nudgeIdleSettlePollInterval = 500 * time.Millisecond
 // using the package's real settle window/poll interval; see that function's
 // doc comment for the two things this tightens over a naive isIdleStatus
 // point-in-time check.
-func CheckNudgeEligible(inst *Instance) error {
+func CheckNudgeEligible(inst *instance.Instance) error {
 	return CheckNudgeEligibleWithSettleWindow(inst, nudgeIdleSettleWindow, nudgeIdleSettlePollInterval)
 }
 
@@ -50,7 +51,7 @@ func CheckNudgeEligible(inst *Instance) error {
 // write-time pane-ownership re-verification (VerifyPaneOwnershipBeforeWrite)
 // remains the guard against a status/identity change between this check
 // returning and the write itself — settleWindow only widens what "checked" means.
-func CheckNudgeEligibleWithSettleWindow(inst *Instance, settleWindow, pollInterval time.Duration) error {
+func CheckNudgeEligibleWithSettleWindow(inst *instance.Instance, settleWindow, pollInterval time.Duration) error {
 	return CheckNudgeEligibleWithSettleWindowCtx(context.Background(), inst, settleWindow, pollInterval)
 }
 
@@ -58,7 +59,7 @@ func CheckNudgeEligibleWithSettleWindow(inst *Instance, settleWindow, pollInterv
 // with a cancellable wait: a cancelled ctx returns promptly (wrapping
 // ctx.Err()) instead of sleeping out the rest of the settle window, so a
 // caller that was told to stop is never left blocked here.
-func CheckNudgeEligibleWithSettleWindowCtx(ctx context.Context, inst *Instance, settleWindow, pollInterval time.Duration) error {
+func CheckNudgeEligibleWithSettleWindowCtx(ctx context.Context, inst *instance.Instance, settleWindow, pollInterval time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("nudge eligibility check cancelled: %w", err)
 	}
@@ -94,9 +95,9 @@ func CheckNudgeEligibleWithSettleWindowCtx(ctx context.Context, inst *Instance, 
 // write-time pane-ownership re-verification (a tmux round trip) immediately
 // before the caller actually writes to the pane. Returns the first error
 // encountered.
-func VerifyNudgeSafeToWrite(ctx context.Context, inst *Instance) error {
+func VerifyNudgeSafeToWrite(ctx context.Context, inst *instance.Instance) error {
 	if err := CheckNudgeEligibleWithSettleWindowCtx(ctx, inst, nudgeIdleSettleWindow, nudgeIdleSettlePollInterval); err != nil {
 		return err
 	}
-	return VerifyPaneOwnershipBeforeWrite(ctx, inst)
+	return instance.VerifyPaneOwnershipBeforeWrite(ctx, inst)
 }

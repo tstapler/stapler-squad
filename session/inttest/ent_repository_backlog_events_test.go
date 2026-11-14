@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // This file lives in the external session_test package (not the internal
@@ -81,7 +82,7 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 
 	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusInProgress),
-	}, session.TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -122,7 +123,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 	// the CAS WHERE clause matches zero rows.
 	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusReview),
-	}, session.TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.Error(t, err)
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
@@ -160,7 +161,7 @@ func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_Item
 	require.NotPanics(t, func() {
 		updated, transErr := storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: string(domain.BacklogStatusInProgress),
-		}, session.TriggeredBySystem)
+		}, instance.TriggeredBySystem)
 		require.NoError(t, transErr)
 		require.NotNil(t, updated)
 	})
@@ -308,7 +309,7 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	select {
@@ -369,7 +370,7 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	sub, subID := bus.Subscribe(ctx)
@@ -559,7 +560,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 		t.Fatal("timed out waiting for SaveReviewVerdict's own BacklogItemChanged event")
 	}
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, nil, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -612,7 +613,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReady, nil, session.TriggeredByUser)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReady, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	// Drain the "idea -> ready" transition's own event — a different publish
@@ -623,7 +624,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 		t.Fatal("timed out waiting for the idea->ready BacklogItemChanged event")
 	}
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -637,7 +638,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 		assert.Equal(t, string(domain.BacklogStatusReady), events[0].ToStatus)
 		assert.Equal(t, string(domain.BacklogStatusReady), events[1].FromStatus)
 		assert.Equal(t, string(domain.BacklogStatusInProgress), events[1].ToStatus)
-		assert.Equal(t, session.TriggeredBySystem, events[1].TriggeredBy)
+		assert.Equal(t, instance.TriggeredBySystem, events[1].TriggeredBy)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from the second TransitionBacklogItemStatus call")
 	}
@@ -1089,7 +1090,7 @@ func TestSaveReviewVerdict_should_persistCommitShaAndTruncation_When_Set(t *test
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "verdict sha round trip", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "review-" + uuid.NewString(), SessionRole: session.SessionRoleReview, DiffTruncated: true,
+		ItemID: item.ID, SessionUUID: "review-" + uuid.NewString(), SessionRole: instance.SessionRoleReview, DiffTruncated: true,
 	})
 	require.NoError(t, err)
 	assert.True(t, is.DiffTruncated, "spawn-time truncation must round-trip on the item session")

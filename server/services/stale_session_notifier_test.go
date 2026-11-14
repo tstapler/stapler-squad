@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -22,8 +23,8 @@ import (
 // lastMeaningfulOutput is written through both the plain field and SyncAtomicTimestamps()
 // so GetTimeSinceLastMeaningfulOutput()'s fast (atomic-shadow) path reflects it immediately,
 // mirroring the pattern session/review_queue_poller_test.go's makeAcknowledgedInstance uses.
-func newStaleTestInstance(title, uuid string, status domain.Status, lastMeaningfulOutput time.Time) *session.Instance {
-	inst := &session.Instance{
+func newStaleTestInstance(title, uuid string, status domain.Status, lastMeaningfulOutput time.Time) *instance.Instance {
+	inst := &instance.Instance{
 		Title:     title,
 		UUID:      uuid,
 		Status:    status,
@@ -37,7 +38,7 @@ func newStaleTestInstance(title, uuid string, status domain.Status, lastMeaningf
 // setLastMeaningfulOutput updates inst's idle clock and keeps the atomic shadow in sync,
 // so a later checkAll() call sees the new value via GetTimeSinceLastMeaningfulOutput's
 // fast path (see newStaleTestInstance's doc comment).
-func setLastMeaningfulOutput(inst *session.Instance, t time.Time) {
+func setLastMeaningfulOutput(inst *instance.Instance, t time.Time) {
 	inst.LastMeaningfulOutput = t
 	inst.SyncAtomicTimestamps()
 }
@@ -45,7 +46,7 @@ func setLastMeaningfulOutput(inst *session.Instance, t time.Time) {
 // newTestNotifierPoller builds a ReviewQueuePoller pre-loaded with instances, for
 // StaleSessionNotifier tests that only need GetInstances() -- never Start()ed, so no
 // polling goroutine or tmux/status-manager dependency is required.
-func newTestNotifierPoller(instances ...*session.Instance) *session.ReviewQueuePoller {
+func newTestNotifierPoller(instances ...*instance.Instance) *session.ReviewQueuePoller {
 	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), nil, nil)
 	poller.SetInstances(instances)
 	return poller

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -20,10 +21,10 @@ import (
 
 // leaseInstance returns an instance with its own flag, so tests never share
 // DefaultLeaseFlag state.
-func leaseInstance(t *testing.T, uuid string) *Instance {
+func leaseInstance(t *testing.T, uuid string) *instance.Instance {
 	t.Helper()
-	inst := &Instance{Title: "lease-" + uuid, UUID: uuid}
-	inst.SetLeaseFlag(&LeaseFlag{})
+	inst := &instance.Instance{Title: "lease-" + uuid, UUID: uuid}
+	inst.SetLeaseFlag(&instance.LeaseFlag{})
 	return inst
 }
 
@@ -34,16 +35,16 @@ func TestWriteLease_ShouldRefuseNilZeroAndForeignLeaseWithZeroWrites_WhenAnyWrit
 
 	cases := []struct {
 		name    string
-		lease   func() *HeldLease
+		lease   func() *instance.HeldLease
 		wantErr error
 	}{
-		{"nil", func() *HeldLease { return nil }, ErrNoLease},
-		{"zero value", func() *HeldLease { return &HeldLease{} }, ErrNoLease},
-		{"foreign instance", func() *HeldLease {
-			l, ok := foreign.TryTerminalWriteLease(LeaseWriterOther)
+		{"nil", func() *instance.HeldLease { return nil }, instance.ErrNoLease},
+		{"zero value", func() *instance.HeldLease { return &instance.HeldLease{} }, instance.ErrNoLease},
+		{"foreign instance", func() *instance.HeldLease {
+			l, ok := foreign.TryTerminalWriteLease(instance.LeaseWriterOther)
 			require.True(t, ok)
 			return l
-		}, ErrLeaseMismatch},
+		}, instance.ErrLeaseMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,45 +53,45 @@ func TestWriteLease_ShouldRefuseNilZeroAndForeignLeaseWithZeroWrites_WhenAnyWrit
 			pane := fixturetest.NewFakePaneSubmitter()
 
 			l := tc.lease()
-			err := SubmitDriverContent(ctx, pane, l, "x", time.Millisecond, time.Millisecond)
+			err := instance.SubmitDriverContent(ctx, pane, l, "x", time.Millisecond, time.Millisecond)
 			require.ErrorIs(t, err, tc.wantErr)
 
 			// A refused lease is not reused by the next call: take a fresh one.
 			l = tc.lease()
-			err = SubmitContentWithEnter(ctx, pane, l, "x")
+			err = instance.SubmitContentWithEnter(ctx, pane, l, "x")
 			require.ErrorIs(t, err, tc.wantErr)
 
 			l = tc.lease()
-			err = SendKeysWithTimeout(ctx, pane, l, "x", time.Second)
+			err = instance.SendKeysWithTimeout(ctx, pane, l, "x", time.Second)
 			require.ErrorIs(t, err, tc.wantErr)
 
 			assert.Empty(t, pane.SendCalls, "a refused lease must perform 0 writes")
 		})
 	}
 	// Every refusal released the foreign lease it was handed.
-	AssertLeaseFree(t, foreign)
+	instance.AssertLeaseFree(t, foreign)
 }
 
 // T-WL-02
 func TestWriteLease_ShouldReturnFalseAtOnceForATryAndBusyAfterTheBoundedWaitForAnAcquireAndNeverHang_WhenAFixtureChainAcquiresTwiceForTheSameInstance(t *testing.T) {
 	t.Parallel()
 	inst := leaseInstance(t, "nest")
-	outer, ok := inst.TryTerminalWriteLease(LeaseWriterSteer)
+	outer, ok := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	require.True(t, ok)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, ok := inst.TryTerminalWriteLease(LeaseWriterSteer)
+		_, ok := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 		assert.False(t, ok, "a nested Try must return false at once")
 
 		start := time.Now()
-		_, err := inst.AcquireTerminalWriteLease(context.Background(), LeaseWriterSteer, 30*time.Millisecond)
-		assert.ErrorIs(t, err, ErrLeaseBusy)
+		_, err := inst.AcquireTerminalWriteLease(context.Background(), instance.LeaseWriterSteer, 30*time.Millisecond)
+		assert.ErrorIs(t, err, instance.ErrLeaseBusy)
 		assert.GreaterOrEqual(t, time.Since(start), 30*time.Millisecond)
 
-		_, err = inst.AcquireTerminalWriteLease(context.Background(), LeaseWriterSteer, 0)
-		assert.ErrorIs(t, err, ErrLeaseBusy, "a zero wait is a Try")
+		_, err = inst.AcquireTerminalWriteLease(context.Background(), instance.LeaseWriterSteer, 0)
+		assert.ErrorIs(t, err, instance.ErrLeaseBusy, "a zero wait is a Try")
 	}()
 	select {
 	case <-done:
@@ -100,19 +101,19 @@ func TestWriteLease_ShouldReturnFalseAtOnceForATryAndBusyAfterTheBoundedWaitForA
 
 	outer.Release()
 	outer.Release() // idempotent backstop
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 func TestWriteLease_ShouldReturnCtxErr_WhenAcquireIsCancelledWhileWaiting(t *testing.T) {
 	t.Parallel()
 	inst := leaseInstance(t, "cancel")
-	held, _ := inst.TryTerminalWriteLease(LeaseWriterSteer)
+	held, _ := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	defer held.Release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := inst.AcquireTerminalWriteLease(ctx, LeaseWriterDriver, time.Minute)
+		_, err := inst.AcquireTerminalWriteLease(ctx, instance.LeaseWriterDriver, time.Minute)
 		errCh <- err
 	}()
 	cancel()
@@ -122,11 +123,11 @@ func TestWriteLease_ShouldReturnCtxErr_WhenAcquireIsCancelledWhileWaiting(t *tes
 func TestWriteLease_ShouldHandTheLeaseToAWaiter_WhenTheHolderReleases(t *testing.T) {
 	t.Parallel()
 	inst := leaseInstance(t, "handoff")
-	held, _ := inst.TryTerminalWriteLease(LeaseWriterSteer)
+	held, _ := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 
-	got := make(chan *HeldLease, 1)
+	got := make(chan *instance.HeldLease, 1)
 	go func() {
-		l, err := inst.AcquireTerminalWriteLease(context.Background(), LeaseWriterAutonomous, 10*time.Second)
+		l, err := inst.AcquireTerminalWriteLease(context.Background(), instance.LeaseWriterAutonomous, 10*time.Second)
 		assert.NoError(t, err)
 		got <- l
 	}()
@@ -134,16 +135,16 @@ func TestWriteLease_ShouldHandTheLeaseToAWaiter_WhenTheHolderReleases(t *testing
 	l := <-got
 	require.NotNil(t, l)
 	l.Release()
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // T-WL-05: never acquired under i.mu or the actor; -race.
 func TestWriteLease_ShouldNotDeadlockOrInvertLockOrder_WhenDriverSteerNudgeAndStatusPollerRunConcurrently(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: "idle"}
-	inst := (&Instance{Title: "lock-order", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst := (&instance.Instance{Title: "lock-order", Status: domain.Active}).WithProcessManagerForTest(pm)
 	inst.MarkStarted()
-	inst.SetLeaseFlag(&LeaseFlag{})
+	inst.SetLeaseFlag(&instance.LeaseFlag{})
 
 	var wg sync.WaitGroup
 	run := func(f func()) {
@@ -157,13 +158,13 @@ func TestWriteLease_ShouldNotDeadlockOrInvertLockOrder_WhenDriverSteerNudgeAndSt
 	}
 	run(func() { _ = sendAnswerKeyUnderLease(inst) }) // driver tick
 	run(func() {                                      // steer: acquire, then a status read while held
-		if l, err := inst.AcquireTerminalWriteLease(context.Background(), LeaseWriterSteer, time.Millisecond); err == nil {
+		if l, err := inst.AcquireTerminalWriteLease(context.Background(), instance.LeaseWriterSteer, time.Millisecond); err == nil {
 			_ = inst.Snapshot()
 			l.Release()
 		}
 	})
 	run(func() { // nudge
-		if l, ok := inst.TryTerminalWriteLease(LeaseWriterNudge); ok {
+		if l, ok := inst.TryTerminalWriteLease(instance.LeaseWriterNudge); ok {
 			l.Release()
 		}
 	})
@@ -180,7 +181,7 @@ func TestWriteLease_ShouldNotDeadlockOrInvertLockOrder_WhenDriverSteerNudgeAndSt
 	case <-time.After(10 * time.Second):
 		t.Fatal("deadlock: lease acquirers and the status poller did not finish")
 	}
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 type warnRecord struct {
@@ -229,51 +230,51 @@ func TestWriteLease_ShouldRaiseTheHeldSecondsGaugeAndLogOneWedgeWarnPerMinuteAnd
 	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
 
 	inst := leaseInstance(t, "wedge")
-	lease, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	require.True(t, ok)
 	t0 := lease.AcquiredAtForTest()
-	scanMine := func(now time.Time, warnAfter time.Duration) []WedgedLease {
-		return ScanWedgedLeases(now, warnAfter, func(i *Instance) bool { return i == inst })
+	scanMine := func(now time.Time, warnAfter time.Duration) []instance.WedgedLease {
+		return instance.ScanWedgedLeases(now, warnAfter, func(i *instance.Instance) bool { return i == inst })
 	}
-	mine := func(ws []WedgedLease) int { return len(ws) }
+	mine := func(ws []instance.WedgedLease) int { return len(ws) }
 	title := inst.Title
 
-	assert.InDelta(t, 45, LeaseHeldSeconds(LeaseWriterReply, t0.Add(45*time.Second)), 1.0)
-	assert.Zero(t, LeaseHeldSeconds(LeaseWriterMCP, t0.Add(45*time.Second)), "other writers' gauge is unaffected")
+	assert.InDelta(t, 45, instance.LeaseHeldSeconds(instance.LeaseWriterReply, t0.Add(45*time.Second)), 1.0)
+	assert.Zero(t, instance.LeaseHeldSeconds(instance.LeaseWriterMCP, t0.Add(45*time.Second)), "other writers' gauge is unaffected")
 
-	assert.Zero(t, mine(scanMine(t0.Add(LeaseWedgeWarnAfter-time.Second), LeaseWedgeWarnAfter)))
+	assert.Zero(t, mine(scanMine(t0.Add(instance.LeaseWedgeWarnAfter-time.Second), instance.LeaseWedgeWarnAfter)))
 	assert.Zero(t, cap.count("terminal_write_lease_wedged", title))
 
-	assert.Equal(t, 1, mine(scanMine(t0.Add(LeaseWedgeWarnAfter), LeaseWedgeWarnAfter)), "first sighting")
+	assert.Equal(t, 1, mine(scanMine(t0.Add(instance.LeaseWedgeWarnAfter), instance.LeaseWedgeWarnAfter)), "first sighting")
 	assert.Equal(t, 1, cap.count("terminal_write_lease_wedged", title))
 
-	assert.Zero(t, mine(scanMine(t0.Add(LeaseWedgeWarnAfter+30*time.Second), LeaseWedgeWarnAfter)), "same episode is not a first sighting")
+	assert.Zero(t, mine(scanMine(t0.Add(instance.LeaseWedgeWarnAfter+30*time.Second), instance.LeaseWedgeWarnAfter)), "same episode is not a first sighting")
 	assert.Equal(t, 1, cap.count("terminal_write_lease_wedged", title), "at most one WARN a minute")
 
-	assert.Zero(t, mine(scanMine(t0.Add(LeaseWedgeWarnAfter+LeaseWedgeWarnEvery), LeaseWedgeWarnAfter)))
+	assert.Zero(t, mine(scanMine(t0.Add(instance.LeaseWedgeWarnAfter+instance.LeaseWedgeWarnEvery), instance.LeaseWedgeWarnAfter)))
 	assert.Equal(t, 2, cap.count("terminal_write_lease_wedged", title))
 
 	// Never force-released: the driver tick skips, the steer and nudge get a retryable busy.
-	busyBefore := LeaseBusyTotal(LeaseWriterDriver)
-	assert.ErrorIs(t, sendAnswerKeyUnderLease(inst), ErrLeaseBusy)
-	assert.Greater(t, LeaseBusyTotal(LeaseWriterDriver), busyBefore, "busy counter increments")
-	_, ok = inst.TryTerminalWriteLease(LeaseWriterNudge)
+	busyBefore := instance.LeaseBusyTotal(instance.LeaseWriterDriver)
+	assert.ErrorIs(t, sendAnswerKeyUnderLease(inst), instance.ErrLeaseBusy)
+	assert.Greater(t, instance.LeaseBusyTotal(instance.LeaseWriterDriver), busyBefore, "busy counter increments")
+	_, ok = inst.TryTerminalWriteLease(instance.LeaseWriterNudge)
 	assert.False(t, ok)
 
 	lease.Release()
-	AssertLeaseFree(t, inst)
-	assert.Zero(t, LeaseHeldSeconds(LeaseWriterReply, t0.Add(time.Hour)), "a released lease leaves the gauge")
+	instance.AssertLeaseFree(t, inst)
+	assert.Zero(t, instance.LeaseHeldSeconds(instance.LeaseWriterReply, t0.Add(time.Hour)), "a released lease leaves the gauge")
 }
 
 // T-WL-04 (latch half): a busy lease is not a dialog attempt.
 func TestAutomatedWriters_ShouldNotCountABusyLeaseAsADialogAttemptAndStillAnswerAfterThreeBusyTicks_WhenTheLeaseIsBusy(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: trustDialogText}
-	inst := (&Instance{Title: "latch", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst := (&instance.Instance{Title: "latch", Status: domain.Active}).WithProcessManagerForTest(pm)
 	inst.MarkStarted()
-	inst.SetLeaseFlag(&LeaseFlag{})
+	inst.SetLeaseFlag(&instance.LeaseFlag{})
 
-	held, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	require.True(t, ok)
 
 	var latch dialogAnswerState
@@ -289,40 +290,40 @@ func TestAutomatedWriters_ShouldNotCountABusyLeaseAsADialogAttemptAndStillAnswer
 	st := answerDialogOnce(&latch, trustDialogText, send, inst.Title, "startup dialog")
 	require.Equal(t, dialogAwaitingDismissal, st)
 	require.EqualValues(t, 1, pm.sendKeysCount.Load(), "answered once after the lease freed")
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // T-WL-04 (nudge half): the idle nudge skips the tick and does not latch.
 func TestAttemptBacklogNudge_ShouldSkipTheTickAndWriteNothing_WhenTheLeaseIsBusy(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: "idle"}
-	inst := (&Instance{Title: "nudge-busy", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst := (&instance.Instance{Title: "nudge-busy", Status: domain.Active}).WithProcessManagerForTest(pm)
 	inst.MarkStarted()
-	inst.SetLeaseFlag(&LeaseFlag{})
+	inst.SetLeaseFlag(&instance.LeaseFlag{})
 
-	held, _ := inst.TryTerminalWriteLease(LeaseWriterReply)
+	held, _ := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	got := attemptBacklogNudge(context.Background(), inst, time.Hour)
 	assert.True(t, got.IsZero(), "a skipped tick leaves nudgeSentAt unset so the next tick nudges")
 	assert.Zero(t, pm.sendKeysCount.Load())
 	held.Release()
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // T-WL-09
 func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkSent_WhenSubmitDriverContentReturnsErrNoLeaseOrErrLeaseMismatch(t *testing.T) {
-	for _, leaseErr := range []error{ErrNoLease, ErrLeaseMismatch} {
+	for _, leaseErr := range []error{instance.ErrNoLease, instance.ErrLeaseMismatch} {
 		t.Run(leaseErr.Error(), func(t *testing.T) {
 			prev := submitInitialPrompt
-			submitInitialPrompt = func(_ context.Context, _ *Instance, l *HeldLease, _ string) error {
+			submitInitialPrompt = func(_ context.Context, _ *instance.Instance, l *instance.HeldLease, _ string) error {
 				l.Release()
 				return leaseErr
 			}
 			t.Cleanup(func() { submitInitialPrompt = prev })
 
 			pm := &stuckDialogProcessManager{dialogText: "> "}
-			inst := (&Instance{Title: "initial-lease-err", Status: domain.Active}).WithProcessManagerForTest(pm)
+			inst := (&instance.Instance{Title: "initial-lease-err", Status: domain.Active}).WithProcessManagerForTest(pm)
 			inst.MarkStarted()
-			inst.SetLeaseFlag(&LeaseFlag{})
+			inst.SetLeaseFlag(&instance.LeaseFlag{})
 
 			var sent bool
 			var sentAt time.Time
@@ -331,7 +332,7 @@ func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkS
 
 			assert.False(t, sent, "must not markSent")
 			assert.Equal(t, 2, attempts, "must not count toward the attempt limit")
-			AssertLeaseFree(t, inst)
+			instance.AssertLeaseFree(t, inst)
 		})
 	}
 }
@@ -339,10 +340,10 @@ func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkS
 // T-WL-04 (initial prompt half): a busy lease consumes no attempt.
 func TestInitialPrompt_ShouldConsumeNoAttempt_WhenTheLeaseIsBusy(t *testing.T) {
 	pm := &stuckDialogProcessManager{dialogText: "> "}
-	inst := (&Instance{Title: "initial-busy", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst := (&instance.Instance{Title: "initial-busy", Status: domain.Active}).WithProcessManagerForTest(pm)
 	inst.MarkStarted()
-	inst.SetLeaseFlag(&LeaseFlag{})
-	held, _ := inst.TryTerminalWriteLease(LeaseWriterReply)
+	inst.SetLeaseFlag(&instance.LeaseFlag{})
+	held, _ := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 
 	var sent bool
 	var sentAt time.Time
@@ -359,12 +360,12 @@ func TestInitialPrompt_ShouldConsumeNoAttempt_WhenTheLeaseIsBusy(t *testing.T) {
 func TestEveryAcquirer_ShouldLeaveTheLeaseFreeOnEveryExitPath_WhenSuccessBusyWriteErrorCancelledContextAndEarlyReturnAreExercised(t *testing.T) {
 	t.Parallel()
 	// Each case gets its own instance bound to the fake pane's lease identity.
-	setup := func(t *testing.T, failOnCall int) (*Instance, *fixturetest.FakePaneSubmitter, *HeldLease) {
+	setup := func(t *testing.T, failOnCall int) (*instance.Instance, *fixturetest.FakePaneSubmitter, *instance.HeldLease) {
 		t.Helper()
 		inst := leaseInstance(t, fixturetest.FakeLeaseOwner)
 		pane := fixturetest.NewFakePaneSubmitter()
 		pane.FailOnCall = failOnCall
-		lease, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+		lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		require.True(t, ok)
 		return inst, pane, lease
 	}
@@ -373,71 +374,71 @@ func TestEveryAcquirer_ShouldLeaveTheLeaseFreeOnEveryExitPath_WhenSuccessBusyWri
 	t.Run("SubmitDriverContent success", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, -1)
-		require.NoError(t, SubmitDriverContent(ctx, pane, lease, "x", time.Millisecond, 20*time.Millisecond))
-		AssertLeaseFree(t, inst)
+		require.NoError(t, instance.SubmitDriverContent(ctx, pane, lease, "x", time.Millisecond, 20*time.Millisecond))
+		instance.AssertLeaseFree(t, inst)
 	})
 	t.Run("SubmitDriverContent write error", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, 0)
-		require.Error(t, SubmitDriverContent(ctx, pane, lease, "x", time.Millisecond, 20*time.Millisecond))
-		AssertLeaseFree(t, inst)
+		require.Error(t, instance.SubmitDriverContent(ctx, pane, lease, "x", time.Millisecond, 20*time.Millisecond))
+		instance.AssertLeaseFree(t, inst)
 	})
 	t.Run("SubmitDriverContent cancelled context", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, -1)
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
-		require.Error(t, SubmitDriverContent(cancelled, pane, lease, "x", time.Millisecond, 20*time.Millisecond))
-		AssertLeaseFree(t, inst)
+		require.Error(t, instance.SubmitDriverContent(cancelled, pane, lease, "x", time.Millisecond, 20*time.Millisecond))
+		instance.AssertLeaseFree(t, inst)
 	})
 	t.Run("SubmitDriverContent pane owner refusal", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, -1)
 		sub := &ownerCheckedSubmitter{FakePaneSubmitter: pane, ownerErr: errors.New("owner mismatch")}
-		require.Error(t, SubmitDriverContent(ctx, sub, lease, "x", time.Millisecond, 20*time.Millisecond))
-		AssertLeaseFree(t, inst)
+		require.Error(t, instance.SubmitDriverContent(ctx, sub, lease, "x", time.Millisecond, 20*time.Millisecond))
+		instance.AssertLeaseFree(t, inst)
 		assert.Empty(t, pane.SendCalls)
 	})
 	t.Run("SubmitContentWithEnter success", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, -1)
-		require.NoError(t, SubmitContentWithEnter(ctx, pane, lease, "x"))
+		require.NoError(t, instance.SubmitContentWithEnter(ctx, pane, lease, "x"))
 		waitLeaseFree(t, inst)
 	})
 	t.Run("SubmitContentWithEnter write error", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, 0)
-		require.Error(t, SubmitContentWithEnter(ctx, pane, lease, "x"))
+		require.Error(t, instance.SubmitContentWithEnter(ctx, pane, lease, "x"))
 		waitLeaseFree(t, inst)
 	})
 	t.Run("SendKeysWithTimeout success", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, -1)
-		require.NoError(t, SendKeysWithTimeout(ctx, pane, lease, "x", time.Second))
+		require.NoError(t, instance.SendKeysWithTimeout(ctx, pane, lease, "x", time.Second))
 		waitLeaseFree(t, inst)
 	})
 	t.Run("SendKeysWithTimeout write error", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, 0)
-		require.Error(t, SendKeysWithTimeout(ctx, pane, lease, "x", time.Second))
+		require.Error(t, instance.SendKeysWithTimeout(ctx, pane, lease, "x", time.Second))
 		waitLeaseFree(t, inst)
 	})
 	t.Run("busy acquire leaves the holder's lease alone", func(t *testing.T) {
 		t.Parallel()
 		inst, _, holder := setup(t, -1)
-		_, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+		_, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		require.False(t, ok)
 		holder.Release()
-		AssertLeaseFree(t, inst)
+		instance.AssertLeaseFree(t, inst)
 	})
 }
 
 // waitLeaseFree tolerates the write goroutine's release landing just after the
 // primitive returned its result.
-func waitLeaseFree(t *testing.T, inst *Instance) {
+func waitLeaseFree(t *testing.T, inst *instance.Instance) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		l, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+		l, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		if ok {
 			l.Release()
 		}
@@ -450,15 +451,15 @@ func waitLeaseFree(t *testing.T, inst *Instance) {
 func TestScanWedgedLeases_ShouldRunIncludeOutsideTheRegistryLock(t *testing.T) {
 	inst := leaseInstance(t, "include-unlocked")
 	other := leaseInstance(t, "include-unlocked-other")
-	lease, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	require.True(t, ok)
 	t.Cleanup(lease.Release)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ScanWedgedLeases(lease.AcquiredAtForTest().Add(LeaseWedgeWarnAfter), LeaseWedgeWarnAfter, func(i *Instance) bool {
-			if l, got := other.TryTerminalWriteLease(LeaseWriterNudge); got {
+		instance.ScanWedgedLeases(lease.AcquiredAtForTest().Add(instance.LeaseWedgeWarnAfter), instance.LeaseWedgeWarnAfter, func(i *instance.Instance) bool {
+			if l, got := other.TryTerminalWriteLease(instance.LeaseWriterNudge); got {
 				l.Release()
 			}
 			return i == inst

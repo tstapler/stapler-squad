@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // terminalWriteLeaseFlagName is the feature flag behind the per-instance
@@ -25,7 +25,7 @@ var terminalWriteLeaseAuditPolicy = FlagAuditPolicy{
 
 // leaseFlagController applies the persisted flag to the injected atomic every
 // instance reads. Its IsEnabled is the live value GetFeatureFlags reports.
-type leaseFlagController struct{ flag *session.LeaseFlag }
+type leaseFlagController struct{ flag *instance.LeaseFlag }
 
 func (c leaseFlagController) Enable(context.Context) error { c.flag.SetEnabled(true); return nil }
 func (c leaseFlagController) Disable() error               { c.flag.SetEnabled(false); return nil }
@@ -36,7 +36,7 @@ func (c leaseFlagController) IsEnabled() bool              { return c.flag.Enabl
 // persisted one. An explicit persisted false is the only way to start with the
 // lease off; a missing or unreadable config keeps it on (fails closed).
 func (s *SessionService) wireLeaseFlag() {
-	flag := session.DefaultLeaseFlag
+	flag := instance.DefaultLeaseFlag
 	flag.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(terminalWriteLeaseFlagName, true))
 	s.featureFlagSvc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: flag})
 }

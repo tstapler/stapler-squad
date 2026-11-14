@@ -26,8 +26,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -887,7 +887,7 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	// e.g. symlink resolution made the deletion and the later Stat disagree).
 	dir := filepath.Join(t.TempDir(), "never-created")
 
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "hub-start-failed-" + t.Name(),
 		Path:  dir,
 	})
@@ -1000,7 +1000,7 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 
 	dir := t.TempDir()
 
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "hub-self-heal-" + t.Name(),
 		Path:  dir,
 	})
@@ -1157,9 +1157,9 @@ func (alwaysAbsentExecutor) Output(_ *exec.Cmd) ([]byte, error) {
 // working directory — pass a never-created path (e.g.
 // filepath.Join(t.TempDir(), "never-created")) to make a subsequent restore
 // fail fast via tmux.ErrWorkDirMissing instead of a real temp dir.
-func newTestTmuxInstance(t *testing.T, title, path string, exec executorIface, ptyFactory tmux.PtyFactory) (*session.Instance, string) {
+func newTestTmuxInstance(t *testing.T, title, path string, exec executorIface, ptyFactory tmux.PtyFactory) (*instance.Instance, string) {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: title,
 		Path:  path,
 	})
@@ -2849,7 +2849,7 @@ func TestWaitForEvent_should_ReturnFalse_When_BusIsNil(t *testing.T) {
 // state, PR URL, ...). An event for the right instance whose Session isn't actually
 // Started() must not be treated as the started signal.
 func TestWaitForInstanceStartedEvent_should_Ignore_UnrelatedUpdateOnSameInstance(t *testing.T) {
-	inst := &session.Instance{UUID: "same-uuid"}
+	inst := &instance.Instance{UUID: "same-uuid"}
 	bus := events.NewEventBus(1)
 	go func() {
 		wait.RequireEventually(t, func() bool { return bus.SubscriberCount() >= 1 }, 2*time.Second, time.Millisecond, "waitForInstanceStartedEvent never subscribed")
@@ -2866,7 +2866,7 @@ func TestWaitForInstanceStartedEvent_should_Ignore_UnrelatedUpdateOnSameInstance
 // TestWaitForInstanceStartedEvent_should_ReturnFalse_When_BusIsNil covers the fallback path
 // for an unwired event bus — falls back to instance.Started() rather than hanging.
 func TestWaitForInstanceStartedEvent_should_ReturnFalse_When_BusIsNil(t *testing.T) {
-	inst := &session.Instance{UUID: "some-uuid"}
+	inst := &instance.Instance{UUID: "some-uuid"}
 
 	if waitForInstanceStartedEvent(nil, inst, 50*time.Millisecond) {
 		t.Error("expected false: nil bus falls back to instance.Started(), which is false for a never-started Instance")

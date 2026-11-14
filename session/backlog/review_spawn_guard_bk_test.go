@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // blockingReviewSpawner blocks every SpawnReviewSession call until release is
@@ -29,7 +30,7 @@ func newBlockingReviewSpawner() *blockingReviewSpawner {
 	return &blockingReviewSpawner{entered: make(chan struct{}, 16), release: make(chan struct{})}
 }
 
-func (b *blockingReviewSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, isID, prompt string) (*session.Instance, error) {
+func (b *blockingReviewSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, isID, prompt string) (*instance.Instance, error) {
 	b.entered <- struct{}{}
 	<-b.release
 	return b.MockReviewGateSpawner.SpawnReviewSession(ctx, item, isID, prompt)
@@ -57,7 +58,7 @@ func newReviewGuardFixture(t *testing.T, spawner reviewgate.ReviewGateSpawner, s
 	})
 	require.NoError(t, err)
 	work, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: created.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleWork,
+		ItemID: created.ID, SessionUUID: uuid.New().String(), SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -72,7 +73,7 @@ func (f *reviewGuardFixture) reviewRows(t *testing.T) (total, open int) {
 	sessions, err := f.storage.ListItemSessions(context.Background(), f.item.ID)
 	require.NoError(t, err)
 	for _, s := range sessions {
-		if s.Role == session.SessionRoleReview {
+		if s.Role == instance.SessionRoleReview {
 			total++
 			if s.EndedAt == nil {
 				open++
@@ -174,7 +175,7 @@ func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
 		spawner := &blktest.MockReviewGateSpawner{}
 		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 		_, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
-			ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview,
+			ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, err)
 		f.l.triggerReviewForSession(f.work.SessionUUID)
@@ -196,7 +197,7 @@ func TestReviewGate_ReReviewAllowedAfterPriorEnded(t *testing.T) {
 	spawner := &blktest.MockReviewGateSpawner{}
 	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 	prior, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
-		ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview,
+		ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 	require.NoError(t, f.storage.UpdateItemSessionEnded(context.Background(), prior.ID, time.Now()))

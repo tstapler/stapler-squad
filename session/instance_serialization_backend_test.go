@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -23,7 +24,7 @@ func TestFromInstanceData_EmptyBackend_HonorsTymuxSessionOverride(t *testing.T) 
 	force := true
 	require.NoError(t, config.LoadConfig().SetTymuxSessionOverride(tmux.NewSessionName("dotfiles", tmux.TmuxPrefix).String(), &force))
 
-	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "dotfiles"))
+	inst, err := instance.FromInstanceDataDeferred(restoredPausedData(t, "dotfiles"))
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTymux, inst.Backend)
@@ -34,7 +35,7 @@ func TestFromInstanceData_EmptyBackend_HonorsTymuxSessionOverride(t *testing.T) 
 func TestFromInstanceData_EmptyBackend_NoOverride_StaysOnDefault(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 
-	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "no-override"))
+	inst, err := instance.FromInstanceDataDeferred(restoredPausedData(t, "no-override"))
 
 	require.NoError(t, err)
 	assert.Empty(t, inst.Backend, "no override means the backend stays unpinned")
@@ -53,7 +54,7 @@ func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 	data := restoredPausedData(t, "tymux-restore")
 	data.Backend = domain.BackendTymux
 
-	_, err := FromInstanceDataDeferred(data)
+	_, err := instance.FromInstanceDataDeferred(data)
 
 	require.NoError(t, err)
 	assert.Equal(t, "claude", fake.gotCommand)
@@ -64,10 +65,10 @@ func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fake := &fakeTymuxManagerForSetCommand{}
-	inst := &Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux}
+	inst := &instance.Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux}
 	inst.SetProcessManagerForTest(NewTymuxBackend(fake))
 
-	inst.WireTmuxSessionForTest(shellLaunch("claude --resume abc"))
+	inst.WireTmuxSessionForTest(instance.ShellLaunch("claude --resume abc"))
 
 	assert.Equal(t, "claude --resume abc", fake.gotCommand)
 }
@@ -75,10 +76,10 @@ func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	mgr := &TmuxProcessManager{}
-	inst := &Instance{Title: "wire-tmux", Path: t.TempDir(), Program: "claude"}
+	inst := &instance.Instance{Title: "wire-tmux", Path: t.TempDir(), Program: "claude"}
 	inst.SetProcessManagerForTest(NewTmuxBackend(mgr))
 
-	inst.WireTmuxSessionForTest(shellLaunch("claude"))
+	inst.WireTmuxSessionForTest(instance.ShellLaunch("claude"))
 
 	assert.NotNil(t, mgr.Session())
 }
@@ -102,7 +103,7 @@ func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
 			data.Status = status
 			data.Backend = domain.BackendTymux
 
-			_, err := FromInstanceDataDeferred(data)
+			_, err := instance.FromInstanceDataDeferred(data)
 
 			require.NoError(t, err)
 			assert.Equal(t, "claude", fake.gotCommand)
@@ -117,7 +118,7 @@ func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
 	on := true
 	require.NoError(t, config.LoadConfig().SetTymuxGlobalOverride(&on))
 
-	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-tmux"))
+	inst, err := instance.FromInstanceDataDeferred(restoredPausedData(t, "legacy-tmux"))
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTmux, inst.Backend, "legacy sessions are pinned to tmux")
@@ -132,7 +133,7 @@ func TestFromInstanceData_EmptyBackend_GlobalNative_StaysTmux(t *testing.T) {
 	cfg.ProcessManagerBackend = string(domain.BackendNative)
 	require.NoError(t, config.SaveConfig(cfg))
 
-	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-native"))
+	inst, err := instance.FromInstanceDataDeferred(restoredPausedData(t, "legacy-native"))
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTmux, inst.Backend)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestOpencodeAdapter_NameAndCanHandle(t *testing.T) {
@@ -29,7 +30,7 @@ func TestOpencodeAdapter_ExportAndImport_RoundTrip(t *testing.T) {
 	defer os.Setenv("HOME", homeBackup)
 
 	adapter := NewOpencodeAdapter()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:      "test-opencode-session",
 		WorkingDir: tmpDir,
 		Program:    "opencode",
@@ -37,28 +38,28 @@ func TestOpencodeAdapter_ExportAndImport_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now().Truncate(time.Millisecond)
-	turns := []CanonicalTurn{
+	turns := []instance.CanonicalTurn{
 		{
-			Role: RoleUser,
-			Blocks: []CanonicalBlock{
-				NewTextBlock("Hello OpenCode"),
+			Role: instance.RoleUser,
+			Blocks: []instance.CanonicalBlock{
+				instance.NewTextBlock("Hello OpenCode"),
 			},
 			Timestamp: now,
 			TurnIndex: 0,
 		},
 		{
-			Role: RoleAssistant,
-			Blocks: []CanonicalBlock{
-				NewTextBlock("I will read the file now."),
-				NewToolUseBlock("call_123", "read", []byte(`{"path":"main.go"}`)),
+			Role: instance.RoleAssistant,
+			Blocks: []instance.CanonicalBlock{
+				instance.NewTextBlock("I will read the file now."),
+				instance.NewToolUseBlock("call_123", "read", []byte(`{"path":"main.go"}`)),
 			},
 			Timestamp: now.Add(time.Second),
 			TurnIndex: 1,
 		},
 		{
-			Role: RoleUser,
-			Blocks: []CanonicalBlock{
-				NewToolResultBlock("call_123", "read", "package main\n\nfunc main() {}\n", false),
+			Role: instance.RoleUser,
+			Blocks: []instance.CanonicalBlock{
+				instance.NewToolResultBlock("call_123", "read", "package main\n\nfunc main() {}\n", false),
 			},
 			Timestamp: now.Add(2 * time.Second),
 			TurnIndex: 2,
@@ -79,17 +80,17 @@ func TestOpencodeAdapter_ExportAndImport_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, importedTurns, 3)
 
-	assert.Equal(t, RoleUser, importedTurns[0].Role)
+	assert.Equal(t, instance.RoleUser, importedTurns[0].Role)
 	assert.Equal(t, "Hello OpenCode", importedTurns[0].Blocks[0].Text)
 
-	assert.Equal(t, RoleAssistant, importedTurns[1].Role)
+	assert.Equal(t, instance.RoleAssistant, importedTurns[1].Role)
 	assert.Equal(t, "I will read the file now.", importedTurns[1].Blocks[0].Text)
-	assert.Equal(t, BlockKindToolUse, importedTurns[1].Blocks[1].Kind)
+	assert.Equal(t, instance.BlockKindToolUse, importedTurns[1].Blocks[1].Kind)
 	assert.Equal(t, "read", importedTurns[1].Blocks[1].ToolName)
 	assert.Equal(t, "call_123", importedTurns[1].Blocks[1].ToolID)
 
-	assert.Equal(t, RoleUser, importedTurns[2].Role)
-	assert.Equal(t, BlockKindToolResult, importedTurns[2].Blocks[0].Kind)
+	assert.Equal(t, instance.RoleUser, importedTurns[2].Role)
+	assert.Equal(t, instance.BlockKindToolResult, importedTurns[2].Blocks[0].Kind)
 	assert.Equal(t, "call_123", importedTurns[2].Blocks[0].ToolResultID)
 	assert.Equal(t, "package main\n\nfunc main() {}\n", importedTurns[2].Blocks[0].ToolResultContent)
 }
@@ -99,7 +100,7 @@ func TestOpencodeAdapter_Import_NoSession_ReturnsError(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 
 	adapter := NewOpencodeAdapter()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:      "nonexistent-session",
 		WorkingDir: tmpDir,
 		Program:    "opencode",

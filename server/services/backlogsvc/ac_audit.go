@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const maxAuditUserAgent = 200
@@ -39,7 +40,7 @@ func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) ses
 	if h.Get("Sec-Fetch-Site") == "same-origin" {
 		actor.Source = "ui"
 	}
-	sid, proof := strings.TrimSpace(h.Get("X-Stapler-Session-UUID")), h.Get(session.MCPProofHeader)
+	sid, proof := strings.TrimSpace(h.Get("X-Stapler-Session-UUID")), h.Get(instance.MCPProofHeader)
 	switch {
 	case sid != "" || proof != "":
 		actor.Class = session.AcActorAgentSession

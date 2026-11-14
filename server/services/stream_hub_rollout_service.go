@@ -6,7 +6,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -30,14 +30,14 @@ type StreamHubRolloutService struct {
 	// possible); nil-safe (falls back to the default prefix) so tests and
 	// callers that never wire it still work for the overwhelmingly common
 	// default-prefix case.
-	findInstance func(title string) *session.Instance
+	findInstance func(title string) *instance.Instance
 }
 
 // NewStreamHubRolloutService creates a StreamHubRolloutService. findInstance
 // resolves a session title to its live instance so SetStreamHubSessionOverride
 // can derive the session's actual TmuxPrefix; pass nil to always assume the
 // default prefix (fine for tests and any session that never customizes it).
-func NewStreamHubRolloutService(findInstance func(title string) *session.Instance) *StreamHubRolloutService {
+func NewStreamHubRolloutService(findInstance func(title string) *instance.Instance) *StreamHubRolloutService {
 	return &StreamHubRolloutService{findInstance: findInstance}
 }
 
@@ -162,7 +162,7 @@ func StreamHubSessionKey(title, tmuxPrefix string) string {
 // (session title + tmux prefix, default "staplersquad_"). Resolution must
 // use this same name so a session's StreamOwnershipLock lookup here and its
 // hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
-func TmuxSessionNameForStreamPath(instance *session.Instance) string {
+func TmuxSessionNameForStreamPath(instance *instance.Instance) string {
 	snap := instance.Snapshot()
 	return StreamHubSessionKey(snap.Title, snap.TmuxPrefix)
 }

@@ -6,16 +6,16 @@ import (
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
 // Wired via SetAutonomousDriverStarter from server.go after both services are constructed.
 type AutonomousDriverStarter interface {
-	StartAutonomousDriverForInstance(inst *session.Instance)
-	StartAutonomousDriverWithTimeout(inst *session.Instance, startupTimeout time.Duration)
+	StartAutonomousDriverForInstance(inst *instance.Instance)
+	StartAutonomousDriverWithTimeout(inst *instance.Instance, startupTimeout time.Duration)
 }
 
 // SessionStopper allows BacklogService to kill live sessions.
@@ -118,7 +118,7 @@ func WithTransitionCaller(ctx context.Context, caller domain.TransitionCaller) c
 // MCP delegate (class agent), so an unknown actor never gains the operator
 // override. Both context keys are unexported, so only in-process code sets them.
 func ResolveTransitionCaller(ctx context.Context) domain.TransitionCaller {
-	if TransitionActorFromContext(ctx) != session.TriggeredByUser {
+	if TransitionActorFromContext(ctx) != instance.TriggeredByUser {
 		return domain.CallerMCPTransitionDelegate
 	}
 	if c, ok := ctx.Value(transitionCallerKey{}).(domain.TransitionCaller); ok && c == domain.CallerOperatorNotificationAction {
@@ -131,7 +131,7 @@ func TransitionActorFromContext(ctx context.Context) string {
 	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
 		return a
 	}
-	return session.TriggeredByUser
+	return instance.TriggeredByUser
 }
 
 // dropSubsumedChangesRequested removes CHANGES_REQUESTED when UNRESOLVED_THREADS
@@ -243,7 +243,7 @@ func FindSupersededSessions(sessions []backlogdto.ItemSessionSummary) []backlogd
 	var superseded []backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if !session.IsTmuxBackedSessionRole(is.Role) {
+		if !instance.IsTmuxBackedSessionRole(is.Role) {
 			continue
 		}
 		if is == currentReview || is == currentWork {
@@ -284,11 +284,11 @@ func FindMostRecentSessions(sessions []backlogdto.ItemSessionSummary) (reviewSes
 	for i := range sessions {
 		is := &sessions[i]
 		switch is.Role {
-		case session.SessionRoleReview:
+		case instance.SessionRoleReview:
 			if reviewSession == nil || is.CreatedAt.After(reviewSession.CreatedAt) {
 				reviewSession = is
 			}
-		case session.SessionRoleWork:
+		case instance.SessionRoleWork:
 			if workSession == nil || is.CreatedAt.After(workSession.CreatedAt) {
 				workSession = is
 			}

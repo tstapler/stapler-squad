@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestStuckPRReady_should_returnTrue_When_GreenMergeablePast30Min(t *testing.T) {
@@ -333,9 +333,9 @@ func TestMostRecentCompletedWorkSession_should_returnLatestCompletedWorkSession_
 	t.Parallel()
 	endedAt := time.Now()
 	sessions := []backlogdto.ItemSessionSummary{
-		{ID: "s1", Role: session.SessionRoleWork, EndedAt: &endedAt},
-		{ID: "s2", Role: session.SessionRoleReview, EndedAt: &endedAt},
-		{ID: "s3", Role: session.SessionRoleWork, EndedAt: &endedAt},
+		{ID: "s1", Role: instance.SessionRoleWork, EndedAt: &endedAt},
+		{ID: "s2", Role: instance.SessionRoleReview, EndedAt: &endedAt},
+		{ID: "s3", Role: instance.SessionRoleWork, EndedAt: &endedAt},
 	}
 	got := MostRecentCompletedWorkSession(sessions)
 	assert.NotNil(t, got)
@@ -346,10 +346,10 @@ func TestMostRecentCompletedWorkSession_should_returnNil_When_NoCompletedWorkSes
 	t.Parallel()
 	assert.Nil(t, MostRecentCompletedWorkSession(nil))
 
-	stillRunning := []backlogdto.ItemSessionSummary{{ID: "s1", Role: session.SessionRoleWork, EndedAt: nil}}
+	stillRunning := []backlogdto.ItemSessionSummary{{ID: "s1", Role: instance.SessionRoleWork, EndedAt: nil}}
 	assert.Nil(t, MostRecentCompletedWorkSession(stillRunning), "an in-progress session must not be picked — see validation.md's async-race edge case")
 
-	reviewOnly := []backlogdto.ItemSessionSummary{{ID: "s1", Role: session.SessionRoleReview, EndedAt: &time.Time{}}}
+	reviewOnly := []backlogdto.ItemSessionSummary{{ID: "s1", Role: instance.SessionRoleReview, EndedAt: &time.Time{}}}
 	assert.Nil(t, MostRecentCompletedWorkSession(reviewOnly))
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // newTestGoalStorage creates a temporary Storage for goal tool tests.
@@ -38,8 +39,8 @@ func makeGoalHandlers(t *testing.T, store session.InstanceStore) (*goalHandlers,
 }
 
 // makeTestInstance creates a minimal managed Instance for use in tests.
-func makeTestInstance(title, uuid string) *session.Instance {
-	inst := &session.Instance{
+func makeTestInstance(title, uuid string) *instance.Instance {
+	inst := &instance.Instance{
 		Title:   title,
 		UUID:    uuid,
 		Path:    "/tmp/test",
@@ -54,7 +55,7 @@ func makeTestInstance(title, uuid string) *session.Instance {
 func TestSetSessionGoalMCP_validCallSetsGoalAndPublishesEvent(t *testing.T) {
 	sessionUUID := "test-uuid-set-goal-19"
 	inst := makeTestInstance("test-session", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 
 	storage := newTestGoalStorage(t)
 	bus := events.NewEventBus(10)
@@ -97,7 +98,7 @@ func TestSetSessionGoalMCP_validCallSetsGoalAndPublishesEvent(t *testing.T) {
 func TestSetSessionGoalMCP_validatesGoalStatusEnum(t *testing.T) {
 	sessionUUID := "test-uuid-set-goal-20"
 	inst := makeTestInstance("test-session", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	h, _ := makeGoalHandlers(t, store)
 
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
@@ -117,7 +118,7 @@ func TestSetSessionGoalMCP_validatesGoalStatusEnum(t *testing.T) {
 func TestSetSessionGoalMCP_usesSessionIDParamWhenProvided(t *testing.T) {
 	sessionUUID := "test-uuid-set-goal-21"
 	inst := makeTestInstance("target-session", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	storage := newTestGoalStorage(t)
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
@@ -140,7 +141,7 @@ func TestSetSessionGoalMCP_usesSessionIDParamWhenProvided(t *testing.T) {
 func TestSetSessionGoalMCP_fallsBackToCallerUUIDWhenNoSessionIDParam(t *testing.T) {
 	sessionUUID := "test-uuid-set-goal-22"
 	inst := makeTestInstance("test-session-22", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	storage := newTestGoalStorage(t)
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
@@ -185,12 +186,12 @@ func TestSetSessionGoalMCP_returnsErrorWhenBothSourcesAbsent(t *testing.T) {
 func TestGetSessionGoalMCP_returnsGoalForNamedSession(t *testing.T) {
 	sessionUUID := "test-uuid-get-goal-24"
 	inst := makeTestInstance("named-session-24", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	storage := newTestGoalStorage(t)
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
 	// Pre-set a goal.
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "get goal test", session.GoalStatusWorking, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "get goal test", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 
 	req := makeToolReq(map[string]interface{}{
@@ -204,10 +205,10 @@ func TestGetSessionGoalMCP_returnsGoalForNamedSession(t *testing.T) {
 	tc, ok := result.Content[0].(mcpgo.TextContent)
 	require.True(t, ok, "expected TextContent in result")
 
-	var goalData session.SessionGoalData
+	var goalData instance.SessionGoalData
 	require.NoError(t, json.Unmarshal([]byte(tc.Text), &goalData), "result should be valid SessionGoalData JSON")
 	assert.Equal(t, "get goal test", goalData.Goal)
-	assert.Equal(t, session.GoalStatusWorking, goalData.Status)
+	assert.Equal(t, instance.GoalStatusWorking, goalData.Status)
 	assert.Equal(t, sessionUUID, goalData.SessionUUID)
 }
 
@@ -216,7 +217,7 @@ func TestGetSessionGoalMCP_returnsGoalForNamedSession(t *testing.T) {
 func TestGetSessionGoalMCP_returnsErrNotFoundWhenAbsent(t *testing.T) {
 	sessionUUID := "test-uuid-get-goal-25"
 	inst := makeTestInstance("session-no-goal", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	h, _ := makeGoalHandlers(t, store)
 
 	req := makeToolReq(map[string]interface{}{
@@ -233,16 +234,16 @@ func TestGetSessionGoalMCP_returnsErrNotFoundWhenAbsent(t *testing.T) {
 func TestUpdateSessionTaskMCP_updatesStatusAndPublishesEvent(t *testing.T) {
 	sessionUUID := "test-uuid-update-task-26"
 	inst := makeTestInstance("session-update-task", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	storage := newTestGoalStorage(t)
 	bus := events.NewEventBus(10)
 	h := &goalHandlers{storage: storage, store: store, eventBus: bus}
 
 	// Pre-set a goal with tasks.
-	tasks := []session.TaskNode{
-		{ID: "task-a", Title: "Task A", Status: session.TaskStatusPending},
+	tasks := []instance.TaskNode{
+		{ID: "task-a", Title: "Task A", Status: instance.TaskStatusPending},
 	}
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "task update goal", session.GoalStatusWorking, tasks, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "task update goal", instance.GoalStatusWorking, tasks, "", "")
 	require.NoError(t, err)
 
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
@@ -261,7 +262,7 @@ func TestUpdateSessionTaskMCP_updatesStatusAndPublishesEvent(t *testing.T) {
 	// Verify updated in DB.
 	loaded, err := storage.GetSessionGoal(context.Background(), sessionUUID)
 	require.NoError(t, err)
-	assert.Equal(t, session.TaskStatusDone, loaded.Tasks[0].Status)
+	assert.Equal(t, instance.TaskStatusDone, loaded.Tasks[0].Status)
 
 	// Verify event published.
 	select {
@@ -279,12 +280,12 @@ func TestUpdateSessionTaskMCP_callerUUIDMismatchReturnsError(t *testing.T) {
 	sessionUUID := "test-uuid-mismatch-27"
 	differentUUID := "test-uuid-different-27"
 	inst := makeTestInstance("session-mismatch", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	storage := newTestGoalStorage(t)
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
 	// Goal belongs to sessionUUID.
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "mismatch goal", session.GoalStatusIdle, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "mismatch goal", instance.GoalStatusIdle, nil, "", "")
 	require.NoError(t, err)
 
 	// Call with differentUUID as caller.
@@ -306,11 +307,11 @@ func TestUpdateSessionTaskMCP_callerUUIDMismatchReturnsError(t *testing.T) {
 func TestUpdateSessionTaskMCP_missingTaskIDReturnsError(t *testing.T) {
 	sessionUUID := "test-uuid-missing-task-28"
 	inst := makeTestInstance("session-missing-task", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	storage := newTestGoalStorage(t)
 	h := &goalHandlers{storage: storage, store: store, eventBus: events.NewEventBus(5)}
 
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "a goal", session.GoalStatusIdle, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "a goal", instance.GoalStatusIdle, nil, "", "")
 	require.NoError(t, err)
 
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
@@ -330,7 +331,7 @@ func TestUpdateSessionTaskMCP_missingTaskIDReturnsError(t *testing.T) {
 func TestUpdateSessionTaskMCP_invalidStatusReturnsError(t *testing.T) {
 	sessionUUID := "test-uuid-invalid-status-29"
 	inst := makeTestInstance("session-invalid-status", sessionUUID)
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	h, _ := makeGoalHandlers(t, store)
 
 	ctx := WithSessionUUID(context.Background(), sessionUUID)

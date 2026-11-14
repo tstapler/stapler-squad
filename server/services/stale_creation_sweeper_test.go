@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // writeCreationStaleConfig writes a minimal config.json with a creation_stale
@@ -179,7 +180,7 @@ func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateE
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := svctest.CreateTestStorage(t)
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "sweeper-never-updated",
 		UUID:      "uuid-sweeper-never-updated",
 		Path:      "/tmp/test",
@@ -222,13 +223,13 @@ func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePip
 	// goroutines racing TryForceStatusIfEpoch would mutate Instance.Status
 	// directly and unsynchronized -- a real data race, not a race this test is
 	// trying to exercise.
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   "sweeper-race",
 		Path:    "/tmp/test",
 		Program: "claude",
 	})
 	require.NoError(t, err)
-	live := session.NewLiveInstance(inst)
+	live := instance.NewLiveInstance(inst)
 	t.Cleanup(live.Stop)
 	require.NoError(t, storage.AddInstance(inst))
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -72,7 +73,7 @@ func TestRepositoryEntryPoints_ShouldReturnErrZeroPRRefAndWriteNothing_WhenRefIs
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
-			assert.ErrorIs(t, call(), ErrZeroPRRef)
+			assert.ErrorIs(t, call(), instance.ErrZeroPRRef)
 		})
 	}
 

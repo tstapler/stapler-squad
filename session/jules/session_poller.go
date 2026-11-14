@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // julesSessionUUIDPrefix marks every jules_work ItemSession's session_uuid —
@@ -438,7 +439,7 @@ func (p *JulesSessionPoller) failJulesSession(ctx context.Context, entry backlog
 	// move to in_progress happens only after CreateSession confirms), so a lost
 	// precondition is a harmless no-op, and a gate denial is reported by the gate.
 	if _, err := p.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerJulesFailSession, ItemID: entry.ItemID, To: domain.BacklogStatusReady, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerJulesFailSession, ItemID: entry.ItemID, To: domain.BacklogStatusReady, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
@@ -525,7 +526,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 		// outcome, and the session row is already closed so no sweep retries this.
 		if _, err := p.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: domain.BacklogStatusReview,
-			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: note}, TriggeredBy: session.TriggeredBySystem,
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: note}, TriggeredBy: instance.TriggeredBySystem,
 		}); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 		}
@@ -554,7 +555,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 
 	reviewItem, err := p.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: domain.BacklogStatusReview,
-		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: session.TriggeredBySystem,
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: instance.TriggeredBySystem,
 	})
 	if err != nil {
 		return fmt.Errorf("transition to review: %w", err)
@@ -562,7 +563,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 
 	summary := fmt.Sprintf("Jules opened pull request %s.", prURL)
 	if err := p.storage.GatedSetPRAndTransition(ctx,
-		backlogdto.TransitionRequest{Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: session.TriggeredBySystem},
+		backlogdto.TransitionRequest{Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: instance.TriggeredBySystem},
 		backlogdto.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: domain.AttachSourceJules}); err != nil {
 		return fmt.Errorf("record PR: %w", err)
 	}

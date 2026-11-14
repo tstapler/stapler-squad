@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestHistoryLinker_SetHistoryInfo_UpdatesInstance(t *testing.T) {
@@ -25,7 +26,7 @@ func TestHistoryLinker_SetHistoryInfo_UpdatesInstance(t *testing.T) {
 
 	// Use the shared mockProcessInspector from history_detector_test.go.
 	inspector := &mockProcessInspector{files: []string{histPath}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 
 	info, err := detector.Detect(1)
 	require.NoError(t, err)
@@ -44,19 +45,19 @@ func TestHistoryLinker_AlreadyLinked_NoUpdate(t *testing.T) {
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	sessionPath := "/home/user/myproject"
 	originalUUID := "aaaaaaaa-1111-1111-1111-111111111111"
 	newUUID := "bbbbbbbb-2222-2222-2222-222222222222"
 
 	// Place a newer file so the detector would return newUUID if queried.
-	projectDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(sessionPath))
+	projectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(sessionPath))
 	require.NoError(t, os.MkdirAll(projectDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, newUUID+".jsonl"), []byte("{}"), 0644))
 
 	// Instance already linked to originalUUID.
-	inst := &session.Instance{Title: "linked-session", Path: sessionPath, Status: domain.Active}
+	inst := &instance.Instance{Title: "linked-session", Path: sessionPath, Status: domain.Active}
 	inst.SetHistoryInfo(originalUUID, "/some/path.jsonl")
 	require.True(t, inst.HasClaudeSession())
 
@@ -76,7 +77,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	sessionPath := "/home/user/myproject"
 	oldUUID := "aaaaaaaa-0000-0000-0000-000000000000"
@@ -84,7 +85,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 
 	// Build two JSONL files; pin oldUUID 1 s in the past so DetectByPath reliably
 	// picks newUUID regardless of filesystem mtime granularity.
-	projectDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(sessionPath))
+	projectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(sessionPath))
 	require.NoError(t, os.MkdirAll(projectDir, 0755))
 	oldPath := filepath.Join(projectDir, oldUUID+".jsonl")
 	newPath := filepath.Join(projectDir, newUUID+".jsonl")
@@ -94,7 +95,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 	require.NoError(t, os.Chtimes(oldPath, past, past))
 
 	// Instance was linked to the old UUID (e.g., from before /clear).
-	inst := &session.Instance{Title: "cleared-session", Path: sessionPath, Status: domain.Active}
+	inst := &instance.Instance{Title: "cleared-session", Path: sessionPath, Status: domain.Active}
 	inst.SetHistoryInfo(oldUUID, filepath.Join(projectDir, oldUUID+".jsonl"))
 	require.True(t, inst.HasClaudeSession())
 
@@ -110,7 +111,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 func TestHistoryLinker_NoJSONLOpen_NoUpdate(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 
 	info, err := detector.Detect(1)
 	require.NoError(t, err)
@@ -123,10 +124,10 @@ func TestHistoryLinker_NoJSONLOpen_NoUpdate(t *testing.T) {
 func TestHistoryLinker_SetInstances(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
 
-	instances := []*session.Instance{
+	instances := []*instance.Instance{
 		makeTestInstance("a"),
 		makeTestInstance("b"),
 	}
@@ -141,7 +142,7 @@ func TestHistoryLinker_SetInstances(t *testing.T) {
 func TestHistoryLinker_RemoveInstance(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
 
 	linker.AddInstance(makeTestInstance("keep"))
@@ -166,7 +167,7 @@ func TestHistoryLinker_RemoveInstance(t *testing.T) {
 func TestHistoryLinker_AddInstance_DedupesSameID(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
 
 	inst := makeTestInstance("dup-session")
@@ -183,7 +184,7 @@ func TestHistoryLinker_AddInstance_DedupesSameID(t *testing.T) {
 func TestHistoryLinker_StartAndStop(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -236,7 +237,7 @@ func TestNewHistoryLinkerFromRealInspector_should_WatchIsolatedDir_When_Isolated
 func TestHistoryLinker_Instances_SnapshotIncludesAddedSessions(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
 
 	a := makeTestInstance("a")
@@ -257,7 +258,7 @@ func TestHistoryLinker_Instances_SnapshotIncludesAddedSessions(t *testing.T) {
 func TestHistoryLinker_Instances_SnapshotIsIndependent(t *testing.T) {
 	t.Parallel()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetector(inspector)
+	detector := instance.NewHistoryFileDetector(inspector)
 	linker := NewHistoryLinker(detector, nil)
 	linker.AddInstance(makeTestInstance("original"))
 
@@ -280,7 +281,7 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}} // no open files → always falls through to DetectByPath
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	// Create two separate Claude project directories: one for the base repo and
 	// one for the worktree. Each contains a distinct UUID so we can tell them apart.
@@ -291,8 +292,8 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 	worktreeUUID := "bbbbbbbb-1111-1111-1111-111111111111"
 
 	// Build the on-disk directory structure under tempHome.
-	repoDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(repoPath))
-	worktreeDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(worktreePath))
+	repoDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(repoPath))
+	worktreeDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(worktreePath))
 	require.NoError(t, os.MkdirAll(repoDir, 0755))
 	require.NoError(t, os.MkdirAll(worktreeDir, 0755))
 	repoFile := filepath.Join(repoDir, repoUUID+".jsonl")
@@ -303,7 +304,7 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 
 	// Build an instance whose Path is the base repo but whose gitManager worktree
 	// points at the worktree path — exactly what a worktree session looks like.
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:  "feature-session",
 		Path:   repoPath,
 		Status: domain.Active,
@@ -329,7 +330,7 @@ func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}} // no open files — session is dead
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	sessionPath := "/home/user/mywiki"
 	originalUUID := "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"
@@ -337,7 +338,7 @@ func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T
 
 	// Create the project directory with two files: the original (older) and a newer
 	// one written by a different session that ran after session A was paused.
-	projectDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(sessionPath))
+	projectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(sessionPath))
 	require.NoError(t, os.MkdirAll(projectDir, 0755))
 
 	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
@@ -350,7 +351,7 @@ func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T
 	require.NoError(t, os.Chtimes(originalPath, past, past))
 
 	// The paused session already has the correct UUID stored.
-	inst := &session.Instance{Title: "wiki-session", Path: sessionPath, Status: domain.Paused}
+	inst := &instance.Instance{Title: "wiki-session", Path: sessionPath, Status: domain.Paused}
 	inst.SetHistoryInfo(originalUUID, originalPath)
 	require.True(t, inst.HasClaudeSession())
 
@@ -370,13 +371,13 @@ func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testi
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	sessionPath := "/home/user/myproject"
 	originalUUID := "cccccccc-3333-3333-3333-cccccccccccc"
 	newerUUID := "dddddddd-4444-4444-4444-dddddddddddd"
 
-	projectDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(sessionPath))
+	projectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(sessionPath))
 	require.NoError(t, os.MkdirAll(projectDir, 0755))
 
 	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
@@ -387,7 +388,7 @@ func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testi
 	past := time.Now().Add(-1 * time.Second)
 	require.NoError(t, os.Chtimes(originalPath, past, past))
 
-	inst := &session.Instance{Title: "hibernated-session", Path: sessionPath, Status: domain.Hibernated}
+	inst := &instance.Instance{Title: "hibernated-session", Path: sessionPath, Status: domain.Hibernated}
 	inst.SetHistoryInfo(originalUUID, originalPath)
 	require.True(t, inst.HasClaudeSession())
 
@@ -406,13 +407,13 @@ func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	sessionPath := "/home/user/myproject"
 	originalUUID := "eeeeeeee-5555-5555-5555-eeeeeeeeeeee"
 	newerUUID := "ffffffff-6666-6666-6666-ffffffffffff"
 
-	projectDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(sessionPath))
+	projectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(sessionPath))
 	require.NoError(t, os.MkdirAll(projectDir, 0755))
 
 	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
@@ -423,7 +424,7 @@ func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.
 	past := time.Now().Add(-1 * time.Second)
 	require.NoError(t, os.Chtimes(originalPath, past, past))
 
-	inst := &session.Instance{Title: "stopped-session", Path: sessionPath, Status: domain.Stopped}
+	inst := &instance.Instance{Title: "stopped-session", Path: sessionPath, Status: domain.Stopped}
 	inst.SetHistoryInfo(originalUUID, originalPath)
 	require.True(t, inst.HasClaudeSession())
 
@@ -440,16 +441,16 @@ func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *te
 	t.Parallel()
 	tempHome := t.TempDir()
 	inspector := &mockProcessInspector{files: []string{}}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
 
 	sessionPath := "/home/user/myproject"
 	sessionUUID := "cccccccc-2222-2222-2222-222222222222"
 
-	sessionDir := filepath.Join(tempHome, ".claude", "projects", session.ClaudeProjectDirName(sessionPath))
+	sessionDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(sessionPath))
 	require.NoError(t, os.MkdirAll(sessionDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, sessionUUID+".jsonl"), []byte("{}"), 0644))
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:  "plain-session",
 		Path:   sessionPath,
 		Status: domain.Active,
@@ -471,8 +472,8 @@ func TestHistoryLinker_ShouldEnqueueFileAndScan_WhenSetHistoryInfoAfterFileExist
 	toolResult := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"created ` + prURL + `"}]}}` + "\n"
 	path := f.write(t, claimOwnStart, toolResult, time.Second)
 
-	fresh := &session.Instance{Title: "late-link", Path: "/repo/late", Status: domain.Active}
-	linker.SetInstances([]*session.Instance{fresh})
+	fresh := &instance.Instance{Title: "late-link", Path: "/repo/late", Status: domain.Active}
+	linker.SetInstances([]*instance.Instance{fresh})
 
 	stored := make(chan string, 4)
 	ae := artifacts.NewArtifactExtractor(

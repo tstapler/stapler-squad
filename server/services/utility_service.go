@@ -21,6 +21,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -395,7 +396,7 @@ func (us *UtilityService) CreateDebugSnapshot(
 	defer cancel()
 
 	// Collect live instances
-	var instances []*session.Instance
+	var instances []*instance.Instance
 	if us.reviewQueuePoller != nil {
 		instances = us.reviewQueuePoller.GetInstances()
 	}

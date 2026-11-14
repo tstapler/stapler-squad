@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // liveWorkListener builds a listener with reader:backlog on, an injected clock and
 // the given probe, over an item whose only PR (#21) is merged in the rows.
-func liveWorkListener(t *testing.T, probe session.LiveWorkProbe, clock *time.Time, reader bool) (*BacklogLifecycleListener, *itemPRFixture, *sessiontest.FakeNotifier) {
+func liveWorkListener(t *testing.T, probe instance.LiveWorkProbe, clock *time.Time, reader bool) (*BacklogLifecycleListener, *itemPRFixture, *sessiontest.FakeNotifier) {
 	t.Helper()
 	f := newItemPRFixture(t, 21)
 	f.link(session.ItemPROwner(f.itemID), 21, domain.PRStateMerged)
@@ -116,7 +117,7 @@ func TestReconcilePRPending_ShouldBehaveAsToday_WhenFlagOffOrProbeNil(t *testing
 	t.Parallel()
 	now := prTestEpoch
 	for name, tc := range map[string]struct {
-		probe  session.LiveWorkProbe
+		probe  instance.LiveWorkProbe
 		reader bool
 	}{
 		"reader off, probe wired": {&stubLiveAll{live: true}, false},

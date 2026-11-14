@@ -15,8 +15,8 @@ go_library(
     deps = [
         "//log",
         "//server/events",
-        "//session",
         "//session/domain",
+        "//session/instance",
         "@com_github_sherclockholmes_webpush_go//:webpush-go",
     ],
 )
@@ -38,8 +38,8 @@ go_test(
     deps = [
         "//server/deliverygate",
         "//server/events",
-        "//session",
         "//session/domain",
+        "//session/instance",
         "//testutil",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

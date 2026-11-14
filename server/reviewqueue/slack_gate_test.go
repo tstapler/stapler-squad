@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -43,7 +43,7 @@ func TestSlackNotifier_ShouldReceiveZeroRoutine_WhenHiddenReviewItemAdded(t *tes
 
 			fake := &fakeSlackNotifierWiring{}
 			mgr.SetSlackNotifier(fake)
-			poller.SetInstances([]*session.Instance{{Title: "review:slack", UUID: "slack-hidden-uuid", Hidden: true}})
+			poller.SetInstances([]*instance.Instance{{Title: "review:slack", UUID: "slack-hidden-uuid", Hidden: true}})
 
 			mgr.OnItemAdded(&queue.ReviewItem{
 				SessionID: "review:slack", SessionName: "review:slack",
@@ -105,7 +105,7 @@ func TestQueueItemSends_ShouldFollowGate_ForHiddenSession(t *testing.T) {
 				hook := &recordingDispatcher{}
 				mgr.SetSlackNotifier(fake)
 				mgr.SetCallbackDispatcher(hook)
-				poller.SetInstances([]*session.Instance{{Title: "review:gate", UUID: "gate-hidden-uuid", Hidden: true}})
+				poller.SetInstances([]*instance.Instance{{Title: "review:gate", UUID: "gate-hidden-uuid", Hidden: true}})
 
 				mgr.OnItemAdded(&queue.ReviewItem{
 					SessionID: "review:gate", SessionName: "review:gate",

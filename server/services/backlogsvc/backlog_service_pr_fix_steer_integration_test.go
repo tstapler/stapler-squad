@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ func createPRPendingItemWithActiveSession(t *testing.T, storage *session.Storage
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: activeSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	return item.ID
@@ -307,7 +308,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SessionUUIDChanged_ReSteersDespite
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: activeSessionUUIDSecondary,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -479,13 +480,13 @@ func TestAutoReopenForPRFix_ActiveWorkSession_MessageTruncated_When_FixContextEx
 		sb.WriteString("- integration-test-shard-line-that-is-reasonably-long\n")
 	}
 	fixContext := sb.String()
-	require.Greater(t, len(fixContext), session.MaxSteerMessageLength, "fixture must actually require truncation")
+	require.Greater(t, len(fixContext), instance.MaxSteerMessageLength, "fixture must actually require truncation")
 
 	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, fixContext))
 
 	calls := steerer.calls()
 	require.Len(t, calls, 1)
-	assert.LessOrEqual(t, len(calls[0].message), session.MaxSteerMessageLength)
+	assert.LessOrEqual(t, len(calls[0].message), instance.MaxSteerMessageLength)
 	assert.True(t, strings.HasSuffix(calls[0].message, prShipSuffix), "the /github:pr-ship suffix must survive truncation")
 }
 

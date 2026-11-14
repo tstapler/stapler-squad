@@ -7,12 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestMigrationToTmux_WiresInstanceEnvironment(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "migration-env", UUID: "migration-proof", Backend: domain.BackendTymux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
-	require.NoError(t, inst.UpdateProcessManagerForRestartForTest(true, domain.BackendTmux, shellLaunch("bash")))
+	inst := &instance.Instance{Title: "migration-env", UUID: "migration-proof", Backend: domain.BackendTymux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
+	require.NoError(t, inst.UpdateProcessManagerForRestartForTest(true, domain.BackendTmux, instance.ShellLaunch("bash")))
 	sess := inst.GetTmuxSession()
 	require.NotNil(t, sess)
 	field := reflect.ValueOf(sess).Elem().FieldByName("extraEnv")

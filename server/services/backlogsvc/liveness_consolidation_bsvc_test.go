@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestFindConfirmedLiveWorkSession covers the 8b2 concurrent-liveness cap's
@@ -32,9 +32,9 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	t.Parallel()
 
 	ended := time.Now().Add(-time.Hour)
-	open := backlogdto.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
-	tombstoned := backlogdto.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
-	review := backlogdto.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
+	open := backlogdto.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: instance.SessionRoleWork}
+	tombstoned := backlogdto.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: instance.SessionRoleWork, EndedAt: &ended}
+	review := backlogdto.ItemSessionSummary{SessionUUID: "uuid-review", Role: instance.SessionRoleReview}
 	allEndedRecheck := map[string]bool{"uuid-ended-work": true}
 
 	cases := []struct {

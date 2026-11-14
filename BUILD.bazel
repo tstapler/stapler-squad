@@ -113,6 +113,7 @@ go_library(
         "//session/domain",
         "//session/git",
         "//session/hostclaim",
+        "//session/instance",
         "//session/scrollback",
         "//session/tmux",
         "//session/tymux",

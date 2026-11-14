@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/require"
@@ -14,10 +15,10 @@ import (
 
 // newFakeLease returns a held lease bound to fixturetest.FakeLeaseOwner, taken from a
 // throwaway instance so each call owns an independent lease.
-func newFakeLease(t *testing.T) *HeldLease {
+func newFakeLease(t *testing.T) *instance.HeldLease {
 	t.Helper()
-	inst := &Instance{UUID: fixturetest.FakeLeaseOwner}
-	l, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+	inst := &instance.Instance{UUID: fixturetest.FakeLeaseOwner}
+	l, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 	require.True(t, ok)
 	return l
 }
@@ -35,7 +36,7 @@ func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) 
 	const content = "some long driver-generated prompt text"
 	// A wide maxWait: the fake answers at once, and a tight window made the confirm
 	// poll time out under load, which triggers the Enter retry and a third write.
-	if err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), content, time.Millisecond, 5*time.Second); err != nil {
+	if err := instance.SubmitDriverContent(context.Background(), inst, newFakeLease(t), content, time.Millisecond, 5*time.Second); err != nil {
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
 
@@ -45,7 +46,7 @@ func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) 
 	if inst.SendCalls[0] != content {
 		t.Errorf("first SendKeys call = %q, want exactly the content with no suffix", inst.SendCalls[0])
 	}
-	if inst.SendCalls[1] != EnterKeySequence {
+	if inst.SendCalls[1] != instance.EnterKeySequence {
 		t.Errorf("second SendKeys call = %q, want exactly EnterKeySequence sent on its own", inst.SendCalls[1])
 	}
 }
@@ -57,7 +58,7 @@ func TestSubmitDriverContent_ContentSendFailure_NeverSendsEnter(t *testing.T) {
 	inst := fixturetest.NewFakePaneSubmitter()
 	inst.FailOnCall = 0
 
-	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
+	err := instance.SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error from the failed content send")
 	}
@@ -73,7 +74,7 @@ func TestSubmitDriverContent_SubmitKeystrokeFailure_ReportsError(t *testing.T) {
 	inst := fixturetest.NewFakePaneSubmitter()
 	inst.FailOnCall = 1
 
-	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
+	err := instance.SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error from the failed submit keystroke")
 	}
@@ -92,14 +93,14 @@ func TestSubmitDriverContent_SwallowedSubmit_RetriesOnceThenReturnsErrSubmitNotC
 	inst := fixturetest.NewFakePaneSubmitter()
 	inst.Updates = []bool{false} // settles immediately (no changes), never confirms (repeats false forever)
 
-	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
-	if !errors.Is(err, ErrSubmitNotConfirmed) {
+	err := instance.SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
+	if !errors.Is(err, instance.ErrSubmitNotConfirmed) {
 		t.Fatalf("SubmitDriverContent error = %v, want ErrSubmitNotConfirmed", err)
 	}
 	if len(inst.SendCalls) != 3 {
 		t.Fatalf("SendKeys called %d times, want exactly 3 (content, Enter, retry Enter) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
-	if inst.SendCalls[1] != EnterKeySequence || inst.SendCalls[2] != EnterKeySequence {
+	if inst.SendCalls[1] != instance.EnterKeySequence || inst.SendCalls[2] != instance.EnterKeySequence {
 		t.Errorf("expected both the second and third SendKeys calls to be EnterKeySequence, got %#v", inst.SendCalls)
 	}
 }
@@ -123,7 +124,7 @@ func TestSubmitDriverContent_ConfirmedOnRetry_Succeeds(t *testing.T) {
 	t.Parallel()
 	inst := &retryConfirmFake{FakePaneSubmitter: fixturetest.NewFakePaneSubmitter()}
 
-	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
+	err := instance.SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestSubmitDriverContent_ContextAlreadyCancelled_NeverSendsKeys(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := SubmitDriverContent(ctx, inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
+	err := instance.SubmitDriverContent(ctx, inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.Canceled", err)
 	}
@@ -176,7 +177,7 @@ func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *test
 	// internal select hits <-ctx.Done() before its first <-time.After(poll)
 	// tick — exercising "context expires mid-wait," not "settle finishes
 	// quickly on its own."
-	err := SubmitDriverContent(ctx, inst, newFakeLease(t), "content", 50*time.Millisecond, 200*time.Millisecond)
+	err := instance.SubmitDriverContent(ctx, inst, newFakeLease(t), "content", 50*time.Millisecond, 200*time.Millisecond)
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
@@ -205,7 +206,7 @@ func TestSendKeysWithTimeout_WedgedWrite_ReturnsDeadlineExceeded(t *testing.T) {
 	inst := &blockingKeySender{unblock: make(chan struct{})}
 	defer close(inst.unblock) // let the leaked goroutine's SendKeys return
 
-	err := SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", 20*time.Millisecond)
+	err := instance.SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", 20*time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SendKeysWithTimeout error = %v, want context.DeadlineExceeded", err)
 	}
@@ -218,7 +219,7 @@ func TestSendKeysWithTimeout_NormalWrite_ReturnsUnderlyingError(t *testing.T) {
 	inst := fixturetest.NewFakePaneSubmitter()
 	inst.FailOnCall = 0
 
-	err := SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", time.Second)
+	err := instance.SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", time.Second)
 	if err == nil || err.Error() != "fake send failure" {
 		t.Fatalf("SendKeysWithTimeout error = %v, want the underlying SendKeys failure", err)
 	}
@@ -230,10 +231,10 @@ func TestSubmitContentWithEnter_DelegatesToSubmitDriverContent(t *testing.T) {
 	t.Parallel()
 	inst := fixturetest.NewFakePaneSubmitter()
 
-	if err := SubmitContentWithEnter(context.Background(), inst, newFakeLease(t), "hello"); err != nil {
+	if err := instance.SubmitContentWithEnter(context.Background(), inst, newFakeLease(t), "hello"); err != nil {
 		t.Fatalf("SubmitContentWithEnter error = %v, want nil", err)
 	}
-	if len(inst.SendCalls) != 2 || inst.SendCalls[0] != "hello" || inst.SendCalls[1] != EnterKeySequence {
+	if len(inst.SendCalls) != 2 || inst.SendCalls[0] != "hello" || inst.SendCalls[1] != instance.EnterKeySequence {
 		t.Fatalf("sendCalls = %#v, want [\"hello\", EnterKeySequence]", inst.SendCalls)
 	}
 }
@@ -256,7 +257,7 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 		}
 	}
 
-	err := SubmitDriverContent(ctx, inst, newFakeLease(t), "content", time.Millisecond, 50*time.Millisecond)
+	err := instance.SubmitDriverContent(ctx, inst, newFakeLease(t), "content", time.Millisecond, 50*time.Millisecond)
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
@@ -276,7 +277,7 @@ func (o *ownerCheckedSubmitter) VerifyPaneOwner(context.Context) error { return 
 func TestSubmitDriverContent_OwnerMismatch_WritesNothing(t *testing.T) {
 	sub := &ownerCheckedSubmitter{FakePaneSubmitter: fixturetest.NewFakePaneSubmitter(), ownerErr: errors.New("pane ownership mismatch")}
 
-	err := SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond)
+	err := instance.SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond)
 
 	require.ErrorContains(t, err, "pane owner not verified")
 	require.Empty(t, sub.SendCalls, "no content or Enter may be written to a pane with a mismatched owner")
@@ -285,7 +286,7 @@ func TestSubmitDriverContent_OwnerMismatch_WritesNothing(t *testing.T) {
 func TestSubmitDriverContent_OwnerVerified_Writes(t *testing.T) {
 	sub := &ownerCheckedSubmitter{FakePaneSubmitter: fixturetest.NewFakePaneSubmitter()}
 
-	require.NoError(t, SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond))
+	require.NoError(t, instance.SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond))
 	require.Equal(t, "review prompt", sub.SendCalls[0])
 }
 
@@ -297,14 +298,14 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 	t.Run("SendKeysWithTimeout", func(t *testing.T) {
 		t.Parallel()
 		inst := leaseInstance(t, fixturetest.FakeLeaseOwner)
-		lease, ok := inst.TryTerminalWriteLease(LeaseWriterMCP)
+		lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterMCP)
 		require.True(t, ok)
 		pane := &blockingKeySender{unblock: make(chan struct{})}
 
-		err := SendKeysWithTimeout(context.Background(), pane, lease, "x", 20*time.Millisecond)
+		err := instance.SendKeysWithTimeout(context.Background(), pane, lease, "x", 20*time.Millisecond)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 
-		_, ok = inst.TryTerminalWriteLease(LeaseWriterSteer)
+		_, ok = inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 		require.False(t, ok, "the abandoned write still holds the lease")
 
 		close(pane.unblock)
@@ -314,7 +315,7 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 	t.Run("SubmitContentWithEnter", func(t *testing.T) {
 		t.Parallel()
 		inst := leaseInstance(t, fixturetest.FakeLeaseOwner)
-		lease, ok := inst.TryTerminalWriteLease(LeaseWriterMCP)
+		lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterMCP)
 		require.True(t, ok)
 
 		unblock := make(chan struct{})
@@ -327,13 +328,13 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
-		go func() { done <- SubmitContentWithEnter(ctx, pane, lease, "x") }()
+		go func() { done <- instance.SubmitContentWithEnter(ctx, pane, lease, "x") }()
 
 		<-entered
 		cancel()
 		require.ErrorIs(t, <-done, context.DeadlineExceeded)
 
-		_, ok = inst.TryTerminalWriteLease(LeaseWriterSteer)
+		_, ok = inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 		require.False(t, ok, "the abandoned write still holds the lease")
 
 		close(unblock)
@@ -363,7 +364,7 @@ func TestSubmitDriverContent_ConfirmsViaOwnSnapshot_WhenHasUpdatedStolen(t *test
 	t.Parallel()
 	inst := &stolenUpdateFake{FakePaneSubmitter: fixturetest.NewFakePaneSubmitter()}
 
-	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
+	err := instance.SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	require.NoError(t, err)
 	require.Len(t, inst.SendCalls, 2, "no retry Enter once the pane visibly changed")
 }

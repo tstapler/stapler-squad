@@ -5,8 +5,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // MockReviewGateSpawner is a mock implementation of reviewgate.ReviewGateSpawner for testing.
@@ -26,10 +26,10 @@ type MockReviewGateSpawner struct {
 	// Instance, when non-nil, is returned by SpawnReviewSession on success instead of
 	// a synthesized one with a random UUID — used to assert the returned Instance's
 	// UUID is exactly what gets linked into the resulting ItemSession.
-	Instance *session.Instance
+	Instance *instance.Instance
 }
 
-func (m *MockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
+func (m *MockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.spawnCalled = true
@@ -43,7 +43,7 @@ func (m *MockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *ba
 	if m.Instance != nil {
 		return m.Instance, nil
 	}
-	return &session.Instance{UUID: uuid.New().String()}, nil
+	return &instance.Instance{UUID: uuid.New().String()}, nil
 }
 
 // CallCount returns the number of times SpawnReviewSession has been called, under

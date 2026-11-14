@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -36,9 +37,9 @@ func newWorktreeConsistencyTestStorage(t *testing.T) *session.Storage {
 // seedCandidateInstance persists a session directly into storage via AddInstance,
 // applying field mutations via opts before persisting — mirrors
 // server/services/session_retention_sweeper_test.go's addArchivedInstance helper.
-func seedCandidateInstance(t *testing.T, storage *session.Storage, title string, opts ...func(*session.Instance)) {
+func seedCandidateInstance(t *testing.T, storage *session.Storage, title string, opts ...func(*instance.Instance)) {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      "/tmp/test-" + title,
 		Status:    domain.Active,
@@ -52,20 +53,20 @@ func seedCandidateInstance(t *testing.T, storage *session.Storage, title string,
 	require.NoError(t, storage.AddInstance(inst))
 }
 
-func withSessionType(st domain.SessionType) func(*session.Instance) {
-	return func(i *session.Instance) { i.SessionType = st }
+func withSessionType(st domain.SessionType) func(*instance.Instance) {
+	return func(i *instance.Instance) { i.SessionType = st }
 }
 
-func withBranch(branch string) func(*session.Instance) {
-	return func(i *session.Instance) { i.Branch = branch }
+func withBranch(branch string) func(*instance.Instance) {
+	return func(i *instance.Instance) { i.Branch = branch }
 }
 
-func withStatus(status domain.Status) func(*session.Instance) {
-	return func(i *session.Instance) { i.Status = status }
+func withStatus(status domain.Status) func(*instance.Instance) {
+	return func(i *instance.Instance) { i.Status = status }
 }
 
-func withUUID(id string) func(*session.Instance) {
-	return func(i *session.Instance) { i.UUID = id }
+func withUUID(id string) func(*instance.Instance) {
+	return func(i *instance.Instance) { i.UUID = id }
 }
 
 // newWorktreeConsistencyTestRepo is newWorktreeConsistencyTestStorage's Epic 1.2
@@ -237,8 +238,8 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_SessionTypeDirecto
 func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 	storage := newWorktreeConsistencyTestStorage(t)
 
-	inst := session.NewPausedTestInstance(t.Name())
-	session.FinishInstanceForTest(inst)
+	inst := instance.NewPausedTestInstance(t.Name())
+	instance.FinishInstanceForTest(inst)
 	inst.Status = domain.Active
 	inst.Path = "/tmp/test-" + inst.Title
 	inst.SessionType = domain.SessionTypeNewWorktree
@@ -630,7 +631,7 @@ func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLink
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -722,7 +723,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1143,8 +1144,8 @@ func TestResolveFinding_should_DowngradeToFlagged_When_IsolatedInstanceAndUnique
 // falls back to Data.MainRepoPath then Data.Path to find a repo to run
 // git.ListWorktrees against — this opt points that fallback at a real git repo instead
 // of seedCandidateInstance's default fake "/tmp/test-<title>" path.
-func withPath(path string) func(*session.Instance) {
-	return func(i *session.Instance) { i.Path = path }
+func withPath(path string) func(*instance.Instance) {
+	return func(i *instance.Instance) { i.Path = path }
 }
 
 // setupLinkedWorktreeWithBranch is setupLinkedWorktree's (session/backlog_commands_test.go)

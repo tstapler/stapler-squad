@@ -10,8 +10,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SessionDeliveryGate decides whether the status-change push (the path the bus
@@ -103,7 +103,7 @@ func deliverEvent(ctx context.Context, event *events.Event, dedup *dedupTracker,
 
 // gateSessionID is the identity the delivery gate resolves: the UUID, or the
 // title for a session that has none. Read via the lock-free snapshot.
-func gateSessionID(sess *session.Instance) string {
+func gateSessionID(sess *instance.Instance) string {
 	snap := sess.Snapshot()
 	if snap.UUID != "" {
 		return snap.UUID
@@ -266,7 +266,7 @@ func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
 
 // buildNotificationForSession constructs a DeliveryNotification for a specific
 // session event type. Used by tests and helper callers.
-func buildNotificationForSession(sess *session.Instance, eventType events.EventType) DeliveryNotification {
+func buildNotificationForSession(sess *instance.Instance, eventType events.EventType) DeliveryNotification {
 	switch eventType {
 	case events.EventSessionUpdated:
 		return buildApprovalNotification(sess)
@@ -276,7 +276,7 @@ func buildNotificationForSession(sess *session.Instance, eventType events.EventT
 }
 
 // buildApprovalNotification constructs an approval-required notification for sess.
-func buildApprovalNotification(sess *session.Instance) DeliveryNotification {
+func buildApprovalNotification(sess *instance.Instance) DeliveryNotification {
 	return DeliveryNotification{
 		Title:              "Approval Required",
 		Body:               fmt.Sprintf("Session '%s' requires approval", sess.GetTitle()),
@@ -289,7 +289,7 @@ func buildApprovalNotification(sess *session.Instance) DeliveryNotification {
 }
 
 // buildCompletedNotification constructs a session-completed notification for sess.
-func buildCompletedNotification(sess *session.Instance) DeliveryNotification {
+func buildCompletedNotification(sess *instance.Instance) DeliveryNotification {
 	return DeliveryNotification{
 		Title:              "Session Completed",
 		Body:               fmt.Sprintf("Session '%s' has completed", sess.GetTitle()),
@@ -304,7 +304,7 @@ func buildCompletedNotification(sess *session.Instance) DeliveryNotification {
 // stableID returns the stable identifier for a session: ID when non-empty, Title otherwise.
 // ID is set once at construction and never mutated, so it's safe to read directly; Title can
 // be changed via Rename() under Instance.stateMutex, so it's read via the locked accessor.
-func stableID(sess *session.Instance) string {
+func stableID(sess *instance.Instance) string {
 	if sess.ID != "" {
 		return sess.ID
 	}
@@ -312,14 +312,14 @@ func stableID(sess *session.Instance) string {
 }
 
 // buildDataMap builds the FCM-compatible data map for a non-approval notification.
-func buildDataMap(sess *session.Instance, notifType string) map[string]interface{} {
+func buildDataMap(sess *instance.Instance, notifType string) map[string]interface{} {
 	return baseDataMap(sess, notifType)
 }
 
 // buildApprovalDataMap builds the FCM-compatible data map for an
 // approval-required notification, adding the actionable review/later buttons
 // a plain buildDataMap notification doesn't need.
-func buildApprovalDataMap(sess *session.Instance) map[string]interface{} {
+func buildApprovalDataMap(sess *instance.Instance) map[string]interface{} {
 	data := baseDataMap(sess, "APPROVAL_NEEDED")
 	data["actions"] = []map[string]string{
 		{"action": "review", "title": "Review"},
@@ -328,7 +328,7 @@ func buildApprovalDataMap(sess *session.Instance) map[string]interface{} {
 	return data
 }
 
-func baseDataMap(sess *session.Instance, notifType string) map[string]interface{} {
+func baseDataMap(sess *instance.Instance, notifType string) map[string]interface{} {
 	id := stableID(sess)
 	return map[string]interface{}{
 		"sessionId":        id,

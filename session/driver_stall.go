@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // workingStallMultiplier stretches the interactive stall budget while the
@@ -92,13 +93,13 @@ func decideStall(e stallEvidence) stallVerdict {
 
 // isAutonomousSession reports whether the backlog pipeline owns inst, so the
 // automated stall -> retry policy (not operator attention) applies to it.
-func isAutonomousSession(inst *Instance) bool {
-	return inst.IsBacklogOriginatedSession() || inst.HasTag(TagBacklogRevision) || IsOneShot(inst)
+func isAutonomousSession(inst *instance.Instance) bool {
+	return inst.IsBacklogOriginatedSession() || inst.HasTag(instance.TagBacklogRevision) || instance.IsOneShot(inst)
 }
 
 // interactiveStallBudget is policy's attention budget, defaulting when unset
 // (a zero RetryPolicy, as in tests and one-off callers).
-func interactiveStallBudget(policy RetryPolicy) time.Duration {
+func interactiveStallBudget(policy instance.RetryPolicy) time.Duration {
 	if policy.InteractiveStallTimeout > 0 {
 		return policy.InteractiveStallTimeout
 	}
@@ -107,7 +108,7 @@ func interactiveStallBudget(policy RetryPolicy) time.Duration {
 
 // gatherStallEvidence reads the live signals. Only call once idle has passed
 // the cheapest threshold: PaneAlive costs a fresh tmux liveness check.
-func gatherStallEvidence(inst *Instance, idle, budget time.Duration) stallEvidence {
+func gatherStallEvidence(inst *instance.Instance, idle, budget time.Duration) stallEvidence {
 	status, controllerActive := inst.GetDetectedStatusInfo()
 	return stallEvidence{
 		Autonomous:       isAutonomousSession(inst),
@@ -121,7 +122,7 @@ func gatherStallEvidence(inst *Instance, idle, budget time.Duration) stallEviden
 
 // logStallDecision records every input to a non-trivial stall verdict so the
 // next occurrence is explainable from the log alone.
-func logStallDecision(inst *Instance, e stallEvidence, v stallVerdict, policy RetryPolicy, now time.Time) {
+func logStallDecision(inst *instance.Instance, e stallEvidence, v stallVerdict, policy instance.RetryPolicy, now time.Time) {
 	rs := inst.RetrySnapshot()
 	log.Warn("SessionDriver: stall decision",
 		"session", inst.Title,
@@ -143,7 +144,7 @@ func logStallDecision(inst *Instance, e stallEvidence, v stallVerdict, policy Re
 // queue's ReasonStale badge (acknowledgement-aware) and StaleSessionNotifier
 // already surface quiet active sessions and clear when output resumes, so a
 // third path here would duplicate them and ignore acknowledgement.
-func noteInteractiveStall(inst *Instance, e stallEvidence, policy RetryPolicy, now time.Time) {
+func noteInteractiveStall(inst *instance.Instance, e stallEvidence, policy instance.RetryPolicy, now time.Time) {
 	logStallDecision(inst, e, stallNeedsAttention, policy, now)
 }
 
@@ -154,7 +155,7 @@ const deadPaneConfirmWindow = 30 * time.Second
 // interactiveDriverShouldEnd reports lifecycle states in which an interactive
 // driver has nothing left to watch. Ending lets a later start (e.g. after a
 // resume) launch a fresh driver instead of no-opping on a stale one.
-func interactiveDriverShouldEnd(inst *Instance) bool {
+func interactiveDriverShouldEnd(inst *instance.Instance) bool {
 	if inst.IsArchived() {
 		return true
 	}
@@ -171,7 +172,7 @@ func interactiveDriverShouldEnd(inst *Instance) bool {
 // (30m, 60m while working) or the quiet flag could never fire. Interactive
 // drivers still end on stop, destroy, pause, archive, hibernate or crash (see
 // interactiveDriverShouldEnd). Zero means unbounded.
-func driverTotalDeadline(inst *Instance, start time.Time) time.Time {
+func driverTotalDeadline(inst *instance.Instance, start time.Time) time.Time {
 	if isAutonomousSession(inst) {
 		return start.Add(currentDriverTiming().total())
 	}

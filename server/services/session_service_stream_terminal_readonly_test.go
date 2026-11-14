@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -44,7 +45,7 @@ func typeThroughStreamTerminal(t *testing.T, client sessionv1connect.SessionServ
 	}
 }
 
-func paneContains(inst *session.Instance, marker string) func() bool {
+func paneContains(inst *instance.Instance, marker string) func() bool {
 	return func() bool {
 		content, err := inst.CapturePaneContent()
 		return err == nil && strings.Contains(content, marker)
@@ -53,12 +54,12 @@ func paneContains(inst *session.Instance, marker string) func() bool {
 
 func TestStreamTerminal_ShouldDropInputAndResizeForHiddenAndApplyForVisible_WhenFramesSent(t *testing.T) {
 	svc, srv := newBidiStreamTestServer(t)
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 	svc.SetRegistry(session.NewRegistry(nil, svc.WireInstanceCallbacks))
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 
-	spawn := func(hidden bool) *session.Instance {
+	spawn := func(hidden bool) *instance.Instance {
 		inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{
 			Title:           "ro-stream-" + uuid.NewString()[:8],
 			Hidden:          hidden,

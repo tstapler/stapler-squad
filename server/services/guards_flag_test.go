@@ -11,8 +11,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // guardsEnv is a steerEnv whose service has the guards flag wired to the flag
@@ -74,7 +74,7 @@ func TestUnaryGuards_ShouldAcceptHiddenTargetWhenReadonlyGuardsFlagOffAndRejectW
 	e.setGuards(false)
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("flag-hidden"))
 	require.NoError(t, err, "flag off: accepted as on main")
-	assert.Equal(t, []string{"ls", session.EnterKeySequence}, hidden.pm.writes())
+	assert.Equal(t, []string{"ls", instance.EnterKeySequence}, hidden.pm.writes())
 	assert.Equal(t, TerminalReadOnly, AccessFor(hidden.inst), "the stream drops are not behind the flag")
 
 	e.setGuards(true)
@@ -84,7 +84,7 @@ func TestUnaryGuards_ShouldAcceptHiddenTargetWhenReadonlyGuardsFlagOffAndRejectW
 
 func TestUnaryGuards_ShouldAcceptProgramAndAutoApproveChangesOnlyWhileTheFlagIsOff(t *testing.T) {
 	e := newGuardsEnv(t)
-	paused := e.addSession("flag-restart", true, "", func(i *session.Instance) { i.Status = domain.Paused })
+	paused := e.addSession("flag-restart", true, "", func(i *instance.Instance) { i.Status = domain.Paused })
 	yes := true
 	req := func() *connect.Request[sessionv1.UpdateSessionRequest] {
 		return connect.NewRequest(&sessionv1.UpdateSessionRequest{Id: "flag-restart", AutoApprove: &yes})
@@ -103,8 +103,8 @@ func TestUnaryGuards_ShouldAcceptProgramAndAutoApproveChangesOnlyWhileTheFlagIsO
 // T-RO-31
 func TestUnaryGuards_ShouldKeepTypedPathAndAuditInBothFlagStates_AndAuditGuardBypassWithRateLimitedWarn_WhenFlagOffAndNonQualifyingHiddenSteer(t *testing.T) {
 	e := newGuardsEnv(t)
-	review := e.addSession("both-review", true, session.SessionRoleReview)
-	diag := e.addSession("both-diagnose", true, session.SessionRoleDiagnose)
+	review := e.addSession("both-review", true, instance.SessionRoleReview)
+	diag := e.addSession("both-diagnose", true, instance.SessionRoleDiagnose)
 
 	require.NoError(t, e.steer(e.localCtx(), review.inst.Title, "on"))
 	e.setGuards(false)
@@ -113,7 +113,7 @@ func TestUnaryGuards_ShouldKeepTypedPathAndAuditInBothFlagStates_AndAuditGuardBy
 
 	// A non-qualifying hidden target is allowed while off, audited as guard_bypass.
 	require.NoError(t, e.steer(e.localCtx(), diag.inst.Title, "bypass"))
-	assert.Equal(t, []string{"bypass", session.EnterKeySequence}, diag.pm.writes())
+	assert.Equal(t, []string{"bypass", instance.EnterKeySequence}, diag.pm.writes())
 	assert.EqualValues(t, 1, e.count(steerOutcomeGuardBypass))
 	assert.Equal(t, uint64(1), e.fix.svc.guardBypass.count.Load())
 
@@ -129,8 +129,8 @@ func TestUnaryGuards_ShouldKeepTypedPathAndAuditInBothFlagStates_AndAuditGuardBy
 
 func TestGuardBypass_ShouldRefuseWithZeroWrites_WhenTheAuditSinkIsDown_AndStillSteerAQualifyingReviewOnTheFallbackRecord(t *testing.T) {
 	e := newGuardsEnv(t)
-	review := e.addSession("down-review", true, session.SessionRoleReview)
-	diag := e.addSession("down-diagnose", true, session.SessionRoleDiagnose)
+	review := e.addSession("down-review", true, instance.SessionRoleReview)
+	diag := e.addSession("down-diagnose", true, instance.SessionRoleDiagnose)
 	e.setGuards(false)
 	e.sink.Close() // drains the flag-change result line before the fault is injected
 	e.mfs.setFailWrite(errDiskFull)
@@ -166,7 +166,7 @@ func TestGuardsFlag_ShouldShowOffStatusLineWithBypassCountInSettings(t *testing.
 	assert.Equal(t, "Hidden-session write guards are OFF: 0 writes bypassed",
 		statusDetailOf(t, e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName))
 
-	diag := e.addSession("status-diagnose", true, session.SessionRoleDiagnose)
+	diag := e.addSession("status-diagnose", true, instance.SessionRoleDiagnose)
 	require.NoError(t, e.steer(e.localCtx(), diag.inst.Title, "x"))
 	assert.Equal(t, "Hidden-session write guards are OFF: 1 writes bypassed",
 		statusDetailOf(t, e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName))

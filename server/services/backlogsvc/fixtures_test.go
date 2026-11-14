@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -71,7 +72,7 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	t.Cleanup(func() { bus.Close() })
 	t.Cleanup(func() { svc.Shutdown() })
 
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 	// Registered after Shutdown's cleanup so it runs first: no created session may leave its SessionDriver polling.
 	t.Cleanup(func() { svctest.StopPollerSessionDrivers(poller) })
@@ -82,7 +83,7 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 type charFixture struct {
 	svc     *services.SessionService
 	storage *session.Storage
-	inst    *session.Instance
+	inst    *instance.Instance
 	title   string
 	itemID  string
 	itemSes string
@@ -99,13 +100,13 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus domain.B
 	t.Cleanup(func() { svc.Shutdown() })
 	svc.SetLifecycleContext(ctx)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 	ch, _ := bus.Subscribe(ctx)
 	f := &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
 
