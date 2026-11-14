@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -456,6 +457,9 @@ type BuildOptions struct {
 // BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
 // Use BuildOptions to inject a pre-built EntClient (for tests).
 func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
+	// A flag owned by a leaf package adds its Spec slice as one more argument here.
+	featureflags.SetCurrent(services.FlagRegistry())
+
 	var sessionService *services.SessionService
 	var err error
 	if opts.EntClient != nil {

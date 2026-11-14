@@ -15,7 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -102,7 +102,7 @@ func TestCreateBacklogItem_should_SetPipelineModeFromRequest_When_FieldPresent(t
 // pipeline_mode on the request, a brand-new item defaults to "sdd" instead of "".
 func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFieldOmitted(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.SddDefaultPipelineFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
@@ -135,7 +135,7 @@ func TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled(t *te
 // "unset, please apply the sdd default".
 func TestCreateBacklogItem_should_RespectExplicitPipelineMode_When_FlagEnabledButFieldSet(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.SddDefaultPipelineFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, true))
 	svc := newBacklogService(t)
 
 	quick := "quick"

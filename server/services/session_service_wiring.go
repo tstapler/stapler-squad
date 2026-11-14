@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -562,7 +563,7 @@ func (s *SessionService) SetJulesUsageCounter(usage julesUsageSnapshotter) {
 
 // SetFeatureController wires a runtime controller for the named feature flag.
 // Delegates to FeatureFlagService which owns the controller registry.
-func (s *SessionService) SetFeatureController(name string, c FeatureController) {
+func (s *SessionService) SetFeatureController(name string, c featureflags.FeatureController) {
 	s.featureFlagSvc.SetFeatureController(name, c)
 }
 

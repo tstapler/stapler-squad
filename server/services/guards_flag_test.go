@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -20,7 +21,7 @@ import (
 func newGuardsEnv(t *testing.T) *steerEnv {
 	t.Helper()
 	e := newSteerEnv(t)
-	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]FlagAuditPolicy{
+	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{
 		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
 	})
 	e.fix.svc.wireGuardsFlag()
@@ -35,9 +36,9 @@ func (e *steerEnv) setGuards(on bool) {
 func TestGuardsFlag_ShouldBeRegisteredDefaultOnGlobalOnlyAndApplyEveryFlipAtOnce(t *testing.T) {
 	e := newGuardsEnv(t)
 	require.True(t, FeatureFlagDefault(hiddenSessionReadonlyGuardsFlagName), "default on")
-	for _, kf := range knownFeatureFlags {
-		if kf.name == hiddenSessionReadonlyGuardsFlagName {
-			assert.Empty(t, kf.scopes, "global only")
+	for _, kf := range featureflags.Current().Specs() {
+		if kf.Name == hiddenSessionReadonlyGuardsFlagName {
+			assert.Empty(t, kf.Scopes, "global only")
 		}
 	}
 	assert.True(t, e.fix.svc.guards.GuardsEnabled())

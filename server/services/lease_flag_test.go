@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -29,7 +30,7 @@ func leaseFlagEnabledInRegistry(t *testing.T, svc *FeatureFlagService) bool {
 			return f.Enabled
 		}
 	}
-	t.Fatalf("%s is not registered in knownFeatureFlags", terminalWriteLeaseFlagName)
+	t.Fatalf("%s is not registered in the flag registry", terminalWriteLeaseFlagName)
 	return false
 }
 
@@ -68,7 +69,7 @@ func TestTerminalWriteLeaseFlag_ShouldStartOffOnlyForAnExplicitPersistedFalse(t 
 func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeverFailInternal_WhenTheAuditSinkIsDown(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	e := newAuditEnv(t)
-	e.svc.SetAudit(e.sink, map[string]FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
+	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
 	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
 	e.mfs.setFailWrite(errDiskFull)
 
@@ -87,7 +88,7 @@ func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeve
 func TestTerminalWriteLeaseFlag_ShouldAppendFlagChangeLineWithTruePreviousValueForEveryFlip(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	e := newAuditEnv(t)
-	e.svc.SetAudit(e.sink, map[string]FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
+	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
 	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
 
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))

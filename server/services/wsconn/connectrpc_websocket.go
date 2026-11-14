@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
 
 	"connectrpc.com/connect"
@@ -2852,9 +2853,9 @@ func currentResyncOptionsFor(writer services.TerminalWriter) ResyncOptions {
 // instead of duplicated across each of handleCurrentPaneRequest's call sites.
 func currentResyncOptions() ResyncOptions {
 	return ResyncOptions{
-		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(services.TerminalResyncSkipStaleDimensionSlowpathFlagName),
-		UseFastLane:                config.LoadConfig().GetFeatureFlagWithDefault(services.TerminalResyncExecGateFastLaneFlagName, services.FeatureFlagDefault(services.TerminalResyncExecGateFastLaneFlagName)),
-		EchoResyncID:               config.LoadConfig().GetFeatureFlag(services.TerminalResyncCorrelationIDFlagName),
+		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName),
+		UseFastLane:                config.LoadConfig().GetFeatureFlagWithDefault(featureflags.TerminalResyncExecGateFastLaneFlagName, services.FeatureFlagDefault(featureflags.TerminalResyncExecGateFastLaneFlagName)),
+		EchoResyncID:               config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName),
 	}
 }
 
@@ -3324,7 +3325,7 @@ func scrollbackResultForRequest(p scrollbackRequestParams) (ScrollbackResult, er
 	// failure into the tmux-native fallback -- a solo PathLegacyPerConnection
 	// session would show a real (mis-scrolled) tmux capture instead of the
 	// "isn't available for this session yet" toast, never a BLOCKED response.
-	if p.writer != nil && config.LoadConfig().GetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName) {
+	if p.writer != nil && config.LoadConfig().GetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName) {
 		if _, gateFailure, _ := instance.AppScrollGate(p.instance, p.subscriberCount); gateFailure != instance.ScrollGateNoCapability {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			outcome, blockedReason, content, ferr := p.instance.ForwardScroll(ctx, p.subscriberCount, p.hub)
@@ -3549,7 +3550,7 @@ func writeCurrentPaneResponse(stream *connectWebSocketStream, sessionID string, 
 
 	envelopeFlags := byte(0)
 	payload := respBytes
-	if config.LoadConfig().GetFeatureFlag(services.TerminalResyncCompressionFlagName) {
+	if config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncCompressionFlagName) {
 		compressed, wasCompressed, compressErr := protocol.CompressEnvelopeIfLarge(respBytes, terminalResyncCompressionThresholdBytes)
 		if compressErr != nil {
 			log.ForSession(sessionID).Warn("failed to compress current pane response, sending uncompressed", "err", compressErr)

@@ -26,6 +26,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -297,8 +298,8 @@ func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *
 func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	got := map[string]bool{}
-	for _, kf := range knownFeatureFlags {
-		got[kf.name] = kf.defaultValue
+	for _, kf := range featureflags.Current().Specs() {
+		got[kf.Name] = kf.Default
 	}
 	require.Equal(t, config.WorkflowEngineShadowDefault, got[config.WorkflowEngineShadowFeatureFlag])
 	require.Equal(t, config.WorkflowEngineEnforceDefault, got[config.WorkflowEngineEnforceFeatureFlag])
@@ -522,10 +523,10 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 			continue // not registered yet: Task 1.5.8g (system)
 		}
 		registered := false
-		for _, kf := range knownFeatureFlags {
-			registered = registered || kf.name == name
+		for _, kf := range featureflags.Current().Specs() {
+			registered = registered || kf.Name == name
 		}
-		require.Truef(t, registered, "class %s row names %q, which must be in knownFeatureFlags", class, name)
+		require.Truef(t, registered, "class %s row names %q, which must be in the flag registry", class, name)
 	}
 	agentName, agentDef, ok := session.ClassEnforceFlag(domain.ClassAgent)
 	require.True(t, ok, "the agent flag is registered in Task 1.5.3c")
@@ -674,7 +675,7 @@ var dfltKnownLiteralSites = map[string]bool{
 // registry default is true, so an unset flag reads false there and true elsewhere.
 // Changing the read is a behavior change and needs an owner decision.
 var dfltKnownPlainReadDisagreements = map[string]bool{
-	"session/instance/instance_tmux.go|" + TerminalResyncExecGateFastLaneFlagName: true,
+	"session/instance/instance_tmux.go|" + featureflags.TerminalResyncExecGateFastLaneFlagName: true,
 }
 
 type dfltFile struct {
@@ -756,9 +757,9 @@ func dfltResolveFlag(e ast.Expr, consts map[string]string) (string, bool) {
 }
 
 func dfltRegistered(name string) (defaultValue, ok bool) {
-	for _, kf := range knownFeatureFlags {
-		if kf.name == name {
-			return kf.defaultValue, true
+	for _, kf := range featureflags.Current().Specs() {
+		if kf.Name == name {
+			return kf.Default, true
 		}
 	}
 	return false, false
@@ -841,9 +842,9 @@ func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
 		}
 	}
 	require.False(t, SddDefaultPipelineEnabled(), "sdd-default-pipeline stays off when unset")
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(SddDefaultPipelineFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, true))
 	require.True(t, SddDefaultPipelineEnabled())
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(SddDefaultPipelineFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, false))
 	require.False(t, SddDefaultPipelineEnabled(), "an explicit false still opts out")
 }
 

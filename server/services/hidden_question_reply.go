@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -40,7 +41,7 @@ func (f *ReplyFlag) SetEnabled(on bool) { f.on.Store(on) }
 // replyFlagAuditPolicy: on loosens (a Reply path opens), so it is audited and
 // fsynced before it is persisted and refused if the sink is down; off is a
 // tightening flip that is persisted first and queued.
-var replyFlagAuditPolicy = FlagAuditPolicy{
+var replyFlagAuditPolicy = featureflags.FlagAuditPolicy{
 	Loosening: func(enabled bool) bool { return enabled },
 }
 

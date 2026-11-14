@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -63,12 +64,12 @@ func TestFlagMutation_ShouldRejectMalformedScopeAndMutationCombinations_AndPersi
 	}{
 		{"bogus kind", gateFlag, setOn, "kind:bogus"},
 		{"triage is not reachable", gateFlag, setOn, "kind:triage"},
-		{"scope on non-scopable flag", SddDefaultPipelineFlagName, setOn, "kind:review"},
+		{"scope on non-scopable flag", featureflags.SddDefaultPipelineFlagName, setOn, "kind:review"},
 		{"set with empty scope", gateFlag, setOn, ""},
 		{"set disabled with empty scope", gateFlag, setOff, ""},
 		{"clear with empty scope", gateFlag, clearScope, ""},
 		{"clear with global literal", gateFlag, clearScope, "global"},
-		{"clear on non-scopable flag", SddDefaultPipelineFlagName, clearScope, "kind:review"},
+		{"clear on non-scopable flag", featureflags.SddDefaultPipelineFlagName, clearScope, "kind:review"},
 		{"reset with a scope", gateFlag, resetGlob, "kind:review"},
 		{"reset with the global literal", gateFlag, resetGlob, "global"},
 		{"unspecified with a scope", gateFlag, sessionv1.FlagMutation_FLAG_MUTATION_UNSPECIFIED, "kind:review"},

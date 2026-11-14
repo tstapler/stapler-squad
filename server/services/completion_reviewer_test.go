@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -242,13 +243,13 @@ func TestFileMemoryStore_Append_ConcurrentWrites_NeverCorrupt(t *testing.T) {
 }
 
 func TestCompletionReviewerFlag_should_BeRegisteredDefaultOff(t *testing.T) {
-	for _, f := range knownFeatureFlags {
-		if f.name == completionReviewerFlagName {
-			assert.False(t, f.defaultValue)
+	for _, f := range featureflags.Current().Specs() {
+		if f.Name == completionReviewerFlagName {
+			assert.False(t, f.Default)
 			return
 		}
 	}
-	t.Fatal("flag not registered in knownFeatureFlags")
+	t.Fatal("flag not registered in the flag registry")
 }
 
 func TestFileMemoryStore_Append_should_RejectOversizedEmptyRepoAndNeutralizeHeaders(t *testing.T) {

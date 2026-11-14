@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -23,11 +24,11 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 	for _, name := range attentionFlagNames {
 		t.Run(name, func(t *testing.T) {
 			found := false
-			for _, f := range knownFeatureFlags {
-				if f.name == name {
+			for _, f := range featureflags.Current().Specs() {
+				if f.Name == name {
 					found = true
-					require.False(t, f.defaultValue)
-					require.NotEmpty(t, f.description)
+					require.False(t, f.Default)
+					require.NotEmpty(t, f.Description)
 				}
 			}
 			require.True(t, found, "registry entry missing")

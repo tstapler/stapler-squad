@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -79,14 +80,6 @@ type ReactiveQueueManager interface {
 	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
 	RemoveStreamClient(clientID string)
 	OnControllerStatusChange(inst *instance.Instance, newStatus detection.DetectedStatus)
-}
-
-// FeatureController is implemented by components that can be enabled/disabled at runtime.
-// Used by GetFeatureFlags/UpdateFeatureFlag to toggle named subsystems.
-type FeatureController interface {
-	Enable(ctx context.Context) error
-	Disable() error
-	IsEnabled() bool
 }
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
@@ -1178,7 +1171,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)
-	ff.SetAudit(sink, map[string]FlagAuditPolicy{
+	ff.SetAudit(sink, map[string]featureflags.FlagAuditPolicy{
 		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
 		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
 		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
