@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type fakeStaleInspector struct{ result services.StaleWorkDisposition }
@@ -32,9 +32,9 @@ func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesO
 			repoPath := t.TempDir()
 			svctest.InitGitRepoWithCommit(t, repoPath)
 			itemID := createReadyItemForSpawn(t, svc, repoPath, "stale item "+name)
-			_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: session.SessionRoleWork})
+			_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: instance.SessionRoleWork})
 			require.NoError(t, err)
-			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 			require.NoError(t, err)
 
 			require.NoError(t, svc.RemediateStaleWorkSession(t.Context(), itemID))

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // PRSetReader derives a backlog item's PR set at read time. The set is never
@@ -77,7 +78,7 @@ func currentRoundSession(work []backlogdto.ItemSessionSummary, links map[string]
 
 func workSessions(all []backlogdto.ItemSessionSummary) (work []backlogdto.ItemSessionSummary, uuids []string) {
 	for _, s := range all {
-		if s.Role == SessionRoleWork && s.SessionUUID != "" {
+		if s.Role == instance.SessionRoleWork && s.SessionUUID != "" {
 			work = append(work, s)
 			uuids = append(uuids, s.SessionUUID)
 		}

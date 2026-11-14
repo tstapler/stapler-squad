@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadyShippedSinceReview
@@ -49,11 +50,11 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// flight, with no knowledge of it.
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusReview),
-	}, TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusPRPending),
-	}, TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// The stale reopen attempt finally executes, using the precondition it
@@ -63,7 +64,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
-	}, TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
@@ -101,7 +102,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 		startBarrier.Wait()
 		_, txErr := repo.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: string(domain.BacklogStatusReview),
-		}, TriggeredBySystem)
+		}, instance.TriggeredBySystem)
 		results <- txErr
 	}
 
@@ -167,7 +168,7 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &utcPrecondition,
-	}, TriggeredByUser)
+	}, instance.TriggeredByUser)
 	require.NoError(t, err, "a UTC-derived expected_updated_at must match the stored value's CAS check")
 	assert.Equal(t, time.UTC, updated.UpdatedAt.Location(), "updated_at must remain UTC after a transition")
 }

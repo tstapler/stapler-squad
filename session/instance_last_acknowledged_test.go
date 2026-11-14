@@ -2,6 +2,7 @@ package session
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 	"time"
 )
@@ -15,7 +16,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 	now := time.Now()
 	lastAck := now.Add(-1 * time.Hour) // 1 hour ago
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
@@ -44,7 +45,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 	}
 
 	// Convert back from InstanceData (deserialization)
-	restoredInstance, err := FromInstanceData(data)
+	restoredInstance, err := instance.FromInstanceData(data)
 	if err != nil {
 		t.Fatalf("Failed to restore instance from data: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
@@ -85,7 +86,7 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 
 	// Convert to InstanceData and back
 	data := inst.ToInstanceData()
-	restoredInstance, err := FromInstanceData(data)
+	restoredInstance, err := instance.FromInstanceData(data)
 	if err != nil {
 		t.Fatalf("Failed to restore instance from data: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{
+			inst := &instance.Instance{
 				Title:  "Test Instance",
 				Path:   "/path/to/repo",
 				Branch: "test-branch",

@@ -35,7 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -197,7 +197,7 @@ func TestStreamTerminal_RemoteSession_InputReachesRemotePTY(t *testing.T) {
 		return remoteHasSessionViaIndependentDial(t, srv, sessionName, fix.svc.testTmuxServerSocket)
 	}, 10*time.Second, 200*time.Millisecond, "remote tmux session must exist before streaming")
 
-	var found *session.Instance
+	var found *instance.Instance
 	wait.RequireEventually(t, func() bool {
 		for _, inst := range fix.poller.GetInstances() {
 			if inst.Title == "remote-stream-input" {

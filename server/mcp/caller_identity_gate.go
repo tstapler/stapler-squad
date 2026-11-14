@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Typed result codes of the wake and peer-help tools (plan Story 4.5). They
@@ -76,11 +77,11 @@ var identityGatedTools = map[string][]callerRole{
 // with no link, or any role not listed, is a work session.
 func roleOfItemSession(role string) callerRole {
 	switch role {
-	case session.SessionRoleTriage:
+	case instance.SessionRoleTriage:
 		return roleTriage
-	case session.SessionRoleReview:
+	case instance.SessionRoleReview:
 		return roleReview
-	case session.SessionRoleDiagnose:
+	case instance.SessionRoleDiagnose:
 		return roleDiagnose
 	default:
 		return roleWork

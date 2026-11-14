@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -93,7 +94,7 @@ func matrixRows() []matrixRow {
 
 // raisedRecorder records AttentionRaised titles; every other event is a no-op.
 type raisedRecorder struct {
-	noopSessionEventRecorder
+	instance.NoopSessionEventRecorder
 	mu     sync.Mutex
 	raised []string
 }
@@ -139,7 +140,7 @@ type matrixHarness struct {
 
 func newMatrixHarness() *matrixHarness {
 	h := &matrixHarness{
-		status:  newFakeStatusProvider(map[string]InstanceStatusInfo{}),
+		status:  newFakeStatusProvider(map[string]instance.InstanceStatusInfo{}),
 		content: newFakeContentProvider(map[string]string{}),
 		rec:     &raisedRecorder{},
 	}
@@ -164,7 +165,7 @@ func (h *matrixHarness) run(t *testing.T, idx int, st matrixStage) {
 	human := fmt.Sprintf("human-%d", idx)
 	idleTitle := fmt.Sprintf("idle-%d", idx)
 	prose := fmt.Sprintf("prose-%d", idx)
-	h.status.statuses[human] = InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: detection.StatusInputRequired}
+	h.status.statuses[human] = instance.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: detection.StatusInputRequired}
 	h.content.content[prose] = matrixProsePrompt
 
 	humanInst := startedInstance(human, withCreatedAgo(time.Hour), withAges(0, 60*time.Second))
@@ -230,8 +231,8 @@ func TestFlagMatrix_Should_MatchAllOffOutcome_When_InertFlagsOnOverCorpus(t *tes
 			t.Fatal(err)
 		}
 		raw := string(data)
-		off := determiner.Determine(goldenInstance(c.name), raw, InstanceStatusInfo{}, detector, DeterminerOptions{})
-		on := determiner.Determine(goldenInstance(c.name), raw, InstanceStatusInfo{}, detector, DeterminerOptions{ProseQuestion: true})
+		off := determiner.Determine(goldenInstance(c.name), raw, instance.InstanceStatusInfo{}, detector, DeterminerOptions{})
+		on := determiner.Determine(goldenInstance(c.name), raw, instance.InstanceStatusInfo{}, detector, DeterminerOptions{ProseQuestion: true})
 		if outcomeOf(off) != outcomeOf(on) {
 			t.Errorf("%s/%s: ProseQuestion changed outcome %+v -> %+v", c.program, c.name, outcomeOf(off), outcomeOf(on))
 		}

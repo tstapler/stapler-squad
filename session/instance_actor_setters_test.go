@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -150,7 +151,7 @@ func TestInstance_SetPinned_should_RejectPin_When_SessionIsArchived(t *testing.T
 
 	err := inst.SetPinned(true)
 
-	assert.ErrorIs(t, err, ErrCannotPinArchivedSession)
+	assert.ErrorIs(t, err, instance.ErrCannotPinArchivedSession)
 	assert.False(t, inst.Snapshot().Pinned)
 }
 
@@ -224,7 +225,7 @@ func TestReclassifyTagsLocked_should_PreserveLLMProvenancedTag_When_UnrelatedSet
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Tags = []string{"Feature"}
-	inst.RuleTagProvenance = map[string]string{"Feature": llmSentinelRuleID}
+	inst.RuleTagProvenance = map[string]string{"Feature": instance.LlmSentinelRuleID}
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules(nil) // no sync rule can match "Feature" -- and none has ID "llm"
 	inst.SetTaggingEngine(engine)
@@ -232,7 +233,7 @@ func TestReclassifyTagsLocked_should_PreserveLLMProvenancedTag_When_UnrelatedSet
 	inst.SetProgram("aider")
 
 	assert.Contains(t, inst.GetTags(), "Feature", "an LLM-provenanced tag must survive the sync retraction loop")
-	assert.Equal(t, llmSentinelRuleID, inst.RuleTagProvenance["Feature"])
+	assert.Equal(t, instance.LlmSentinelRuleID, inst.RuleTagProvenance["Feature"])
 }
 
 func TestReclassifyTagsLocked_should_RetractTag_When_OwningRuleDeletedViaCRUD(t *testing.T) {
@@ -261,8 +262,8 @@ func TestDropUnclassifiedIfOtherTagsPresentLocked_should_RemoveUnclassified_When
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Branch = "bugfix/x"
-	inst.Tags = []string{UnclassifiedTag}
-	inst.RuleTagProvenance = map[string]string{UnclassifiedTag: llmSentinelRuleID}
+	inst.Tags = []string{instance.UnclassifiedTag}
+	inst.RuleTagProvenance = map[string]string{instance.UnclassifiedTag: instance.LlmSentinelRuleID}
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules([]classifier.TaggingRule{fixturetest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
@@ -271,20 +272,20 @@ func TestDropUnclassifiedIfOtherTagsPresentLocked_should_RemoveUnclassified_When
 
 	tags := inst.GetTags()
 	assert.Contains(t, tags, "Bugfix")
-	assert.NotContains(t, tags, UnclassifiedTag)
+	assert.NotContains(t, tags, instance.UnclassifiedTag)
 }
 
 func TestDropUnclassifiedIfOtherTagsPresentLocked_should_LeaveUnclassified_When_NoOtherTagPresent(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.Tags = []string{UnclassifiedTag}
+	inst.Tags = []string{instance.UnclassifiedTag}
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules(nil)
 	inst.SetTaggingEngine(engine)
 
 	inst.SetProgram("aider")
 
-	assert.Equal(t, []string{UnclassifiedTag}, inst.GetTags())
+	assert.Equal(t, []string{instance.UnclassifiedTag}, inst.GetTags())
 }
 
 // --- Story 2.3.3 addendum: fire-count recording from reclassifyTagsLocked ---
@@ -331,10 +332,10 @@ func TestInstance_SetPinned_should_BumpUpdatedAt_OnlyWhenValueChanges(t *testing
 }
 
 // autonomousInstance is a live-actor instance with autonomy on mid-run.
-func autonomousInstance(t *testing.T) *Instance {
+func autonomousInstance(t *testing.T) *instance.Instance {
 	t.Helper()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	t.Cleanup(li.Stop)
 	inst.SetAutonomousMode(true, "")
 	inst.SetAutonomousTurn(4, 20)
@@ -454,10 +455,14 @@ func TestAutonomousSetters_NoRaceWithSnapshotReaders(t *testing.T) {
 
 func TestAutonomousSetters_ReturnErrorWhenActorDone(t *testing.T) {
 	t.Parallel()
-	setters := map[string]func(*Instance) error{
-		"Stopped":      func(i *Instance) error { return i.SetAutonomousStopped(domain.StopReasonOrchestratorError) },
-		"StopObserved": func(i *Instance) error { return i.SetAutonomousStopObserved(domain.StopReasonOrchestratorError) },
-		"StoppedQuiet": func(i *Instance) error { return i.SetAutonomousStoppedQuiet(domain.StopReasonOrchestratorError) },
+	setters := map[string]func(*instance.Instance) error{
+		"Stopped": func(i *instance.Instance) error { return i.SetAutonomousStopped(domain.StopReasonOrchestratorError) },
+		"StopObserved": func(i *instance.Instance) error {
+			return i.SetAutonomousStopObserved(domain.StopReasonOrchestratorError)
+		},
+		"StoppedQuiet": func(i *instance.Instance) error {
+			return i.SetAutonomousStoppedQuiet(domain.StopReasonOrchestratorError)
+		},
 	}
 	for name, set := range setters {
 		t.Run(name, func(t *testing.T) {
@@ -465,7 +470,7 @@ func TestAutonomousSetters_ReturnErrorWhenActorDone(t *testing.T) {
 			inst := minimalInstance(t)
 			inst.AutonomousMode = true
 			inst.PublishSnapshotForTest()
-			li := NewLiveInstance(inst)
+			li := instance.NewLiveInstance(inst)
 			li.CancelForTest()
 			t.Cleanup(li.Stop)
 			before := inst.Snapshot().Autonomous

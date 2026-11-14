@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---------------------------------------------------------------------------
@@ -228,7 +229,7 @@ func buildSteerMessage(program, fixContext string) string {
 	body := fixContext
 	// Reserve room for suffix + truncationPointer against fixContext
 	// alone, so both always fit even when fixContext itself must be cut.
-	budget := session.MaxSteerMessageLength - len(suffix) - len(truncationPointer)
+	budget := instance.MaxSteerMessageLength - len(suffix) - len(truncationPointer)
 	if budget < 0 {
 		budget = 0
 	}
@@ -282,7 +283,7 @@ func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID,
 	// always ends the jules_work session before the item reaches pr_pending —
 	// but a future violation of that invariant must fail loudly here rather
 	// than attempt a tmux write that has nothing to write to.
-	if active.Role == session.SessionRoleJulesWork {
+	if active.Role == instance.SessionRoleJulesWork {
 		log.ErrorLog().Printf("[AutoReopenForPRFix] invariant violation: active session %s for item=%s is jules_work (should have ended before pr_pending) — refusing to steer", active.SessionUUID, itemID)
 		return
 	}

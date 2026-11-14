@@ -9,7 +9,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // steerAuthKind names which decision produced a steerAuthorization.
@@ -43,23 +43,23 @@ var (
 
 // verify refuses a zero token, a token for another instance and a lease bound
 // to another instance. It has no side effects.
-func (a steerAuthorization) verify(inst *session.Instance, lease *session.HeldLease) error {
+func (a steerAuthorization) verify(inst *instance.Instance, lease *instance.HeldLease) error {
 	switch {
 	case a.kind == steerAuthNone || a.instanceUUID == "":
 		return errSteerNoAuthorization
 	case inst == nil || a.instanceUUID != inst.LeaseOwnerUUID():
 		return errSteerAuthTargetDiffer
 	case lease == nil || lease.OwnerUUID() == "":
-		return session.ErrNoLease
+		return instance.ErrNoLease
 	case lease.OwnerUUID() != inst.LeaseOwnerUUID():
-		return session.ErrLeaseMismatch
+		return instance.ErrLeaseMismatch
 	}
 	return nil
 }
 
 // internalSteerAuthorization is the one constructor of the internal kind; its
 // callers are pinned by the guard set (steerInternal only).
-func internalSteerAuthorization(inst *session.Instance) steerAuthorization {
+func internalSteerAuthorization(inst *instance.Instance) steerAuthorization {
 	return steerAuthorization{kind: steerAuthInternal, instanceUUID: inst.LeaseOwnerUUID()}
 }
 
@@ -105,7 +105,7 @@ func requestFactsOf(ctx context.Context, req connect.AnyRequest) steerRequestFac
 // mutation. A hidden target qualifies only through a live BacklogReviewLink
 // (never a tag); with the guards flag off a non-qualifying hidden target is
 // allowed as on main, marked bypass so the caller audits it.
-func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyRequest, inst *session.Instance) (steerDecision, error) {
+func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyRequest, inst *instance.Instance) (steerDecision, error) {
 	if !inst.Snapshot().Hidden {
 		return steerDecision{auth: steerAuthorization{kind: steerAuthVisible, instanceUUID: inst.LeaseOwnerUUID()}}, nil
 	}
@@ -140,10 +140,10 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 // steerUnderLease is the acquirer of the UpdateSession steer chain: it takes
 // the write lease once and hands it to steerAuthorized with a token that
 // decideSteerAccess built for this instance.
-func (s *SessionService) steerUnderLease(ctx context.Context, auth steerAuthorization, instance *session.Instance, message string) error {
-	lease, ok := instance.TryTerminalWriteLease(session.LeaseWriterSteer)
+func (s *SessionService) steerUnderLease(ctx context.Context, auth steerAuthorization, instance *instance.Instance, message string) error {
+	lease, ok := instance.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	if !ok {
-		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, session.ErrLeaseBusy)
+		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, instance.ErrLeaseBusy)
 	}
 	return s.steerAuthorized(ctx, auth, lease, instance, message)
 }
@@ -151,10 +151,10 @@ func (s *SessionService) steerUnderLease(ctx context.Context, auth steerAuthoriz
 // steerInternal is the acquirer for in-process callers (SteerActiveSession and
 // the guarded-steer family). Their access is pinned by the guard set instead of
 // decided per request, so it alone builds the internal kind.
-func (s *SessionService) steerInternal(ctx context.Context, instance *session.Instance, message string) error {
-	lease, ok := instance.TryTerminalWriteLease(session.LeaseWriterSteer)
+func (s *SessionService) steerInternal(ctx context.Context, instance *instance.Instance, message string) error {
+	lease, ok := instance.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	if !ok {
-		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, session.ErrLeaseBusy)
+		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, instance.ErrLeaseBusy)
 	}
 	return s.steerAuthorized(ctx, internalSteerAuthorization(instance), lease, instance, message)
 }
@@ -169,7 +169,7 @@ func (s *SessionService) steerInternal(ctx context.Context, instance *session.In
 // Returns only plain fmt.Errorf-wrapped errors, never connect.NewError, since
 // SteerActiveSession calls this in-process from BacklogService; UpdateSession is
 // the sole caller that translates the error into a connect.Code.
-func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthorization, lease *session.HeldLease, instance *session.Instance, message string) error {
+func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthorization, lease *instance.HeldLease, instance *instance.Instance, message string) error {
 	if err := auth.verify(instance, lease); err != nil {
 		lease.Release()
 		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, err)
@@ -212,7 +212,7 @@ func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthoriz
 	// wedged/dead session can't hang this goroutine forever) — content and
 	// the submit keystroke travel as two separate SendKeys writes (BUG-031),
 	// never concatenated.
-	if err := session.SubmitContentWithEnter(ctx, instance, lease, message); err != nil {
+	if err := instance.SubmitContentWithEnter(ctx, instance, lease, message); err != nil {
 		return fmt.Errorf("steer session %q: %w", instance.Snapshot().Title, err)
 	}
 	s.notifySteerSent(instance, message)
@@ -221,6 +221,6 @@ func (s *SessionService) steerAuthorized(ctx context.Context, auth steerAuthoriz
 
 // steerBacklogLinked is the O7 chain's hand-off to steerAuthorized: the token
 // is built here, in the one file that constructs them, from a resolved link.
-func (s *SessionService) steerBacklogLinked(ctx context.Context, link BacklogReviewLink, lease *session.HeldLease, message string) error {
+func (s *SessionService) steerBacklogLinked(ctx context.Context, link BacklogReviewLink, lease *instance.HeldLease, message string) error {
 	return s.steerAuthorized(ctx, backlogLinkAuthorization(link), lease, link.inst, message)
 }

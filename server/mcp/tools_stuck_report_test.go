@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestUniqueFailingTestClasses(t *testing.T) {
@@ -216,7 +217,7 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "multi pr", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	sessUUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 
 	ref := func(n int) domain.PRRef {
@@ -258,7 +259,7 @@ func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktre
 	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocked cleanup", Status: string(domain.BacklogStatusDone)})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	n, url := 5, ""
 	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ReleaseFunc is the refcount-gated teardown closure returned by Acquire and Register.
@@ -31,7 +32,7 @@ var ErrSessionNotFound = errors.New("session: not found in storage")
 var ErrSessionAlreadyRegistered = errors.New("session: already registered")
 
 type registryEntry struct {
-	instance *LiveInstance
+	instance *instance.LiveInstance
 	refcount int
 	retained bool
 }
@@ -48,13 +49,13 @@ type Registry struct {
 	// NEVER invoked on a refcount++ of an already-live entry, NEVER on the losing side
 	// of a construction race (that branch discards via StopActor() instead).
 	// Register does NOT invoke onConstruct — see Register's doc comment for why.
-	onConstruct func(*LiveInstance)
+	onConstruct func(*instance.LiveInstance)
 }
 
 // NewRegistry constructs a Registry. onConstruct may be nil (e.g. daemon.go's own
 // Registry, which has no SessionService to wire callbacks for); Acquire nil-checks
 // before calling it.
-func NewRegistry(storage *Storage, onConstruct func(*LiveInstance)) *Registry {
+func NewRegistry(storage *Storage, onConstruct func(*instance.LiveInstance)) *Registry {
 	return &Registry{
 		storage:     storage,
 		entries:     make(map[string]*registryEntry),
@@ -70,7 +71,7 @@ func NewRegistry(storage *Storage, onConstruct func(*LiveInstance)) *Registry {
 //  1. Not in storage → ErrSessionNotFound
 //  2. Not in map, construction succeeds → new entry, refcount=1
 //  3. Already in map (or races with concurrent Acquire) → refcount++
-func (r *Registry) Acquire(sessionID string) (*LiveInstance, ReleaseFunc, error) {
+func (r *Registry) Acquire(sessionID string) (*instance.LiveInstance, ReleaseFunc, error) {
 	r.mu.Lock()
 	if e, ok := r.entries[sessionID]; ok {
 		e.refcount++
@@ -121,7 +122,7 @@ func (r *Registry) Acquire(sessionID string) (*LiveInstance, ReleaseFunc, error)
 //
 // No double-checked locking here (unlike Acquire): Register has no storage I/O to
 // release the lock around, so the whole check-then-insert runs under one lock acquisition.
-func (r *Registry) Register(instance *LiveInstance) (ReleaseFunc, error) {
+func (r *Registry) Register(instance *instance.LiveInstance) (ReleaseFunc, error) {
 	sessionID := instance.GetStableID()
 	r.mu.Lock()
 	if _, ok := r.entries[sessionID]; ok {
@@ -136,7 +137,7 @@ func (r *Registry) Register(instance *LiveInstance) (ReleaseFunc, error) {
 // Retain preserves the canonical instance until ForceRelease or Shutdown, even when
 // no poller or Acquire holder remains. Repeated calls do not add references.
 // If this ID already has an actor, that actor wins over the supplied instance.
-func (r *Registry) Retain(inst *Instance) *LiveInstance {
+func (r *Registry) Retain(inst *instance.Instance) *instance.LiveInstance {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id := inst.GetStableID()
@@ -146,7 +147,7 @@ func (r *Registry) Retain(inst *Instance) *LiveInstance {
 	}
 	live := inst.LiveInstance()
 	if live == nil {
-		live = NewLiveInstance(inst)
+		live = instance.NewLiveInstance(inst)
 	}
 	r.entries[id] = &registryEntry{instance: live, retained: true}
 	return live
@@ -154,7 +155,7 @@ func (r *Registry) Retain(inst *Instance) *LiveInstance {
 
 // Lookup returns an already-owned instance by stable ID or legacy title, without
 // constructing a replacement or acquiring a reference. It may be nil.
-func (r *Registry) Lookup(id string) *LiveInstance {
+func (r *Registry) Lookup(id string) *instance.LiveInstance {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if e, ok := r.entries[id]; ok {
@@ -228,12 +229,12 @@ func (r *Registry) ForceRelease(sessionID string) {
 // AcquireAll acquires every session known to Storage in one call; returns one release
 // closing over all of them. Sugar for sweep-style callers (health.go, hibernation_sweeper.go).
 // Sessions that fail to Acquire are logged and skipped, not returned.
-func (r *Registry) AcquireAll() ([]*LiveInstance, ReleaseFunc, error) {
+func (r *Registry) AcquireAll() ([]*instance.LiveInstance, ReleaseFunc, error) {
 	ids, err := r.storage.ListInstanceIDs()
 	if err != nil {
 		return nil, nil, fmt.Errorf("registry: AcquireAll: list IDs: %w", err)
 	}
-	var live []*LiveInstance
+	var live []*instance.LiveInstance
 	var releases []ReleaseFunc
 	for _, id := range ids {
 		l, release, acquireErr := r.Acquire(id)
@@ -272,7 +273,7 @@ func (r *Registry) Storage() *Storage { return r.storage }
 // (RPC handlers, one-shot lookups) where forgetting release() is the common failure mode.
 // Reserve raw Acquire/release() for genuinely long-lived holders (WebSocket streams,
 // poller caches, background goroutines).
-func (r *Registry) WithInstance(ctx context.Context, sessionID string, fn func(*LiveInstance) error) error {
+func (r *Registry) WithInstance(ctx context.Context, sessionID string, fn func(*instance.LiveInstance) error) error {
 	inst, release, err := r.Acquire(sessionID)
 	if err != nil {
 		return err
@@ -283,10 +284,10 @@ func (r *Registry) WithInstance(ctx context.Context, sessionID string, fn func(*
 
 // List returns a snapshot of all currently-live instances, holding the lock only for
 // the copy.
-func (r *Registry) List() []*LiveInstance {
+func (r *Registry) List() []*instance.LiveInstance {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]*LiveInstance, 0, len(r.entries))
+	out := make([]*instance.LiveInstance, 0, len(r.entries))
 	for _, e := range r.entries {
 		out = append(out, e.instance)
 	}
@@ -305,13 +306,13 @@ func (r *Registry) Count() int {
 // this rather than *Registry (Interface Segregation — matches WorkspaceService's existing
 // LiveInstanceFinder convention).
 type InstanceAcquirer interface {
-	Acquire(sessionID string) (*LiveInstance, ReleaseFunc, error)
+	Acquire(sessionID string) (*instance.LiveInstance, ReleaseFunc, error)
 }
 
 // RegistryInspector is the narrowest interface for callers that only enumerate live
 // instances without acquiring individual handles.
 type RegistryInspector interface {
-	List() []*LiveInstance
+	List() []*instance.LiveInstance
 	Count() int
 }
 
@@ -322,10 +323,10 @@ var _ RegistryInspector = (*Registry)(nil)
 // newLiveInstance is the internal construction path used by Registry.Acquire.
 // It calls FromInstanceData to reconstruct the *Instance from storage data
 // (including Start() for Active sessions), then wraps it in a LiveInstance.
-func newLiveInstance(data domain.InstanceData, storage *Storage) (*LiveInstance, error) {
+func newLiveInstance(data domain.InstanceData, storage *Storage) (*instance.LiveInstance, error) {
 	rows := []domain.InstanceData{data}
 	storage.hydrateSessionPRs(context.Background(), rows) // single-session read; LoadInstances does the bulk one
-	inst, err := FromInstanceData(rows[0])
+	inst, err := instance.FromInstanceData(rows[0])
 	if err != nil {
 		return nil, err
 	}
@@ -333,5 +334,5 @@ func newLiveInstance(data domain.InstanceData, storage *Storage) (*LiveInstance,
 	inst.SetShellRepository(storage.Repo)
 	inst.SetInitialPromptRepository(storage.Repo)
 	inst.SetPRPersister(storage)
-	return NewLiveInstance(inst), nil
+	return instance.NewLiveInstance(inst), nil
 }

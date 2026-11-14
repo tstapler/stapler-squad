@@ -13,8 +13,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type prSpec struct {
@@ -25,9 +25,9 @@ type prSpec struct {
 
 // addLivePRSession persists a session with the given PR links and registers the
 // reloaded (hydrated, persister-wired) instance with the live poller.
-func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, prs ...prSpec) *session.Instance {
+func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, prs ...prSpec) *instance.Instance {
 	t.Helper()
-	inst := &session.Instance{Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Stopped, Program: "claude",
+	inst := &instance.Instance{Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Stopped, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: "acme", GitHubRepo: "app"}
 	require.NoError(t, fix.storage.AddInstance(inst))
 	for _, p := range prs {
@@ -35,7 +35,7 @@ func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, pr
 		require.NoError(t, err)
 		_, err = fix.storage.AttachSessionPR(context.Background(), uuid, ref,
 			domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery,
-				Initial: domain.PRInitial{State: p.state, Terminal: p.terminal}}, session.PRMirror{})
+				Initial: domain.PRInitial{State: p.state, Terminal: p.terminal}}, instance.PRMirror{})
 		require.NoError(t, err)
 	}
 	loaded, err := fix.storage.LoadInstances()
@@ -86,7 +86,7 @@ func TestDetachSessionPullRequest_ShouldDeleteOneLinkAndTombstoneInOneTxn(t *tes
 	assert.Equal(t, []int{11}, prNumbers(inst))
 }
 
-func prNumbers(inst *session.Instance) []int {
+func prNumbers(inst *instance.Instance) []int {
 	prs := inst.Snapshot().GitHub.PRs
 	out := make([]int, 0, len(prs))
 	for _, v := range prs {
@@ -197,7 +197,7 @@ func TestRefreshSessionPullRequests_ShouldRefreshOpenAndUnverifiedRowsOnly_WhenC
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err), "no refresher wired")
 
 	var polled []int
-	fix.svc.SetPRRefreshFunc(func(_ context.Context, _ *session.Instance, ref domain.PRRef) error {
+	fix.svc.SetPRRefreshFunc(func(_ context.Context, _ *instance.Instance, ref domain.PRRef) error {
 		polled = append(polled, ref.Number())
 		return nil
 	})

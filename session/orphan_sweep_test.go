@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -83,13 +84,13 @@ exit 1
 	require.NoError(t, os.WriteFile(fakeTmux, []byte(script), 0o755))
 	t.Setenv("TMUX_BIN", fakeTmux)
 
-	inst := &Instance{}
-	inst.AddStoppedShellForTest(&Shell{
+	inst := &instance.Instance{}
+	inst.AddStoppedShellForTest(&instance.Shell{
 		ID:              "shell-1",
 		TmuxSessionName: "staplersquad_parent_shell_shell-1",
 	})
 
-	ReconcileOrphanedTmuxSessions([]*Instance{inst}, 0)
+	ReconcileOrphanedTmuxSessions([]*instance.Instance{inst}, 0)
 
 	logBytes, err := os.ReadFile(logPath)
 	require.NoError(t, err)
@@ -204,14 +205,14 @@ func (f *fakeTmux) killTargets() []string {
 
 // namedPM gives a bare Instance a fixed tmux session name.
 type namedPM struct {
-	ProcessManager
+	instance.ProcessManager
 	id string
 }
 
 func (p namedPM) GetSessionIdentifier() string { return p.id }
 
-func liveInstance(tmuxName string) *Instance {
-	return (&Instance{Title: tmuxName}).WithProcessManagerForTest(namedPM{id: tmuxName})
+func liveInstance(tmuxName string) *instance.Instance {
+	return (&instance.Instance{Title: tmuxName}).WithProcessManagerForTest(namedPM{id: tmuxName})
 }
 
 func sweepNow() time.Time { return time.Unix(2_000_000_000, 0) }
@@ -223,7 +224,7 @@ func TestReconcileOrphans_should_NotKillLiveSessions_When_TmuxMangledSeparatorTo
 	live := liveInstance("staplersquad_dotfiles")
 	f := &fakeTmux{list: "staplersquad_dotfiles_1793909015\nstaplersquad_keepalive_1793846962\n", envFails: true, envErr: "no such session"}
 
-	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+	reconcileOrphanedTmuxSessions([]*instance.Instance{live}, 5*time.Minute, f.run, sweepNow)
 
 	require.Empty(t, f.killTargets(), "mangled name_epoch lines must never reach kill-session")
 }
@@ -233,7 +234,7 @@ func TestReconcileOrphans_should_ReapTrueOrphan_When_OlderThanMinAge(t *testing.
 	live := liveInstance("staplersquad_dotfiles")
 	f := &fakeTmux{list: "staplersquad_dotfiles|1793909015\nstaplersquad_keepalive|1793846962\nstaplersquad_ghost|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
 
-	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+	reconcileOrphanedTmuxSessions([]*instance.Instance{live}, 5*time.Minute, f.run, sweepNow)
 
 	require.Equal(t, []string{"=staplersquad_ghost"}, f.killTargets(), "only the true orphan is killed, with an exact-match target")
 }
@@ -270,7 +271,7 @@ func TestReconcileOrphans_should_NotKill_When_UUIDMatchesKnownSession(t *testing
 	live.UUID = "uuid-1"
 	f := &uuidFake{fakeTmux: fakeTmux{list: "staplersquad_renamed|1793909015\n"}}
 
-	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+	reconcileOrphanedTmuxSessions([]*instance.Instance{live}, 5*time.Minute, f.run, sweepNow)
 
 	require.Empty(t, f.killTargets())
 }
@@ -280,7 +281,7 @@ func TestReconcileOrphans_should_NotKill_When_NameIsKnownNameWithFusedEpoch(t *t
 	live := liveInstance("staplersquad_dotfiles")
 	f := &fakeTmux{list: "staplersquad_dotfiles_1793909015|1793909015\n", envFails: true, envErr: "unknown variable: STAPLER_SESSION_UUID"}
 
-	reconcileOrphanedTmuxSessions([]*Instance{live}, 5*time.Minute, f.run, sweepNow)
+	reconcileOrphanedTmuxSessions([]*instance.Instance{live}, 5*time.Minute, f.run, sweepNow)
 
 	require.Empty(t, f.killTargets())
 }
@@ -385,7 +386,7 @@ func TestControlModeRunner_should_NotRetryOnExec_When_TmuxRejectedTheCommand(t *
 
 func TestReconcileOrphans_should_IssueOneTmuxCommand_When_AllSessionsAreKnown(t *testing.T) {
 	t.Parallel()
-	var instances []*Instance
+	var instances []*instance.Instance
 	var list strings.Builder
 	for i := 0; i < 20; i++ {
 		title := fmt.Sprintf("sess%d", i)
@@ -401,7 +402,7 @@ func TestReconcileOrphans_should_IssueOneTmuxCommand_When_AllSessionsAreKnown(t 
 
 // accessorPM exposes a fixed *tmux.TmuxSession, like TmuxBackend does.
 type accessorPM struct {
-	ProcessManager
+	instance.ProcessManager
 	ts *tmux.TmuxSession
 }
 
@@ -412,10 +413,10 @@ func TestControlModeSessionsOn_should_FilterBySocketAndSkipInstancesWithoutTmuxS
 	t.Parallel()
 	onDefault := tmux.NewTmuxSessionWithServerSocket("a", "true", tmux.TmuxPrefix, "ssq-default")
 	onOther := tmux.NewTmuxSessionWithServerSocket("b", "true", tmux.TmuxPrefix, "ssq-other")
-	instances := []*Instance{
-		(&Instance{}).WithProcessManagerForTest(accessorPM{ts: onDefault}),
-		(&Instance{}).WithProcessManagerForTest(accessorPM{ts: onOther}),
-		(&Instance{}).WithProcessManagerForTest(accessorPM{ts: nil}),
+	instances := []*instance.Instance{
+		(&instance.Instance{}).WithProcessManagerForTest(accessorPM{ts: onDefault}),
+		(&instance.Instance{}).WithProcessManagerForTest(accessorPM{ts: onOther}),
+		(&instance.Instance{}).WithProcessManagerForTest(accessorPM{ts: nil}),
 		liveInstance("staplersquad_noaccessor"),
 	}
 

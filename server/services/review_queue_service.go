@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -157,7 +158,7 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 	// Look up the live in-memory instance from the poller first. This avoids calling
 	// LoadInstances(), which constructs fresh Instance objects from the database and
 	// discards the live PTY/controller state held by instances already in the poller.
-	var instance *session.Instance
+	var instance *instance.Instance
 	if rqs.reviewQueuePoller != nil {
 		instance = rqs.reviewQueuePoller.FindInstance(req.Msg.Id)
 	}

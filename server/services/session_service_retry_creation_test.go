@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -33,7 +34,7 @@ import (
 // -- exercising the pipeline against an under-initialized hand-built
 // instance is what a bare session.NewInstance fixture would do, and it
 // panics deep in Instance.Start()'s post-start wiring.
-func newRetryTestInstance(t *testing.T, svc *SessionService, storage *session.Storage, title string) *session.Instance {
+func newRetryTestInstance(t *testing.T, svc *SessionService, storage *session.Storage, title string) *instance.Instance {
 	t.Helper()
 	// A Registry is required for CreateManagedInstance to wrap the new
 	// instance in a session.LiveInstance (session/create_managed_instance.go

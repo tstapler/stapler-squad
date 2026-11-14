@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func itemInStatus(t *testing.T, f *itemPRFixture, status domain.BacklogStatus) *backlogdto.BacklogItemData {
@@ -88,7 +89,7 @@ func TestSetPRAndTransition_ShouldAttachFollowupAndKeepPending_WhenAdditive(t *t
 	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status, "status unchanged")
 	assert.Equal(t, 22, got.PrNumber, "the mirror follows the derived active PR (open #22 outranks merged #21)")
 	assert.ElementsMatch(t, []int{21, 22}, itemLinkNumbers(t, f))
-	assert.Equal(t, ItemVerdictOpen, f.verdict())
+	assert.Equal(t, instance.ItemVerdictOpen, f.verdict())
 	views, _ := f.repo.ListByItem(ctx, f.itemID)
 	for _, v := range views {
 		if v.Ref.Number() == 22 {

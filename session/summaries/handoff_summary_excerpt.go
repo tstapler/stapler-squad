@@ -2,7 +2,7 @@ package summaries
 
 import (
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -21,9 +21,9 @@ const (
 // tail slice so a handoff summary can carry the start and end of a session
 // verbatim while pruning/budgeting the (usually much larger) middle.
 type TranscriptWindow struct {
-	Head   []session.ClaudeConversationMessage
-	Middle []session.ClaudeConversationMessage
-	Tail   []session.ClaudeConversationMessage
+	Head   []instance.ClaudeConversationMessage
+	Middle []instance.ClaudeConversationMessage
+	Tail   []instance.ClaudeConversationMessage
 }
 
 // buildTranscriptWindow splits messages (chronological order) into Head,
@@ -32,7 +32,7 @@ type TranscriptWindow struct {
 // with no overlap, leaving Middle empty. Otherwise Head is the first
 // headMessageCount messages, Tail is the last tailMessageCount messages, and
 // Middle is everything in between.
-func buildTranscriptWindow(messages []session.ClaudeConversationMessage) TranscriptWindow {
+func buildTranscriptWindow(messages []instance.ClaudeConversationMessage) TranscriptWindow {
 	if len(messages) <= headMessageCount+tailMessageCount {
 		half := len(messages) / 2
 		return TranscriptWindow{
@@ -64,8 +64,8 @@ func pruneExcerptText(content string) string {
 // maxExcerptMessageBytes. Unlike applySummaryBudget, this never drops
 // messages -- it only caps each one's content -- so it's the right building
 // block for Head/Tail, which must stay verbatim in count.
-func pruneMessages(messages []session.ClaudeConversationMessage) []session.ClaudeConversationMessage {
-	pruned := make([]session.ClaudeConversationMessage, len(messages))
+func pruneMessages(messages []instance.ClaudeConversationMessage) []instance.ClaudeConversationMessage {
+	pruned := make([]instance.ClaudeConversationMessage, len(messages))
 	for i, msg := range messages {
 		msg.Content = pruneExcerptText(msg.Content)
 		pruned[i] = msg
@@ -87,7 +87,7 @@ type SummaryBudget struct {
 // sumContentBytes returns the total byte length of every message's Content,
 // unpruned. Used by newSummaryBudget to size the excerpt budget against the
 // real, pre-pruning size of the transcript being compressed.
-func sumContentBytes(messages []session.ClaudeConversationMessage) int {
+func sumContentBytes(messages []instance.ClaudeConversationMessage) int {
 	total := 0
 	for _, msg := range messages {
 		total += len(msg.Content)
@@ -119,7 +119,7 @@ func newSummaryBudget(cfg config.HandoffSummaryConfig, totalTranscriptBytes int)
 // until the total pruned content length is at or under
 // budget.MiddleExcerptMaxBytes. It never splits a single message's content,
 // so the retained messages are always a suffix of the original slice.
-func applySummaryBudget(middle []session.ClaudeConversationMessage, budget SummaryBudget) []session.ClaudeConversationMessage {
+func applySummaryBudget(middle []instance.ClaudeConversationMessage, budget SummaryBudget) []instance.ClaudeConversationMessage {
 	pruned := pruneMessages(middle)
 
 	total := 0

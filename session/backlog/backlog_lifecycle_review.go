@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ReviewRespawner can automatically re-trigger the review gate for a backlog
@@ -76,10 +77,10 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 	var workEntry *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		s := &sessions[i]
-		if s.SessionUUID == reviewIS.SessionUUID && s.Role == session.SessionRoleReview {
+		if s.SessionUUID == reviewIS.SessionUUID && s.Role == instance.SessionRoleReview {
 			reviewEntry = s
 		}
-		if s.Role == session.SessionRoleWork {
+		if s.Role == instance.SessionRoleWork {
 			workEntry = s
 		}
 	}
@@ -601,7 +602,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 			ID:            latest.ID.String(),
 			BacklogItemID: item.ID.String(),
 			SessionUUID:   latest.SessionUUID,
-			Role:          string(session.SessionRoleReview),
+			Role:          string(instance.SessionRoleReview),
 		}, true)
 	}
 }
@@ -830,7 +831,7 @@ func (l *BacklogLifecycleListener) ReserveReview(ctx context.Context, itemID str
 			return false
 		}
 		for _, s := range sessions {
-			if s.Role == session.SessionRoleReview && s.EndedAt == nil {
+			if s.Role == instance.SessionRoleReview && s.EndedAt == nil {
 				return true
 			}
 		}

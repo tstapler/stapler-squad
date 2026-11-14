@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -190,7 +191,7 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 // watchForNewSessions watches for state.json file changes and updates instances accordingly
 func watchForNewSessions(
 	watcher *fsnotify.Watcher,
-	instances *[]*session.Instance,
+	instances *[]*instance.Instance,
 	storage *session.Storage,
 	cfg *config.Config,
 	stopCh <-chan struct{},
@@ -283,7 +284,7 @@ func watchForNewSessions(
 }
 
 // detectAndAddNewSessions checks for new sessions and adds them to the current instances
-func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *session.Storage) error {
+func detectAndAddNewSessions(currentInstances *[]*instance.Instance, storage *session.Storage) error {
 	// State refreshing is now handled automatically in GetInstances()
 
 	// Load the latest instances from the refreshed state
@@ -299,7 +300,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 	}
 
 	// Find any new instances not in our current list
-	newInstances := []*session.Instance{}
+	newInstances := []*instance.Instance{}
 	for _, instance := range newlyLoadedInstances {
 		if !existingTitles[instance.Title] {
 			log.Info("detected new session", "session", instance.Title, "status", instance.Status)

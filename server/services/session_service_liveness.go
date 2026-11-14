@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -24,7 +25,7 @@ import (
 // or nil if the poller is not wired or the session is not found. Use this instead of
 // LoadInstances() for read-only and mutation operations that need the live instance
 // (with its PTY handles and controller state).
-func (s *SessionService) FindLiveInstance(id string) *session.Instance {
+func (s *SessionService) FindLiveInstance(id string) *instance.Instance {
 	if s.ReviewQueuePoller == nil {
 		return nil
 	}
@@ -46,7 +47,7 @@ func (s *SessionService) LiveSnapshot(sessionUUID string) (*domain.InstanceSnaps
 // below that resolves a request's Id (UUID or legacy title) against an
 // already-loaded instance list (an already-live FindLiveInstance miss, a
 // LoadInstances() call, or the poller's GetInstances() snapshot).
-func findInstanceByID(instances []*session.Instance, id string) *session.Instance {
+func findInstanceByID(instances []*instance.Instance, id string) *instance.Instance {
 	for _, inst := range instances {
 		if inst.MatchesID(id) {
 			return inst
@@ -146,7 +147,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 		if archived {
 			log.Info("ArchiveSessionByUUID: archived via storage-only fallback (session not in live poller)", "uuid", sessionUUID)
 			if reInst := s.findLifecycleInstance(nil, sessionUUID); reInst != nil {
-				if err := s.storage.SaveInstances([]*session.Instance{reInst}); err != nil {
+				if err := s.storage.SaveInstances([]*instance.Instance{reInst}); err != nil {
 					return fmt.Errorf("failed to re-save resumed session %s after storage fallback race: %w", sessionUUID, err)
 				}
 			}
@@ -159,7 +160,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 	if !inst.SetArchivedAtIfNilAndStop(time.Now()) {
 		return nil // already archived
 	}
-	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return fmt.Errorf("failed to save archived session %s: %w", sessionUUID, err)
 	}
 	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale
@@ -172,7 +173,7 @@ func (s *SessionService) ArchiveSessionByUUID(ctx context.Context, sessionUUID s
 // stopGuardrailSession ends the backlog ItemSession with reason (so the
 // orchestrator's reconcilers see why it stopped and can respawn or flag the
 // item) and then kills the live session.
-func stopGuardrailSession(ctx context.Context, st *session.Storage, inst *session.Instance, reason string) error {
+func stopGuardrailSession(ctx context.Context, st *session.Storage, inst *instance.Instance, reason string) error {
 	var endErr error
 	is, err := st.GetItemSessionBySessionUUID(ctx, inst.Snapshot().UUID)
 	switch {
@@ -224,7 +225,7 @@ func (s *SessionService) StopSessionByUUID(ctx context.Context, sessionUUID stri
 // touches the worktree) and StopSessionByUUID's existing best-effort,
 // error-dropped cleanup call sites, but not a source of truth for worktree
 // deletion.
-func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *session.Instance {
+func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *instance.Instance {
 	if inst := s.FindLiveInstance(sessionUUID); inst != nil {
 		return inst
 	}
@@ -235,7 +236,7 @@ func (s *SessionService) findConfirmedLiveInstance(sessionUUID string) *session.
 	if err != nil || data == nil {
 		return nil
 	}
-	shadow, err := session.FromInstanceDataDeferred(*data)
+	shadow, err := instance.FromInstanceDataDeferred(*data)
 	if err != nil {
 		return nil
 	}
@@ -422,7 +423,7 @@ func (s *SessionService) claimConversationUUID(candidateUUID, selfUUID string) (
 // every worktree-deleting path: MCP pause/stop, RPC UpdateSession, and
 // DeleteSession. inst may be nil (no live Instance to inspect) — returns
 // nil, same as a non-worktree session.
-func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) error {
+func (s *SessionService) RefuseIfWorktreeSharedWithOtherLiveSession(inst *instance.Instance) error {
 	if inst == nil || !inst.HasGitWorktree() {
 		return nil
 	}

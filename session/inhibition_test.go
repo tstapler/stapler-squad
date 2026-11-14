@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 )
 
@@ -21,12 +22,12 @@ func TestInhibitionEngine(t *testing.T) {
 	t.Run("SanitizeTurn redacts CanonicalBlocks", func(t *testing.T) {
 		rawArgs := json.RawMessage(`{"token": "Bearer secret_token_value", "public": "hello"}`)
 
-		turn := CanonicalTurn{
-			Role: RoleUser,
-			Blocks: []CanonicalBlock{
-				NewTextBlock("Here is password=secretpassword123"),
-				NewToolUseBlock("tool-1", "test_tool", rawArgs),
-				NewToolResultBlock("tool-1", "test_tool", "Result with sk-abcdefghijklmnopqrstuvwxyz", false),
+		turn := instance.CanonicalTurn{
+			Role: instance.RoleUser,
+			Blocks: []instance.CanonicalBlock{
+				instance.NewTextBlock("Here is password=secretpassword123"),
+				instance.NewToolUseBlock("tool-1", "test_tool", rawArgs),
+				instance.NewToolResultBlock("tool-1", "test_tool", "Result with sk-abcdefghijklmnopqrstuvwxyz", false),
 			},
 		}
 

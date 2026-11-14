@@ -36,6 +36,7 @@ go_test(
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",
+        "//session/instance",
         "//session/internal/sessiontest",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",

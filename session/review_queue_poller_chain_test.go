@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -12,7 +13,7 @@ import (
 // pinned independently of terminal detection.
 type stubDeterminer struct{ result DetectionResult }
 
-func (s stubDeterminer) Determine(*Instance, string, InstanceStatusInfo, detection.TerminalDetector, DeterminerOptions) DetectionResult {
+func (s stubDeterminer) Determine(*instance.Instance, string, instance.InstanceStatusInfo, detection.TerminalDetector, DeterminerOptions) DetectionResult {
 	return s.result
 }
 
@@ -126,7 +127,7 @@ func TestCheckSession_Should_PreserveCharacterizedSuppressionChain_When_Refactor
 	for _, tc := range chainCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := startedInstance("s", func(inst *Instance, now time.Time) {
+			inst := startedInstance("s", func(inst *instance.Instance, now time.Time) {
 				if tc.outputAgo != 0 {
 					inst.LastMeaningfulOutput = now.Add(-tc.outputAgo)
 				}
@@ -138,7 +139,7 @@ func TestCheckSession_Should_PreserveCharacterizedSuppressionChain_When_Refactor
 				}
 			})
 
-			poller := NewReviewQueuePoller(queue.NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
+			poller := NewReviewQueuePoller(queue.NewReviewQueue(), newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 				"s": {IsControllerActive: tc.controllerActive},
 			}), nil)
 			poller.SetOptionsSource(func() (DeterminerOptions, RuleOptions) {

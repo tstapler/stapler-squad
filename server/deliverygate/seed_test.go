@@ -4,12 +4,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func newHiddenInstance(t *testing.T, title string, tags ...string) *session.Instance {
+func newHiddenInstance(t *testing.T, title string, tags ...string) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   title,
 		Path:    t.TempDir(),
 		Program: "claude",
@@ -27,7 +27,7 @@ func newHiddenInstance(t *testing.T, title string, tags ...string) *session.Inst
 func TestSeedFromInstances_ShouldResolveHiddenByAllIdentityForms_WhenRealInstancesSeeded(t *testing.T) {
 	t.Parallel()
 	hidden := newHiddenInstance(t, "review-x", "backlog:review")
-	visible, err := session.NewInstance(session.InstanceOptions{Title: "work-y", Path: t.TempDir(), Program: "claude"})
+	visible, err := instance.NewInstance(instance.InstanceOptions{Title: "work-y", Path: t.TempDir(), Program: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestSeedFromInstances_ShouldResolveHiddenByAllIdentityForms_WhenRealInstanc
 	g.index = NewVisibilityIndex(g.now)
 	g.resolver = newResolver(g.index, g.metrics, g.now)
 
-	g.SeedFromInstances([]*session.Instance{hidden, visible, nil})
+	g.SeedFromInstances([]*instance.Instance{hidden, visible, nil})
 	if !g.Seeded() {
 		t.Fatal("not seeded")
 	}
@@ -73,7 +73,7 @@ func TestSeed_ShouldReadHiddenViaSnapshot_WhenInstanceMutatedConcurrently(t *tes
 		}
 	}()
 	for i := 0; i < 200; i++ {
-		g.SeedFromInstances([]*session.Instance{inst})
+		g.SeedFromInstances([]*instance.Instance{inst})
 		g.UpsertInstance(inst)
 	}
 	close(stop)

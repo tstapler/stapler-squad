@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- rule (a): legacy writer names ---------------------------------------------
@@ -274,7 +274,7 @@ func Dynamic(c string)  { _ = TransitionRequest{Caller: pick(c)} }
 }
 
 func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t *testing.T) {
-	for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, "robot", ""} {
+	for _, actor := range []string{instance.TriggeredByUser, instance.TriggeredByAgent, instance.TriggeredBySystem, "robot", ""} {
 		ctx := WithTransitionActor(t.Context(), actor)
 		_, ok := domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)

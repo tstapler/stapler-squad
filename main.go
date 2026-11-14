@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -207,7 +208,7 @@ var (
 			// for tymuxNeeded's startup-supervision decision below: whether
 			// tymuxd needs to be running *right now*, given the flag's value at
 			// this instant.
-			resolvedBackend := session.ResolveSessionBackend(cfg, "", "")
+			resolvedBackend := instance.ResolveSessionBackend(cfg, "", "")
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -442,7 +443,7 @@ var (
 					}
 					tymux.MonitorDaemon(ctx, daemonCfg, func() bool {
 						current := config.LoadConfig()
-						if tymuxNeeded(current, session.ResolveSessionBackend(current, "", "")) {
+						if tymuxNeeded(current, instance.ResolveSessionBackend(current, "", "")) {
 							return true
 						}
 						rows, err := coreDeps.Storage.ListInstanceData()

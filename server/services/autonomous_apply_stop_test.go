@@ -10,16 +10,17 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func newApplyStopFixture(t *testing.T) (*AutonomousOrchestrationService, *session.Instance, *session.LiveInstance, <-chan *events.Event) {
+func newApplyStopFixture(t *testing.T) (*AutonomousOrchestrationService, *instance.Instance, *instance.LiveInstance, <-chan *events.Event) {
 	t.Helper()
 	bus := events.NewEventBus(100)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ch, _ := bus.Subscribe(ctx)
-	inst := &session.Instance{Title: "apply-stop", UUID: "apply-stop-uuid", Status: domain.Paused, Program: "claude"}
-	li := session.NewLiveInstance(inst)
+	inst := &instance.Instance{Title: "apply-stop", UUID: "apply-stop-uuid", Status: domain.Paused, Program: "claude"}
+	li := instance.NewLiveInstance(inst)
 	t.Cleanup(li.Stop)
 	inst.SetAutonomousMode(true, "")
 	inst.SetAutonomousTurn(3, 20)

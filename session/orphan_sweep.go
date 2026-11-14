@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -51,7 +52,7 @@ import (
 // this race cannot occur (no new session creation is possible before BuildRuntimeDeps
 // finishes). Any periodic caller MUST pass a nonzero minAge (production passes
 // orphanTmuxMinAge, 5m). The unparseable-created-time skip applies only when minAge > 0.
-func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) {
+func ReconcileOrphanedTmuxSessions(instances []*instance.Instance, minAge time.Duration) {
 	// Resolve once, here -- not per-command below. This is what actually makes this
 	// function test-safe: inside a `go test` binary it targets a per-process
 	// isolated socket instead of the real shared default, so it can never again
@@ -74,7 +75,7 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration) 
 
 // controlModeSessionsOn returns the live tmux sessions whose control-mode client is
 // attached to the server on socket, so the sweep can reuse them instead of forking.
-func controlModeSessionsOn(instances []*Instance, socket string) []*tmux.TmuxSession {
+func controlModeSessionsOn(instances []*instance.Instance, socket string) []*tmux.TmuxSession {
 	var out []*tmux.TmuxSession
 	for _, inst := range instances {
 		if ts := inst.GetTmuxSession(); ts != nil && ts.ServerSocket() == socket {
@@ -201,7 +202,7 @@ type knownSessions struct {
 	names map[string]struct{}
 }
 
-func collectKnownSessions(instances []*Instance) knownSessions {
+func collectKnownSessions(instances []*instance.Instance) knownSessions {
 	k := knownSessions{
 		uuids: make(map[string]struct{}, len(instances)),
 		names: map[string]struct{}{tmux.TmuxPrefix + "keepalive": {}},
@@ -340,7 +341,7 @@ func (k knownSessions) decide(run tmuxRunFunc, c sessionLine, minAge time.Durati
 	return k.classifyByUUID(run, "="+c.name) // "=" targets the exact name; plain -t prefix/glob-matches
 }
 
-func reconcileOrphanedTmuxSessions(instances []*Instance, minAge time.Duration, run tmuxRunFunc, now func() time.Time) {
+func reconcileOrphanedTmuxSessions(instances []*instance.Instance, minAge time.Duration, run tmuxRunFunc, now func() time.Time) {
 	known := collectKnownSessions(instances)
 
 	// #{session_created} (unix seconds) rides along in the same call so the age

@@ -15,6 +15,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // lockedBuffer is a slog sink safe for the poller's goroutines writing while the test reads.
@@ -105,17 +106,17 @@ func newTagPollerFixture(fake *fakeTagPoolClient, outputTags ...string) tagPolle
 
 // primedInstance builds a bare Instance with a snapshot immediately published so
 // SessionTagClassificationPoller.pollOnce sees the given field values on its first tick.
-func primedInstance(title string, branch string) *Instance {
-	inst := &Instance{Title: title, Branch: branch}
-	inst.MutateForTest(func(*Instance) {})
+func primedInstance(title string, branch string) *instance.Instance {
+	inst := &instance.Instance{Title: title, Branch: branch}
+	inst.MutateForTest(func(*instance.Instance) {})
 	return inst
 }
 
 // renameAndResnapshot mutates title/branch directly and republishes the snapshot (test-only,
 // same-package access), mirroring instance_snapshot_test.go's own convention for forcing a
 // snapshot rebuild without going through the actor mailbox.
-func renameAndResnapshot(inst *Instance, title, branch string) {
-	inst.MutateForTest(func(i *Instance) {
+func renameAndResnapshot(inst *instance.Instance, title, branch string) {
+	inst.MutateForTest(func(i *instance.Instance) {
 		if title != "" {
 			i.Title = title
 		}
@@ -146,7 +147,7 @@ func TestSessionTagPoller_should_SkipLLMCall_When_AlreadyClassified(t *testing.T
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 1 {
@@ -164,7 +165,7 @@ func TestSessionTagPoller_should_CallLLMAndUpdateCache_When_ContentHashChanged(t
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]},{"name":"sess-1-renamed","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 1 {
@@ -174,7 +175,7 @@ func TestSessionTagPoller_should_CallLLMAndUpdateCache_When_ContentHashChanged(t
 	// Simulate a rename: the new title has no cache entry, so classify-once does not cover
 	// it and the next tick classifies it (renames are deliberate, not flaps).
 	renameAndResnapshot(inst, "sess-1-renamed", "")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 2 {
@@ -187,8 +188,8 @@ func TestSessionTagPoller_should_KeepExistingTagsAndBackOff_When_LLMCallFails(t 
 	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-2", "feature/x")
-	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
-	fx.poller.SetInstances([]*Instance{inst})
+	inst.ApplyLLMTagResult([]string{"Feature"}, instance.LlmSentinelRuleID)
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 
@@ -211,8 +212,8 @@ func TestSessionTagPoller_should_ReturnErrClassificationDegraded_When_ClassifyNo
 	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-3", "feature/x")
-	inst.ApplyLLMTagResult([]string{"Feature"}, llmSentinelRuleID)
-	fx.poller.SetInstances([]*Instance{inst})
+	inst.ApplyLLMTagResult([]string{"Feature"}, instance.LlmSentinelRuleID)
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	err := fx.poller.ClassifyNow(context.Background(), "sess-3")
 
@@ -236,7 +237,7 @@ func TestSessionTagPoller_should_LogFailedUnclassifiedOutcome_When_GenerateSessi
 	fake := &fakeTagPoolClient{err: errors.New("fake pool client error")}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-degraded", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 
@@ -257,7 +258,7 @@ func TestSessionTagPoller_should_LogAppliedOutcome_When_ModelLegitimatelyReturns
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-genuine-unclassified","tags":["Unclassified"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-genuine-unclassified", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 
@@ -293,7 +294,7 @@ func TestSessionTagPoller_should_RecomputeVocabularyFromLiveEngine_When_RuleAdde
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-3","tags":["Hotfix"]},{"name":"sess-4","tags":["Hotfix"]}]}`}
 	fx := newTagPollerFixture(fake, "Bugfix", "Feature")
 	inst := primedInstance("sess-3", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 	firstVocab := vocabularyFromPrompt(fake.userPrompt())
@@ -311,7 +312,7 @@ func TestSessionTagPoller_should_RecomputeVocabularyFromLiveEngine_When_RuleAdde
 		RuleMeta:  classifier.RuleMeta{ID: "rule-hotfix", Name: "Hotfix", Priority: 1, Enabled: true, Source: "user"},
 		OutputTag: "Hotfix",
 	}})
-	fx.poller.SetInstances([]*Instance{inst, primedInstance("sess-4", "hotfix/y")})
+	fx.poller.SetInstances([]*instance.Instance{inst, primedInstance("sess-4", "hotfix/y")})
 
 	fx.poller.pollOnce()
 	secondVocab := vocabularyFromPrompt(fake.userPrompt())
@@ -339,7 +340,7 @@ func TestSessionTagPoller_should_IssueOneCall_When_MultipleSessionsChanged(t *te
 		{"name":"sess-b","tags":["Bugfix"]},
 		{"name":"sess-c","tags":["Unclassified"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature", "Bugfix")
-	fx.poller.SetInstances([]*Instance{
+	fx.poller.SetInstances([]*instance.Instance{
 		primedInstance("sess-a", "feature/x"),
 		primedInstance("sess-b", "bugfix/y"),
 		primedInstance("sess-c", "main"),
@@ -371,7 +372,7 @@ func TestSessionTagPoller_should_DeferSurplusSessions_When_ChangedExceedBatchSiz
 	fx.poller.config.MinReclassifyInterval = 0
 	instA := primedInstance("sess-a", "feature/x")
 	instB := primedInstance("sess-b", "feature/y")
-	fx.poller.SetInstances([]*Instance{instA, instB})
+	fx.poller.SetInstances([]*instance.Instance{instA, instB})
 
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 1 {
@@ -400,7 +401,7 @@ func TestSessionTagPoller_should_NeverReclassify_When_AlreadyApplied(t *testing.
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 1 {
@@ -422,10 +423,10 @@ func TestSessionTagPoller_should_RetryDegraded_When_BackoffExpired(t *testing.T)
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	// Seed a degraded entry as if the last attempt failed just now.
-	fx.poller.cache.Store("sess-1", cachedTagResult{tags: []string{UnclassifiedTag}, classifiedAt: time.Now(), applied: false})
+	fx.poller.cache.Store("sess-1", cachedTagResult{tags: []string{instance.UnclassifiedTag}, classifiedAt: time.Now(), applied: false})
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 0 {
 		t.Fatalf("tick inside degraded backoff: CallBlocking called %d times, want 0", got)
@@ -500,7 +501,7 @@ func TestSessionTagPoller_should_ClassifySynchronously_When_ClassifyNowCalled(t 
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
 	inst := primedInstance("sess-1", "feature/x")
-	fx.poller.SetInstances([]*Instance{inst})
+	fx.poller.SetInstances([]*instance.Instance{inst})
 
 	fx.poller.pollOnce()
 	renameAndResnapshot(inst, "", "feature/y")
@@ -532,7 +533,7 @@ func TestSessionTagPoller_should_NotLogClassificationLines_When_NothingChanged(t
 
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
 	fx := newTagPollerFixture(fake, "Feature")
-	fx.poller.SetInstances([]*Instance{primedInstance("sess-1", "feature/x")})
+	fx.poller.SetInstances([]*instance.Instance{primedInstance("sess-1", "feature/x")})
 
 	fx.poller.pollOnce() // classifies: one INFO classification line expected
 	if got := fake.callCount(); got != 1 {

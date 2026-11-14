@@ -7,14 +7,14 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // ExternalPaneTarget is what an external-pane resize needs from a terminal attach.
 type ExternalPaneTarget struct {
-	Instance    *session.Instance
+	Instance    *instance.Instance
 	Snap        *domain.InstanceSnapshot
 	TmuxSession string
 	SessionID   string

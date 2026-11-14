@@ -11,8 +11,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Story 5.2 unary guards: a hidden (background) session is read-only for the UI
@@ -31,23 +31,23 @@ func TestWriteToSession_ShouldReturnFailedPreconditionWhenHiddenAndSucceedWhenVi
 	hidden := e.addSession("wts-hidden", true, "")
 	visible := e.addSession("wts-visible", false, "")
 	ts := newLeaseTerminalService(t, hidden.inst)
-	ts.poller.SetInstances([]*session.Instance{hidden.inst, visible.inst})
+	ts.poller.SetInstances([]*instance.Instance{hidden.inst, visible.inst})
 	ts.SetGuardsFlag(e.fix.svc.guards)
 
 	_, err := ts.WriteToSession(context.Background(), writeToSessionReq("wts-hidden"))
 	requireReadOnlyRefusal(t, err, "hidden")
 	assert.Empty(t, hidden.pm.writes())
-	session.AssertLeaseFree(t, hidden.inst)
+	instance.AssertLeaseFree(t, hidden.inst)
 
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("wts-visible"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ls", session.EnterKeySequence}, visible.pm.writes())
+	assert.Equal(t, []string{"ls", instance.EnterKeySequence}, visible.pm.writes())
 }
 
 // T-RO-13
 func TestRestartSessionAndShell_ShouldReturnFailedPrecondition_WhenHiddenAndInternalCallersUnaffected(t *testing.T) {
 	fix := setupShellsFixture(t)
-	hidden := &session.Instance{
+	hidden := &instance.Instance{
 		Title: "restart-hidden", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		Hidden: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -76,7 +76,7 @@ func TestSwitchWorkspace_ShouldReturnFailedPreconditionWithZeroWritesZeroCheckpo
 	e := newSteerEnv(t)
 	hidden := e.addSession("switch-hidden", true, "")
 	// Paused, so the visible switch takes no checkpoint through the fake pane.
-	e.addSession("switch-visible", false, "", func(i *session.Instance) { i.Status = domain.Paused })
+	e.addSession("switch-visible", false, "", func(i *instance.Instance) { i.Status = domain.Paused })
 
 	types := map[string]sessionv1.WorkspaceSwitchType{
 		"directory": sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_DIRECTORY,
@@ -142,9 +142,9 @@ func TestUpdateSession_ShouldReturnFailedPreconditionWithZeroRestartsZeroMarkers
 
 // T-RO-32
 func TestGuardsFlag_ShouldBeAnInjectedInterfaceNotABoolAndFailClosed_WhenConfigUnreadable(t *testing.T) {
-	hidden := session.NewStartedInstanceForTest(t, "flag-hidden", &steerRecordingPM{})
+	hidden := instance.NewStartedInstanceForTest(t, "flag-hidden", &steerRecordingPM{})
 	hidden.Hidden = true
-	visible := session.NewStartedInstanceForTest(t, "flag-visible", &steerRecordingPM{})
+	visible := instance.NewStartedInstanceForTest(t, "flag-visible", &steerRecordingPM{})
 
 	assert.Equal(t, TerminalReadOnly, AccessForUnary(nil, nil))
 	assert.Equal(t, TerminalReadOnly, AccessForUnary(hidden, nil), "no flag injected: guards on")
@@ -164,9 +164,9 @@ func TestGuardsFlag_ShouldBeAnInjectedInterfaceNotABoolAndFailClosed_WhenConfigU
 // ClearTerminalStatusIfLive guard row (same guard as RestartSession, T-RO-13).
 func TestClearTerminalStatusIfLive_ShouldRefuseHiddenAndReviveVisible(t *testing.T) {
 	t.Parallel()
-	hidden := session.NewHotRestorableInstanceForTest(t, "clear-hidden", domain.Failed)
-	session.SetHiddenForTest(t, hidden, true)
-	visible := session.NewHotRestorableInstanceForTest(t, "clear-visible", domain.Failed)
+	hidden := instance.NewHotRestorableInstanceForTest(t, "clear-hidden", domain.Failed)
+	instance.SetHiddenForTest(t, hidden, true)
+	visible := instance.NewHotRestorableInstanceForTest(t, "clear-visible", domain.Failed)
 	svc := newClearTerminalService(hidden, visible)
 
 	_, err := svc.ClearTerminalStatusIfLive(context.Background(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{SessionIds: []string{"clear-hidden"}}))

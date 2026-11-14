@@ -39,6 +39,7 @@ go_test(
         "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/instance",
         "//testutil/wait",
         "//tools/bzl/ent",
         "@com_github_stretchr_testify//assert",

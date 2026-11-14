@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // makeTestBacklogItem creates a minimal *BacklogItemData for unit tests.
@@ -261,7 +261,7 @@ func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTw
 
 	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < 2; i++ {
-		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
+		s := makeEndedItemSession(instance.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
 		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 			OverallOutcome: string(domain.ReviewOutcomeFail),
@@ -291,7 +291,7 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_OnlyOneRevie
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
 	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
 
-	s := makeEndedItemSession(session.SessionRoleReview, 0, "")
+	s := makeEndedItemSession(instance.SessionRoleReview, 0, "")
 	s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 		OverallOutcome: string(domain.ReviewOutcomeFail),
 		Summary:        "diff computation failed",
@@ -318,7 +318,7 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdentic
 
 	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < 3; i++ {
-		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
+		s := makeEndedItemSession(instance.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
 		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 			OverallOutcome: string(domain.ReviewOutcomeFail),
@@ -345,7 +345,7 @@ func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTw
 
 	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < 2; i++ {
-		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
+		s := makeEndedItemSession(instance.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
 		s.ReviewVerdict = nil
 		sessions = append(sessions, s)

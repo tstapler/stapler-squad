@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // createTestJulesReadyItemForRPC is createTestJulesReadyItem plus
@@ -64,7 +65,7 @@ func TestBacklogService_DispatchToJules_should_ReturnItemSessionWithJulesWorkRol
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.ItemSession)
-	assert.Equal(t, string(session.SessionRoleJulesWork), resp.Msg.ItemSession.SessionRole)
+	assert.Equal(t, string(instance.SessionRoleJulesWork), resp.Msg.ItemSession.SessionRole)
 	assert.True(t, strings.HasPrefix(resp.Msg.ItemSession.SessionUuid, "jules-sessions/"),
 		"session_uuid must start with jules-sessions/, got %q", resp.Msg.ItemSession.SessionUuid)
 

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -25,7 +26,7 @@ func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.Rev
 
 	bus := events.NewEventBus(16)
 	queue := queue.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller = session.NewReviewQueuePoller(queue, statusMgr, nil)
 
 	rqs = NewReviewQueueService(queue, storage, bus)
@@ -47,7 +48,7 @@ func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	// Persist a paused instance so AcknowledgeSession can find it in storage.
-	persisted := &session.Instance{
+	persisted := &instance.Instance{
 		Title:   "sess-1",
 		Path:    "/tmp/test",
 		Status:  domain.Paused,
@@ -57,7 +58,7 @@ func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
 
 	// Register the sentinel with the poller — this represents the live in-memory state.
 	sentinel := persisted
-	poller.SetInstances([]*session.Instance{sentinel})
+	poller.SetInstances([]*instance.Instance{sentinel})
 
 	_, err := rqs.AcknowledgeSession(context.Background(), connect.NewRequest(&sessionv1.AcknowledgeSessionRequest{
 		Id: "sess-1",

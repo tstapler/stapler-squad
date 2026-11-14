@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"strings"
 )
 
@@ -27,7 +28,7 @@ type DriverPrompt struct{ keys string }
 // the paste terminator is refused, since it would end the paste early and let
 // the rest act as keystrokes.
 func ParseDriverPrompt(s string) (DriverPrompt, error) {
-	text := cleanDriverPromptText(s)
+	text := instance.CleanDriverPromptText(s)
 	if strings.Contains(text, bracketedPasteEnd) {
 		return DriverPrompt{}, fmt.Errorf("%w: contains the bracketed-paste terminator ESC[201~", ErrPromptUndeliverable)
 	}

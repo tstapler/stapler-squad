@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -24,7 +25,7 @@ func NewTmuxBackend(mgr TmuxManager) *TmuxBackend {
 func (b *TmuxBackend) TmuxManager() TmuxManager { return b.mgr }
 
 // WireLaunch builds the tmux session for spec.Program and installs it on the manager.
-func (b *TmuxBackend) WireLaunch(spec LaunchSpec) {
+func (b *TmuxBackend) WireLaunch(spec instance.LaunchSpec) {
 	var opts []tmux.TmuxSessionOption
 	if mgr, ok := b.mgr.(*TmuxProcessManager); ok {
 		// Kills a leftover pane process before a restart so it can't race the new one.
@@ -43,15 +44,15 @@ func (b *TmuxBackend) AppendLaunchEnv(env ...string) {
 // --- Capabilities (see process_capabilities.go) ---
 
 var (
-	_ ExitStatusReporter   = (*TmuxBackend)(nil)
-	_ OrphanProber         = (*TmuxBackend)(nil)
-	_ PriorityCapturer     = (*TmuxBackend)(nil)
-	_ ContextCapturer      = (*TmuxBackend)(nil)
-	_ AltScreenQuerier     = (*TmuxBackend)(nil)
-	_ CachedScreenCapturer = (*TmuxBackend)(nil)
-	_ PaneCwdReporter      = (*TmuxBackend)(nil)
-	_ RemoteSessionEnsurer = (*TmuxBackend)(nil)
-	_ TmuxSessionAccessor  = (*TmuxBackend)(nil)
+	_ instance.ExitStatusReporter   = (*TmuxBackend)(nil)
+	_ instance.OrphanProber         = (*TmuxBackend)(nil)
+	_ instance.PriorityCapturer     = (*TmuxBackend)(nil)
+	_ instance.ContextCapturer      = (*TmuxBackend)(nil)
+	_ instance.AltScreenQuerier     = (*TmuxBackend)(nil)
+	_ instance.CachedScreenCapturer = (*TmuxBackend)(nil)
+	_ instance.PaneCwdReporter      = (*TmuxBackend)(nil)
+	_ instance.RemoteSessionEnsurer = (*TmuxBackend)(nil)
+	_ instance.TmuxSessionAccessor  = (*TmuxBackend)(nil)
 )
 
 var errNoTmuxProcessManager = errors.New("session: backend has no tmux process manager")
@@ -250,4 +251,4 @@ func (b *TmuxBackend) SetOnExitCallback(fn func(string)) { b.mgr.SetOnExitCallba
 func (b *TmuxBackend) ResetExitOnce()                    { b.mgr.ResetExitOnce() }
 
 // compile-time check that *TmuxBackend satisfies ProcessManager.
-var _ ProcessManager = (*TmuxBackend)(nil)
+var _ instance.ProcessManager = (*TmuxBackend)(nil)

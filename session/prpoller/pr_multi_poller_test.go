@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // recordingPRClient records the PR number of every GetPRInfoConditional call and
@@ -90,7 +91,7 @@ func TestPoller_MergedAThenOpenB_PollsAndActsOnB(t *testing.T) {
 
 	inst := newTwoPRInstance(t)
 	inst.Status = domain.Active
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 	owner := session.SessionPROwner(inst.UUID)
 	seedStateRow(t, storage.Repo, owner, mustPRRef(t, "", "acme", "app", 11), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 	seedStateRow(t, storage.Repo, owner, mustPRRef(t, "", "acme", "app", 12), domain.PRInitial{State: domain.PRStateOpen})
@@ -116,18 +117,18 @@ func (c *recordingPRClient) callNumbers() map[int]bool {
 	return out
 }
 
-func newPRTestInstance(t *testing.T) *session.Instance {
+func newPRTestInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: "multi-pr", UUID: "uuid-multi-pr", Path: t.TempDir(), Program: "echo", Branch: "feat/x",
 		GitHubOwner: "acme", GitHubRepo: "app",
 	}
-	session.FinishInstanceForTest(inst)
+	instance.FinishInstanceForTest(inst)
 	return inst
 }
 
 // newTwoPRInstance returns a session with #11 merged (terminal) and #12 open.
-func newTwoPRInstance(t *testing.T) *session.Instance {
+func newTwoPRInstance(t *testing.T) *instance.Instance {
 	t.Helper()
 	inst := newPRTestInstance(t)
 	require.NoError(t, inst.AttachPR(prRefN(t, 11), domain.AttachSourceCreatedFromURL,
@@ -138,14 +139,14 @@ func newTwoPRInstance(t *testing.T) *session.Instance {
 }
 
 // persistedPRSession adds a started session with a uuid to a fresh in-memory storage.
-func persistedPRSession(t *testing.T) (*session.Storage, *session.Instance) {
+func persistedPRSession(t *testing.T) (*session.Storage, *instance.Instance) {
 	t.Helper()
 	storage, err := session.NewStorageWithRepository(session.NewTestEntRepository(t))
 	require.NoError(t, err)
-	inst := session.NewPausedTestInstance("pr-session")
+	inst := instance.NewPausedTestInstance("pr-session")
 	inst.UUID = "uuid-pr-session"
 	inst.GitHubOwner, inst.GitHubRepo, inst.Branch = "acme", "app", "feat/x"
-	session.FinishInstanceForTest(inst)
+	instance.FinishInstanceForTest(inst)
 	require.NoError(t, storage.AddInstance(inst))
 	return storage, inst
 }
@@ -165,7 +166,7 @@ func TestPoller_ShouldNotRepollMerged_WhenThreeTicks(t *testing.T) {
 	owner := session.SessionPROwner("u1")
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 11), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
-	before := session.PRPollCount(domain.PRStateOpen)
+	before := instance.PRPollCount(domain.PRStateOpen)
 
 	for range 3 {
 		p.checkAllSessions()
@@ -173,14 +174,14 @@ func TestPoller_ShouldNotRepollMerged_WhenThreeTicks(t *testing.T) {
 
 	assert.Equal(t, 0, client.callsFor(11))
 	assert.Equal(t, 3, client.callsFor(12))
-	assert.Equal(t, before+3, session.PRPollCount(domain.PRStateOpen))
+	assert.Equal(t, before+3, instance.PRPollCount(domain.PRStateOpen))
 }
 
 func TestPoller_ShouldFetchOnceAndRefreshBothSessions_WhenTwoSessionsShareOpenPR(t *testing.T) {
 	t.Parallel()
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", ApprovedCount: 3}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	insts := make([]*session.Instance, 0, 2)
+	insts := make([]*instance.Instance, 0, 2)
 	for _, id := range []string{"u1", "u2"} {
 		inst := newPRTestInstance(t)
 		inst.UUID, inst.Title = id, id
@@ -214,12 +215,12 @@ func TestPoller_ShouldPollItemOnlyState_WhenNoSessionLink(t *testing.T) {
 
 func TestPoller_ShouldKeyBackoffByUUIDOrTitle_WhenLegacyEmptyUUID(t *testing.T) {
 	t.Parallel()
-	a := &session.Instance{Title: "same-title"}
-	b := &session.Instance{Title: "other-title"}
-	c := &session.Instance{Title: "same-title", UUID: "uuid-c"}
-	session.FinishInstanceForTest(a)
-	session.FinishInstanceForTest(b)
-	session.FinishInstanceForTest(c)
+	a := &instance.Instance{Title: "same-title"}
+	b := &instance.Instance{Title: "other-title"}
+	c := &instance.Instance{Title: "same-title", UUID: "uuid-c"}
+	instance.FinishInstanceForTest(a)
+	instance.FinishInstanceForTest(b)
+	instance.FinishInstanceForTest(c)
 
 	assert.Equal(t, "same-title", pollKey(a.Snapshot()))
 	assert.NotEqual(t, pollKey(a.Snapshot()), pollKey(b.Snapshot()))
@@ -375,7 +376,7 @@ func (c *discoveryClient) GetPRForBranchConditional(_ context.Context, _ github.
 	return c.found, etag, true, nil
 }
 
-func discoverySession(t *testing.T, prs ...PRInitialRef) (*PRStatusPoller, *session.Storage, *session.Instance, *discoveryClient) {
+func discoverySession(t *testing.T, prs ...PRInitialRef) (*PRStatusPoller, *session.Storage, *instance.Instance, *discoveryClient) {
 	t.Helper()
 	storage, inst := persistedPRSession(t)
 	client := &discoveryClient{}
@@ -390,7 +391,7 @@ func discoverySession(t *testing.T, prs ...PRInitialRef) (*PRStatusPoller, *sess
 	for _, pr := range prs {
 		require.NoError(t, inst.AttachPR(prRefN(t, pr.N), domain.AttachSourceCreatedFromURL, pr.Initial))
 	}
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 	return p, storage, inst, client
 }
 
@@ -403,7 +404,7 @@ func TestPoller_ShouldResumeAndClearTerminal_WhenDiscoveryFindsPRBOnBranch(t *te
 	p, storage, inst, client := discoverySession(t, PRInitialRef{11, domain.PRInitial{State: domain.PRStateMerged, Terminal: true}})
 	require.True(t, inst.Snapshot().GitHub.GitHubPRStatusTerminal)
 	client.found = &github.PRInfo{Number: 12, State: "open", HeadRef: "feat/x"}
-	observedBefore := session.SessionPRCountObservations(2)
+	observedBefore := instance.SessionPRCountObservations(2)
 
 	p.checkAllSessions()
 
@@ -412,7 +413,7 @@ func TestPoller_ShouldResumeAndClearTerminal_WhenDiscoveryFindsPRBOnBranch(t *te
 	assert.Equal(t, 12, snap.PRs[1].Ref.Number())
 	assert.Equal(t, domain.PRRoleFollowup, snap.PRs[1].Role, "#11 stays the primary")
 	assert.False(t, snap.GitHubPRStatusTerminal, "a new open PR resumes the session")
-	assert.Equal(t, observedBefore+1, session.SessionPRCountObservations(2), "attach observed ssq_session_pr_count")
+	assert.Equal(t, observedBefore+1, instance.SessionPRCountObservations(2), "attach observed ssq_session_pr_count")
 
 	p.checkAllSessions()
 	assert.Equal(t, 1, client.callsFor(12), "the next tick polls #12")
@@ -488,7 +489,7 @@ func TestInvalidateAndRefresh_ShouldRefreshOnlyTheNamedRow_WhenSessionTracksTwoP
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newTwoPRInstance(t)
 	inst.Status = domain.Active
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 	owner := session.SessionPROwner(inst.UUID)
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 11), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})

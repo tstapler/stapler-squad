@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"os"
 	"strings"
 	"sync"
@@ -45,9 +46,9 @@ func TestBuildContinuationPrompt_WithJSONL(t *testing.T) {
 	}
 
 	path := writeTestJSONL(t, turns)
-	inst := &Instance{Title: "test-jsonl", HistoryFilePath: path}
+	inst := &instance.Instance{Title: "test-jsonl", HistoryFilePath: path}
 
-	got := buildContinuationPrompt(inst)
+	got := instance.BuildContinuationPrompt(inst)
 	if got == "" {
 		t.Fatal("buildContinuationPrompt returned empty string")
 	}
@@ -68,17 +69,17 @@ func TestBuildContinuationPrompt_TruncatesLongMessage(t *testing.T) {
 	}
 
 	path := writeTestJSONL(t, turns)
-	inst := &Instance{Title: "test-truncate", HistoryFilePath: path}
+	inst := &instance.Instance{Title: "test-truncate", HistoryFilePath: path}
 
-	got := buildContinuationPrompt(inst)
+	got := instance.BuildContinuationPrompt(inst)
 	if !strings.Contains(got, "...") {
 		t.Errorf("expected truncated prompt to contain '...', got:\n%s", got)
 	}
 
 	// Find the truncated portion: it should start with 500 'x' chars followed by "..."
-	expected := strings.Repeat("x", driverContinuationMaxChars) + "..."
+	expected := strings.Repeat("x", instance.DriverContinuationMaxChars) + "..."
 	if !strings.Contains(got, expected) {
-		t.Errorf("expected prompt to contain %d 'x' chars followed by '...'; prompt was:\n%s", driverContinuationMaxChars, got)
+		t.Errorf("expected prompt to contain %d 'x' chars followed by '...'; prompt was:\n%s", instance.DriverContinuationMaxChars, got)
 	}
 }
 
@@ -91,9 +92,9 @@ func TestBuildContinuationPrompt_NoAssistantMessage(t *testing.T) {
 	}
 
 	path := writeTestJSONL(t, turns)
-	inst := &Instance{Title: "test-no-assistant", HistoryFilePath: path}
+	inst := &instance.Instance{Title: "test-no-assistant", HistoryFilePath: path}
 
-	got := buildContinuationPrompt(inst)
+	got := instance.BuildContinuationPrompt(inst)
 	if got == "" {
 		t.Fatal("buildContinuationPrompt returned empty string")
 	}
@@ -147,7 +148,7 @@ func TestBuildContinuationPrompt_ConcurrentWithSetHistoryInfo(t *testing.T) {
 			ready.Done()
 			ready.Wait()
 			for i := 0; i < 5000; i++ {
-				_ = buildContinuationPrompt(inst)
+				_ = instance.BuildContinuationPrompt(inst)
 			}
 		}()
 	}

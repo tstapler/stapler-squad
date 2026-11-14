@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/session/dialogpresence"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -201,7 +201,7 @@ func (s ReplyStage) String() string {
 const (
 	// ReplySendTimeout bounds the one-byte write (INFERRED: a healthy write is
 	// milliseconds; SendKeysWithTimeout's 5s default is the repo precedent).
-	ReplySendTimeout = session.DefaultSendKeysTimeout
+	ReplySendTimeout = instance.DefaultSendKeysTimeout
 	// ReplyClosedPollEvery and ReplyClosedWindow bound the post-write check
 	// (the pane updated within 0.5 s in Spike 1.3g; the rest is margin).
 	ReplyClosedPollEvery = 100 * time.Millisecond
@@ -219,7 +219,7 @@ var (
 
 // replyPane is the narrow surface SubmitReplyOnce needs; *Instance satisfies it.
 type replyPane interface {
-	session.LeaseOwner
+	instance.LeaseOwner
 	// SendKeysN returns the byte count so a proven 0, err is not-sent.
 	SendKeysN(keys string) (int, error)
 	// CapturePaneContent is a live capture of the pane, never a cached status.
@@ -262,7 +262,7 @@ type replyResult struct {
 // the goroutine, idle -> aborted on the caller's timeout; the loser backs off),
 // so after the caller returns at most the one write already inside the syscall
 // can still land.
-func SubmitReplyOnce(ctx context.Context, pane replyPane, lease *session.HeldLease, digit byte, opts ReplyOptions) (ReplyStage, error) {
+func SubmitReplyOnce(ctx context.Context, pane replyPane, lease *instance.HeldLease, digit byte, opts ReplyOptions) (ReplyStage, error) {
 	if err := lease.Check(pane); err != nil {
 		lease.Release()
 		return StageNotStarted, err

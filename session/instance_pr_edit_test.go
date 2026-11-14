@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ type fakePRSetEditor struct {
 	fakePRPersister
 	emu      sync.Mutex
 	events   []string
-	mirrors  []PRMirror
+	mirrors  []instance.PRMirror
 	editErr  error
 	tombErr  error
 	pinCalls []bool
@@ -48,12 +49,12 @@ func (f *fakePRSetEditor) ClearSessionPRTombstone(_ context.Context, _ string, r
 
 func (f *fakePRSetEditor) PersistPRMirror(_ string, url string, number int, terminal bool) error {
 	f.emu.Lock()
-	f.mirrors = append(f.mirrors, PRMirror{URL: url, Number: number, Terminal: terminal})
+	f.mirrors = append(f.mirrors, instance.PRMirror{URL: url, Number: number, Terminal: terminal})
 	f.emu.Unlock()
 	return nil
 }
 
-func editorInstance(t *testing.T) (*Instance, *fakePRSetEditor) {
+func editorInstance(t *testing.T) (*instance.Instance, *fakePRSetEditor) {
 	t.Helper()
 	inst := newPRTestInstance(t)
 	ed := &fakePRSetEditor{}
@@ -103,7 +104,7 @@ func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 	t.Parallel()
 	inst, ed := editorInstance(t)
 	r12 := fixturetest.MustPRRef(t, "", "acme", "app", 12)
-	pinsBefore, unpinsBefore := PRPinCount("pin"), PRPinCount("unpin")
+	pinsBefore, unpinsBefore := instance.PRPinCount("pin"), instance.PRPinCount("unpin")
 
 	require.NoError(t, inst.PinPRPersisted(context.Background(), r12, true))
 	active := domain.ActivePR(inst.Snapshot().GitHub.PRs, "")
@@ -114,8 +115,8 @@ func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 	active = domain.ActivePR(inst.Snapshot().GitHub.PRs, "")
 	assert.Equal(t, 13, active.Ref.Number())
 	assert.Equal(t, []bool{true, false}, ed.pinCalls)
-	assert.GreaterOrEqual(t, PRPinCount("pin"), pinsBefore+1, "ssq_pr_pin_total{action=pin}")
-	assert.GreaterOrEqual(t, PRPinCount("unpin"), unpinsBefore+1, "ssq_pr_pin_total{action=unpin}")
+	assert.GreaterOrEqual(t, instance.PRPinCount("pin"), pinsBefore+1, "ssq_pr_pin_total{action=pin}")
+	assert.GreaterOrEqual(t, instance.PRPinCount("unpin"), unpinsBefore+1, "ssq_pr_pin_total{action=unpin}")
 }
 
 func TestPinPRPersisted_ShouldNotPinInMemory_WhenRepositoryFails(t *testing.T) {
@@ -146,5 +147,5 @@ func TestPRSetEdits_ShouldFail_WhenPersisterCannotEdit(t *testing.T) {
 	inst := newPRTestInstance(t)
 	inst.SetPRPersister(&fakePRPersister{})
 	_, err := inst.DetachPRPersisted(context.Background(), fixturetest.MustPRRef(t, "", "acme", "app", 12))
-	assert.ErrorIs(t, err, ErrPRPersisterUnavailable)
+	assert.ErrorIs(t, err, instance.ErrPRPersisterUnavailable)
 }

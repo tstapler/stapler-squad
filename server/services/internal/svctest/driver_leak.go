@@ -9,19 +9,20 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // stopSessionDriverOnCleanup stops and joins inst's SessionDriver when the test
 // ends. Use it for instances that never enter the fixture's poller (e.g. built
 // with session.CreateManagedInstance), which setupForkTestFixture cannot see.
-func StopSessionDriverOnCleanup(t testing.TB, inst *session.Instance) {
+func StopSessionDriverOnCleanup(t testing.TB, inst *instance.Instance) {
 	t.Helper()
 	t.Cleanup(func() { StopSessionDriver(inst) })
 }
 
-func StopSessionDriver(inst *session.Instance) {
-	session.StopSessionDriver(inst)
-	session.JoinSessionDriver(inst)
+func StopSessionDriver(inst *instance.Instance) {
+	instance.StopSessionDriver(inst)
+	instance.JoinSessionDriver(inst)
 }
 
 // stopPollerSessionDrivers stops the driver of every instance registered with poller.
@@ -64,12 +65,12 @@ func AwaitNoSessionDrivers(timeout time.Duration) int {
 // test binary, so a leak report can name the code path that started it.
 var driverStartLog struct {
 	mu     sync.Mutex
-	starts map[*session.Instance]string
+	starts map[*instance.Instance]string
 }
 
 func RecordSessionDriverStarts() {
-	driverStartLog.starts = map[*session.Instance]string{}
-	session.SetSessionDriverStartHookForTest(func(inst *session.Instance) {
+	driverStartLog.starts = map[*instance.Instance]string{}
+	session.SetSessionDriverStartHookForTest(func(inst *instance.Instance) {
 		stack := make([]byte, 1<<14)
 		stack = stack[:runtime.Stack(stack, false)]
 		driverStartLog.mu.Lock()

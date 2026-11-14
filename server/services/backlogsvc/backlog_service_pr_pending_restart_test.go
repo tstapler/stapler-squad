@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func spawnedPRPendingItem(t *testing.T, svc *BacklogService, storage *session.St
 	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{Notes: &notes, PrURL: &prURL}, nil)
 	require.NoError(t, err)
 	_, err = storage.Rollback(t.Context(), itemID, domain.BacklogStatusPRPending,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress)}, session.TriggeredBySystem)
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress)}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	return itemID
 }
@@ -112,7 +113,7 @@ func TestForceResetItem_should_StopSessionsAndMoveToInProgress_When_PRPending(t 
 
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	updated, err := svc.forceResetItem(t.Context(), item, session.TriggeredByUser)
+	updated, err := svc.forceResetItem(t.Context(), item, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	assert.Equal(t, string(domain.BacklogStatusInProgress), updated.Status)
@@ -196,7 +197,7 @@ func TestSpawnSessionFromItem_should_RefuseForceRestart_When_JulesSessionLive(t 
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	itemID := spawnedPRPendingItem(t, svc, storage)
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
-		ItemID: itemID, SessionUUID: "jules-sessions/force-guard", SessionRole: session.SessionRoleJulesWork,
+		ItemID: itemID, SessionUUID: "jules-sessions/force-guard", SessionRole: instance.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
 

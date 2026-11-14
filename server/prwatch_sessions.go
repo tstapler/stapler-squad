@@ -8,9 +8,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // prwatchSessionView is the steerer subset the Sessions adapter needs;
@@ -41,7 +41,7 @@ func detectRemote(path string) (owner, repo, host string, resolved bool) {
 	if path == "" {
 		return "", "", "", true
 	}
-	e := session.ActiveWorktreeEnricher()
+	e := instance.ActiveWorktreeEnricher()
 	if e == nil {
 		return "", "", "", false
 	}

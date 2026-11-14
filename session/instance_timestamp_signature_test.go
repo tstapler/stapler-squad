@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -13,12 +14,12 @@ import (
 // This test addresses BUG-002: Timestamp refresh reset on startup.
 func TestUpdateTerminalTimestamps_SignatureBasedPreservation(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-signature",
 		Path:    "/tmp/test-signature",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -84,12 +85,12 @@ func TestUpdateTerminalTimestamps_SignatureBasedPreservation(t *testing.T) {
 // This is the core scenario described in BUG-002.
 func TestPreview_PreservesHistoricalTimestamps(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-preview-preserve",
 		Path:    "/tmp/test-preview-preserve",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -133,12 +134,12 @@ func TestPreview_PreservesHistoricalTimestamps(t *testing.T) {
 // bypasses signature checking but still uses signatures for change detection.
 func TestForceUpdate_SignatureChangeDetection(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-force-update",
 		Path:    "/tmp/test-force-update",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -191,8 +192,8 @@ func TestSignatureStability(t *testing.T) {
 	t.Parallel()
 	content := "Test terminal content\nLine 2\nLine 3"
 
-	signature1 := computeContentSignature(content)
-	signature2 := computeContentSignature(content)
+	signature1 := instance.ComputeContentSignature(content)
+	signature2 := instance.ComputeContentSignature(content)
 
 	if signature1 != signature2 {
 		t.Errorf("Same content should produce same signature. Got %s and %s",
@@ -201,7 +202,7 @@ func TestSignatureStability(t *testing.T) {
 
 	// Different content should produce different signature
 	differentContent := "Different terminal content\nLine 2\nLine 3"
-	signature3 := computeContentSignature(differentContent)
+	signature3 := instance.ComputeContentSignature(differentContent)
 
 	if signature1 == signature3 {
 		t.Error("Different content should produce different signatures")
@@ -217,12 +218,12 @@ func TestSignatureStability(t *testing.T) {
 // 4. Content hasn't changed, so timestamp should be preserved
 func TestReviewQueueRefreshScenario(t *testing.T) {
 	t.Parallel()
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:   "test-review-refresh",
 		Path:    "/tmp/test-review-refresh",
 		Program: "claude",
 	}
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -236,7 +237,7 @@ func TestReviewQueueRefreshScenario(t *testing.T) {
 
 	inst.LastMeaningfulOutput = twoHoursAgo
 	inst.LastTerminalUpdate = twoHoursAgo
-	inst.LastOutputSignature = computeContentSignature(terminalContent)
+	inst.LastOutputSignature = instance.ComputeContentSignature(terminalContent)
 
 	// STEP 2: Simulate app restart - timestamps loaded from disk
 	// (already set above - in real scenario, loaded via FromInstanceData)
@@ -264,7 +265,7 @@ func TestReviewQueueRefreshScenario(t *testing.T) {
 	}
 
 	// Verify signature was used for comparison
-	if inst.LastOutputSignature != computeContentSignature(terminalContent) {
+	if inst.LastOutputSignature != instance.ComputeContentSignature(terminalContent) {
 		t.Error("Signature should match original content signature")
 	}
 

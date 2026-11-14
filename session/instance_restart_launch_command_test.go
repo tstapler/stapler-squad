@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -36,7 +37,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-spike-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          fixturetest.StubClaudeBinary(t),

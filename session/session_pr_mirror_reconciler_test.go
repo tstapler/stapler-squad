@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -20,11 +21,11 @@ func linkPR(t *testing.T, s *Storage, uuid string, n int, role domain.PRRole, at
 	require.NoError(t, err)
 }
 
-func reconcilerFor(s *Storage, insts []*Instance) *PRMirrorReconciler {
-	return NewPRMirrorReconciler(func() []*Instance { return insts }, s)
+func reconcilerFor(s *Storage, insts []*instance.Instance) *PRMirrorReconciler {
+	return NewPRMirrorReconciler(func() []*instance.Instance { return insts }, s)
 }
 
-func loadByTitle(t *testing.T, s *Storage, title string) *Instance {
+func loadByTitle(t *testing.T, s *Storage, title string) *instance.Instance {
 	t.Helper()
 	loaded, err := s.LoadInstances()
 	require.NoError(t, err)
@@ -50,14 +51,14 @@ func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActive
 	require.Equal(t, 11, sessionMirror(t, storage, "drifted").GitHubPRNumber)
 
 	before := PRMirrorDriftCorrected()
-	corrected, skipped := reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	corrected, skipped := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 
 	assert.Equal(t, 1, corrected)
 	assert.Zero(t, skipped)
 	assert.Equal(t, before+1, PRMirrorDriftCorrected())
 	assert.Equal(t, 12, sessionMirror(t, storage, "drifted").GitHubPRNumber)
 
-	corrected, _ = reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	corrected, _ = reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 	assert.Zero(t, corrected, "a second pass finds nothing to fix")
 }
 
@@ -70,7 +71,7 @@ func TestMirrorReconciler_ShouldSkipAndCount_WhenLegacyPRUnrepresented(t *testin
 	want := sessionMirror(t, storage, "skipped")
 
 	before, driftBefore := PRMirrorDriftSkipped(), PRMirrorDriftCorrected()
-	corrected, skipped := reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	corrected, skipped := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 
 	assert.Zero(t, corrected)
 	assert.Equal(t, 1, skipped)
@@ -92,7 +93,7 @@ func TestMirrorReconciler_ShouldOverwriteTombstonedValue_WhenSessionHasOtherLink
 	inst := loadByTitle(t, storage, "tombstoned")
 	require.False(t, inst.Snapshot().GitHub.LegacyPRUnrepresented)
 
-	corrected, skipped := reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	corrected, skipped := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 
 	assert.Equal(t, 1, corrected)
 	assert.Zero(t, skipped)
@@ -106,7 +107,7 @@ func TestMirrorReconciler_ShouldEndWithMirrorEqualToActivePR_WhenAttachApplyAndR
 	prLoadFixture(t, storage, "racy", "u-race", "acme", "app", 0)
 	inst := loadByTitle(t, storage, "racy")
 	inst.SetPRPersister(storage)
-	rec := reconcilerFor(storage, []*Instance{inst})
+	rec := reconcilerFor(storage, []*instance.Instance{inst})
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -117,7 +118,10 @@ func TestMirrorReconciler_ShouldEndWithMirrorEqualToActivePR_WhenAttachApplyAndR
 			defer wg.Done()
 			_ = inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})
 		}()
-		go func() { defer wg.Done(); inst.ApplyPRUpdate(ref, PRStatusUpdate{State: "merged", Terminal: true}) }()
+		go func() {
+			defer wg.Done()
+			inst.ApplyPRUpdate(ref, instance.PRStatusUpdate{State: "merged", Terminal: true})
+		}()
 		go func() { defer wg.Done(); rec.RunOnce(ctx) }()
 	}
 	wg.Wait()
@@ -128,7 +132,7 @@ func TestMirrorReconciler_ShouldEndWithMirrorEqualToActivePR_WhenAttachApplyAndR
 	assert.Equal(t, snap.GitHubPRNumber, row.GitHubPRNumber)
 	assert.Equal(t, snap.GitHubPRURL, row.GitHubPRURL)
 	assert.Equal(t, snap.GitHubPRStatusTerminal, row.GitHubPRStatusTerminal)
-	m, ok := ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
+	m, ok := instance.ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
 	require.True(t, ok)
 	assert.Equal(t, m.Number, row.GitHubPRNumber)
 }

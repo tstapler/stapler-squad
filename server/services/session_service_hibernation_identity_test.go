@@ -11,49 +11,50 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 type hibernationIdentityStore struct {
 	session.InstanceStore
-	loaded *session.Instance
-	saved  *session.Instance
+	loaded *instance.Instance
+	saved  *instance.Instance
 }
 
-func (s *hibernationIdentityStore) LoadInstances() ([]*session.Instance, error) {
-	return []*session.Instance{s.loaded}, nil
+func (s *hibernationIdentityStore) LoadInstances() ([]*instance.Instance, error) {
+	return []*instance.Instance{s.loaded}, nil
 }
 
-func (s *hibernationIdentityStore) SaveInstances(instances []*session.Instance) error {
+func (s *hibernationIdentityStore) SaveInstances(instances []*instance.Instance) error {
 	s.saved = instances[0]
 	return nil
 }
 
-func newHibernationIdentityFixture(t *testing.T) (*SessionService, *session.Instance, *hibernationIdentityStore) {
+func newHibernationIdentityFixture(t *testing.T) (*SessionService, *instance.Instance, *hibernationIdentityStore) {
 	t.Helper()
-	canonical, err := session.NewInstance(session.InstanceOptions{
+	canonical, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "hibernate-identity", Path: filepath.Join(t.TempDir(), "not-created"), Program: "bash",
 	})
 	require.NoError(t, err)
 	canonical.ForceStatus(domain.Active)
-	stale := &session.Instance{Title: canonical.Title, UUID: canonical.UUID, Status: domain.Stopped}
+	stale := &instance.Instance{Title: canonical.Title, UUID: canonical.UUID, Status: domain.Stopped}
 	store := &hibernationIdentityStore{loaded: stale}
 	bus := events.NewEventBus(8)
 	t.Cleanup(bus.Close)
 	registry := session.NewRegistry(nil, nil)
 	t.Cleanup(registry.Shutdown)
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	poller.AddInstance(canonical)
 	svc := &SessionService{
 		storage: store, eventBus: bus, registry: registry, ReviewQueuePoller: poller,
 		AutonomousSvc: &AutonomousOrchestrationService{},
 	}
-	release := session.HoldHibernationTeardownForTest(t, canonical)
+	release := instance.HoldHibernationTeardownForTest(t, canonical)
 	t.Cleanup(func() {
 		canonical.ForceStatus(domain.Stopped)
-		session.StopSessionDriver(canonical)
+		instance.StopSessionDriver(canonical)
 		release()
-		session.JoinHibernation(canonical)
+		instance.JoinHibernation(canonical)
 	})
 	return svc, canonical, store
 }
@@ -84,7 +85,7 @@ func TestHibernateResumeRPC_RetainsCanonicalInstance(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				svc, canonical, store := newHibernationIdentityFixture(t)
 				if name != "poller only" {
-					_, err := svc.registry.Register(session.NewLiveInstance(canonical))
+					_, err := svc.registry.Register(instance.NewLiveInstance(canonical))
 					require.NoError(t, err)
 				}
 				if name == "registry beats stale poller" {

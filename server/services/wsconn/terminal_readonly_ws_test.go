@@ -11,11 +11,11 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-func writerForHandler(t *testing.T, sender services.TmuxInputSender, inst *session.Instance) services.TerminalWriter {
+func writerForHandler(t *testing.T, sender services.TmuxInputSender, inst *instance.Instance) services.TerminalWriter {
 	t.Helper()
 	h := &ConnectRPCWebSocketHandler{tmuxSender: sender}
 	return h.writerFor(inst)
@@ -29,7 +29,7 @@ func resizeFrame(cols, rows int32) *sessionv1.TerminalData {
 	return &sessionv1.TerminalData{Data: &sessionv1.TerminalData_Resize{Resize: &sessionv1.TerminalResize{Cols: cols, Rows: rows}}}
 }
 
-func capturePaneParamsFor(inst *session.Instance, writer services.TerminalWriter, managed bool) capturePaneStreamParams {
+func capturePaneParamsFor(inst *instance.Instance, writer services.TerminalWriter, managed bool) capturePaneStreamParams {
 	snap := *inst.Snapshot()
 	snap.Permissions.CanSendCommand = true
 	return capturePaneStreamParams{

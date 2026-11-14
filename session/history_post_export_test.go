@@ -10,14 +10,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Not t.Parallel(): t.Setenv mutates process-global HOME.
-func postExportInstance(t *testing.T) (*Instance, *int) {
+func postExportInstance(t *testing.T) (*instance.Instance, *int) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	calls := 0
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title: "ported",
 		Path:  "/home/test/proj",
 	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: "uuid-1"})

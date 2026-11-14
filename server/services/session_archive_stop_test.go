@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil"
 )
@@ -92,9 +93,9 @@ func TestArchiveSession_PublishesSessionArchivedEvent(t *testing.T) {
 // into fix.poller, returning the loaded (storage-backed) *session.Instance — the
 // add+load+find+addInstanceToPoller boilerplate shared by the ArchiveSessionByUUID tests
 // below, which all need a live, storage-backed instance to archive.
-func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title string) *session.Instance {
+func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title string) *instance.Instance {
 	t.Helper()
-	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+	require.NoError(t, fix.storage.AddInstance(&instance.Instance{
 		Title:     title,
 		UUID:      uuid,
 		Path:      "/tmp/test",
@@ -105,7 +106,7 @@ func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title strin
 	}))
 	loaded, err := fix.storage.LoadInstances()
 	require.NoError(t, err)
-	var liveInst *session.Instance
+	var liveInst *instance.Instance
 	for _, li := range loaded {
 		if li.Title == title {
 			liveInst = li
@@ -168,7 +169,7 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "not-in-poller",
 		UUID:      "test-uuid-not-in-poller",
 		Path:      "/tmp/test",
@@ -207,7 +208,7 @@ func TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageI
 	t.Parallel()
 
 	queue := queue.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 
 	// Construct SessionService directly (not via NewSessionService) so this test only

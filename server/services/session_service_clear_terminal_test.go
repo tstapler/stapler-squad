@@ -13,18 +13,18 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func newClearTerminalService(insts ...*session.Instance) *SessionService {
+func newClearTerminalService(insts ...*instance.Instance) *SessionService {
 	poller := svctest.NewEmptyPoller()
 	poller.SetInstances(insts)
 	return &SessionService{ReviewQueuePoller: poller, eventBus: events.NewEventBus(8)}
 }
 
-func probeOf(live bool, probed *bool) func(*session.Instance) func() bool {
-	return func(*session.Instance) func() bool {
+func probeOf(live bool, probed *bool) func(*instance.Instance) func() bool {
+	return func(*instance.Instance) func() bool {
 		return func() bool {
 			*probed = true
 			return live
@@ -37,18 +37,18 @@ func TestClearTerminalStatusOne_Outcomes(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
 		name      string
-		inst      *session.Instance
+		inst      *instance.Instance
 		live      bool
 		want      string
 		wantProbe bool
 		want0     domain.Status
 	}{
-		{"not live is untouched", &session.Instance{Title: "x", Status: domain.PermanentlyFailed}, false, "not_live", true, domain.PermanentlyFailed},
-		{"archived is rejected without probing", &session.Instance{Title: "x", Status: domain.Failed, ArchivedAt: &now}, true, "archived", false, domain.Failed},
-		{"active is not terminal", &session.Instance{Title: "x", Status: domain.Active}, true, "not_terminal", false, domain.Active},
+		{"not live is untouched", &instance.Instance{Title: "x", Status: domain.PermanentlyFailed}, false, "not_live", true, domain.PermanentlyFailed},
+		{"archived is rejected without probing", &instance.Instance{Title: "x", Status: domain.Failed, ArchivedAt: &now}, true, "archived", false, domain.Failed},
+		{"active is not terminal", &instance.Instance{Title: "x", Status: domain.Active}, true, "not_terminal", false, domain.Active},
 		// No process manager is wired, so the hot attach itself fails: proves the
 		// live seam reached Start, and the prior terminal status is restored.
-		{"live reaches hot attach and failure restores status", &session.Instance{Title: "x", Status: domain.Failed}, true, "error", true, domain.Failed},
+		{"live reaches hot attach and failure restores status", &instance.Instance{Title: "x", Status: domain.Failed}, true, "error", true, domain.Failed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -72,7 +72,7 @@ func TestClearTerminalStatusOne_UnknownSession(t *testing.T) {
 
 func TestClearTerminalStatusIfLive_RPCValidation(t *testing.T) {
 	t.Parallel()
-	svc := newClearTerminalService(&session.Instance{Title: "dead", Status: domain.PermanentlyFailed})
+	svc := newClearTerminalService(&instance.Instance{Title: "dead", Status: domain.PermanentlyFailed})
 
 	_, err := svc.ClearTerminalStatusIfLive(t.Context(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{}))
 	require.Error(t, err)
@@ -95,7 +95,7 @@ func clearReq(ids ...string) *connect.Request[sessionv1.ClearTerminalStatusIfLiv
 
 func TestClearTerminalStatusIfLive_ClearedPublishesSessionUpdated(t *testing.T) {
 	t.Parallel()
-	inst := session.NewHotRestorableInstanceForTest(t, "alive", domain.PermanentlyFailed)
+	inst := instance.NewHotRestorableInstanceForTest(t, "alive", domain.PermanentlyFailed)
 	svc := newClearTerminalService(inst)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -137,7 +137,7 @@ func TestClearTerminalStatusIfLive_BatchCapBoundary(t *testing.T) {
 
 func TestClearTerminalStatusIfLive_RejectsBlankIDs(t *testing.T) {
 	t.Parallel()
-	svc := newClearTerminalService(&session.Instance{Title: "x", Status: domain.Failed})
+	svc := newClearTerminalService(&instance.Instance{Title: "x", Status: domain.Failed})
 	for _, bad := range []string{"", "   "} {
 		_, err := svc.ClearTerminalStatusIfLive(t.Context(), clearReq("x", bad))
 		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "id %q", bad)
@@ -149,13 +149,13 @@ func TestClearTerminalStatusIfLive_SingleIDErrorMapping(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
 		name string
-		inst *session.Instance
+		inst *instance.Instance
 		want connect.Code
 	}{
 		// IsLiveOrStoredSessionLive is false for a bare instance: not_live.
-		{"not_live", &session.Instance{Title: "x", Status: domain.PermanentlyFailed}, connect.CodeFailedPrecondition},
-		{"archived", &session.Instance{Title: "x", Status: domain.Failed, ArchivedAt: &now}, connect.CodeFailedPrecondition},
-		{"not_terminal", &session.Instance{Title: "x", Status: domain.Active}, connect.CodeFailedPrecondition},
+		{"not_live", &instance.Instance{Title: "x", Status: domain.PermanentlyFailed}, connect.CodeFailedPrecondition},
+		{"archived", &instance.Instance{Title: "x", Status: domain.Failed, ArchivedAt: &now}, connect.CodeFailedPrecondition},
+		{"not_terminal", &instance.Instance{Title: "x", Status: domain.Active}, connect.CodeFailedPrecondition},
 		{"read_only", hiddenFailedInstance(t), connect.CodeFailedPrecondition},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -168,10 +168,10 @@ func TestClearTerminalStatusIfLive_SingleIDErrorMapping(t *testing.T) {
 	}
 }
 
-func hiddenFailedInstance(t *testing.T) *session.Instance {
+func hiddenFailedInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	inst := session.NewHotRestorableInstanceForTest(t, "x", domain.Failed)
-	session.SetHiddenForTest(t, inst, true)
+	inst := instance.NewHotRestorableInstanceForTest(t, "x", domain.Failed)
+	instance.SetHiddenForTest(t, inst, true)
 	return inst
 }
 
@@ -195,7 +195,7 @@ func TestClearTerminalStatusIfLive_ExternalDiscoveryOnlySessionIsNotFound(t *tes
 
 func TestClearTerminalStatusIfLive_DuplicateIDsClearOnce(t *testing.T) {
 	t.Parallel()
-	inst := session.NewHotRestorableInstanceForTest(t, "dup", domain.Failed)
+	inst := instance.NewHotRestorableInstanceForTest(t, "dup", domain.Failed)
 	svc := newClearTerminalService(inst)
 	resp, err := svc.ClearTerminalStatusIfLive(t.Context(), clearReq("dup", "dup"))
 	require.NoError(t, err)
@@ -206,7 +206,7 @@ func TestClearTerminalStatusIfLive_DuplicateIDsClearOnce(t *testing.T) {
 
 func TestClearTerminalStatusIfLive_CanceledContextStopsTheBatch(t *testing.T) {
 	t.Parallel()
-	inst := session.NewHotRestorableInstanceForTest(t, "late", domain.Failed)
+	inst := instance.NewHotRestorableInstanceForTest(t, "late", domain.Failed)
 	svc := newClearTerminalService(inst)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

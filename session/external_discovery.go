@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/mux"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -20,12 +21,12 @@ type ExternalSessionDiscovery struct {
 	discovery *mux.Discovery
 
 	// External sessions discovered via mux
-	sessions   map[string]*Instance
+	sessions   map[string]*instance.Instance
 	sessionsMu sync.RWMutex
 
 	// Callbacks for session events (supports multiple callbacks)
-	onSessionAddedCallbacks   []func(*Instance)
-	onSessionRemovedCallbacks []func(*Instance)
+	onSessionAddedCallbacks   []func(*instance.Instance)
+	onSessionRemovedCallbacks []func(*instance.Instance)
 
 	// Context for lifecycle management
 	ctx    context.Context
@@ -39,19 +40,19 @@ type ExternalSessionDiscovery struct {
 func NewExternalSessionDiscovery() *ExternalSessionDiscovery {
 	return &ExternalSessionDiscovery{
 		discovery: mux.NewDiscovery(),
-		sessions:  make(map[string]*Instance),
+		sessions:  make(map[string]*instance.Instance),
 	}
 }
 
 // OnSessionAdded registers a callback for when a new external session is discovered.
 // Multiple callbacks can be registered and will all be invoked.
-func (e *ExternalSessionDiscovery) OnSessionAdded(callback func(*Instance)) {
+func (e *ExternalSessionDiscovery) OnSessionAdded(callback func(*instance.Instance)) {
 	e.onSessionAddedCallbacks = append(e.onSessionAddedCallbacks, callback)
 }
 
 // OnSessionRemoved registers a callback for when an external session is removed.
 // Multiple callbacks can be registered and will all be invoked.
-func (e *ExternalSessionDiscovery) OnSessionRemoved(callback func(*Instance)) {
+func (e *ExternalSessionDiscovery) OnSessionRemoved(callback func(*instance.Instance)) {
 	e.onSessionRemovedCallbacks = append(e.onSessionRemovedCallbacks, callback)
 }
 
@@ -97,11 +98,11 @@ func (e *ExternalSessionDiscovery) Wait() {
 }
 
 // GetSessions returns all currently discovered external sessions.
-func (e *ExternalSessionDiscovery) GetSessions() []*Instance {
+func (e *ExternalSessionDiscovery) GetSessions() []*instance.Instance {
 	e.sessionsMu.RLock()
 	defer e.sessionsMu.RUnlock()
 
-	sessions := make([]*Instance, 0, len(e.sessions))
+	sessions := make([]*instance.Instance, 0, len(e.sessions))
 	for _, session := range e.sessions {
 		sessions = append(sessions, session)
 	}
@@ -109,14 +110,14 @@ func (e *ExternalSessionDiscovery) GetSessions() []*Instance {
 }
 
 // GetSession returns a specific external session by socket path (deprecated - use GetSessionByTmux).
-func (e *ExternalSessionDiscovery) GetSession(socketPath string) *Instance {
+func (e *ExternalSessionDiscovery) GetSession(socketPath string) *instance.Instance {
 	e.sessionsMu.RLock()
 	defer e.sessionsMu.RUnlock()
 	return e.sessions[socketPath]
 }
 
 // GetSessionByTmux returns a specific external session by tmux session name.
-func (e *ExternalSessionDiscovery) GetSessionByTmux(tmuxSessionName string) *Instance {
+func (e *ExternalSessionDiscovery) GetSessionByTmux(tmuxSessionName string) *instance.Instance {
 	e.sessionsMu.RLock()
 	defer e.sessionsMu.RUnlock()
 
@@ -146,7 +147,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 
 	// Create Instance wrapper
 	now := time.Now()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:        title,
 		Path:         discovered.Metadata.Cwd,
 		Program:      discovered.Metadata.Command,
@@ -171,14 +172,14 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 			TmuxSessionName: discovered.Metadata.TmuxSession, // For unified tmux control
 		},
 		// Use mux permissions which enable destroy (unified architecture)
-		Permissions: GetMuxExternalPermissions(),
+		Permissions: instance.GetMuxExternalPermissions(),
 	}
 
 	// Initialize the process manager for external instances. An unrecognized
 	// inst.Backend value here means genuinely corrupted/unexpected data —
 	// log it loudly and skip wrapping this discovered session rather than
 	// registering an Instance with no process manager.
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: inst.Backend})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: inst.Backend})
 	if err != nil {
 		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
 		return
@@ -200,7 +201,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		log.Info("attached to tmux session for unified streaming of external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title)
 	}
 
-	FinishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 
 	// Register the session
 	e.sessionsMu.Lock()

@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -17,7 +18,7 @@ const (
 )
 
 type cleanupGateMetricSet struct {
-	totals *counterByLabel
+	totals *instance.CounterByLabel
 	otel   metric.Int64Counter
 	gauge  metric.Int64Gauge
 
@@ -28,7 +29,7 @@ type cleanupGateMetricSet struct {
 var cleanupGateMetrics = newCleanupGateMetricSet()
 
 func newCleanupGateMetricSet() *cleanupGateMetricSet {
-	m := &cleanupGateMetricSet{totals: newCounterByLabel(), items: map[string]int{}}
+	m := &cleanupGateMetricSet{totals: instance.NewCounterByLabel(), items: map[string]int{}}
 	meter := telemetry.GetMeter()
 	m.otel, _ = meter.Int64Counter(MetricCleanupGateBlockedTotal)
 	m.gauge, _ = meter.Int64Gauge(MetricCleanupGateBlockedItems)

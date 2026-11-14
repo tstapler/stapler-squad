@@ -10,10 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // seedRegistryEntry writes a valid, signed advertisement for hostname/addr
@@ -182,7 +182,7 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
-		_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+		_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredByUser, "")
 		require.NoError(t, err)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://myhost/backlog/v1/"+item.ID, nil)
@@ -322,7 +322,7 @@ func TestDeepLinkResolver_should_LogResolvedOrFailedEvent_When_EveryOutcomeReaso
 		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	_, err = storage.RawArchiveBacklogItem(ctx, archivedItem.ID, nil, session.TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, archivedItem.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	cases := []struct {

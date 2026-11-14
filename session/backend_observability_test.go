@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -189,10 +190,10 @@ func TestTmuxBackend_Start_RecordsSpanWithTmuxBackendLabel(t *testing.T) {
 // wrapper types, not to whatever ProcessManagerBackend string an Instance's
 // (possibly stale/empty) Backend field happens to hold.
 func TestProcessManagerBackendLabel_MatchesConcreteType(t *testing.T) {
-	assert.Equal(t, domain.BackendTmux, processManagerBackendKey(NewTmuxBackend(&mockTmuxManager{})))
-	assert.Equal(t, domain.BackendTymux, processManagerBackendKey(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
-	assert.Equal(t, domain.BackendNative, processManagerBackendKey(NewNativeProcessManager(ProcessManagerOptions{})))
-	assert.Equal(t, domain.ProcessManagerBackend(""), processManagerBackendKey(nil))
+	assert.Equal(t, domain.BackendTmux, instance.ProcessManagerBackendKey(NewTmuxBackend(&mockTmuxManager{})))
+	assert.Equal(t, domain.BackendTymux, instance.ProcessManagerBackendKey(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
+	assert.Equal(t, domain.BackendNative, instance.ProcessManagerBackendKey(NewNativeProcessManager(instance.ProcessManagerOptions{})))
+	assert.Equal(t, domain.ProcessManagerBackend(""), instance.ProcessManagerBackendKey(nil))
 }
 
 func TestTymuxBackend_Start_RecordsSpanWithTymuxBackendLabel(t *testing.T) {

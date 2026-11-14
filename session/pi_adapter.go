@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type PiAdapter struct{}
@@ -29,7 +30,7 @@ func (a *PiAdapter) CanHandle(program string) bool {
 	return strings.Contains(strings.ToLower(program), "pi")
 }
 
-func (a *PiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
+func (a *PiAdapter) Import(ctx context.Context, inst *instance.Instance) ([]instance.CanonicalTurn, error) {
 	sessionID := inst.PiSessionID()
 
 	if sessionID == "" {
@@ -51,8 +52,8 @@ func (a *PiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn
 	}
 	defer file.Close()
 
-	reader := NewPiEventReader(file)
-	var turns []CanonicalTurn
+	reader := instance.NewPiEventReader(file)
+	var turns []instance.CanonicalTurn
 	turnIdx := 0
 
 	for {
@@ -64,28 +65,28 @@ func (a *PiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn
 			continue
 		}
 
-		if toolEv, ok := event.(PiToolExecutionStartEvent); ok {
-			turn := CanonicalTurn{
-				Role: RoleAssistant,
-				Blocks: []CanonicalBlock{
-					NewToolUseBlock(toolEv.ToolCallID, toolEv.ToolName, toolEv.Args),
+		if toolEv, ok := event.(instance.PiToolExecutionStartEvent); ok {
+			turn := instance.CanonicalTurn{
+				Role: instance.RoleAssistant,
+				Blocks: []instance.CanonicalBlock{
+					instance.NewToolUseBlock(toolEv.ToolCallID, toolEv.ToolName, toolEv.Args),
 				},
 				Timestamp: time.Now(),
 				TurnIndex: turnIdx,
 			}
 			turns = append(turns, turn)
 			turnIdx++
-		} else if resultEv, ok := event.(PiToolExecutionEndEvent); ok {
+		} else if resultEv, ok := event.(instance.PiToolExecutionEndEvent); ok {
 			var textParts []string
 			for _, c := range resultEv.Result.Content {
 				if c.Text != "" {
 					textParts = append(textParts, c.Text)
 				}
 			}
-			turn := CanonicalTurn{
-				Role: RoleUser,
-				Blocks: []CanonicalBlock{
-					NewToolResultBlock(resultEv.ToolCallID, resultEv.ToolName, strings.Join(textParts, "\n"), resultEv.IsError),
+			turn := instance.CanonicalTurn{
+				Role: instance.RoleUser,
+				Blocks: []instance.CanonicalBlock{
+					instance.NewToolResultBlock(resultEv.ToolCallID, resultEv.ToolName, strings.Join(textParts, "\n"), resultEv.IsError),
 				},
 				Timestamp: time.Now(),
 				TurnIndex: turnIdx,
@@ -98,7 +99,7 @@ func (a *PiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn
 	return turns, nil
 }
 
-func (a *PiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
+func (a *PiAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, inst *instance.Instance) error {
 	sessionID := inst.PiSessionID()
 
 	if sessionID == "" {
@@ -125,7 +126,7 @@ func (a *PiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Ins
 	}
 	defer file.Close()
 
-	sessEv := PiSessionEvent{
+	sessEv := instance.PiSessionEvent{
 		Type:      "session",
 		Version:   3,
 		ID:        sessionID,
@@ -140,8 +141,8 @@ func (a *PiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Ins
 	for _, turn := range turns {
 		for _, block := range turn.Blocks {
 			switch block.Kind {
-			case BlockKindToolUse:
-				ev := PiToolExecutionStartEvent{
+			case instance.BlockKindToolUse:
+				ev := instance.PiToolExecutionStartEvent{
 					Type:       "tool_execution_start",
 					ToolCallID: block.ToolID,
 					ToolName:   block.ToolName,
@@ -151,14 +152,14 @@ func (a *PiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Ins
 					_, _ = file.Write(b)
 					_, _ = file.Write([]byte("\n"))
 				}
-			case BlockKindToolResult:
-				ev := PiToolExecutionEndEvent{
+			case instance.BlockKindToolResult:
+				ev := instance.PiToolExecutionEndEvent{
 					Type:       "tool_execution_end",
 					ToolCallID: block.ToolResultID,
 					ToolName:   block.ToolName,
 					IsError:    block.ToolResultIsError,
-					Result: PiToolExecutionResult{
-						Content: []PiToolExecutionResultContent{
+					Result: instance.PiToolExecutionResult{
+						Content: []instance.PiToolExecutionResultContent{
 							{Type: "text", Text: block.ToolResultContent},
 						},
 					},

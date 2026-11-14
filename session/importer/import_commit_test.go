@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -21,9 +22,9 @@ import (
 // for the fd-based fast path. This keeps commit tests focused on the
 // persist/start/suspend orchestration rather than history-file correlation,
 // which is already covered by import_correlate_test.go.
-func newNotFoundDetector(t *testing.T) *session.HistoryFileDetector {
+func newNotFoundDetector(t *testing.T) *instance.HistoryFileDetector {
 	t.Helper()
-	return session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir())
+	return instance.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir())
 }
 
 func TestCommitImportExternalSession_ReturnsErrCorrelationDrifted_When_FreshKindDiffersFromExpected(t *testing.T) {

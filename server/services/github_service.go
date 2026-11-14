@@ -9,6 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -67,7 +68,7 @@ func classifyGitHubRateLimitError(err error) error {
 type GitHubService struct {
 	storage *session.Storage
 	// find replaces the storage lookup in tests.
-	find func(id string) (*session.Instance, error)
+	find func(id string) (*instance.Instance, error)
 }
 
 // NewGitHubService creates a GitHubService backed by the given storage.
@@ -78,7 +79,7 @@ func NewGitHubService(storage *session.Storage) *GitHubService {
 // findInstance loads all instances from storage and returns the one matching id.
 // id may be either the session UUID or the legacy Title; both are accepted.
 // Returns CodeNotFound if not found.
-func (gs *GitHubService) findInstance(id string) (*session.Instance, error) {
+func (gs *GitHubService) findInstance(id string) (*instance.Instance, error) {
 	if gs.find != nil {
 		return gs.find(id)
 	}

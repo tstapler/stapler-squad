@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // cleanupWiring is BacklogService's cleanup-gate state: the gate, the live-work probe
@@ -21,7 +22,7 @@ type cleanupWiring struct {
 
 	mu      sync.Mutex
 	gate    *session.PRCleanupGate
-	probe   session.LiveWorkProbe
+	probe   instance.LiveWorkProbe
 	blocked *session.BlockedSet
 
 	// liveEnabled replaces the reader:backlog lookup in tests.
@@ -57,7 +58,7 @@ func (w *cleanupWiring) gateAndSet() (*session.PRCleanupGate, *session.BlockedSe
 }
 
 // ruleLProbe is the probe RULE L consults: nil unless the scope is on.
-func (w *cleanupWiring) ruleLProbe() session.LiveWorkProbe {
+func (w *cleanupWiring) ruleLProbe() instance.LiveWorkProbe {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !w.scopeOn() {
@@ -75,7 +76,7 @@ func (w *cleanupWiring) remove(wt domain.GitWorktreeData) error {
 
 // SetLiveWorkProbe wires the live-work probe shared with the lifecycle listener and
 // rebuilds the gate around it.
-func (s *BacklogService) SetLiveWorkProbe(p session.LiveWorkProbe) {
+func (s *BacklogService) SetLiveWorkProbe(p instance.LiveWorkProbe) {
 	s.cleanup.mu.Lock()
 	defer s.cleanup.mu.Unlock()
 	s.cleanup.probe = p
@@ -83,7 +84,7 @@ func (s *BacklogService) SetLiveWorkProbe(p session.LiveWorkProbe) {
 }
 
 // LiveWorkProbe returns the probe the service and its gate share (nil when unwired).
-func (s *BacklogService) LiveWorkProbe() session.LiveWorkProbe {
+func (s *BacklogService) LiveWorkProbe() instance.LiveWorkProbe {
 	s.cleanup.mu.Lock()
 	defer s.cleanup.mu.Unlock()
 	return s.cleanup.probe

@@ -13,9 +13,9 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // UI-only RPCs for editing a session's PR set. They are never reachable from the
@@ -29,7 +29,7 @@ type prRefsSeams struct {
 	lookup func(ctx context.Context, ref github.RepoRef, number int) (*github.PRInfo, error)
 	// refresh re-polls one PR and returns once the state row is updated. Nil
 	// until the awaited poller refresh (T3.3.2) is wired.
-	refresh func(ctx context.Context, inst *session.Instance, ref domain.PRRef) error
+	refresh func(ctx context.Context, inst *instance.Instance, ref domain.PRRef) error
 	// detail reads fresh PR state for ask-to-fix; nil means the GraphQL fetcher.
 	detail github.PRDetailFetcher
 	// tokens resolves the owning account's token; nil means the user PR cache.
@@ -55,11 +55,11 @@ func (s prRefsSeams) lookupPR(ctx context.Context, ref github.RepoRef, number in
 
 // SetPRRefreshFunc installs the awaited per-PR refresh behind
 // RefreshSessionPullRequests.
-func (s *SessionService) SetPRRefreshFunc(f func(ctx context.Context, inst *session.Instance, ref domain.PRRef) error) {
+func (s *SessionService) SetPRRefreshFunc(f func(ctx context.Context, inst *instance.Instance, ref domain.PRRef) error) {
 	s.prRefs.refresh = f
 }
 
-func (s *SessionService) livePRInstance(id string) (*session.Instance, error) {
+func (s *SessionService) livePRInstance(id string) (*instance.Instance, error) {
 	if id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session id is required"))
 	}
@@ -89,19 +89,19 @@ func prRefFromProto(p *sessionv1.PullRequestRef) (domain.PRRef, error) {
 
 func prSetError(err error) error {
 	switch {
-	case errors.Is(err, session.ErrPRNotAttached):
+	case errors.Is(err, instance.ErrPRNotAttached):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, session.ErrPRPersisterUnavailable), errors.Is(err, domain.ErrNoSessionUUID):
+	case errors.Is(err, instance.ErrPRPersisterUnavailable), errors.Is(err, domain.ErrNoSessionUUID):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, domain.ErrSessionPRLinkCap):
 		return connect.NewError(connect.CodeResourceExhausted, err)
-	case errors.Is(err, session.ErrZeroPRRef):
+	case errors.Is(err, instance.ErrZeroPRRef):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	return connect.NewError(connect.CodeInternal, err)
 }
 
-func currentPRList(inst *session.Instance) []*sessionv1.SessionPullRequest {
+func currentPRList(inst *instance.Instance) []*sessionv1.SessionPullRequest {
 	snap := inst.Snapshot()
 	return adapters.SessionPullRequests(snap.GitHub.PRs, snap.Branch)
 }
@@ -261,7 +261,7 @@ func listPRFilter(p *sessionv1.PullRequestRef) (ref domain.PRRef, set bool, err 
 }
 
 // instanceHasPR reports whether the session holds a link to ref.
-func instanceHasPR(inst *session.Instance, ref domain.PRRef) bool {
+func instanceHasPR(inst *instance.Instance, ref domain.PRRef) bool {
 	for _, v := range inst.Snapshot().GitHub.PRs {
 		if v.Ref == ref {
 			return true
@@ -274,7 +274,7 @@ func instanceHasPR(inst *session.Instance, ref domain.PRRef) bool {
 // selector means the session's active PR; a set one must belong to the session.
 // The returned ref is never the zero ref: a session with no PR gets
 // FailedPrecondition "no pull request", never a call for number 0.
-func resolveTargetPR(inst *session.Instance, sel *sessionv1.PullRequestRef) (*domain.PRRef, error) {
+func resolveTargetPR(inst *instance.Instance, sel *sessionv1.PullRequestRef) (*domain.PRRef, error) {
 	var requested *domain.PRRef
 	if sel != nil {
 		ref, err := prRefFromProto(sel)
@@ -285,9 +285,9 @@ func resolveTargetPR(inst *session.Instance, sel *sessionv1.PullRequestRef) (*do
 	}
 	resolved, err := inst.ResolveTargetPR(requested)
 	switch {
-	case errors.Is(err, session.ErrNoPullRequest):
+	case errors.Is(err, instance.ErrNoPullRequest):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no pull request"))
-	case errors.Is(err, session.ErrPRNotAttached):
+	case errors.Is(err, instance.ErrPRNotAttached):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	case err != nil:
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -386,7 +386,7 @@ func (s *SessionService) askFixDeliver(ctx context.Context, id string, target do
 
 // askFixTarget re-finds the live instance and refuses what cannot take a
 // request. A nil instance ends the call with stop or err.
-func (s *SessionService) askFixTarget(id string) (*session.Instance, *askFixStop, error) {
+func (s *SessionService) askFixTarget(id string) (*instance.Instance, *askFixStop, error) {
 	live := s.FindLiveInstance(id)
 	if live == nil {
 		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nudgeNotTrackedDetail}, nil

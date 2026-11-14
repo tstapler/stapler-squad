@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -208,17 +208,17 @@ func clampSearchLimit(n int32) int {
 }
 
 // visibleSet is the live sessions a caller may see, keyed by UUID (the index key).
-type visibleSet struct{ byUUID map[string]*session.Instance }
+type visibleSet struct{ byUUID map[string]*instance.Instance }
 
 // visibleSessions applies the history-search hidden rule (hidden sessions are
 // dropped only on request) and the list rule (archived are dropped unless asked
 // for). A session without a live Instance is never visible: results are sessions.
 func (a *ArtifactService) visibleSessions(excludeAutomation, includeArchived bool) visibleSet {
-	var all []*session.Instance
+	var all []*instance.Instance
 	if a.allInstances != nil {
 		all = a.allInstances()
 	}
-	out := make(map[string]*session.Instance, len(all))
+	out := make(map[string]*instance.Instance, len(all))
 	for _, inst := range all {
 		snap := inst.Snapshot()
 		switch {
@@ -256,7 +256,7 @@ func sessionLastActivity(snap *domain.InstanceSnapshot) time.Time {
 	return snap.UpdatedAt
 }
 
-func newSessionHit(inst *session.Instance, source string) *sessionv1.SessionArtifactHit {
+func newSessionHit(inst *instance.Instance, source string) *sessionv1.SessionArtifactHit {
 	snap := inst.Snapshot()
 	hit := &sessionv1.SessionArtifactHit{SessionId: inst.GetStableID(), Title: snap.Title, Source: source}
 	if t := sessionLastActivity(snap); !t.IsZero() {

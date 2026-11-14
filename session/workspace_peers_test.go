@@ -9,9 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func addTestInstance(t *testing.T, storage *Storage, inst *Instance) {
+func addTestInstance(t *testing.T, storage *Storage, inst *instance.Instance) {
 	t.Helper()
 	inst.MarkStarted()
 	if inst.CreatedAt.IsZero() {
@@ -69,11 +70,11 @@ func TestListWorkspacePeers_excludesCallerAndDifferentRepos(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
+	caller := &instance.Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	samePeer := &Instance{Title: "same-repo-peer", UUID: "peer-uuid", Path: "/repos/widgets-wt", Status: domain.Active, Program: "claude",
+	samePeer := &instance.Instance{Title: "same-repo-peer", UUID: "peer-uuid", Path: "/repos/widgets-wt", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	otherRepo := &Instance{Title: "other-repo", UUID: "other-uuid", Path: "/repos/gadgets", Status: domain.Active, Program: "claude",
+	otherRepo := &instance.Instance{Title: "other-repo", UUID: "other-uuid", Path: "/repos/gadgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "gadgets"}
 	addTestInstance(t, storage, caller)
 	addTestInstance(t, storage, samePeer)
@@ -90,9 +91,9 @@ func TestListWorkspacePeers_includesDifferentBranchesAndWorktreesOfSameRepo(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Branch: "main", Status: domain.Active, Program: "claude",
+	caller := &instance.Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Branch: "main", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	worktreePeer := &Instance{Title: "feature-peer", UUID: "peer-uuid", Path: "/repos/widgets-feature", Branch: "feature-x", Status: domain.Active, Program: "claude",
+	worktreePeer := &instance.Instance{Title: "feature-peer", UUID: "peer-uuid", Path: "/repos/widgets-feature", Branch: "feature-x", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, caller)
 	addTestInstance(t, storage, worktreePeer)
@@ -119,10 +120,10 @@ func TestListWorkspacePeers_crashedSessionGoalStillVisible(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	crashed := &Instance{Title: "crashed", UUID: "crashed-uuid", Path: "/repos/widgets", Status: domain.Stopped, Program: "claude",
+	crashed := &instance.Instance{Title: "crashed", UUID: "crashed-uuid", Path: "/repos/widgets", Status: domain.Stopped, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, crashed)
-	_, err := storage.SetSessionGoal(context.Background(), "crashed-uuid", "finish the migration", GoalStatusWorking, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), "crashed-uuid", "finish the migration", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "crashed-uuid", crashed.WorkspaceKey()))
 
@@ -144,9 +145,9 @@ func TestListWorkspacePeers_scopedToOwnStorageInstance(t *testing.T) {
 	storageB, cleanupB := createTestStorage(t)
 	defer cleanupB()
 
-	instA := &Instance{Title: "instance-a-session", UUID: "a-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
+	instA := &instance.Instance{Title: "instance-a-session", UUID: "a-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	instB := &Instance{Title: "instance-b-session", UUID: "b-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
+	instB := &instance.Instance{Title: "instance-b-session", UUID: "b-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storageA, instA)
 	addTestInstance(t, storageB, instB)
@@ -163,14 +164,14 @@ func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{Title: "skewed", UUID: "skewed-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
+	inst := &instance.Instance{Title: "skewed", UUID: "skewed-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, inst)
-	_, err := storage.SetSessionGoal(context.Background(), "skewed-uuid", "goal", GoalStatusWorking, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), "skewed-uuid", "goal", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "skewed-uuid", inst.WorkspaceKey()))
 
-	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
+	caller := &instance.Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, caller)
 
@@ -199,7 +200,7 @@ func TestWorkspacePeer_Lifecycle_distinguishesDeadFromStuck(t *testing.T) {
 func TestApplyTmuxLiveness_confirmsDeathEvenWhenStatusSaysActive(t *testing.T) {
 	t.Parallel()
 	peers := []WorkspacePeer{
-		{SessionUUID: "live-uuid", InstanceLive: true, Goal: &SessionGoalData{UpdatedAt: time.Now().Add(-time.Hour)}},
+		{SessionUUID: "live-uuid", InstanceLive: true, Goal: &instance.SessionGoalData{UpdatedAt: time.Now().Add(-time.Hour)}},
 		{SessionUUID: "crashed-uuid", InstanceLive: true}, // Status said Active, but tmux disagrees
 	}
 	ApplyTmuxLiveness(peers, map[string]struct{}{"live-uuid": {}})
@@ -217,8 +218,8 @@ func TestApplyTmuxLiveness_staleGoalBoundaryIsExclusive(t *testing.T) {
 	// "elapsed == goalStaleThreshold exactly" is inherently racy against the wall clock.
 	const margin = time.Second
 	peers := []WorkspacePeer{
-		{SessionUUID: "just-under-threshold", InstanceLive: true, Goal: &SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold + margin)}},
-		{SessionUUID: "just-over-threshold", InstanceLive: true, Goal: &SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold - margin)}},
+		{SessionUUID: "just-under-threshold", InstanceLive: true, Goal: &instance.SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold + margin)}},
+		{SessionUUID: "just-over-threshold", InstanceLive: true, Goal: &instance.SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold - margin)}},
 	}
 	live := map[string]struct{}{"just-under-threshold": {}, "just-over-threshold": {}}
 	ApplyTmuxLiveness(peers, live)
@@ -249,7 +250,7 @@ func TestBuildWorkspacePeersBlock_emptyWhenNoPeers(t *testing.T) {
 func TestBuildWorkspacePeersBlock_includesTitleAndGoal(t *testing.T) {
 	t.Parallel()
 	peers := []WorkspacePeer{
-		{Title: "other-session", Branch: "feature-x", InstanceLive: true, Goal: &SessionGoalData{Goal: "fix the bug"}},
+		{Title: "other-session", Branch: "feature-x", InstanceLive: true, Goal: &instance.SessionGoalData{Goal: "fix the bug"}},
 	}
 	block := BuildWorkspacePeersBlock(peers)
 	assert.Contains(t, block, "other-session")

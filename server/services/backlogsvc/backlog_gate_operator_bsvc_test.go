@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) session.TransitionData {
@@ -99,7 +100,7 @@ func TestTransitionHandler_Enforce_OperatorOverrideBypassesGateAgentDoesNot(t *t
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "an unsatisfied operator gate denies")
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID), "an operator denial returns the error only")
 
-	_, err = svc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, session.TriggeredByAgent), req(item.ID, "agent insists"))
+	_, err = svc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, instance.TriggeredByAgent), req(item.ID, "agent insists"))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "an agent never bypasses a Configured gate")
 	assert.Equal(t, string(domain.BacklogStatusReady), storedStatus(t, storage, item.ID))
 	rows := transitionDeniedRows(t, svc, item.ID)

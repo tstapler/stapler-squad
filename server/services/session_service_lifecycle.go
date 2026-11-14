@@ -20,9 +20,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func (s *SessionService) findLifecycleInstance(instances []*session.Instance, id string) *session.Instance {
+func (s *SessionService) findLifecycleInstance(instances []*instance.Instance, id string) *instance.Instance {
 	if s.registry != nil {
 		if live := s.registry.Lookup(id); live != nil {
 			return live.Instance
@@ -79,7 +80,7 @@ func (s *SessionService) HibernateSession(
 	// session does not linger with a stale queue entry until reconcileSessions fires.
 	s.removeFromAllPollers(instance.Title)
 
-	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -118,7 +119,7 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -162,7 +163,7 @@ func (s *SessionService) ResumeCrashedSession(
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
-	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -203,7 +204,7 @@ func (s *SessionService) ResumeCrashedSession(
 // context-bounded, so a hung removal can outlive a caller's timeout as an
 // untracked goroutine. Not fixed here — this helper inherits that property
 // from DeleteSession's existing chain rather than worsening it.
-func cleanupPartialCreation(instance *session.Instance, force bool) error {
+func cleanupPartialCreation(instance *instance.Instance, force bool) error {
 	if instance.Started() {
 		return destroyInstance(instance, force)
 	}
@@ -214,7 +215,7 @@ func cleanupPartialCreation(instance *session.Instance, force bool) error {
 	// Call it unconditionally, mirroring Destroy()'s own top-of-function
 	// call, so any StartSessionDriver arriving after this point refuses to
 	// start (driverDestroyed). See docs/bugs/fixed/BUG-099-*.md.
-	session.StopSessionDriver(instance)
+	instance.StopSessionDriver(instance)
 
 	// Re-check Started() immediately after StopSessionDriver: if a
 	// concurrent Instance.Start() completed while we were stopping the
@@ -258,7 +259,7 @@ func cleanupPartialCreation(instance *session.Instance, force bool) error {
 
 // destroyInstance is Destroy, or ForceDestroy when the caller explicitly asked to discard
 // uncommitted work in the session's worktree.
-func destroyInstance(instance *session.Instance, force bool) error {
+func destroyInstance(instance *instance.Instance, force bool) error {
 	if force {
 		return instance.ForceDestroy()
 	}
@@ -267,7 +268,7 @@ func destroyInstance(instance *session.Instance, force bool) error {
 
 // removeWorktreeUnlessDirty removes the worktree, refusing (session.ErrWorktreeDirty) when it
 // holds uncommitted changes unless force is set.
-func removeWorktreeUnlessDirty(instance *session.Instance, force bool) error {
+func removeWorktreeUnlessDirty(instance *instance.Instance, force bool) error {
 	if !force {
 		if err := instance.CheckWorktreeRemovable(); err != nil {
 			return err
@@ -697,7 +698,7 @@ func (s *SessionService) RestartSession(
 	// comment and session.Instance.Restart's migrating branch.
 	if err := instance.Restart(req.Msg.PreserveOutput, domain.ProcessManagerBackend(req.Msg.GetBackendOverride())); err != nil {
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)
-		if errors.Is(err, session.ErrUnrecognizedBackend) {
+		if errors.Is(err, instance.ErrUnrecognizedBackend) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
@@ -706,7 +707,7 @@ func (s *SessionService) RestartSession(
 	RefreshInstanceHookProof(instance)
 
 	// Persist the updated instance state.
-	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save restarted instance: %w", err))
 	}
 	s.concStorage.RecordManualNudgeForSession(ctx, instance.GetStableID(), session.ManualNudgeRestart)
@@ -761,7 +762,7 @@ func (s *SessionService) RetrySession(
 	}
 
 	if err := instance.RetryNow(instance.GetEffectiveRootDir()); err != nil {
-		if errors.Is(err, session.ErrRetryInFlight) {
+		if errors.Is(err, instance.ErrRetryInFlight) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 		}
 		log.Error("[RetrySession] failed to retry session", "session", instance.Title, "err", err)
@@ -772,7 +773,7 @@ func (s *SessionService) RetrySession(
 	// read-only terminal stream waiting for Active) must hear it even if persistence fails.
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"}))
 
-	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save retried instance: %w", err))
 	}
 
@@ -871,7 +872,7 @@ func (s *SessionService) RunOneShot(
 	// and the PRStatusPoller can use the direct-number path instead of branch-name discovery.
 	if prURL != "" {
 		prNumber := 0
-		if ref, parseErr := session.ParseGitHubURL(prURL); parseErr == nil && ref.PRNumber > 0 {
+		if ref, parseErr := instance.ParseGitHubURL(prURL); parseErr == nil && ref.PRNumber > 0 {
 			prNumber = ref.PRNumber
 		}
 		inst.SetGitHubPR(prURL, prNumber)
@@ -971,7 +972,7 @@ func (s *SessionService) UnarchiveSession(
 	inst.SetArchivedAt(nil)
 	// Tell watchers (terminal streams that attached read-only while archived) before saving.
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"archived_at"}))
-	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
 	return connect.NewResponse(&sessionv1.UnarchiveSessionResponse{}), nil
@@ -1011,12 +1012,12 @@ func (s *SessionService) setPinned(sessionID string, pinned bool) error {
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", sessionID))
 	}
 	if err := inst.SetPinned(pinned); err != nil {
-		if errors.Is(err, session.ErrCannotPinArchivedSession) {
+		if errors.Is(err, instance.ErrCannotPinArchivedSession) {
 			return connect.NewError(connect.CodeFailedPrecondition, err)
 		}
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update pin: %w", err))
 	}
-	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
 	// Push to other browsers' WatchSessions streams so a pin made in one appears in all.
@@ -1059,7 +1060,7 @@ func (s *SessionService) DeleteWorkflowFailedSessions(
 // If the workflow has archive_after_hours > 0, the retention enforcer handles
 // time-delayed archival, so we skip immediate archival here (ADR-4). Backlog
 // sessions have no such delayed-archival config, so that check is workflow-only.
-func (s *SessionService) maybeAutoArchive(inst *session.Instance) {
+func (s *SessionService) maybeAutoArchive(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}
@@ -1081,7 +1082,7 @@ func (s *SessionService) maybeAutoArchive(inst *session.Instance) {
 	if !inst.SetArchivedAtIfNil(now) {
 		return
 	}
-	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{inst}); err != nil {
 		log.Warn("[SessionService] failed to auto-archive workflow session",
 			"session", inst.Title, "workflow_id", inst.WorkflowID, "err", err)
 	}

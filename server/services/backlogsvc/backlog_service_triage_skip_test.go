@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -140,7 +141,7 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 	require.Equal(t, 1, pool.callCount())
 
 	// Back to queued (e.g. plan never approved): unchanged content -> skipped, status preserved.
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusQueued, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusQueued, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	require.NoError(t, svc.AutoRespawnTriage(t.Context(), item.ID))
 	assert.Equal(t, 1, pool.callCount())
@@ -185,7 +186,7 @@ func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
 		return e == nil && got.Status == string(domain.BacklogStatusReady) && !svc.IsTriageLive(item.ID)
 	}, 5*time.Second, 20*time.Millisecond, "first triage completes")
 
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusQueued, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusQueued, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	assert.True(t, svc.IsRetriagePointless(t.Context(), item.ID), "content unchanged since the completed triage")
 

@@ -8,9 +8,9 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//github",
-        "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/instance",
     ],
 )
 
@@ -29,9 +29,9 @@ go_test(
     embed = [":stuck"],
     deps = [
         "//github",
-        "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/instance",
         "@com_github_stretchr_testify//assert",
     ],
 )

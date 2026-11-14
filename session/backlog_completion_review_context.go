@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // BuildCompletionReviewContext assembles the text the completion reviewer reads for a
@@ -57,7 +58,7 @@ func writeCompletionVerdictSection(sb *strings.Builder, sessions []backlogdto.It
 func writeCompletionDiffSection(sb *strings.Builder, sessions []backlogdto.ItemSessionSummary) {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		s := sessions[i]
-		if s.Role != SessionRoleWork || (s.LastCommitMessage == "" && s.CommitCountSinceSpawn == 0) {
+		if s.Role != instance.SessionRoleWork || (s.LastCommitMessage == "" && s.CommitCountSinceSpawn == 0) {
 			continue
 		}
 		fmt.Fprintf(sb, "\n## Work Summary\nCommits: %d\nLast commit: %s\n", s.CommitCountSinceSpawn, domain.SanitizeField(s.LastCommitMessage, 300))

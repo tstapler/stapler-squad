@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type fakeSessionView struct {
@@ -202,19 +203,19 @@ func TestPRWatchSessions_should_RetryResolution_When_ResolverReportsUnresolved(t
 func TestDetectRemote_should_ServeOtherSessions_When_ProbeBlocks(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{
+	e := instance.NewWorktreeEnricher(instance.WorktreeEnricherConfig{
 		Workers: 2,
-		Probe: func(path string) (*session.WorktreeInfo, error) {
+		Probe: func(path string) (*instance.WorktreeInfo, error) {
 			if path == "/blocked" {
 				<-release
 			}
-			return &session.WorktreeInfo{GitHubOwner: "acme", GitHubRepo: "widget"}, nil
+			return &instance.WorktreeInfo{GitHubOwner: "acme", GitHubRepo: "widget"}, nil
 		},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	e.Start(ctx)
-	session.SetWorktreeEnricher(e)
+	instance.SetWorktreeEnricher(e)
 	t.Cleanup(e.Stop)
 
 	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{

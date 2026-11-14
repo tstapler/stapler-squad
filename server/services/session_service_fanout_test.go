@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestFanOutSession_RejectsCountOutsideCap(t *testing.T) {
@@ -112,7 +112,7 @@ func fanoutGitRepo(t *testing.T) string {
 }
 
 // fanoutMember builds a stopped instance backed by a real worktree with one uncommitted file.
-func fanoutMember(t *testing.T, repo, groupID string, n int, file, content string) *session.Instance {
+func fanoutMember(t *testing.T, repo, groupID string, n int, file, content string) *instance.Instance {
 	t.Helper()
 	title := fmt.Sprintf("fan [variant %d]", n)
 	wt, _, err := git.NewGitWorktreeWithBranch(repo, title, fmt.Sprintf("fanout-test-v%d", n))
@@ -121,7 +121,7 @@ func fanoutMember(t *testing.T, repo, groupID string, n int, file, content strin
 	t.Cleanup(func() { _ = wt.Cleanup() })
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), file), []byte(content), 0o644))
 
-	inst := &session.Instance{Title: title, UUID: uuid.NewString(), Path: repo, Status: domain.Stopped, Program: "claude"}
+	inst := &instance.Instance{Title: title, UUID: uuid.NewString(), Path: repo, Status: domain.Stopped, Program: "claude"}
 	inst.SetGitWorktree(wt)
 	inst.ForceStatus(domain.Stopped) // Snapshot() is what GetStatus reads, not the struct literal
 	require.NoError(t, inst.SetTags([]string{fanoutGroupTagPrefix + groupID, fanoutBaseTagPrefix + "main"}))
@@ -134,7 +134,7 @@ func TestPickFanoutWinner_MergesWinnerAndArchivesLosers(t *testing.T) {
 	const groupID = "g-real"
 	winner := fanoutMember(t, repo, groupID, 1, "winner.txt", "w\n")
 	loser := fanoutMember(t, repo, groupID, 2, "loser.txt", "l\n")
-	fix.poller.SetInstances([]*session.Instance{winner, loser})
+	fix.poller.SetInstances([]*instance.Instance{winner, loser})
 
 	resp, err := fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{
 		GroupId: groupID, WinnerSessionId: winner.UUID,
@@ -156,7 +156,7 @@ func TestPickFanoutWinner_ConflictReturnsAbortedAndArchivesNothing(t *testing.T)
 	const groupID = "g-conflict"
 	winner := fanoutMember(t, repo, groupID, 1, "a.txt", "from winner\n")
 	loser := fanoutMember(t, repo, groupID, 2, "loser.txt", "l\n")
-	fix.poller.SetInstances([]*session.Instance{winner, loser})
+	fix.poller.SetInstances([]*instance.Instance{winner, loser})
 
 	// Diverge the base branch on the same file so the winner's merge conflicts.
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("from base\n"), 0o644))
@@ -177,7 +177,7 @@ func TestPickFanoutWinner_RejectsStillRunningWinner(t *testing.T) {
 	const groupID = "g-running"
 	winner := fanoutMember(t, repo, groupID, 1, "w.txt", "w\n")
 	winner.ForceStatus(domain.Creating)
-	fix.poller.SetInstances([]*session.Instance{winner})
+	fix.poller.SetInstances([]*instance.Instance{winner})
 
 	_, err := fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{
 		GroupId: groupID, WinnerSessionId: winner.UUID,
@@ -190,7 +190,7 @@ func TestPickFanoutWinner_RejectsDirtyBaseRepo(t *testing.T) {
 	repo := fanoutGitRepo(t)
 	const groupID = "g-dirty"
 	winner := fanoutMember(t, repo, groupID, 1, "w.txt", "w\n")
-	fix.poller.SetInstances([]*session.Instance{winner})
+	fix.poller.SetInstances([]*instance.Instance{winner})
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scratch.txt"), []byte("user edit\n"), 0o644))
 
 	_, err := fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{
@@ -211,7 +211,7 @@ func TestPickFanoutWinner_PausedWinnerWithRemovedWorktreeMergesItsBranch(t *test
 	// pause_session deletes the worktree directory but keeps the branch.
 	fanoutGitRun(t, repo, "worktree", "remove", "--force", wt.GetWorktreePath())
 	winner.ForceStatus(domain.Paused)
-	fix.poller.SetInstances([]*session.Instance{winner})
+	fix.poller.SetInstances([]*instance.Instance{winner})
 
 	_, err = fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{
 		GroupId: groupID, WinnerSessionId: winner.UUID,
@@ -226,11 +226,11 @@ func TestPickFanoutWinner_ConcurrentPicksMergeOnlyOneWinner(t *testing.T) {
 	const groupID = "g-race"
 	a := fanoutMember(t, repo, groupID, 1, "a-only.txt", "a\n")
 	b := fanoutMember(t, repo, groupID, 2, "b-only.txt", "b\n")
-	fix.poller.SetInstances([]*session.Instance{a, b})
+	fix.poller.SetInstances([]*instance.Instance{a, b})
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
-	for i, w := range []*session.Instance{a, b} {
+	for i, w := range []*instance.Instance{a, b} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

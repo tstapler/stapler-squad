@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/procinfo"
 )
 
@@ -33,7 +34,7 @@ type ProcessCreateTimeReader interface {
 // enforced by an interceptor registered in server.go (Story 1.3.2) rather
 // than duplicated per-method here.
 type ImportService struct {
-	detector  *session.HistoryFileDetector
+	detector  *instance.HistoryFileDetector
 	inspector ProcessCreateTimeReader
 
 	// aliveChecker, storage, registry, linker, and suspended are only
@@ -82,7 +83,7 @@ func (l *instanceLocks) forInstance(instanceID string) *sync.Mutex {
 // environments where process inspection isn't available (e.g. unsupported
 // OS); PreviewImportExternalSession still functions but never populates
 // pid_identity.
-func NewImportService(detector *session.HistoryFileDetector, inspector ProcessCreateTimeReader) *ImportService {
+func NewImportService(detector *instance.HistoryFileDetector, inspector ProcessCreateTimeReader) *ImportService {
 	return &ImportService{detector: detector, inspector: inspector}
 }
 
@@ -97,7 +98,7 @@ func NewImportServiceWithRealInspector(
 ) *ImportService {
 	inspector := procinfo.NewProcessInspector()
 	return &ImportService{
-		detector:     session.NewHistoryFileDetectorWithRealInspector(),
+		detector:     instance.NewHistoryFileDetectorWithRealInspector(),
 		inspector:    inspector,
 		aliveChecker: inspector,
 		storage:      storage,
@@ -418,7 +419,7 @@ func correlationResultFromProto(proto *sessionv1.CorrelationResultProto) importe
 	}
 
 	for _, c := range proto.GetCandidates() {
-		result.Candidates = append(result.Candidates, session.HistoryFileInfo{
+		result.Candidates = append(result.Candidates, instance.HistoryFileInfo{
 			ConversationUUID: c.GetConversationUuid(),
 			HistoryFilePath:  c.GetHistoryFilePath(),
 			ProjectDir:       c.GetProjectDir(),
@@ -431,13 +432,13 @@ func correlationResultFromProto(proto *sessionv1.CorrelationResultProto) importe
 // lastMessageExcerpt returns a short preview of the last turn's text, for
 // display in the preview dialog so the user can sanity-check they're
 // importing the right conversation.
-func lastMessageExcerpt(turns []session.CanonicalTurn) string {
+func lastMessageExcerpt(turns []instance.CanonicalTurn) string {
 	if len(turns) == 0 {
 		return ""
 	}
 	last := turns[len(turns)-1]
 	for _, block := range last.Blocks {
-		if block.Kind == session.BlockKindText && block.Text != "" {
+		if block.Kind == instance.BlockKindText && block.Text != "" {
 			text := strings.TrimSpace(block.Text)
 			const maxExcerptLen = 200
 			if len(text) > maxExcerptLen {

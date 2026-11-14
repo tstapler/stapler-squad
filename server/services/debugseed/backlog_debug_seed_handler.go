@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // triageSessionUUIDPrefix mirrors services.HeadlessTriageUUIDPrefix (duplicated: this leaf must not import server/services).
@@ -393,7 +394,7 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:       item.ID,
 		SessionUUID:  sessionUUID,
-		SessionRole:  session.SessionRoleTriage,
+		SessionRole:  instance.SessionRoleTriage,
 		TriageResult: string(triageResultJSON),
 	})
 	if err != nil {
@@ -455,7 +456,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWrite
 	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	if err != nil {
 		writeInternalError(w, "backlog debug seed: create work item session failed", "failed to create item session", err)
@@ -502,7 +503,7 @@ func (h *BacklogDebugSeedHandler) handleSeedReviewVerdict(w http.ResponseWriter,
 	itemSession, err := h.storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "e2e-review-" + uuid.New().String(),
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewOutcomePartial,
 		PerCriterion:   string(perCriterion),
@@ -660,7 +661,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 	if _, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	}); err != nil {
 		writeInternalError(w, "backlog debug seed: create work item session failed", "failed to create item session", err)
 		return
@@ -773,7 +774,7 @@ func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWrit
 	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	if err != nil {
 		log.Error("backlog debug seed: create jules_work item session failed", "err", err)

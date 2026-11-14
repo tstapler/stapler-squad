@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -40,7 +41,7 @@ func (v cookieValidator) ValidateAuthSession(tok string) bool { return tok == v.
 
 // countingPane stands in for the tmux pane: every keystroke is counted.
 type countingPane struct {
-	session.ProcessManager
+	instance.ProcessManager
 	sends atomic.Int32
 }
 
@@ -107,10 +108,10 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 	t.Cleanup(svc.Shutdown)
 
 	pane := &countingPane{}
-	inst := session.NewStartedInstanceForTest(t, "review-hidden", pane)
+	inst := instance.NewStartedInstanceForTest(t, "review-hidden", pane)
 	inst.UUID, inst.Hidden = "uuid-hidden", true
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
-	poller.SetInstances([]*session.Instance{inst})
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
+	poller.SetInstances([]*instance.Instance{inst})
 	svc.SetReviewQueuePoller(poller)
 
 	q := services.PendingQuestion{QuestionID: "q1", SessionUUID: "uuid-hidden"}

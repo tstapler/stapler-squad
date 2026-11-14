@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // recordingItemChangePublisher is a minimal ItemChangePublisher test double
@@ -61,7 +62,7 @@ func TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil(t *testi
 
 	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusReview),
-	}, TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err, "transition must succeed even though no ItemChangePublisher is wired")
 	assert.Equal(t, string(domain.BacklogStatusDone), updated.Status)
 }

@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestDeferToReconcile_should_BeTrueOnlyForStatusesWithNoActiveEdge(t *testing.T) {
@@ -22,7 +22,7 @@ func TestDeferToReconcile_should_BeTrueOnlyForStatusesWithNoActiveEdge(t *testin
 		{domain.Active, false},
 		{domain.Paused, false},
 	} {
-		inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "claude"})
+		inst, err := instance.NewInstance(instance.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "claude"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -34,11 +34,11 @@ func TestDeferToReconcile_should_BeTrueOnlyForStatusesWithNoActiveEdge(t *testin
 func TestShouldBootStart(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	started := session.NewStartedInstanceForTest(t, "boot-started", nil)
+	started := instance.NewStartedInstanceForTest(t, "boot-started", nil)
 
-	assert.True(t, shouldBootStart(&session.Instance{Status: domain.Active}), "unstarted active instance boots")
+	assert.True(t, shouldBootStart(&instance.Instance{Status: domain.Active}), "unstarted active instance boots")
 	assert.False(t, shouldBootStart(nil))
 	assert.False(t, shouldBootStart(started), "a client's lazy restore may have started it during the boot stagger")
-	assert.False(t, shouldBootStart(&session.Instance{Status: domain.Active, ArchivedAt: &now}), "archived is never auto-started")
-	assert.False(t, shouldBootStart(&session.Instance{Status: domain.Failed}), "failed is left to reconcile")
+	assert.False(t, shouldBootStart(&instance.Instance{Status: domain.Active, ArchivedAt: &now}), "archived is never auto-started")
+	assert.False(t, shouldBootStart(&instance.Instance{Status: domain.Failed}), "failed is left to reconcile")
 }

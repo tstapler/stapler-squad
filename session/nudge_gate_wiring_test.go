@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestVerifyPaneOwnershipBeforeWrite_NoTmuxIdentity covers the case
@@ -13,9 +14,9 @@ import (
 // with no live tmux session (GetTmuxSessionName() == "") has nothing to
 // re-verify against, so it must fail closed rather than silently no-op.
 func TestVerifyPaneOwnershipBeforeWrite_NoTmuxIdentity(t *testing.T) {
-	inst := &Instance{Title: "no-tmux-session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "no-tmux-session", UUID: uuid.New().String()}
 
-	err := VerifyPaneOwnershipBeforeWrite(context.Background(), inst)
+	err := instance.VerifyPaneOwnershipBeforeWrite(context.Background(), inst)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no tmux identity to verify")
@@ -26,7 +27,7 @@ func TestVerifyPaneOwnershipBeforeWrite_NoTmuxIdentity(t *testing.T) {
 // paused, or never started) can never be nudge-eligible regardless of its
 // last-known status.
 func TestCheckNudgeEligible_RejectsNilController(t *testing.T) {
-	inst := &Instance{Title: "no-controller", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "no-controller", UUID: uuid.New().String()}
 
 	err := CheckNudgeEligible(inst)
 

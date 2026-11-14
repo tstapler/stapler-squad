@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -13,7 +14,7 @@ import (
 // returns nil without modifying WorkingDir when the instance has not been started.
 func TestCaptureCurrentState_NotStarted_IsNoOp(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-session"}
+	inst := &instance.Instance{Title: "test-session"}
 	// inst.started == false by default
 
 	err := inst.CaptureCurrentState()
@@ -40,7 +41,7 @@ func TestInstance_CaptureCurrentState_UpdatesWorkingDir(t *testing.T) {
 	mockSession := tmux.NewTmuxSessionWithDeps(sessionName, "echo", nil, mockExec)
 	tpm := &TmuxProcessManager{}
 	tpm.SetSession(mockSession)
-	inst := (&Instance{Title: sessionName}).WithProcessManagerForTest(NewTmuxBackend(tpm))
+	inst := (&instance.Instance{Title: sessionName}).WithProcessManagerForTest(NewTmuxBackend(tpm))
 	inst.MarkStarted()
 
 	err := inst.CaptureCurrentState()
@@ -57,14 +58,14 @@ func TestInstance_CaptureCurrentState_UpdatesWorkingDir(t *testing.T) {
 // the root path itself is never considered "escaped".
 func TestPathEscapesRoot_should_returnFalse_When_CandidateIsRootItself(t *testing.T) {
 	t.Parallel()
-	assert.False(t, pathEscapesRoot("/home/user/worktree", "/home/user/worktree"))
+	assert.False(t, instance.PathEscapesRoot("/home/user/worktree", "/home/user/worktree"))
 }
 
 // TestPathEscapesRoot_should_returnFalse_When_CandidateIsInsideRoot verifies a
 // subdirectory of the worktree is never considered "escaped".
 func TestPathEscapesRoot_should_returnFalse_When_CandidateIsInsideRoot(t *testing.T) {
 	t.Parallel()
-	assert.False(t, pathEscapesRoot("/home/user/worktree", "/home/user/worktree/subdir/file"))
+	assert.False(t, instance.PathEscapesRoot("/home/user/worktree", "/home/user/worktree/subdir/file"))
 }
 
 // TestPathEscapesRoot_should_returnTrue_When_CandidateIsParentRepo is the
@@ -76,7 +77,7 @@ func TestPathEscapesRoot_should_returnFalse_When_CandidateIsInsideRoot(t *testin
 // persist it as the session's WorkingDir.
 func TestPathEscapesRoot_should_returnTrue_When_CandidateIsParentRepo(t *testing.T) {
 	t.Parallel()
-	assert.True(t, pathEscapesRoot(
+	assert.True(t, instance.PathEscapesRoot(
 		"/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/stapler-squad-add-cron-schedule-builder-widget_18c4ac95c784fad8",
 		"/home/tstapler/Programming/stapler-squad",
 	))
@@ -87,7 +88,7 @@ func TestPathEscapesRoot_should_returnTrue_When_CandidateIsParentRepo(t *testing
 // worktree, not just outside the bare parent repo.
 func TestPathEscapesRoot_should_returnTrue_When_CandidateIsSiblingWorktree(t *testing.T) {
 	t.Parallel()
-	assert.True(t, pathEscapesRoot(
+	assert.True(t, instance.PathEscapesRoot(
 		"/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/item-a",
 		"/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/item-b",
 	))
@@ -102,5 +103,5 @@ func TestPathEscapesRoot_should_returnTrue_When_PathsAreUnrelated(t *testing.T) 
 	// filepath.Rel doesn't error on plain unrelated absolute Unix paths (it just
 	// returns a "../.." style relative path) — this exercises that shape
 	// directly, since a genuine filepath.Rel error is platform-specific.
-	assert.True(t, pathEscapesRoot("/home/tstapler/worktree-a", "/var/other/path"))
+	assert.True(t, instance.PathEscapesRoot("/home/tstapler/worktree-a", "/var/other/path"))
 }

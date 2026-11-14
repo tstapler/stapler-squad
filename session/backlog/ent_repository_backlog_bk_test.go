@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassignedAfterSessionStart
@@ -56,7 +57,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	createdIS, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              "snapshot-freeze-test-session",
-		SessionRole:              session.SessionRoleWork,
+		SessionRole:              instance.SessionRoleWork,
 		PipelineModeSnapshot:     "quick",
 		PipelineModeSnapshotHash: spawnTimeHash,
 	})
@@ -147,7 +148,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	preExistingSession, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      preExistingItem.ID,
 		SessionUUID: "pre-existing-stage-executor-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 		// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
 		// ExecutorFallbackReason/CostUnpriced deliberately omitted: simulates a
 		// row created before these fields existed.

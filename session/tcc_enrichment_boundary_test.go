@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
@@ -31,7 +32,7 @@ func TestTCCEnrichmentBoundary_LinkedMetadataIsNotClassified(t *testing.T) {
 		return tcc.Result{Protected: path == common || path == gitdir, Root: common}
 	}, nil, nil)
 	require.True(t, gate.Ready(worktree))
-	info, err := DetectWorktree(worktree)
+	info, err := instance.DetectWorktree(worktree)
 	require.NoError(t, err)
 	require.Equal(t, "from-protected-config", info.GitHubRepo)
 	require.Equal(t, []string{worktree}, classified)

@@ -12,15 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // steerRecordingPM captures SendKeys traffic and reports one pane change after
 // each write so session.SubmitDriverContent's settle/confirm polls succeed.
 type steerRecordingPM struct {
-	session.ProcessManager
+	instance.ProcessManager
 	mu      sync.Mutex
 	sent    []string
 	pending bool
@@ -76,7 +76,7 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 
 	const sessionUUID = "hidden-review-steer-uuid"
 	pm := &steerRecordingPM{}
-	inst := session.NewStartedInstanceForTest(t, "hidden-review-session", pm)
+	inst := instance.NewStartedInstanceForTest(t, "hidden-review-session", pm)
 	inst.UUID = sessionUUID
 	inst.Path = t.TempDir()
 	inst.Status = domain.Active
@@ -94,14 +94,14 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
 	// Live review link predicate: newest row is an un-ended review row, instance live.
 	link, err := fix.storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionRoleReview, link.Role)
+	assert.Equal(t, instance.SessionRoleReview, link.Role)
 	assert.Nil(t, link.EndedAt, "the review row must be un-ended")
 	assert.True(t, inst.Started(), "the instance must be live")
 	assert.True(t, inst.Snapshot().Hidden, "the session is hidden")
@@ -117,7 +117,7 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Session)
-	assert.Equal(t, []string{msg, session.EnterKeySequence}, pm.writes())
+	assert.Equal(t, []string{msg, instance.EnterKeySequence}, pm.writes())
 }
 
 // CapturePaneContent reports no capture so submit confirmation falls back to HasUpdated.

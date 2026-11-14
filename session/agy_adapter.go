@@ -14,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -49,7 +50,7 @@ type rawAgyStep struct {
 	} `json:"tool_calls,omitempty"`
 }
 
-func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
+func (a *AgyAdapter) Import(ctx context.Context, inst *instance.Instance) ([]instance.CanonicalTurn, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -103,7 +104,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 	}
 	defer file.Close()
 
-	var turns []CanonicalTurn
+	var turns []instance.CanonicalTurn
 	reader := bufio.NewReader(file)
 	turnIdx := 0
 
@@ -123,10 +124,10 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 				}
 
 				if raw.Type == "USER_INPUT" {
-					turn := CanonicalTurn{
-						Role: RoleUser,
-						Blocks: []CanonicalBlock{
-							NewTextBlock(raw.Content),
+					turn := instance.CanonicalTurn{
+						Role: instance.RoleUser,
+						Blocks: []instance.CanonicalBlock{
+							instance.NewTextBlock(raw.Content),
 						},
 						Timestamp: tTime,
 						TurnIndex: turnIdx,
@@ -137,19 +138,19 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 					turns = append(turns, turn)
 					turnIdx++
 				} else if raw.Type == "PLANNER_RESPONSE" {
-					var blocks []CanonicalBlock
+					var blocks []instance.CanonicalBlock
 					if raw.Content != "" {
-						blocks = append(blocks, NewTextBlock(raw.Content))
+						blocks = append(blocks, instance.NewTextBlock(raw.Content))
 					}
 					for _, tc := range raw.ToolCalls {
-						blocks = append(blocks, NewToolUseBlock(tc.ID, tc.Name, tc.Args))
+						blocks = append(blocks, instance.NewToolUseBlock(tc.ID, tc.Name, tc.Args))
 					}
 					if len(blocks) == 0 {
 						// Skip empty planner responses that have no text and no tool calls.
 						continue
 					}
-					turn := CanonicalTurn{
-						Role:      RoleAssistant,
+					turn := instance.CanonicalTurn{
+						Role:      instance.RoleAssistant,
 						Blocks:    blocks,
 						Timestamp: tTime,
 						TurnIndex: turnIdx,
@@ -161,10 +162,10 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 					turnIdx++
 				} else if raw.Source == "MODEL" && raw.Type != "" {
 					// Tool result or other model execution output
-					turn := CanonicalTurn{
-						Role: RoleUser,
-						Blocks: []CanonicalBlock{
-							NewToolResultBlock("", raw.Type, raw.Content, false),
+					turn := instance.CanonicalTurn{
+						Role: instance.RoleUser,
+						Blocks: []instance.CanonicalBlock{
+							instance.NewToolResultBlock("", raw.Type, raw.Content, false),
 						},
 						Timestamp: tTime,
 						TurnIndex: turnIdx,
@@ -186,7 +187,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 	return turns, nil
 }
 
-func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
+func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, inst *instance.Instance) error {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
 		return fmt.Errorf("no conversation UUID found")
@@ -216,10 +217,10 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 			step.CreatedAt = turn.Timestamp.Format(time.RFC3339)
 			step.Status = "DONE"
 
-			if turn.Role == RoleUser {
+			if turn.Role == instance.RoleUser {
 				isToolResult := false
 				for _, block := range turn.Blocks {
-					if block.Kind == BlockKindToolResult {
+					if block.Kind == instance.BlockKindToolResult {
 						step.Source = "MODEL"
 						step.Type = strings.ToUpper(block.ToolName)
 						if step.Type == "" {
@@ -235,7 +236,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 					step.Type = "USER_INPUT"
 					var textBlocks []string
 					for _, block := range turn.Blocks {
-						if block.Kind == BlockKindText {
+						if block.Kind == instance.BlockKindText {
 							textBlocks = append(textBlocks, block.Text)
 						}
 					}
@@ -247,9 +248,9 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 				var textBlocks []string
 				for _, block := range turn.Blocks {
 					switch block.Kind {
-					case BlockKindText:
+					case instance.BlockKindText:
 						textBlocks = append(textBlocks, block.Text)
-					case BlockKindToolUse:
+					case instance.BlockKindToolUse:
 						step.ToolCalls = append(step.ToolCalls, struct {
 							Name string          `json:"name"`
 							Args json.RawMessage `json:"args"`
@@ -362,10 +363,10 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 	for _, turn := range turns {
 		stepType := 15 // PLANNER_RESPONSE
 		contentLen := 0
-		if turn.Role == RoleUser {
+		if turn.Role == instance.RoleUser {
 			stepType = 14
 			for _, b := range turn.Blocks {
-				if b.Kind == BlockKindToolResult {
+				if b.Kind == instance.BlockKindToolResult {
 					contentLen += len(b.ToolResultContent)
 				} else {
 					contentLen += len(b.Text)

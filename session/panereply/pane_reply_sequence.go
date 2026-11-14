@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -84,7 +84,7 @@ func (o SequenceOptions) withDefaults() SequenceOptions {
 
 // SubmitReplySequence runs steps under lease and releases it exactly once. See
 // the file comment for the guarantees; SubmitReplyOnce's single-byte contract is unchanged.
-func SubmitReplySequence(ctx context.Context, pane replyPane, lease *session.HeldLease, steps []ReplyStep, opts SequenceOptions) SequenceResult {
+func SubmitReplySequence(ctx context.Context, pane replyPane, lease *instance.HeldLease, steps []ReplyStep, opts SequenceOptions) SequenceResult {
 	total := len(steps)
 	fail := func(err error) SequenceResult {
 		lease.Release()

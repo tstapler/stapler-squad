@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -28,17 +28,17 @@ func scannedBlob(recs ...domain.ArtifactRecord) *domain.SessionArtifactsBlob {
 	return &domain.SessionArtifactsBlob{Records: recs, ScanState: domain.ScanStateHasData}
 }
 
-func artifactSession(uuid, title string, age time.Duration, blob *domain.SessionArtifactsBlob) *session.Instance {
-	return &session.Instance{UUID: uuid, Title: title, UpdatedAt: artifactT0.Add(age), Artifacts: blob}
+func artifactSession(uuid, title string, age time.Duration, blob *domain.SessionArtifactsBlob) *instance.Instance {
+	return &instance.Instance{UUID: uuid, Title: title, UpdatedAt: artifactT0.Add(age), Artifacts: blob}
 }
 
 // newArtifactSvc indexes every instance's blob, as the OnScanComplete wiring does.
-func newArtifactSvc(links staticPRLinks, insts ...*session.Instance) *ArtifactService {
+func newArtifactSvc(links staticPRLinks, insts ...*instance.Instance) *ArtifactService {
 	idx := search.NewArtifactIndex(links)
 	for _, in := range insts {
 		idx.Update(in.UUID, in.Artifacts)
 	}
-	return &ArtifactService{index: idx, allInstances: func() []*session.Instance { return insts }}
+	return &ArtifactService{index: idx, allInstances: func() []*instance.Instance { return insts }}
 }
 
 func artifactSearchReq(q string) *connect.Request[sessionv1.SearchSessionArtifactsRequest] {
@@ -157,7 +157,7 @@ func TestSearchSessionArtifacts_ShouldRestrictToThePRFilter(t *testing.T) {
 
 func TestUnscannedCount_ShouldCountNotLinkedAndScanningVisibleSessions(t *testing.T) {
 	t.Parallel()
-	var insts []*session.Instance
+	var insts []*instance.Instance
 	insts = append(insts, artifactSession("s0", "s0", 0, scannedBlob(domain.BranchRecord{Name: "x-branch"})))
 	for i := 1; i < 7; i++ {
 		insts = append(insts, artifactSession("s"+string(rune('0'+i)), "s"+string(rune('0'+i)), 0, scannedBlob()))

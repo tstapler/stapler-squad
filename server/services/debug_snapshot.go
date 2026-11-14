@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"os"
 	"path/filepath"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"runtime"
 	"strings"
@@ -114,7 +114,7 @@ const (
 
 // CollectSnapshot gathers all diagnostic data into a DebugSnapshot.
 // Individual subsystem failures are recorded in Errors and do not abort the collection.
-func CollectSnapshot(ctx context.Context, note string, instances []*session.Instance, approvalStore *ApprovalStore, logLines int) *DebugSnapshot {
+func CollectSnapshot(ctx context.Context, note string, instances []*instance.Instance, approvalStore *ApprovalStore, logLines int) *DebugSnapshot {
 	if logLines <= 0 {
 		logLines = defaultLogLines
 	}
@@ -146,7 +146,7 @@ func collectServerInfo() ServerInfo {
 }
 
 // collectSessionSnapshots captures the state of all active sessions.
-func collectSessionSnapshots(ctx context.Context, instances []*session.Instance) ([]SessionSnapshot, []string) {
+func collectSessionSnapshots(ctx context.Context, instances []*instance.Instance) ([]SessionSnapshot, []string) {
 	var snapshots []SessionSnapshot
 	var errors []string
 

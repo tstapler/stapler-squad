@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // defaultSyncInterval is the time between sync ticks.
@@ -313,7 +314,7 @@ type backwardSyncOutcome struct{ updated, skipped, errored int }
 // live item that moved since the sync read from being archived.
 func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target domain.BacklogStatus) backwardSyncOutcome {
 	_, err := sl.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
+		Caller: domain.CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: instance.TriggeredByGitHubSync,
 		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(from)},
 	})
 	switch {

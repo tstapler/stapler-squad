@@ -3,6 +3,7 @@ package session
 import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // BackgroundOutcome is the server-computed result of a hidden (background)
@@ -57,7 +58,7 @@ func IsFailureEndReason(endReason string) bool {
 // the session has no ItemSession. A recorded verdict wins over a failure
 // reason; the diagnose role records no verdict, so it is always unknown.
 func ComputeBackgroundOutcome(status domain.Status, is *backlogdto.ItemSessionSummary) BackgroundOutcome {
-	if is != nil && is.Role == SessionRoleDiagnose {
+	if is != nil && is.Role == instance.SessionRoleDiagnose {
 		return BackgroundOutcomeUnknown
 	}
 	if is != nil && hasRecordedResult(is) {
@@ -71,9 +72,9 @@ func ComputeBackgroundOutcome(status domain.Status, is *backlogdto.ItemSessionSu
 
 func hasRecordedResult(is *backlogdto.ItemSessionSummary) bool {
 	switch is.Role {
-	case SessionRoleReview:
+	case instance.SessionRoleReview:
 		return is.ReviewVerdict != nil
-	case SessionRoleTriage:
+	case instance.SessionRoleTriage:
 		return is.TriageResult != ""
 	}
 	return false

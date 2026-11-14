@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // diagnoseHandlers implements the Diagnose & Nudge MCP tools (backlog item
@@ -176,8 +177,8 @@ func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.Call
 func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
 	itemSession, linkErr := session.ResolveItemLink(ctx, storage, callerUUID, itemID)
 	if linkErr == nil {
-		if itemSession.Role != session.SessionRoleDiagnose {
-			return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only %q may call this tool", itemSession.Role, session.SessionRoleDiagnose), "")
+		if itemSession.Role != instance.SessionRoleDiagnose {
+			return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only %q may call this tool", itemSession.Role, instance.SessionRoleDiagnose), "")
 		}
 		return itemSession, nil
 	}
@@ -401,7 +402,7 @@ func (dh *diagnoseHandlers) claimNudgeAttemptForWrite(ctx context.Context, calle
 // write-time pane-ownership re-verification can't be skipped even though
 // DiagnoseNudgeAllowed/dispatch-time eligibility already looked idle (AC2's
 // two-part write-time gate).
-func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessionArgs) (*session.Instance, *mcpgo.CallToolResult) {
+func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessionArgs) (*instance.Instance, *mcpgo.CallToolResult) {
 	if dh.live == nil {
 		return nil, errResult(ErrSessionNotFound, "no live session lookup available", "")
 	}
@@ -423,8 +424,8 @@ func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessi
 // writeNudge takes the target's write lease BEFORE claiming the dispatch's one
 // nudge attempt, so a busy lease (a driver key, a steer) never consumes the
 // attempt and the diagnostic agent may retry (Story 5.0).
-func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, target *session.Instance, message string) *mcpgo.CallToolResult {
-	lease, busy := acquireMCPWriteLease(target, session.LeaseWriterNudge)
+func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, target *instance.Instance, message string) *mcpgo.CallToolResult {
+	lease, busy := acquireMCPWriteLease(target, instance.LeaseWriterNudge)
 	if busy != nil {
 		return busy
 	}
@@ -432,7 +433,7 @@ func (dh *diagnoseHandlers) writeNudge(ctx context.Context, callerUUID string, t
 		lease.Release()
 		return errRes
 	}
-	if submitErr := session.SubmitContentWithEnter(ctx, target, lease, message); submitErr != nil {
+	if submitErr := instance.SubmitContentWithEnter(ctx, target, lease, message); submitErr != nil {
 		recordDiagnoseWriteFailure(target, submitErr)
 		return errResult(ErrInternalError, fmt.Sprintf("nudge write failed: %v", submitErr), "")
 	}
@@ -470,7 +471,7 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 
 // recordDiagnoseWriteFailure counts a failed diagnose write; an uncertain
 // submit may still have reached the pane, so it is kept apart from "failed".
-func recordDiagnoseWriteFailure(target *session.Instance, err error) {
+func recordDiagnoseWriteFailure(target *instance.Instance, err error) {
 	outcome := session.NudgeOutcomeFailed
 	if errors.Is(err, session.ErrNudgeSubmitUncertain) {
 		outcome = session.NudgeOutcomeUncertain

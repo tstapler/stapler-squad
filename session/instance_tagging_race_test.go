@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -82,7 +83,7 @@ func TestReclassifyTagsAfterCreate_should_AcquireOwnLock_When_CalledConcurrently
 	projectDir := base + "/lock-order-race-project"
 
 	title := fmt.Sprintf("test-tag-lock-order-race-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             projectDir,
 		Program:          "sleep 300",

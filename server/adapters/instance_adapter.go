@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -72,7 +73,7 @@ func artifactsToProto(a *domain.SessionArtifactsBlob, linked bool, supportsTrans
 
 // InstanceToProto converts a session.Instance to a proto Session message.
 // workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
-func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *sessionv1.Session {
+func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *sessionv1.Session {
 	if inst == nil {
 		return nil
 	}
@@ -259,7 +260,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 
 	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
-	var statusInfo session.InstanceStatusInfo
+	var statusInfo instance.InstanceStatusInfo
 	if snap.Status == domain.Active {
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			statusInfo = mgr.GetStatus(inst)
@@ -307,7 +308,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
 	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
 	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
-	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+	if remoteTarget, ok := inst.GetExecutionTarget().(instance.RemoteExecutionTarget); ok {
 		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
@@ -321,7 +322,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {
-		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
+		tasksJSON, _ := instance.EncodeTasks(g.Tasks) // empty string on error is safe
 		protoSession.Goal = &sessionv1.SessionGoalSummary{
 			GoalText:   g.Goal,
 			Status:     g.Status,
@@ -372,7 +373,7 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 // toProtoSubStatusFromInfo derives the SubStatus proto enum from pre-computed status info.
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
-func toProtoSubStatusFromInfo(basicStatus domain.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
+func toProtoSubStatusFromInfo(basicStatus domain.Status, rateLimitState int, info instance.InstanceStatusInfo) sessionv1.SubStatus {
 	if basicStatus != domain.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}

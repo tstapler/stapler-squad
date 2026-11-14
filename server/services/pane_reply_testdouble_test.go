@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Shared pane-reply test double: the visible-session and answer-router tests
@@ -28,7 +28,7 @@ func replyDialogFixture(t *testing.T, name string) string {
 // `after` (or still `dialog` when keepOpen), and notes how many audit lines
 // were durable at the instant of each write.
 type replyPM struct {
-	session.ProcessManager
+	instance.ProcessManager
 	mu       sync.Mutex
 	sent     []string
 	dialog   string

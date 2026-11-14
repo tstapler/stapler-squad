@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
@@ -42,11 +43,11 @@ import (
 type SessionCreator interface {
 	// CreateDirectorySession creates a directory-type session at path. See
 	// SessionSpawnOptions.ProgramOverride's doc comment for how program overrides apply.
-	CreateDirectorySession(ctx context.Context, path string, opts services.SessionSpawnOptions) (*session.Instance, error)
+	CreateDirectorySession(ctx context.Context, path string, opts services.SessionSpawnOptions) (*instance.Instance, error)
 	// CreateWorktreeSession spawns a session inside an already-created git worktree at
 	// worktreePath. repoPath is the parent repo used for program resolution; worktreePath
 	// must already exist on disk before this is called.
-	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts services.SessionSpawnOptions) (*session.Instance, error)
+	CreateWorktreeSession(ctx context.Context, repoPath, worktreePath string, opts services.SessionSpawnOptions) (*instance.Instance, error)
 }
 
 // RepoWatchRemover lets BacklogService tell the background unfinished-changes
@@ -286,7 +287,7 @@ type BacklogService struct {
 	// resolveGitHubInput resolves a GitHub URL/shorthand to a local clone path,
 	// cloning it if necessary. Defaults to session.ResolveGitHubInput; overridable
 	// via SetGitHubResolver so tests don't need real network/git access.
-	resolveGitHubInput func(input string) (string, *session.GitHubRef, error)
+	resolveGitHubInput func(input string) (string, *instance.GitHubRef, error)
 
 	// tokenStore and pricing power per-session cost estimates surfaced in the UI.
 	tokenStore tokens.TokenStoreReader
@@ -556,7 +557,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		shutdownCancel:       cancel,
 		triageSem:            make(chan struct{}, cfg.MaxConcurrentTriageOrDefault()),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
-		resolveGitHubInput:   session.ResolveGitHubInput,
+		resolveGitHubInput:   instance.ResolveGitHubInput,
 		capabilityCheck:      headless.DefaultCapabilitySelfCheck,
 		modelFamilies:        workflows.DefaultModelFamilies(),
 		cleanup:              newCleanupWiring(storage),
@@ -834,7 +835,7 @@ func (s *BacklogService) buildCostLookup() func(tmuxUUID string) float64 {
 // SetGitHubResolver overrides how GitHub URLs are resolved to local clone paths.
 // Used by tests to avoid real network/git access; production wiring uses the
 // session.ResolveGitHubInput default set in NewBacklogService.
-func (s *BacklogService) SetGitHubResolver(fn func(input string) (string, *session.GitHubRef, error)) {
+func (s *BacklogService) SetGitHubResolver(fn func(input string) (string, *instance.GitHubRef, error)) {
 	s.resolveGitHubInput = fn
 }
 
@@ -845,7 +846,7 @@ func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
 	if input == "" {
 		return input, nil
 	}
-	if !session.IsGitHubURL(input) {
+	if !instance.IsGitHubURL(input) {
 		// "scheme://" input no recognizer accepts (e.g. "https://github.com/") is
 		// never a usable filesystem path. Configured GHE URLs still pass through
 		// unchanged, as before.
@@ -865,7 +866,7 @@ func (s *BacklogService) isEnterpriseGitHubURL(input string) bool {
 	if s.cfg == nil {
 		return false
 	}
-	return session.IsGitHubURLWithHosts(input, s.EnterpriseHosts())
+	return instance.IsGitHubURLWithHosts(input, s.EnterpriseHosts())
 }
 
 // itemSessionToProto converts an ItemSessionSummary to its proto representation.
@@ -1280,7 +1281,7 @@ func itemSourceToProto(src *backlogdto.ItemSourceData) *sessionv1.ItemSource {
 // are durable before the item is marked done. Errors are logged but not returned.
 func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, sessions []backlogdto.ItemSessionSummary) {
 	for _, is := range sessions {
-		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+		if is.SessionUUID == "" || is.Role != string(instance.SessionRoleWork) {
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -1327,7 +1328,7 @@ func (s *BacklogService) cleanupWorktrees(ctx context.Context, sessions []backlo
 	}
 	failed := false
 	for _, is := range sessions {
-		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
+		if is.SessionUUID == "" || is.Role != string(instance.SessionRoleWork) {
 			continue
 		}
 		wt, err := s.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
@@ -1445,7 +1446,7 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 		return
 	}
 	for _, is := range sessions {
-		if is.SessionUUID == "" || !session.IsTmuxBackedSessionRole(is.Role) {
+		if is.SessionUUID == "" || !instance.IsTmuxBackedSessionRole(is.Role) {
 			continue
 		}
 		if err := s.sessionStopper.ArchiveSessionByUUID(ctx, is.SessionUUID); err != nil {

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func noopSession(age int, role string, ended bool, commits int, last, base string) backlogdto.ItemSessionSummary {
@@ -25,7 +25,7 @@ func noopSession(age int, role string, ended bool, commits int, last, base strin
 }
 
 func TestConsecutiveNoopWorkSessions(t *testing.T) {
-	w := string(session.SessionRoleWork)
+	w := string(instance.SessionRoleWork)
 	tests := []struct {
 		name     string
 		sessions []backlogdto.ItemSessionSummary
@@ -35,7 +35,7 @@ func TestConsecutiveNoopWorkSessions(t *testing.T) {
 		{"three no-ops", []backlogdto.ItemSessionSummary{noopSession(3, w, true, 0, "", ""), noopSession(2, w, true, 0, "a", "a"), noopSession(1, w, true, 0, "", "")}, 3},
 		{"newest committed breaks run", []backlogdto.ItemSessionSummary{noopSession(3, w, true, 0, "", ""), noopSession(1, w, true, 2, "b", "a")}, 0},
 		{"older commit does not count", []backlogdto.ItemSessionSummary{noopSession(3, w, true, 4, "b", "a"), noopSession(2, w, true, 0, "", ""), noopSession(1, w, true, 0, "", "")}, 2},
-		{"running and review sessions skipped", []backlogdto.ItemSessionSummary{noopSession(3, w, true, 0, "", ""), noopSession(2, string(session.SessionRoleReview), true, 0, "", ""), noopSession(1, w, false, 0, "", "")}, 1},
+		{"running and review sessions skipped", []backlogdto.ItemSessionSummary{noopSession(3, w, true, 0, "", ""), noopSession(2, string(instance.SessionRoleReview), true, 0, "", ""), noopSession(1, w, false, 0, "", "")}, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

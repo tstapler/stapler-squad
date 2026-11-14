@@ -7,15 +7,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // stubLiveFinder is a test double for LiveInstanceFinder that returns a fixed instance.
 type StubLiveFinder struct {
-	Inst *session.Instance
+	Inst *instance.Instance
 }
 
-func (s *StubLiveFinder) FindLiveInstance(_ string) *session.Instance {
+func (s *StubLiveFinder) FindLiveInstance(_ string) *instance.Instance {
 	return s.Inst
 }
 

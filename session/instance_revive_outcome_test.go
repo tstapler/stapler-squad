@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -65,17 +66,17 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 
 	tests := []struct {
 		name    string
-		startFn func(inst *Instance) error
+		startFn func(inst *instance.Instance) error
 	}{
 		{
 			name: "startLocked (actor-routed Start)",
-			startFn: func(inst *Instance) error {
+			startFn: func(inst *instance.Instance) error {
 				return inst.Start(false)
 			},
 		},
 		{
 			name: "legacy start (StartWithCleanup)",
-			startFn: func(inst *Instance) error {
+			startFn: func(inst *instance.Instance) error {
 				startCleanup, err := inst.StartWithCleanup(false)
 				if startCleanup != nil {
 					t.Cleanup(func() { _ = startCleanup() })
@@ -88,7 +89,7 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			title := fmt.Sprintf("test-cold-lost-history-%d", time.Now().UnixNano())
-			inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+			inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 				Title:            title,
 				Path:             t.TempDir(),
 				Program:          "sleep 300",
@@ -139,7 +140,7 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-no-history-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
@@ -185,7 +186,7 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-then-hot-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",

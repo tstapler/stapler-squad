@@ -18,12 +18,13 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---- fakes ----
 
 type steerCall struct {
-	inst *session.Instance
+	inst *instance.Instance
 	sig  string
 	msg  string
 }
@@ -32,7 +33,7 @@ type steerCall struct {
 // around the recorded write, like SteerInstanceGuarded does.
 type fakeNudger struct {
 	mu       sync.Mutex
-	insts    []*session.Instance
+	insts    []*instance.Instance
 	finds    int
 	steers   []steerCall
 	outcome  SteerOutcome
@@ -44,7 +45,7 @@ type fakeNudger struct {
 	notIdle  bool // InstanceReadyForSteer reports false
 }
 
-func (f *fakeNudger) FindLiveInstance(id string) *session.Instance {
+func (f *fakeNudger) FindLiveInstance(id string) *instance.Instance {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.finds++
@@ -56,9 +57,9 @@ func (f *fakeNudger) FindLiveInstance(id string) *session.Instance {
 	return nil
 }
 
-func (f *fakeNudger) InstanceReadyForSteer(*session.Instance) bool { return !f.notIdle }
+func (f *fakeNudger) InstanceReadyForSteer(*instance.Instance) bool { return !f.notIdle }
 
-func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *session.Instance, sig, msg string) (SteerOutcome, error) {
+func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *instance.Instance, sig, msg string) (SteerOutcome, error) {
 	release := func(bool) {}
 	if f.guard != nil {
 		rel, g := f.guard.TryBegin(inst.GetStableID(), sig)
@@ -246,7 +247,7 @@ type nudgeFixture struct {
 	prs     *fakePRs
 	clock   *fakeNudgeClock
 	logs    *logCapture
-	inst    *session.Instance
+	inst    *instance.Instance
 }
 
 func linkedPR(host, owner, repo string, number int, account string, links ...githubpkg.LinkedSession) githubpkg.UserPR {
@@ -268,9 +269,9 @@ func failingLintDetail(t *testing.T, host, owner, repo string, number int) githu
 // idle claude session "fix-ci", with one failing check "lint".
 func newNudgeFixture(t *testing.T) *nudgeFixture {
 	t.Helper()
-	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
+	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
 	f := &nudgeFixture{
-		nudger:  &fakeNudger{insts: []*session.Instance{inst}, outcome: SteerDelivered},
+		nudger:  &fakeNudger{insts: []*instance.Instance{inst}, outcome: SteerDelivered},
 		fetcher: &fakeFetcher{detail: failingLintDetail(t, "github.com", "acme", "api", 42)},
 		prs: &fakePRs{
 			prs: []githubpkg.UserPR{linkedPR("github.com", "acme", "api", 42, "alice",
@@ -335,8 +336,8 @@ func TestNudgeSessionForPR_should_ReturnSessionNotLinkedWithZeroSteers_When_Cros
 	for _, sessionID := range []string{"s-web", "other"} {
 		t.Run(sessionID, func(t *testing.T) {
 			f := newNudgeFixture(t)
-			web := &session.Instance{Title: "s-web", UUID: "uuid-web", Program: "claude"}
-			other := &session.Instance{Title: "other", UUID: "uuid-other", Program: "claude"}
+			web := &instance.Instance{Title: "s-web", UUID: "uuid-web", Program: "claude"}
+			other := &instance.Instance{Title: "other", UUID: "uuid-other", Program: "claude"}
 			f.nudger.insts = append(f.nudger.insts, web, other)
 			// s-web is linked to acme/web#42 (same number, other repo), not to acme/api#42.
 			f.prs.prs = append(f.prs.prs, linkedPR("github.com", "acme", "web", 42, "alice", githubpkg.LinkedSession{SessionID: "s-web"}))
@@ -450,11 +451,11 @@ func TestNudgeSessionForPR_should_MapBusyPausedUntrackedAndNoControllerToDistinc
 // readiness gate (the one auto-steer uses) decides.
 func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGenericBusyCopy_When_NoStatusSource(t *testing.T) {
 	fix := setupForkTestFixture(t)
-	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
+	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
 	svctest.AddInstanceToPoller(fix.poller, inst)
 	writes := 0
-	fix.svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { writes++; return nil }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error { return nil }
+	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
+	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return nil }
 	fix.svc.guardedSteer.guard.now = newFakeNudgeClock().Now
 
 	f := newNudgeFixture(t)
@@ -470,7 +471,7 @@ func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGene
 	details := make([]string, 0, len(gates))
 	for _, g := range gates {
 		g := g
-		fix.svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return g.ready }
+		fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return g.ready }
 		resp, err := f.call("fix-ci")
 		require.NoError(t, err)
 		assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_BUSY, resp.Outcome)
@@ -564,13 +565,13 @@ func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSess
 
 func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_PaneOwnershipMismatch(t *testing.T) {
 	fix := setupForkTestFixture(t)
-	inst := &session.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
+	inst := &instance.Instance{Title: "fix-ci", UUID: "uuid-fix-ci", Program: "claude"}
 	svctest.AddInstanceToPoller(fix.poller, inst)
 	writes := 0
 	verifyErr := errors.New("pane ownership mismatch")
-	fix.svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return notReadyNone }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error { return verifyErr }
-	fix.svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { writes++; return nil }
+	fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
+	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return verifyErr }
+	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
 	clk := newFakeNudgeClock()
 	fix.svc.guardedSteer.guard.now = clk.Now
 	f := newNudgeFixture(t)

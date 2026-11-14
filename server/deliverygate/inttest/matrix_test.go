@@ -15,8 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -158,7 +158,7 @@ func (e *matrixEnv) publishEveryType(t *testing.T) {
 	e.bus.Publish(&events.Event{
 		Type: events.EventSessionUpdated,
 		// The instance is Hidden: the gate (not a check in the push builder) drops it.
-		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: domain.Stopped, Hidden: true},
+		Session:       &instance.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: domain.Stopped, Hidden: true},
 		UpdatedFields: []string{events.FieldStatus},
 	})
 	e.bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))

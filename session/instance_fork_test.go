@@ -11,10 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // forkResumeID returns the resume conversation UUID stored in the forked instance (if any).
-func forkResumeID(inst *Instance) string {
+func forkResumeID(inst *instance.Instance) string {
 	cs := inst.GetClaudeSession()
 	if cs == nil {
 		return ""
@@ -40,7 +41,7 @@ func TestForkFromCheckpoint_ConvUUID_SetAsResumeId(t *testing.T) {
 	configDir := t.TempDir()
 
 	// Create source instance.
-	srcInst := &Instance{
+	srcInst := &instance.Instance{
 		Title: "src-session",
 		Path:  t.TempDir(),
 	}
@@ -73,7 +74,7 @@ func TestForkFromCheckpoint_ConvUUID_SetAsResumeId(t *testing.T) {
 func TestForkFromCheckpoint_NoConvUUID_EmptyResumeId(t *testing.T) {
 	t.Parallel()
 	configDir := t.TempDir()
-	srcInst := &Instance{
+	srcInst := &instance.Instance{
 		Title: "src-session",
 		Path:  t.TempDir(),
 	}
@@ -102,7 +103,7 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 	historyFile := filepath.Join(historyDir, "conv-real.jsonl")
 	writeParsableClaudeTurns(t, historyFile, 10)
 
-	srcInst := (&Instance{
+	srcInst := (&instance.Instance{
 		Title:           "src-session",
 		Path:            t.TempDir(),
 		HistoryFilePath: historyFile,

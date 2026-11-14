@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type gateFunc func(string) bool
@@ -24,7 +24,7 @@ func (f gateFunc) AllowStatusChange(id string) bool { return f(id) }
 func stoppedEvent(title string, hidden bool) *events.Event {
 	return &events.Event{
 		Type:          events.EventSessionUpdated,
-		Session:       &session.Instance{ID: "id-" + title, Title: title, Status: domain.Stopped, Hidden: hidden},
+		Session:       &instance.Instance{ID: "id-" + title, Title: title, Status: domain.Stopped, Hidden: hidden},
 		UpdatedFields: []string{events.FieldStatus},
 	}
 }

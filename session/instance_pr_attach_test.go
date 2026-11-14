@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -34,10 +35,10 @@ type fakePRCall struct {
 	uuid   string
 	ref    domain.PRRef
 	link   domain.PRLink
-	mirror PRMirror
+	mirror instance.PRMirror
 }
 
-func (f *fakePRPersister) AttachSessionPR(_ context.Context, uuid string, ref domain.PRRef, link domain.PRLink, m PRMirror) (domain.PRLinkResult, error) {
+func (f *fakePRPersister) AttachSessionPR(_ context.Context, uuid string, ref domain.PRRef, link domain.PRLink, m instance.PRMirror) (domain.PRLinkResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakePRCall{uuid, ref, link, m})
@@ -59,17 +60,17 @@ func (f *fakePRPersister) callCount() int {
 	return len(f.calls)
 }
 
-func newPRTestInstance(t *testing.T) *Instance {
+func newPRTestInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title: "multi-pr", UUID: "uuid-multi-pr", Path: t.TempDir(), Program: "echo", Branch: "feat/x",
 		GitHubOwner: "acme", GitHubRepo: "app",
 	}
-	FinishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	return inst
 }
 
-func attachNumbers(t *testing.T, inst *Instance) []int {
+func attachNumbers(t *testing.T, inst *instance.Instance) []int {
 	t.Helper()
 	prs := inst.Snapshot().GitHub.PRs
 	out := make([]int, 0, len(prs))
@@ -186,7 +187,7 @@ func TestAttachPR_ShouldReturnErrNoSessionUUID_WhenUUIDEmpty(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.UUID = ""
-	FinishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{})
 	if !errors.Is(err, domain.ErrNoSessionUUID) {
 		t.Fatalf("AttachPR err = %v, want domain.ErrNoSessionUUID", err)
@@ -285,7 +286,7 @@ func TestDetachPinApply_ShouldUpdateSetAndFlags(t *testing.T) {
 	if !inst.PinPR(r11, true) || inst.Snapshot().GitHub.GitHubPRNumber != 11 {
 		t.Errorf("pin did not make #11 active: %d", inst.Snapshot().GitHub.GitHubPRNumber)
 	}
-	if !inst.ApplyPRUpdate(r12, PRStatusUpdate{State: "merged", Terminal: true}) {
+	if !inst.ApplyPRUpdate(r12, instance.PRStatusUpdate{State: "merged", Terminal: true}) {
 		t.Fatal("ApplyPRUpdate did not find #12")
 	}
 	if inst.MarkPRTerminal(r12, domain.PRStateOpen) {
@@ -315,7 +316,7 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.GitHubPRNumber, inst.LegacyPRUnrepresented = 11, true
-			FinishInstanceConstruction(inst)
+			instance.FinishInstanceConstruction(inst)
 			_ = inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", tt.attach), domain.AttachSourceBackfill, domain.PRInitial{})
 			if got := inst.Snapshot().GitHub.LegacyPRUnrepresented; got != tt.wantSet {
 				t.Errorf("LegacyPRUnrepresented = %v, want %v", got, tt.wantSet)
@@ -365,7 +366,7 @@ func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR
 
 func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "from-pr", Path: t.TempDir(), Program: "echo",
 		GitHubOwner: "acme", GitHubRepo: "app",
 		GitHubPRNumber: 12, GitHubPRURL: "https://github.com/acme/app/pull/12",
@@ -382,9 +383,9 @@ func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T)
 func TestAttachPR_ShouldObservePRCountThree_WhenThirdPRAttaches(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	before := SessionPRCountObservations(3)
+	before := instance.SessionPRCountObservations(3)
 	for _, n := range []int{11, 12, 13} {
 		require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", n), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	}
-	assert.GreaterOrEqual(t, SessionPRCountObservations(3), before+1, "third attach observed ssq_session_pr_count=3")
+	assert.GreaterOrEqual(t, instance.SessionPRCountObservations(3), before+1, "third attach observed ssq_session_pr_count=3")
 }

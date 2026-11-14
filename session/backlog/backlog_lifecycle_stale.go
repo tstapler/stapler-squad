@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // StaleWorkRemediator can clean up and respawn an in_progress backlog item
@@ -79,7 +80,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		}
 		var active *backlogdto.ItemSessionSummary
 		for i := range sessions {
-			if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+			if sessions[i].Role == instance.SessionRoleWork && sessions[i].EndedAt == nil {
 				active = &sessions[i]
 				break
 			}

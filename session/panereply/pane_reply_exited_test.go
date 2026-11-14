@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -32,7 +32,7 @@ func TestSubmitReplyOnce_ShouldFailFastWithIndeterminateStage_WhenPaneExitsAfter
 
 	require.ErrorIs(t, err, tymux.ErrPaneExited)
 	assert.Equal(t, StageWriteEntered, stage)
-	session.AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // exitingSim is the tabbed simulator whose process exits once deadAfter keys

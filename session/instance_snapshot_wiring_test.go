@@ -4,12 +4,13 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 )
 
 func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   "snapshot-test-new",
 		Path:    t.TempDir(),
 		Program: "echo",
@@ -27,14 +28,14 @@ func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
 
 func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "pr-snap", Path: t.TempDir(), Program: "echo", Branch: "feat/x"}
-	FinishInstanceConstruction(inst)
+	inst := &instance.Instance{Title: "pr-snap", Path: t.TempDir(), Program: "echo", Branch: "feat/x"}
+	instance.FinishInstanceConstruction(inst)
 	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	inst.PRs = []domain.PRView{{StateID: 1, Ref: ref, State: domain.PRStateOpen, HeadBranch: "feat/x"}}
 	inst.LegacyPRUnrepresented = true
 	inst.HasPRLinks = true
 
-	snap := buildSnapshot(inst)
+	snap := instance.BuildSnapshot(inst)
 	inst.PRs[0].State = domain.PRStateMerged // mutate the live set after the build
 
 	if got := snap.GitHub.PRs[0].State; got != domain.PRStateOpen {
@@ -49,17 +50,17 @@ func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 
 	// The flags are carried, never re-derived: no links but a true flag stays true.
 	inst.PRs, inst.HasPRLinks = nil, true
-	if !buildSnapshot(inst).GitHub.HasPRLinks {
+	if !instance.BuildSnapshot(inst).GitHub.HasPRLinks {
 		t.Error("HasPRLinks was re-derived from an empty PRs slice")
 	}
 }
 
 func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "pr-out", Path: t.TempDir(), Program: "echo"}
+	inst := &instance.Instance{Title: "pr-out", Path: t.TempDir(), Program: "echo"}
 	inst.PRs = []domain.PRView{{StateID: 1, Ref: fixturetest.MustPRRef(t, "", "acme", "app", 12), State: domain.PRStateOpen}}
 	inst.LegacyPRUnrepresented, inst.HasPRLinks = true, true
-	FinishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 
 	data := inst.ToInstanceData()
 	if !data.LegacyPRUnrepresented || !data.HasPRLinks || len(data.PRs) != 1 {

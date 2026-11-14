@@ -18,6 +18,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -118,7 +119,7 @@ func TestFirstPaint_should_RestoreTerminalStateInXterm_EndToEnd(t *testing.T) {
 		Modes:     &v1.TerminalModes{AppCursorKeys: true, BracketedPaste: true},
 		AltScreen: true, Title: "vim", ScrollTop: 1, ScrollBottom: 3, CursorRow: 2, CursorCol: 4,
 	}}
-	inst := session.NewStartedInstanceForTest(t, "e2e", session.NewTymuxBackend(pane))
+	inst := instance.NewStartedInstanceForTest(t, "e2e", session.NewTymuxBackend(pane))
 	hub := streamhub.NewStreamHub("e2e", inst, streamhub.WithTeardownGrace(time.Hour),
 		streamhub.WithQuiescenceTimeout(5*time.Millisecond), streamhub.WithQuiescenceQuietPeriod(time.Millisecond))
 	stream, conn, cleanup := createTestWebSocketPair(t)

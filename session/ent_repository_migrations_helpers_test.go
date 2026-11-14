@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/migrations"
 )
 
@@ -25,7 +26,7 @@ func runGitHubPRURLBackfill(ctx context.Context, er *EntRepository) error {
 }
 
 func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *EntRepository) error {
-	return migrations.BacklogItemRepoPathCanonicalization(ctx, migrationEnv(er), ResolveMainRepoRoot)
+	return migrations.BacklogItemRepoPathCanonicalization(ctx, migrationEnv(er), instance.ResolveMainRepoRoot)
 }
 
 func runBacklogItemLegacyImportExternalBackfill(ctx context.Context, er *EntRepository) error {

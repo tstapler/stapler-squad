@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -394,14 +395,14 @@ func FindConversationFilePath(ctx context.Context, sessionID string) (string, er
 // limit == 0 all messages are returned.
 //
 // Results are always in chronological order (oldest first).
-func (sh *ClaudeSessionHistory) GetMessagesFromConversationFile(sessionID string, limit int) ([]ClaudeConversationMessage, error) {
+func (sh *ClaudeSessionHistory) GetMessagesFromConversationFile(sessionID string, limit int) ([]instance.ClaudeConversationMessage, error) {
 	conversationFile, err := findConversationFilePath(context.Background(), "", sessionID)
 	if err != nil {
 		return nil, err
 	}
 
 	if limit > 0 {
-		return readLastNMessagesFromFile(conversationFile, limit)
+		return instance.ReadLastNMessagesFromFile(conversationFile, limit)
 	}
-	return readAllMessagesFromFile(conversationFile)
+	return instance.ReadAllMessagesFromFile(conversationFile)
 }

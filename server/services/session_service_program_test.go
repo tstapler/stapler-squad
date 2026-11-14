@@ -13,8 +13,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // addHibernatedThenForceActive persists inst with Status=Hibernated (whose reload path
@@ -31,10 +31,10 @@ import (
 // contention from the rest of the parallel test suite, the same class of problem
 // TestResumeCrashedSession_TransitionsCrashedToActive avoids by never synchronously waiting
 // on the real restart it kicks off).
-func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, path string) *session.Instance {
+func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, path string) *instance.Instance {
 	t.Helper()
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      path,
 		Status:    domain.Hibernated,
@@ -59,7 +59,7 @@ func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, pat
 
 // findInstanceByTitle returns the instance with the given title from loaded, failing the
 // test if it isn't present.
-func findInstanceByTitle(t *testing.T, loaded []*session.Instance, title string) *session.Instance {
+func findInstanceByTitle(t *testing.T, loaded []*instance.Instance, title string) *instance.Instance {
 	t.Helper()
 	for _, inst := range loaded {
 		if inst.Title == title {
@@ -118,7 +118,7 @@ func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "stopped-program-session",
 		Path:      "/tmp/test",
 		Status:    domain.Stopped,
@@ -168,7 +168,7 @@ func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "default-resolve-session",
 		Path:      "/tmp/test",
 		Status:    domain.Stopped,
@@ -345,7 +345,7 @@ func TestUpdateSessionProgram_PublishesPlainEvent_WhenControllerNotRegistered(t 
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
-	fix.svc.SetStatusManager(session.NewInstanceStatusManager())
+	fix.svc.SetStatusManager(instance.NewInstanceStatusManager())
 
 	addPausedSession(t, fix, "no-controller-session")
 

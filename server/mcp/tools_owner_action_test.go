@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func (r *toolRig) linkedItem(sessionUUID string) string {
@@ -20,7 +21,7 @@ func (r *toolRig) linkedItem(sessionUUID string) string {
 	ctx := context.Background()
 	item, err := r.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "owner action", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(r.t, err)
-	_, err = r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	_, err = r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(r.t, err)
 	return item.ID
 }
@@ -190,7 +191,7 @@ func itemWithCriteria(t *testing.T, r *toolRig, sid string, statuses ...domain.A
 	require.NoError(t, err)
 	item, err := r.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "w", Status: string(domain.BacklogStatusInProgress), AcceptanceCriteria: raw})
 	require.NoError(t, err)
-	_, err = r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sid, SessionRole: session.SessionRoleWork})
+	_, err = r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sid, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	return item.ID
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,7 @@ import (
 
 // newTwoPRInstance returns a session with #11 merged (terminal) and #12 open,
 // the shared fixture of the session-multi-pr-tracking headline tests (T1.3.4).
-func newTwoPRInstance(t *testing.T) *Instance {
+func newTwoPRInstance(t *testing.T) *instance.Instance {
 	t.Helper()
 	inst := newPRTestInstance(t)
 	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceCreatedFromURL,
@@ -82,7 +83,7 @@ func TestPRActions_ShouldHonorExplicitPRAndRefuseUnattached(t *testing.T) {
 	require.Equal(t, []string{"merge#11"}, fake.calls)
 
 	err := inst.MergePR(ctx, &r99, "merge")
-	require.ErrorIs(t, err, ErrPRNotAttached)
+	require.ErrorIs(t, err, instance.ErrPRNotAttached)
 	require.Len(t, fake.calls, 1, "GitHub is not called for a PR the session does not hold")
 }
 
@@ -91,7 +92,7 @@ func TestPRActions_ShouldNeverTargetPRZero_WhenSessionHasNoPR(t *testing.T) {
 	fake := &fakePRActions{}
 	inst.SetPRActionClient(fake)
 	err := inst.MergePR(context.Background(), nil, "merge")
-	require.ErrorIs(t, err, ErrNoPullRequest)
+	require.ErrorIs(t, err, instance.ErrNoPullRequest)
 	require.Empty(t, fake.calls)
 }
 
@@ -106,6 +107,6 @@ func TestResolvePR_ShouldReturnCurrentPRAndRejectNonPRSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, explicit, got)
 
-	_, err = (&Instance{Title: "plain"}).ResolvePRForTest(nil)
+	_, err = (&instance.Instance{Title: "plain"}).ResolvePRForTest(nil)
 	require.ErrorContains(t, err, "is not a PR session")
 }

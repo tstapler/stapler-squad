@@ -11,7 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
@@ -48,7 +48,7 @@ type sequenceOutcome struct {
 
 // RunSequence is the leader's path for a multi-key answer. consumed is true
 // when a key may have reached the pane.
-func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in sequenceInput, inst *session.Instance, facts steerRequestFacts) sequenceOutcome {
+func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance, facts steerRequestFacts) sequenceOutcome {
 	reservation, retryAfter, ok := c.limiters.reserve(in.sessionUUID)
 	if !ok {
 		secs := int32((retryAfter + time.Second - 1) / time.Second)
@@ -73,7 +73,7 @@ func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in
 	return out
 }
 
-func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *session.Instance, facts steerRequestFacts) AuditLine {
+func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Instance, facts steerRequestFacts) AuditLine {
 	return AuditLine{
 		Kind: auditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: in.sessionUUID, SessionTitle: inst.Snapshot().Title,
@@ -86,11 +86,11 @@ func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *session.Instan
 }
 
 // writeSequenceUnderLease is the sequence chain's acquirer.
-func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target AnswerTarget, in sequenceInput, inst *session.Instance) (sequenceOutcome, string, bool) {
+func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance) (sequenceOutcome, string, bool) {
 	notSent := func(o sessionv1.ReplyOutcome, stage string) (sequenceOutcome, string, bool) {
 		return sequenceOutcome{replyOutcomeResult: replyOutcomeResult{Outcome: o}}, stage, false
 	}
-	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	if !ok {
 		return notSent(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, replyStageLeaseBusy)
 	}
@@ -110,7 +110,7 @@ func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target Answ
 // sequenceChecks run under the lease before the first key: still the target
 // kind, the session is the question's, and a status controller is active. The
 // first step's frame check is the structural match.
-func (c *PaneReplyCore) sequenceChecks(target AnswerTarget, in sequenceInput, inst *session.Instance) func() error {
+func (c *PaneReplyCore) sequenceChecks(target AnswerTarget, in sequenceInput, inst *instance.Instance) func() error {
 	return func() error {
 		if !target.admits(AccessFor(inst)) {
 			out, stage := target.mismatchOutcome()

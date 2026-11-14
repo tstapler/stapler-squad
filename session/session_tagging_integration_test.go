@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
@@ -55,18 +56,18 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
 	require.Contains(t, inst.GetTags(), "Bugfix")
 	require.Equal(t, "seed-bugfix", inst.RuleTagProvenance["Bugfix"])
-	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
+	require.NotContains(t, inst.GetTags(), instance.UnclassifiedTag)
 
 	// When: the session is renamed off that branch, the sync fixpoint retracts "Bugfix".
 	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "main"})
 	require.NotContains(t, inst.GetTags(), "Bugfix", "rule-owned tag must be retracted once its branch condition no longer holds")
-	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
+	require.NotContains(t, inst.GetTags(), instance.UnclassifiedTag)
 
 	// And: one poller tick runs against a fake PoolClient that succeeds on the very first
 	// attempt with an in-vocabulary tag (batch envelope keyed by the instance title).
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":` + strconv.Quote(t.Name()) + `,"tags":["Refactor"]}]}`}
 	poller := NewSessionTagClassificationPoller(fake, engine)
-	poller.SetInstances([]*Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 	poller.pollOnce()
 
 	// Then: the final tag state is exactly ["Refactor"] with LLM provenance, and
@@ -74,7 +75,7 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	tags := inst.GetTags()
 	assert.Equal(t, []string{"Refactor"}, tags)
 	assert.Equal(t, "llm", inst.RuleTagProvenance["Refactor"])
-	assert.NotContains(t, tags, UnclassifiedTag)
+	assert.NotContains(t, tags, instance.UnclassifiedTag)
 	assert.Equal(t, 1, fake.callCount(), "the LLM must be called exactly once")
 }
 
@@ -86,7 +87,7 @@ func TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_First
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Branch = "feature/x"
-	inst.MutateForTest(func(*Instance) {})
+	inst.MutateForTest(func(*instance.Instance) {})
 
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules([]classifier.TaggingRule{neverMatchingRule("seed-feature", "Feature")})
@@ -96,7 +97,7 @@ func TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_First
 	// Cooldown disabled: the second tick must re-classify immediately after the branch
 	// change (this test proves Unclassified-drop coexistence, not the cooldown gate).
 	poller.config.MinReclassifyInterval = 0
-	poller.SetInstances([]*Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 
 	// First tick: the LLM call fails, so no tags are applied.
 	poller.pollOnce()

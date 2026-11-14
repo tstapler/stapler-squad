@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // WorkflowSchedulerInterface is the interface WorkflowService uses to interact with the scheduler.
@@ -663,7 +664,7 @@ const archiveInstanceTimeout = 2 * time.Second
 // archived while Active. That residual is by design, and is repaired by the
 // load-time self-heal in fromInstanceData (see ADR-001,
 // superseded-rework-session-retirement).
-func archiveMatchingInstances(ctx context.Context, instances []*session.Instance, workflowID string, now time.Time) {
+func archiveMatchingInstances(ctx context.Context, instances []*instance.Instance, workflowID string, now time.Time) {
 	for _, inst := range instances {
 		if inst == nil {
 			continue

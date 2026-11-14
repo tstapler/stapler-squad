@@ -8,18 +8,18 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
 type tccEnrichmentState struct {
 	gate     *tcc.ConsentGate
-	enricher *session.WorktreeEnricher
+	enricher *instance.WorktreeEnricher
 	enabled  bool
 }
 
 // SetTCCEnrichment wires the startup-owned gate before serving requests.
-func (s *SessionService) SetTCCEnrichment(gate *tcc.ConsentGate, enricher *session.WorktreeEnricher, enabled bool) {
+func (s *SessionService) SetTCCEnrichment(gate *tcc.ConsentGate, enricher *instance.WorktreeEnricher, enabled bool) {
 	s.tccEnrichment = tccEnrichmentState{gate: gate, enricher: enricher, enabled: enabled}
 }
 
@@ -58,7 +58,7 @@ const tccOutcomeDenied = "denied"
 
 // enrichmentRootOutcome reports the enrichment outcome only; "denied" is the
 // gate's sticky EPERM hint and is applied by the caller.
-func enrichmentRootOutcome(enricher *session.WorktreeEnricher, paths []string) string {
+func enrichmentRootOutcome(enricher *instance.WorktreeEnricher, paths []string) string {
 	outcome := "completed"
 	for _, path := range paths {
 		current := enricher.Outcome(path)

@@ -67,6 +67,7 @@ go_test(
         "//pkg/events",
         "//session",
         "//session/domain",
+        "//session/instance",
         "//tools/bzl/ent",
         "//tools/bzl/ent:analyticsevent",
         "@com_github_stretchr_testify//assert",

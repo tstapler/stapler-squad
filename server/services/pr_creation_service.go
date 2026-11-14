@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -37,7 +38,7 @@ type PRCreationService struct {
 	eventBus                 *events.EventBus
 	headlessPool             headless.PoolClient
 	backlogLifecycleListener *backlog.BacklogLifecycleListener
-	findInstance             func(string) *session.Instance
+	findInstance             func(string) *instance.Instance
 	prCreationInFlight       sync.Map
 
 	// vcsReader is a single shared *unfinished.GoGitVCSReader instance reused
@@ -58,7 +59,7 @@ func NewPRCreationService(
 	eventBus *events.EventBus,
 	headlessPool *headless.Pool,
 	backlogLifecycleListener *backlog.BacklogLifecycleListener,
-	findInstance func(string) *session.Instance,
+	findInstance func(string) *instance.Instance,
 ) *PRCreationService {
 	s := &PRCreationService{
 		storage:                  storage,
@@ -102,7 +103,7 @@ func (s *PRCreationService) SetBacklogLifecycleListener(l *backlog.BacklogLifecy
 // CodeFailedPrecondition (instance has no worktree, or GetGitWorktree itself fails
 // — e.g. "instance has not been started"). Shared by DraftPullRequest and
 // CreatePullRequest (Epic 1.4) so both RPCs resolve a session's worktree identically.
-func (s *PRCreationService) resolveSessionWorktree(sessionID string) (*session.Instance, *git.GitWorktree, error) {
+func (s *PRCreationService) resolveSessionWorktree(sessionID string) (*instance.Instance, *git.GitWorktree, error) {
 	if sessionID == "" {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
 	}
@@ -130,7 +131,7 @@ const fallbackPRBody = "## Summary\n\n_No diff description available._"
 // This is DraftPullRequest's answer to headless.DraftPRDescription's itemDescription
 // argument for a session, which (unlike a backlog item) has no fixed problem-statement
 // field (Post-Review Revision #1 / Task 1.3.1c).
-func sessionGoalText(inst *session.Instance) string {
+func sessionGoalText(inst *instance.Instance) string {
 	if goal := inst.GetSessionGoal(); goal != nil {
 		return goal.Goal
 	}
@@ -162,7 +163,7 @@ func (s *PRCreationService) DraftPullRequest(
 	}
 
 	// Existing-PR short-circuit (AC4): skip all diff/draft work below entirely.
-	if existingURL, existingNumber, found := session.ExistingPRForCreate(inst.Snapshot(), wt.GetBranchName()); found {
+	if existingURL, existingNumber, found := instance.ExistingPRForCreate(inst.Snapshot(), wt.GetBranchName()); found {
 		// #nosec G115 -- existingNumber is a GitHub PR number, far below int32 range.
 		return connect.NewResponse(&sessionv1.DraftPullRequestResponse{
 			ExistingPrUrl:    existingURL,
@@ -272,7 +273,7 @@ func (s *PRCreationService) CreatePullRequest(
 	// PR at the gh/findExistingPR level when it does run, but from this
 	// handler's perspective that's still a "create" attempt, not a cache hit,
 	// so don't expect perfect create-vs-reuse fidelity from a single gh race.
-	prURL, prNumber, alreadyExisted := session.ExistingPRForCreate(inst.Snapshot(), wt.GetBranchName())
+	prURL, prNumber, alreadyExisted := instance.ExistingPRForCreate(inst.Snapshot(), wt.GetBranchName())
 	if alreadyExisted && prNumber <= 0 {
 		alreadyExisted = false
 	}
@@ -301,7 +302,7 @@ func (s *PRCreationService) CreatePullRequest(
 	inst.SetGitHubPR(prURL, prNumber)
 	persisted := true
 	persistError := ""
-	if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
+	if saveErr := s.storage.SaveInstances([]*instance.Instance{inst}); saveErr != nil {
 		persisted = false
 		persistError = saveErr.Error()
 		log.Warn("CreatePullRequest: failed to persist PR URL", "session", req.Msg.SessionId, "err", saveErr)

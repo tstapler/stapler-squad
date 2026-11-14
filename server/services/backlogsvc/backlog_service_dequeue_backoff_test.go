@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 var errSpawnBoom = errors.New("tmux exploded")
@@ -564,7 +565,7 @@ func TestTransitionBacklogItemStatus_SpawnBackoffClearScopedToUser(t *testing.T)
 	t.Run("agent keeps the backoff", func(t *testing.T) {
 		t.Parallel()
 		svc, storage, itemID := setup(t)
-		require.NoError(t, move(services.WithTransitionActor(t.Context(), session.TriggeredByAgent), svc, itemID))
+		require.NoError(t, move(services.WithTransitionActor(t.Context(), instance.TriggeredByAgent), svc, itemID))
 		_, ok := openSpawnFailedRow(t, storage, itemID)
 		assert.True(t, ok)
 	})

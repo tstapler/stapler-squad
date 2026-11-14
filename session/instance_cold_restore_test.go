@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -30,7 +31,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
@@ -89,7 +90,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
@@ -130,7 +131,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 // ordering); otherwise the file keeps its natural write-time mtime.
 func writeJSONLFixture(t *testing.T, homeDir, projectPath, uuid string, modTime time.Time) string {
 	t.Helper()
-	dir := filepath.Join(homeDir, ".claude", "projects", ClaudeProjectDirName(projectPath))
+	dir := filepath.Join(homeDir, ".claude", "projects", instance.ClaudeProjectDirName(projectPath))
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, uuid+".jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o644))
@@ -158,7 +159,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 	fakeHome := t.TempDir()
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          fixturetest.StubClaudeBinary(t),
@@ -181,7 +182,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	// PID fast path — a nil inspector would panic there. Same convention as
 	// history_linker_test.go's "no open files → always falls through to
 	// DetectByPath" mocks.
-	inst.WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
+	inst.WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
 	writeJSONLFixture(t, fakeHome, inst.Path, fixtureUUID, time.Time{})
 
@@ -213,8 +214,8 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 // 300` tmux session on an isolated prefix/socket — the fixture shared by
 // every real-tmux restore test below (hot restore and the one-shot revive
 // regression test), so the live-pane session shape is defined once.
-func sleepInstanceOptions(title, tmpDir, prefix, socket string) InstanceOptions {
-	return InstanceOptions{
+func sleepInstanceOptions(title, tmpDir, prefix, socket string) instance.InstanceOptions {
+	return instance.InstanceOptions{
 		Title:            title,
 		Path:             tmpDir,
 		Program:          "sleep 300",
@@ -238,7 +239,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	prefix := fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
 	// First instance: create and start normally to put a live tmux session in place.
-	inst1, cleanup1, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	inst1, cleanup1, err := instance.NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	defer func() {
 		if cleanupErr := cleanup1(); cleanupErr != nil {
@@ -260,7 +261,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 
 	// Second instance: same title/socket — simulates an instance reloaded from storage
 	// while the original tmux session is still alive.
-	inst2, cleanup2, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	inst2, cleanup2, err := instance.NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	defer func() {
 		if cleanupErr := cleanup2(); cleanupErr != nil {
@@ -335,7 +336,7 @@ func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus domain.S
 		TmuxServerSocket: socket,
 		Tags:             tags,
 	}
-	restored, err := FromInstanceDataDeferred(data)
+	restored, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.Equal(t, wantStatus, restored.Snapshot().Status)
@@ -346,14 +347,14 @@ func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus domain.S
 // program on an isolated socket/prefix and registers its teardown, returning
 // the live Instance plus the identifiers needed to reload it via
 // InstanceData (title, path, tmux prefix, tmux socket).
-func newLiveSleepInstance(t *testing.T) (inst *Instance, title, tmpDir, prefix, socket string) {
+func newLiveSleepInstance(t *testing.T) (inst *instance.Instance, title, tmpDir, prefix, socket string) {
 	t.Helper()
 	title = fmt.Sprintf("test-oneshot-revive-%d", time.Now().UnixNano())
 	tmpDir = t.TempDir()
 	socket = fixturetest.ColdRestoreSocket(t)
 	prefix = fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
-	inst, cleanup, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	inst, cleanup, err := instance.NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	t.Cleanup(func() { logTeardownErr(t, "cleanup", cleanup()) })
 
@@ -412,7 +413,7 @@ func TestIsStaleResumeExit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, isStaleResumeExit("claude", tt.content))
+			assert.Equal(t, tt.want, instance.IsStaleResumeExit("claude", tt.content))
 		})
 	}
 }
@@ -452,11 +453,11 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			fakeHome := t.TempDir()
 			clearedAt := time.Now()
 
-			inst := (&Instance{
+			inst := (&instance.Instance{
 				Title:       "test-clearedat-guard",
 				Path:        tmpDir,
 				SessionType: domain.SessionTypeDirectory,
-			}).WithConversationClearedAtForTest(clearedAt).WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
+			}).WithConversationClearedAtForTest(clearedAt).WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 
 			inst.TryExtractConversationUUID()
@@ -529,12 +530,12 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 
 	writeJSONLFixture(t, fakeHome, sharedPath, conversationUUID, time.Time{})
 
-	instB := (&Instance{
+	instB := (&instance.Instance{
 		Title:       "session-b",
 		UUID:        "session-b-uuid",
 		Path:        sharedPath,
 		SessionType: domain.SessionTypeDirectory,
-	}).WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
+	}).WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
 		simulatedLiveInstance{uuid: sessionAUUID, conversationUUID: conversationUUID, path: sharedPath, alive: true},
 	))
@@ -561,12 +562,12 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 
 	writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, time.Time{})
 
-	inst := (&Instance{
+	inst := (&instance.Instance{
 		Title:       "cold-restore-self-recovery",
 		UUID:        "cold-restore-self-uuid",
 		Path:        tmpDir,
 		SessionType: domain.SessionTypeDirectory,
-	}).WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
+	}).WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,
 		simulatedLiveInstance{uuid: inst.UUID, conversationUUID: fixtureUUID, path: tmpDir, alive: true},
 	))

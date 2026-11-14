@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -96,7 +97,7 @@ func TestHealthCheckerDebounce(t *testing.T) {
 
 	// Create a minimal instance that appears started but has no tmux session.
 	// TmuxAlive() returns false because tmuxManager.HasSession() is false.
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "debounce-test",
 		Status: domain.Active,
 	}
@@ -191,7 +192,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 		paneExitDead:     true, // but the wrapped program has exited
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "pane-dead-test",
 		Status: domain.Active,
 	}
@@ -242,7 +243,7 @@ func TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive(t *testing.
 		hasSessionReturn: true,
 		isAliveReturn:    false,
 	}
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "batch-miss-test",
 		Status: domain.Active,
 	}
@@ -276,7 +277,7 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 		isAliveReturn:    true,
 		tmuxSessionName:  "batch-hit-session",
 	}
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "batch-hit-test",
 		Status: domain.Active,
 	}
@@ -318,7 +319,7 @@ func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *tes
 		paneExitDead:     true,
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{Title: "crashed-test", Status: domain.Active}
+	inst := &instance.Instance{Title: "crashed-test", Status: domain.Active}
 	inst.MarkStarted()
 	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
@@ -363,7 +364,7 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testi
 		startReturn:      errors.New("refusing to start: crash loop"),
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{Title: "crashed-test-respawn-fails", Status: domain.Active}
+	inst := &instance.Instance{Title: "crashed-test-respawn-fails", Status: domain.Active}
 	inst.MarkStarted()
 	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
@@ -404,7 +405,7 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 		paneExitDead:     true,
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{Title: "normal-exit-test", Status: domain.Active}
+	inst := &instance.Instance{Title: "normal-exit-test", Status: domain.Active}
 	inst.MarkStarted()
 	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
@@ -449,7 +450,7 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 		paneExitDead:     true,
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "fresh-session-test",
 		Status:    domain.Active,
 		CreatedAt: time.Now(), // created after (>=) checker.startedAt
@@ -491,7 +492,7 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 		paneExitDead:     true,
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "pre-existing-session-test",
 		Status:    domain.Active,
 		CreatedAt: time.Now().Add(-1 * time.Hour), // created well before the checker started
@@ -530,7 +531,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 	checker := NewSessionHealthChecker(nil)
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() would be false
-	inst := &Instance{Title: "permanently-failed-test", Status: domain.PermanentlyFailed}
+	inst := &instance.Instance{Title: "permanently-failed-test", Status: domain.PermanentlyFailed}
 	inst.MarkStarted()
 	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
@@ -587,7 +588,7 @@ func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testi
 	checker := NewSessionHealthChecker(nil)
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
-	inst := &Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: domain.BackendTymux}
+	inst := &instance.Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: domain.BackendTymux}
 	inst.MarkStarted()
 	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
@@ -628,12 +629,12 @@ func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(
 	checker.tmuxSocket = querier
 	querier.setDown("custom", true) // "" (default) stays up
 
-	instHealthy := &Instance{Title: "healthy-default-socket", Status: domain.Active, TmuxServerSocket: ""}
+	instHealthy := &instance.Instance{Title: "healthy-default-socket", Status: domain.Active, TmuxServerSocket: ""}
 	instHealthy.MarkStarted()
-	instDown := &Instance{Title: "down-custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
+	instDown := &instance.Instance{Title: "down-custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
 	instDown.MarkStarted()
 
-	results := checker.checkInstances([]*Instance{instHealthy, instDown})
+	results := checker.checkInstances([]*instance.Instance{instHealthy, instDown})
 
 	if len(results) != 1 {
 		t.Fatalf("expected exactly 1 result (down-socket instance skipped), got %d: %+v", len(results), results)
@@ -659,12 +660,12 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 	checker.tmuxSocket = querier
 	// Neither socket is marked down -- both should be checked.
 
-	instDefault := &Instance{Title: "default-socket", Status: domain.Active, TmuxServerSocket: ""}
+	instDefault := &instance.Instance{Title: "default-socket", Status: domain.Active, TmuxServerSocket: ""}
 	instDefault.MarkStarted()
-	instCustom := &Instance{Title: "custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
+	instCustom := &instance.Instance{Title: "custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
 	instCustom.MarkStarted()
 
-	results := checker.checkInstances([]*Instance{instDefault, instCustom})
+	results := checker.checkInstances([]*instance.Instance{instDefault, instCustom})
 
 	if len(results) != 2 {
 		t.Fatalf("expected both instances to be checked, got %d results: %+v", len(results), results)
@@ -701,7 +702,7 @@ func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testi
 			checker := NewSessionHealthChecker(nil)
 
 			mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() is false
-			inst := &Instance{Title: "archived-health-" + tt.name, Status: tt.status}
+			inst := &instance.Instance{Title: "archived-health-" + tt.name, Status: tt.status}
 			if tt.archived {
 				// Set before anything calls Snapshot(): it caches its first build.
 				inst.ArchivedAt = &archivedAt

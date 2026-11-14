@@ -10,7 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -50,18 +50,18 @@ func (s *SessionService) ClearTerminalStatusIfLive(
 			})
 			continue
 		}
-		results = append(results, s.clearTerminalStatusOne(id, func(inst *session.Instance) func() bool {
+		results = append(results, s.clearTerminalStatusOne(id, func(inst *instance.Instance) func() bool {
 			return inst.IsLiveOrStoredSessionLive
 		}))
 	}
 	log.Info("audit: ClearTerminalStatusIfLive batch", "requested", len(ids), "summary", summarizeClearTerminal(results))
-	if len(results) == 1 && results[0].Outcome != string(session.HotRestoreCleared) {
+	if len(results) == 1 && results[0].Outcome != string(instance.HotRestoreCleared) {
 		r := results[0]
 		code := connect.CodeFailedPrecondition
 		switch r.Outcome {
 		case clearTerminalOutcomeNotFound:
 			code = connect.CodeNotFound
-		case string(session.HotRestoreError):
+		case string(instance.HotRestoreError):
 			code = connect.CodeInternal
 		}
 		return nil, connect.NewError(code, fmt.Errorf("%s: %s", r.Outcome, r.Message))
@@ -70,7 +70,7 @@ func (s *SessionService) ClearTerminalStatusIfLive(
 }
 
 // clearTerminalStatusOne handles one id; liveProbe is the test seam for liveness.
-func (s *SessionService) clearTerminalStatusOne(id string, liveProbe func(*session.Instance) func() bool) *sessionv1.ClearTerminalStatusIfLiveResult {
+func (s *SessionService) clearTerminalStatusOne(id string, liveProbe func(*instance.Instance) func() bool) *sessionv1.ClearTerminalStatusIfLiveResult {
 	res := &sessionv1.ClearTerminalStatusIfLiveResult{SessionId: id}
 	// Managed instances only: findInstance's external-discovery fallback would let
 	// an external session reach Start(false).
@@ -87,19 +87,19 @@ func (s *SessionService) clearTerminalStatusOne(id string, liveProbe func(*sessi
 		return res
 	}
 	statusBefore := inst.GetLifecycleStatus()
-	outcome, err := session.HotRestoreIfLive(inst, liveProbe(inst))
+	outcome, err := instance.HotRestoreIfLive(inst, liveProbe(inst))
 	res.Outcome = string(outcome)
 	switch outcome {
-	case session.HotRestoreCleared:
+	case instance.HotRestoreCleared:
 		res.Message = fmt.Sprintf("cleared %s; attached to live process", statusBefore)
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
-	case session.HotRestoreNotLive:
+	case instance.HotRestoreNotLive:
 		res.Message = "backing process is not alive; session left untouched"
-	case session.HotRestoreArchived:
+	case instance.HotRestoreArchived:
 		res.Message = "session is archived; left untouched"
-	case session.HotRestoreBusy:
+	case instance.HotRestoreBusy:
 		res.Message = "a restart is already in flight; try again shortly"
-	case session.HotRestoreNotTerminal:
+	case instance.HotRestoreNotTerminal:
 		res.Message = fmt.Sprintf("status %s is not terminal", statusBefore)
 	default:
 		res.Message = "hot restore failed"

@@ -13,8 +13,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/search"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -168,7 +168,7 @@ func (s *SessionService) RenameSession(
 
 	// Use the live poller list for the same reason as UpdateSession: avoid LoadInstances
 	// side-effects that can drop sessions and clobber the poller list via SetInstances.
-	var instances []*session.Instance
+	var instances []*instance.Instance
 	if s.ReviewQueuePoller != nil {
 		instances = s.ReviewQueuePoller.GetInstances()
 	} else {
@@ -659,7 +659,7 @@ func (s *SessionService) ListBranches(
 }
 
 // findInstance finds an instance by title using the live in-memory poller.
-func (s *SessionService) findInstance(id string) *session.Instance {
+func (s *SessionService) findInstance(id string) *instance.Instance {
 	if s.ReviewQueuePoller != nil {
 		if inst := s.ReviewQueuePoller.FindInstance(id); inst != nil {
 			return inst
@@ -678,7 +678,7 @@ func (s *SessionService) findInstance(id string) *session.Instance {
 // the OnSessionAdded/OnSessionRemoved callbacks in dependencies.go, and including
 // them here would re-persist deleted external sessions during unrelated operations
 // such as CreateCheckpoint or ForkSession.
-func (s *SessionService) allInstances() []*session.Instance {
+func (s *SessionService) allInstances() []*instance.Instance {
 	if s.ReviewQueuePoller != nil {
 		return s.ReviewQueuePoller.GetInstances()
 	}

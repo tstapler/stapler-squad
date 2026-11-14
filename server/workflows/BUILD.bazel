@@ -19,6 +19,7 @@ go_library(
         "//server/events",
         "//session",
         "//session/domain",
+        "//session/instance",
         "//tools/bzl/ent",
         "//tools/bzl/ent:session",
         "@com_connectrpc_connect//:connect",

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ─── pipeline_mode presence gating (Story 1.4.4) ───────────────────────────────
@@ -435,7 +436,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictPass,
 	})
@@ -511,7 +512,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictPass,
 	})
@@ -558,7 +559,7 @@ func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_Review
 			_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: "review-session-pass-verdict",
-				SessionRole: session.SessionRoleReview,
+				SessionRole: instance.SessionRoleReview,
 			}, backlogdto.ReviewVerdictData{
 				OverallOutcome: domain.ReviewVerdictPass,
 			})
@@ -595,7 +596,7 @@ func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideR
 	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-pass-verdict-override",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictPass,
 	})
@@ -652,7 +653,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictPass,
 	})
@@ -668,7 +669,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 	require.NoError(t, err)
 	var workSessionID string
 	for _, is := range sessions {
-		if is.Role == string(session.SessionRoleWork) {
+		if is.Role == string(instance.SessionRoleWork) {
 			workSessionID = is.ID
 		}
 	}
@@ -713,7 +714,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-session-to-archive",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -746,7 +747,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "idea-work-session-to-archive",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -780,7 +781,7 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "in-flight-work-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -823,7 +824,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: "work-live-1",
-				SessionRole: session.SessionRoleWork,
+				SessionRole: instance.SessionRoleWork,
 			})
 			require.NoError(t, err)
 
@@ -867,7 +868,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-pass-verdict",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictPass,
 	})
@@ -876,7 +877,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-live-1",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -913,7 +914,7 @@ func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_Transiti
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-forward-1",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -949,7 +950,7 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-live-1",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1336,7 +1337,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 		startBarrier.Wait()
 		_, automatedErr = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: string(domain.BacklogStatusReview),
-		}, session.TriggeredBySystem)
+		}, instance.TriggeredBySystem)
 	}()
 	go func() {
 		defer wg.Done()
@@ -1427,7 +1428,7 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-single-override",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -1488,7 +1489,7 @@ func newOverrideVerdictItem(t *testing.T, storage *session.Storage, from domain.
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "override verdict item", Status: string(from)})
 	require.NoError(t, err)
 	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "review-session-" + item.ID[:8], SessionRole: session.SessionRoleReview,
+		ItemID: item.ID, SessionUUID: "review-session-" + item.ID[:8], SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 	return item, is

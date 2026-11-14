@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // CleanupStatus is the result class of one terminal-item cleanup attempt.
@@ -100,19 +101,19 @@ type CleanupGateSource interface {
 // clause, only with the multi-PR scope on and a probe wired).
 type PRCleanupGate struct {
 	src         CleanupGateSource
-	probe       LiveWorkProbe
+	probe       instance.LiveWorkProbe
 	liveEnabled func() bool
 	now         func() time.Time
 }
 
 // NewPRCleanupGate builds the gate. A nil probe or a false liveEnabled disables
 // the live clause (today's behavior).
-func NewPRCleanupGate(src CleanupGateSource, probe LiveWorkProbe, liveEnabled func() bool) *PRCleanupGate {
+func NewPRCleanupGate(src CleanupGateSource, probe instance.LiveWorkProbe, liveEnabled func() bool) *PRCleanupGate {
 	return &PRCleanupGate{src: src, probe: probe, liveEnabled: liveEnabled, now: time.Now}
 }
 
 // Probe returns the live-work probe the gate holds (for the wiring assertion).
-func (g *PRCleanupGate) Probe() LiveWorkProbe { return g.probe }
+func (g *PRCleanupGate) Probe() instance.LiveWorkProbe { return g.probe }
 
 // Blocked reports whether removal must be withheld for sessions, with the reason
 // naming each holding owner. Any lookup error blocks (fail closed).
@@ -139,7 +140,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.Ite
 	var uuids []string
 	itemIDs := map[string]struct{}{}
 	for _, s := range sessions {
-		if s.SessionUUID == "" || s.Role != SessionRoleWork {
+		if s.SessionUUID == "" || s.Role != instance.SessionRoleWork {
 			continue
 		}
 		uuids = append(uuids, s.SessionUUID)
@@ -199,7 +200,7 @@ func OwnPRsBlockReason(d domain.InstanceData, rows []domain.PRView) string {
 		}
 		return "legacy PR number with no link and no terminal flag"
 	}
-	if !PRsAllTerminal(rows, d.GitHubPRNumber) {
+	if !instance.PRsAllTerminal(rows, d.GitHubPRNumber) {
 		return "a linked PR is open, unknown or unverified"
 	}
 	if d.GitHubPRNumber > 0 && !LegacyNumberRepresented(d, rows) && !LegacyOnlyPRSafe(d) {

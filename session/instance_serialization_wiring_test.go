@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // If this fails, an archived row cold-restores a real claude process on boot,
@@ -50,7 +51,7 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 
 			// Deferred entry point: wires the tmux session object but never
 			// spawns a subprocess, the same path LoadInstances uses.
-			restored, err := FromInstanceDataDeferred(data)
+			restored, err := instance.FromInstanceDataDeferred(data)
 			if err != nil {
 				t.Fatalf("FromInstanceDataDeferred: %v", err)
 			}

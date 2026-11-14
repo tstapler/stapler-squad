@@ -13,9 +13,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // This file is the second UI exception to "no UI path writes to a hidden
@@ -36,7 +36,7 @@ var (
 // BacklogLinkResolver decides whether a hidden session is a live backlog
 // review session. ok is false (with a nil error) when it is not.
 type BacklogLinkResolver interface {
-	ResolveLiveReviewLink(ctx context.Context, inst *session.Instance) (link BacklogReviewLink, ok bool, err error)
+	ResolveLiveReviewLink(ctx context.Context, inst *instance.Instance) (link BacklogReviewLink, ok bool, err error)
 }
 
 // BacklogReviewLink proves the durable predicate held when it was built: the
@@ -44,7 +44,7 @@ type BacklogLinkResolver interface {
 // instance is live. It has unexported fields and one constructor, in this file
 // (guard check (a)).
 type BacklogReviewLink struct {
-	inst   *session.Instance
+	inst   *instance.Instance
 	itemID string
 }
 
@@ -56,7 +56,7 @@ type itemSessionLookup interface {
 // nil lookup (a service built without storage) never links.
 type storageLinkResolver struct{ lookup itemSessionLookup }
 
-func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *session.Instance) (BacklogReviewLink, bool, error) {
+func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *instance.Instance) (BacklogReviewLink, bool, error) {
 	if r.lookup == nil || inst == nil || !inst.Started() || inst.Snapshot().Status.IsSuspended() {
 		return BacklogReviewLink{}, false, nil
 	}
@@ -67,7 +67,7 @@ func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *se
 	case err != nil:
 		return BacklogReviewLink{}, false, err
 	}
-	if row.Role != session.SessionRoleReview || row.EndedAt != nil {
+	if row.Role != instance.SessionRoleReview || row.EndedAt != nil {
 		return BacklogReviewLink{}, false, nil
 	}
 	if err := inst.VerifyPaneOwner(ctx); err != nil {
@@ -127,8 +127,8 @@ func (w *BacklogSteerWriter) Steer(ctx context.Context, text string) error {
 // TAB (ADR-010 decision 5): no C0 or C1 control character, no U+2028/9, no
 // format character except the two joiners.
 func validateBacklogSteerText(text string) error {
-	if len(text) > session.MaxSteerMessageLength {
-		return fmt.Errorf("%w: exceeds maximum length of %d bytes", errSteerInvalid, session.MaxSteerMessageLength)
+	if len(text) > instance.MaxSteerMessageLength {
+		return fmt.Errorf("%w: exceeds maximum length of %d bytes", errSteerInvalid, instance.MaxSteerMessageLength)
 	}
 	if !utf8.ValidString(text) {
 		return fmt.Errorf("%w: not valid UTF-8", errSteerInvalid)
@@ -158,7 +158,7 @@ func steerPreview(msg string) string {
 	return string([]rune(msg)[:steerPreviewRunes])
 }
 
-func (s *SessionService) steerAuditLine(ctx context.Context, inst *session.Instance, msg string) AuditLine {
+func (s *SessionService) steerAuditLine(ctx context.Context, inst *instance.Instance, msg string) AuditLine {
 	f := steerRequestFactsFrom(ctx)
 	sum := sha256.Sum256([]byte(msg))
 	snap := inst.Snapshot()
@@ -233,10 +233,10 @@ func (s *SessionService) steerHiddenReviewViaBacklogLink(ctx context.Context, li
 	if err := s.appendSteerRequest(ctx, line); err != nil {
 		return err
 	}
-	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterSteer)
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	if !ok {
 		s.appendSteerResult(line, steerOutcomeAborted)
-		return fmt.Errorf("steer session %q: %w", inst.Snapshot().Title, session.ErrLeaseBusy)
+		return fmt.Errorf("steer session %q: %w", inst.Snapshot().Title, instance.ErrLeaseBusy)
 	}
 	if _, stillLinked, err := s.backlogLinks.ResolveLiveReviewLink(ctx, inst); err != nil || !stillLinked {
 		lease.Release()

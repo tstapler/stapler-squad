@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -684,7 +685,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title: "active-restore-test",
 		Path:  t.TempDir(),
 		// Whitespace-split, no shell quoting (see buildBaseLaunchCommand): a quoted
@@ -738,7 +739,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 
 	// Round-trip through the same serialize/deserialize path LoadInstances() uses.
 	data := inst.ToInstanceData()
-	restored, err := FromInstanceData(data)
+	restored, err := instance.FromInstanceData(data)
 	require.NoError(t, err, "FromInstanceData should succeed for an Active instance with a live tmux session")
 
 	assert.True(t, restored.TmuxAlive(),
@@ -781,7 +782,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 	// Started()" gate, then persist it and kill the underlying tmux session to
 	// simulate a session whose process died (the exact scenario that used to
 	// make LoadInstances cold-restore synchronously, one session at a time).
-	inst, instCleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, instCleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "load-instances-defer-start-test",
 		Path:             t.TempDir(),
 		Program:          "bash -c 'echo hi; exec bash'",
@@ -802,7 +803,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 	}
 	require.True(t, inst.Started())
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	require.NoError(t, inst.KillSession(), "simulate the process dying before the next server start")
 
 	start := time.Now()
@@ -814,7 +815,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 	assert.Lessf(t, elapsed, budget,
 		"LoadInstances took %s — Start() may be getting called synchronously again instead of deferred to the async Step 6 loop", elapsed)
 
-	var found *Instance
+	var found *instance.Instance
 	for _, loaded := range instances {
 		if loaded.UUID == inst.UUID {
 			found = loaded

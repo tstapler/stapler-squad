@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestResolveBacklogItemLookup_should_RouteToPublicIdBranch_When_BlPrefixedStringGiven
@@ -242,7 +243,7 @@ func newTestJulesItemSession(t *testing.T, storage *Storage, role, sessionUUID s
 	require.NoError(t, err)
 	is, err := storage.GetEntClient().ItemSession.Create().
 		SetSessionUUID(sessionUUID).
-		SetSessionRole(SessionRoleJulesWork).
+		SetSessionRole(instance.SessionRoleJulesWork).
 		SetBacklogItemID(parsedItemID).
 		SetCreatedAt(time.Now().Add(-createdAgo)).
 		Save(ctx)
@@ -260,17 +261,17 @@ func TestListOpenJulesItemSessions_should_ReturnOnlyUnfinishedJulesRows_When_Mix
 	defer cleanup()
 	ctx := context.Background()
 
-	_, endedID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/ended", 0)
+	_, endedID := newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/ended", 0)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, endedID, time.Now()))
 
-	openItemID, _ := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/open", 0)
+	openItemID, _ := newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/open", 0)
 
 	workItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "unrelated open work item"})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      workItem.ID,
 		SessionUUID: "tmux-work-session",
-		SessionRole: SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -290,9 +291,9 @@ func TestCountJulesItemSessionsSince_should_RespectWindow_When_RowsSpanBoundary(
 	defer cleanup()
 	ctx := context.Background()
 
-	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/recent-1", 2*time.Hour)
-	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/recent-2", 2*time.Hour)
-	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/old", 30*time.Hour)
+	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/recent-1", 2*time.Hour)
+	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/recent-2", 2*time.Hour)
+	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/old", 30*time.Hour)
 
 	got, err := storage.CountJulesItemSessionsSince(ctx, time.Now().Add(-24*time.Hour))
 	require.NoError(t, err)
@@ -310,9 +311,9 @@ func TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatc
 	defer cleanup()
 	ctx := context.Background()
 
-	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/confirmed", 2*time.Hour)
-	newTestJulesItemSession(t, storage, SessionRoleJulesWork, JulesPendingUUIDPrefix+"reservation", 1*time.Hour)
-	_, failedID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/failed-attempt", 30*time.Minute)
+	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/confirmed", 2*time.Hour)
+	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, JulesPendingUUIDPrefix+"reservation", 1*time.Hour)
+	_, failedID := newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/failed-attempt", 30*time.Minute)
 	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, failedID, time.Now(), julesDispatchFailedEndReason))
 
 	got, err := storage.CountJulesItemSessionsSince(ctx, time.Now().Add(-24*time.Hour))
@@ -331,7 +332,7 @@ func TestTouchItemSessionProgress_should_UpdateOnlyLastProgressAt_When_Called(t 
 	defer cleanup()
 	ctx := context.Background()
 
-	_, sessionID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/progress", 0)
+	_, sessionID := newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/progress", 0)
 
 	before, err := storage.GetItemSession(ctx, sessionID)
 	require.NoError(t, err)

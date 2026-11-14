@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -19,7 +20,7 @@ func CreateTestStorage(t *testing.T) (*session.Storage, func()) {
 }
 
 // NewTestInstance returns a minimal Paused Instance ready for Storage.AddInstance.
-func NewTestInstance(title string) *session.Instance { return session.NewPausedTestInstance(title) }
+func NewTestInstance(title string) *instance.Instance { return instance.NewPausedTestInstance(title) }
 
 // QuietWarningLog is for tests that may write to log.WarningLog but never assert on it.
 func QuietWarningLog(t *testing.T) {

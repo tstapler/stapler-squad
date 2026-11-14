@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"entgo.io/ent"
@@ -84,7 +85,7 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	db, err := sql.Open("sqlite", er.DbPath)
 	require.NoError(t, err)
@@ -105,7 +106,7 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "uuid-roundtrip",
 		UUID:      "my-stable-uuid",
 		Path:      "/tmp/test",
@@ -139,7 +140,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "backend-roundtrip",
 		Path:      "/tmp/test",
 		Status:    domain.Paused,
@@ -167,7 +168,7 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "multi-load",
 		UUID:      "consistent-uuid",
 		Path:      "/tmp/test",
@@ -202,7 +203,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 	defer cleanup()
 
 	// Insert a legacy session with no UUID (simulating pre-UUID schema data).
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "legacy-no-uuid",
 		UUID:      "", // explicitly empty — legacy session
 		Path:      "/tmp/test",
@@ -240,17 +241,17 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 	t.Parallel()
 	queue := queue.NewReviewQueue()
-	statusMgr := NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:   "my-session-title",
 		UUID:    "test-uuid-lookup",
 		Status:  domain.Paused,
 		Program: "claude",
 	}
 	inst.MarkStarted()
-	poller.SetInstances([]*Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 
 	found := poller.FindInstance("test-uuid-lookup")
 	require.NotNil(t, found, "FindInstance must find session by UUID")
@@ -263,19 +264,19 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 	t.Parallel()
 	queue := queue.NewReviewQueue()
-	statusMgr := NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
 
-	existing := &Instance{
+	existing := &instance.Instance{
 		Title:   "existing-session",
 		UUID:    "existing-uuid",
 		Status:  domain.Paused,
 		Program: "claude",
 	}
 	existing.MarkStarted()
-	poller.SetInstances([]*Instance{existing})
+	poller.SetInstances([]*instance.Instance{existing})
 
-	newcomer := &Instance{
+	newcomer := &instance.Instance{
 		Title:   "new-session",
 		UUID:    "new-uuid",
 		Status:  domain.Paused,
@@ -436,8 +437,8 @@ func TestInstanceDataLoadWithDiffContent(t *testing.T) {
 }
 
 // newTestInstance returns a minimal Paused Instance ready for AddInstance.
-func newTestInstance(title string) *Instance {
-	inst := &Instance{
+func newTestInstance(title string) *instance.Instance {
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
 		Status:    domain.Paused,
@@ -689,7 +690,7 @@ func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDi
 	inst.UUID = "33333333-3333-3333-3333-333333333333"
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	records := storage.ListSessionRecords()
 	require.Len(t, records, 1)
@@ -706,7 +707,7 @@ func TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath(t 
 	defer cleanup()
 
 	inst := newTestInstance("plain-session-records")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	records := storage.ListSessionRecords()
 	require.Len(t, records, 1)
@@ -830,7 +831,7 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	// Mutate fields that the Ent schema supports.
 	inst.Tags = []string{"sync-tag"}
 	inst.Category = "sync-category"
-	err := storage.SaveInstancesSync([]*Instance{inst})
+	err := storage.SaveInstancesSync([]*instance.Instance{inst})
 	require.NoError(t, err)
 
 	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
@@ -857,7 +858,7 @@ func TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded(
 	inst.Tags = []string{"Bugfix"}
 	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
 	inst.SuppressedRuleTags = map[string]bool{"Suppressed": true}
-	require.NoError(t, storage.SaveInstancesSync([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstancesSync([]*instance.Instance{inst}))
 
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -905,7 +906,7 @@ func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session", "worktree-session", "backlog/some-item", "abc123def")
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	wt, err := storage.GetWorktreeDataBySessionUUID(context.Background(), inst.UUID)
 	require.NoError(t, err)
@@ -923,10 +924,10 @@ func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{Title: "not-started", Path: "/tmp/test", UUID: "22222222-2222-2222-2222-222222222222"}
+	inst := &instance.Instance{Title: "not-started", Path: "/tmp/test", UUID: "22222222-2222-2222-2222-222222222222"}
 	require.False(t, inst.Started())
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -1106,7 +1107,7 @@ func TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "epoch-match",
 		UUID:      "uuid-epoch-match",
 		Path:      "/tmp/test",
@@ -1136,7 +1137,7 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "epoch-stale",
 		UUID:      "uuid-epoch-stale",
 		Path:      "/tmp/test",
@@ -1338,7 +1339,7 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 	defer cleanup()
 
 	archivedAt := time.Now()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:      "archived-active-roundtrip",
 		Path:       "/tmp/test",
 		Status:     domain.Active,
@@ -1375,7 +1376,7 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 	b.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
 	noWT := newTestInstance("batch-dir")
 	noWT.UUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-	require.NoError(t, storage.SaveInstances([]*Instance{a, b, noWT}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{a, b, noWT}))
 
 	var queries atomic.Int64
 	storage.GetEntClient().Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
@@ -1428,7 +1429,7 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	var loaded []*Instance
+	var loaded []*instance.Instance
 	stmts := countStatementsMatching(t, storage.Repo, func(q string) bool {
 		return strings.Contains(q, "session_prs") || strings.Contains(q, "pull_request_states")
 	}, func() {
@@ -1457,8 +1458,8 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 		fixturetest.MustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
 	require.NoError(t, err)
 
-	byTitle := func(insts []*Instance) map[string]*Instance {
-		m := map[string]*Instance{}
+	byTitle := func(insts []*instance.Instance) map[string]*instance.Instance {
+		m := map[string]*instance.Instance{}
 		for _, i := range insts {
 			m[i.Title] = i
 		}

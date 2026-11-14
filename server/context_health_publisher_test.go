@@ -4,17 +4,17 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
-func healthTestInstance(t *testing.T, uuid string) *session.Instance {
+func healthTestInstance(t *testing.T, uuid string) *instance.Instance {
 	t.Helper()
-	li := session.NewLiveInstance(&session.Instance{Title: "s-" + uuid})
+	li := instance.NewLiveInstance(&instance.Instance{Title: "s-" + uuid})
 	t.Cleanup(li.Stop)
 	if uuid != "" {
 		li.SetClaudeConversationUUID(uuid)
@@ -31,9 +31,9 @@ func TestApplyContextHealth_PublishesOnLevelChangeOnly(t *testing.T) {
 	current := &tokens.ParseResult{ContextHealth: loopSignals(3)}
 	lookup := func(string) *tokens.ParseResult { return current }
 	var published int
-	publish := func(*session.Instance) { published++ }
+	publish := func(*instance.Instance) { published++ }
 	run := func() {
-		applyContextHealth([]*session.Instance{inst}, lookup, config.ContextHealthConfig{}, publish)
+		applyContextHealth([]*instance.Instance{inst}, lookup, config.ContextHealthConfig{}, publish)
 	}
 
 	run() // unknown -> amber
@@ -58,10 +58,10 @@ func TestApplyContextHealth_SkipsInstancesWithoutTranscript(t *testing.T) {
 	noUUID := healthTestInstance(t, "")
 	noParse := healthTestInstance(t, "missing")
 	var published int
-	applyContextHealth([]*session.Instance{noUUID, noParse},
+	applyContextHealth([]*instance.Instance{noUUID, noParse},
 		func(string) *tokens.ParseResult { return nil },
 		config.ContextHealthConfig{},
-		func(*session.Instance) { published++ })
+		func(*instance.Instance) { published++ })
 	assert.Equal(t, 0, published)
 	assert.Equal(t, domain.HealthUnknown, noUUID.Snapshot().ContextHealth.Level)
 	assert.Equal(t, domain.HealthUnknown, noParse.Snapshot().ContextHealth.Level)

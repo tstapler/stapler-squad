@@ -6,22 +6,22 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeInstanceFinder is a test double for InstanceFinder.
 type fakeInstanceFinder struct {
-	inst *session.Instance
+	inst *instance.Instance
 }
 
-func (f *fakeInstanceFinder) FindInstance(_ string) *session.Instance {
+func (f *fakeInstanceFinder) FindInstance(_ string) *instance.Instance {
 	return f.inst
 }
 
 // newTestInstance creates a minimal *session.Instance using the session package.
 // It does NOT start tmux or any background processes; it only initialises
 // the in-memory managers (noop when deps are absent).
-func newTestInstance(t *testing.T) *session.Instance {
+func newTestInstance(t *testing.T) *instance.Instance {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "cdp-handler-test-*")
 	if err != nil {
@@ -29,7 +29,7 @@ func newTestInstance(t *testing.T) *session.Instance {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "test-cdp",
 		Path:  dir,
 	})
