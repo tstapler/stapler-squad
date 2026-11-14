@@ -43,6 +43,7 @@ var lifecycleFiles = []string{
 	"session/instance/instance_serialization.go",
 	"session/instance/hot_restore.go",
 	"server/dependencies.go",
+	"server/dependencies_instances.go",
 	"server/wakes/revive.go",
 	"server/services/question_answer_router.go",
 	"server/services/session_service_clear_terminal.go",
