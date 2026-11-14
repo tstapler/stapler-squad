@@ -1283,8 +1283,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 12b. Capture the pre-work HEAD SHA so the review gate can diff base..HEAD across
 	// all commits the agent makes (not just HEAD~1..HEAD at review time). This goes in
 	// BaseCommitSha, never LastCommitSha — see SetItemSessionBaseCommit's doc comment.
-	if baseSHA, shaErr := pipeline.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
-		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
+	if baseSHA := s.stampBaseCommit(ctx, baseCommitStamp{
+		Caller: "SpawnSessionFromItem", Item: item, Session: is, Dir: worktreePath, RaisesNotification: true,
+	}); baseSHA != "" {
 		inst.SetDirBaseSHA(baseSHA)
 	}
 
@@ -1938,7 +1939,10 @@ func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string,
 		return "", false, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", pathErr))
 	}
 
-	if git.IsGitRepo(resolvedRepo) {
+	// A `.git` entry means a git checkout even when go-git cannot open it (an
+	// unsupported repo extension made IsGitRepo false on 2026-11-03 and sent two work
+	// sessions to directory mode, with no branch or base commit for the PR guard).
+	if git.IsGitRepo(resolvedRepo) || hasDotGit(resolvedRepo) {
 		// No special-case fallback for a zero-commit repo: findGitRepoRoot
 		// (session/git/util.go, called by both GitWorktree constructors before
 		// Setup runs) auto-creates an initial commit for exactly that case, so
@@ -3597,9 +3601,7 @@ Do not modify the code. Only write the review verdict.
 	}
 
 	// Capture the pre-review HEAD SHA so diffs against base..HEAD work correctly.
-	if baseSHA, shaErr := pipeline.GetGitHeadSHA(item.RepoPath); shaErr == nil && baseSHA != "" {
-		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
-	}
+	s.stampBaseCommit(ctx, baseCommitStamp{Caller: "TriggerReReview", Item: item, Session: is, Dir: item.RepoPath})
 
 	log.Info("[TriggerReReview] spawned re-review session", "session", inst.UUID, "item", item.ID)
 

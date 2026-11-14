@@ -142,8 +142,9 @@ func (s *BacklogService) AttachSessionToItem(
 				// Capture pre-work HEAD SHA so the review gate can diff base..HEAD
 				// across all commits the agent makes (same as SpawnSessionFromItem step 12b) —
 				// into BaseCommitSha, never LastCommitSha (see SetItemSessionBaseCommit).
-				if baseSHA, shaErr := pipeline.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
-					_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
+				if baseSHA := s.stampBaseCommit(ctx, baseCommitStamp{
+					Caller: "AttachSessionToItem", Item: item, Session: is, Dir: worktreePath, RaisesNotification: true,
+				}); baseSHA != "" {
 					inst.SetDirBaseSHA(baseSHA)
 				}
 				// Persist synchronously so the review gate's worktree lookup (by session
