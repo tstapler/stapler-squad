@@ -180,7 +180,8 @@ var (
 				// aggregator cache; its as_of makes that visible to the agent.
 				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil,
 					mcpserver.WithFlowService(backlogflow.NewFlowServiceFromStorage(storage)),
-					mcpserver.WithPluginRegistry(server.NewItemSourceRegistry()))
+					mcpserver.WithPluginRegistry(server.NewItemSourceRegistry()),
+					mcpserver.WithTrackerRefParser(server.NewTrackerRefParser()))
 			}
 
 			// Enable test mode if flag is set
