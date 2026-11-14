@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -407,7 +408,7 @@ func newHandlerWithStorage(t *testing.T) (*ApprovalHandler, *session.Storage) {
 func addPausedInstanceWithUUID(t *testing.T, storage *session.Storage, title, uuid, path string) {
 	t.Helper()
 	now := time.Now()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		UUID:      uuid,
 		Path:      path,
@@ -440,10 +441,10 @@ func (c *capturingClassifier) BuildContext(_ string) classifier.ClassificationCo
 // LastPRStatusCheck are not persisted (see Storage.UpdateInstancePRStatus), so
 // ApprovalHandler reads them through this live-registry seam instead of *session.Storage.
 type fakeApprovalLiveInstanceFinder struct {
-	inst *session.Instance
+	inst *instance.Instance
 }
 
-func (f *fakeApprovalLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
+func (f *fakeApprovalLiveInstanceFinder) FindLiveInstance(id string) *instance.Instance {
 	if f.inst != nil && (f.inst.UUID == id || f.inst.Title == id) {
 		return f.inst
 	}
@@ -465,7 +466,7 @@ func TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown(t *testing.T) {
 
 	const uuid = "cccccccc-1111-2222-3333-ffffffffffff"
 	now := time.Now()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:                 "stale-ci-session",
 		UUID:                  uuid,
 		Path:                  "/projects/stale-ci",
@@ -509,7 +510,7 @@ func TestHandlePermissionRequest_FreshCIStatus_Populated(t *testing.T) {
 
 	const uuid = "dddddddd-1111-2222-3333-ffffffffffff"
 	now := time.Now()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:                 "fresh-ci-session",
 		UUID:                  uuid,
 		Path:                  "/projects/fresh-ci",
@@ -1107,7 +1108,7 @@ func TestHandlePermissionRequest_DeniesBasedOnSessionIdleTime_EndToEnd(t *testin
 
 	const uuid = "ffffffff-1111-2222-3333-ffffffffffff"
 	now := time.Now()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "idle-45",
 		UUID:      uuid,
 		Path:      "/projects/idle-45",

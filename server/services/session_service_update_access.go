@@ -7,7 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // The access-decision block of UpdateSession (plan Story 5.2). It runs right
@@ -42,7 +42,7 @@ func otherMutatingFields(msg *sessionv1.UpdateSessionRequest) []string {
 // start the driver typing into it: further routes into a hidden session's
 // terminal (ADV-N28). A value equal to the current one is a no-op in the handler
 // and is not refused here.
-func restartsPane(msg *sessionv1.UpdateSessionRequest, inst *session.Instance) bool {
+func restartsPane(msg *sessionv1.UpdateSessionRequest, inst *instance.Instance) bool {
 	snap := inst.Snapshot()
 	if msg.Program != nil && (*msg.Program == "" || *msg.Program != snap.Program) {
 		return true
@@ -55,7 +55,7 @@ func restartsPane(msg *sessionv1.UpdateSessionRequest, inst *session.Instance) b
 
 // decideUpdateAccess returns the steer decision for req (zero when there is no
 // steer) or the connect error that refuses the whole request.
-func (s *SessionService) decideUpdateAccess(ctx context.Context, req *connect.Request[sessionv1.UpdateSessionRequest], inst *session.Instance) (steerDecision, error) {
+func (s *SessionService) decideUpdateAccess(ctx context.Context, req *connect.Request[sessionv1.UpdateSessionRequest], inst *instance.Instance) (steerDecision, error) {
 	msg := req.Msg
 	steering := msg.SteerMessage != nil && *msg.SteerMessage != ""
 	hidden := inst.Snapshot().Hidden
@@ -77,7 +77,7 @@ func (s *SessionService) decideUpdateAccess(ctx context.Context, req *connect.Re
 
 // runSteer sends msg by the path decideSteerAccess chose: the audited backlog
 // writer for the O7 path, the lease-taking visible acquirer otherwise.
-func (s *SessionService) runSteer(ctx context.Context, d steerDecision, inst *session.Instance, msg string) error {
+func (s *SessionService) runSteer(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) error {
 	if d.bypass {
 		return s.runBypassSteer(ctx, d, inst, msg)
 	}
@@ -107,7 +107,7 @@ func steerErrorToConnect(err error) error {
 
 // runBypassSteer is the guards-off steer of a non-qualifying hidden target: the
 // guard_bypass line is durable before the write, and a result line follows.
-func (s *SessionService) runBypassSteer(ctx context.Context, d steerDecision, inst *session.Instance, msg string) error {
+func (s *SessionService) runBypassSteer(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) error {
 	line, err := s.auditGuardBypass(ctx, d, inst, msg)
 	if err != nil {
 		return err

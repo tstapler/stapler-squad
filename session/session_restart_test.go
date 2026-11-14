@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -35,7 +38,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create a test instance with Claude session data
-	instance, cleanup, err := NewTestInstance(t, "claude-restart-test").
+	inst, cleanup, err := NewTestInstance(t, "claude-restart-test").
 		WithProgram("claude --model sonnet").
 		Build()
 	require.NoError(t, err)
@@ -48,7 +51,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	}()
 
 	// Set Claude session data with valid UUID
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -61,7 +64,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	})
 
 	// Start the session (first time)
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Session should start successfully")
 	defer func() {
 		if startCleanup != nil {
@@ -73,7 +76,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 
 	// Verify the command was enriched with --resume flag
 	// Check the tmux session's program command
-	if instance.processManager.HasSession() {
+	if inst.ProcessManagerForTest().HasSession() {
 		// The program should contain the --resume flag
 		expectedCommand := fmt.Sprintf("claude --model sonnet --resume %s", validSessionID)
 		t.Logf("✓ Session started with expected command containing --resume flag")
@@ -81,16 +84,16 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	}
 
 	// Simulate a session crash by killing the tmux session
-	err = instance.KillSession()
+	err = inst.KillSession()
 	require.NoError(t, err, "Session should be killable")
 
 	// Restart the session (simulating health checker or lazy recovery)
-	err = instance.Start(false) // false = not first time setup
+	err = inst.Start(false) // false = not first time setup
 	require.NoError(t, err, "Session should restart successfully")
 
 	// Verify the restart also used the --resume flag
-	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
+	assert.True(t, inst.Started(), "Instance should be started after restart")
+	assert.Equal(t, domain.Active, inst.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Session restarted successfully with conversation continuity")
 }
@@ -98,7 +101,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 // testRestartWithoutClaudeSession verifies fallback behavior without session data
 func testRestartWithoutClaudeSession(t *testing.T) {
 	// Create a Claude instance without session data
-	instance, cleanup, err := NewTestInstance(t, "claude-no-session-test").
+	inst, cleanup, err := NewTestInstance(t, "claude-no-session-test").
 		WithProgram("claude").
 		Build()
 	require.NoError(t, err)
@@ -113,7 +116,7 @@ func testRestartWithoutClaudeSession(t *testing.T) {
 	// No Claude session data set (instance.claudeSession == nil)
 
 	// Start the session
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Session should start without session data")
 	defer func() {
 		if startCleanup != nil {
@@ -125,7 +128,7 @@ func testRestartWithoutClaudeSession(t *testing.T) {
 
 	// Verify the command does NOT have --resume flag
 	// The program should be unchanged (no --resume added)
-	assert.True(t, instance.Started(), "Instance should be started")
+	assert.True(t, inst.Started(), "Instance should be started")
 
 	t.Logf("✓ Session started without --resume flag (no session data)")
 }
@@ -135,7 +138,7 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	invalidSessionID := "not-a-valid-uuid"
 
 	// Create a Claude instance with invalid session ID
-	instance, cleanup, err := NewTestInstance(t, "claude-invalid-uuid-test").
+	inst, cleanup, err := NewTestInstance(t, "claude-invalid-uuid-test").
 		WithProgram("claude").
 		Build()
 	require.NoError(t, err)
@@ -148,7 +151,7 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	}()
 
 	// Set Claude session data with INVALID UUID
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: invalidSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -156,7 +159,7 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	})
 
 	// Start the session - should succeed but skip --resume
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Session should start even with invalid UUID")
 	defer func() {
 		if startCleanup != nil {
@@ -167,7 +170,7 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	}()
 
 	// Verify session started successfully (without --resume flag due to invalid UUID)
-	assert.True(t, instance.Started(), "Instance should be started")
+	assert.True(t, inst.Started(), "Instance should be started")
 
 	t.Logf("✓ Session started without --resume flag (invalid UUID detected)")
 }
@@ -177,7 +180,7 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create an instance with a non-Claude program
-	instance, cleanup, err := NewTestInstance(t, "aider-restart-test").
+	inst, cleanup, err := NewTestInstance(t, "aider-restart-test").
 		WithProgram("aider --model ollama_chat/gemma3:1b").
 		Build()
 	require.NoError(t, err)
@@ -190,7 +193,7 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	}()
 
 	// Set Claude session data (should be ignored for non-Claude programs)
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -198,7 +201,7 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	})
 
 	// Start the session
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Non-Claude session should start successfully")
 	defer func() {
 		if startCleanup != nil {
@@ -209,7 +212,7 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	}()
 
 	// Verify the command does NOT have --resume flag (not a Claude program)
-	assert.True(t, instance.Started(), "Instance should be started")
+	assert.True(t, inst.Started(), "Instance should be started")
 
 	t.Logf("✓ Non-Claude program started without --resume flag (correctly skipped)")
 }
@@ -219,7 +222,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create a Claude instance with session data
-	instance, cleanup, err := NewTestInstance(t, "health-checker-test").
+	inst, cleanup, err := NewTestInstance(t, "health-checker-test").
 		WithProgram("claude").
 		Build()
 	require.NoError(t, err)
@@ -232,7 +235,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-456",
 		ProjectName:      "health-check-project",
@@ -240,7 +243,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	})
 
 	// Start the session (first time)
-	startCleanup1, err := instance.StartWithCleanup(true)
+	startCleanup1, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Session should start successfully")
 	defer func() {
 		if startCleanup1 != nil {
@@ -251,24 +254,24 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	}()
 
 	// Verify session is running
-	assert.True(t, instance.Started(), "Instance should be started")
-	assert.True(t, instance.TmuxAlive(), "Tmux session should be alive")
+	assert.True(t, inst.Started(), "Instance should be started")
+	assert.True(t, inst.TmuxAlive(), "Tmux session should be alive")
 
 	// Simulate tmux crash by killing the session
-	err = instance.KillSession()
+	err = inst.KillSession()
 	require.NoError(t, err, "Session should be killable")
 
 	// Verify tmux is dead but instance metadata is still there
-	assert.False(t, instance.TmuxAlive(), "Tmux session should be dead after kill")
-	assert.True(t, instance.Started(), "Instance should still be marked as started")
+	assert.False(t, inst.TmuxAlive(), "Tmux session should be dead after kill")
+	assert.True(t, inst.Started(), "Instance should still be marked as started")
 
 	// Simulate health checker automatic restart (calls Start with false)
-	err = instance.Start(false)
+	err = inst.Start(false)
 	require.NoError(t, err, "Health checker restart should succeed")
 
 	// Verify session is restored
-	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
+	assert.True(t, inst.Started(), "Instance should be started after restart")
+	assert.Equal(t, domain.Active, inst.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Health checker automatic restart succeeded with conversation continuity")
 }
@@ -278,7 +281,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create a Claude instance
-	instance, cleanup, err := NewTestInstance(t, "lazy-recovery-test").
+	inst, cleanup, err := NewTestInstance(t, "lazy-recovery-test").
 		WithProgram("claude --verbose").
 		Build()
 	require.NoError(t, err)
@@ -291,7 +294,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-789",
 		ProjectName:      "lazy-recovery-project",
@@ -299,7 +302,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 	})
 
 	// Start the session (first time)
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Session should start successfully")
 	defer func() {
 		if startCleanup != nil {
@@ -310,19 +313,19 @@ func testLazyRecoveryRestart(t *testing.T) {
 	}()
 
 	// Simulate tmux crash
-	err = instance.KillSession()
+	err = inst.KillSession()
 	require.NoError(t, err, "Session should be killable")
 
 	// Simulate lazy recovery (app detects dead tmux before attach)
 	// This would typically happen in ensureSessionHealthy() in app.go
-	if !instance.TmuxAlive() {
+	if !inst.TmuxAlive() {
 		// Attempt recovery by restarting
-		err = instance.Start(false)
+		err = inst.Start(false)
 		require.NoError(t, err, "Lazy recovery should succeed")
 	}
 
 	// Verify recovery worked
-	assert.True(t, instance.Started(), "Instance should be started after recovery")
+	assert.True(t, inst.Started(), "Instance should be started after recovery")
 
 	t.Logf("✓ Lazy recovery restart succeeded with conversation continuity")
 }
@@ -396,7 +399,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			instance, cleanup, err := NewTestInstance(t, fmt.Sprintf("enrich-%s", strings.ReplaceAll(tc.name, " ", "-"))).
+			inst, cleanup, err := NewTestInstance(t, fmt.Sprintf("enrich-%s", strings.ReplaceAll(tc.name, " ", "-"))).
 				WithProgram(tc.baseProgram).
 				Build()
 			require.NoError(t, err)
@@ -410,7 +413,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 
 			// Set session data if provided
 			if tc.sessionID != "" {
-				instance.SetClaudeSession(&domain.ClaudeSessionData{
+				inst.SetClaudeSession(&domain.ClaudeSessionData{
 					ConversationUUID: tc.sessionID,
 					SquadSessionID:   "conv-test",
 					ProjectName:      "test-project",
@@ -419,7 +422,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 			}
 
 			// Start the session
-			startCleanup, err := instance.StartWithCleanup(true)
+			startCleanup, err := inst.StartWithCleanup(true)
 			require.NoError(t, err, "Session should start")
 			defer func() {
 				if startCleanup != nil {
@@ -430,7 +433,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 			}()
 
 			// Verify command enrichment
-			assert.True(t, instance.Started(), "Instance should be started")
+			assert.True(t, inst.Started(), "Instance should be started")
 
 			if tc.shouldEnrich {
 				t.Logf("✓ Command enriched with %s flag as expected", tc.expectedInCommand)
@@ -445,7 +448,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 func testMultipleRestartCycles(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
-	instance, cleanup, err := NewTestInstance(t, "multi-restart-test").
+	inst, cleanup, err := NewTestInstance(t, "multi-restart-test").
 		WithProgram("claude").
 		Build()
 	require.NoError(t, err)
@@ -458,7 +461,7 @@ func testMultipleRestartCycles(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-multi",
 		ProjectName:      "multi-restart-project",
@@ -474,23 +477,23 @@ func testMultipleRestartCycles(t *testing.T) {
 		var startErr error
 		if cycle == 1 {
 			// First start
-			_, startErr = instance.StartWithCleanup(true)
+			_, startErr = inst.StartWithCleanup(true)
 		} else {
 			// Restart
-			startErr = instance.Start(false)
+			startErr = inst.Start(false)
 		}
 		require.NoError(t, startErr, "Cycle %d: Session should start successfully", cycle)
 
 		// Verify session is running
-		assert.True(t, instance.Started(), "Cycle %d: Instance should be started", cycle)
-		assert.True(t, instance.TmuxAlive(), "Cycle %d: Tmux should be alive", cycle)
+		assert.True(t, inst.Started(), "Cycle %d: Instance should be started", cycle)
+		assert.True(t, inst.TmuxAlive(), "Cycle %d: Tmux should be alive", cycle)
 
 		// Kill the session to simulate crash
-		err = instance.KillSession()
+		err = inst.KillSession()
 		require.NoError(t, err, "Cycle %d: Session should be killable", cycle)
 
 		// Verify tmux is dead
-		assert.False(t, instance.TmuxAlive(), "Cycle %d: Tmux should be dead after kill", cycle)
+		assert.False(t, inst.TmuxAlive(), "Cycle %d: Tmux should be dead after kill", cycle)
 
 		t.Logf("✓ Cycle %d/%d completed", cycle, numCycles)
 	}
@@ -506,7 +509,7 @@ func testSessionDataPersistence(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create an instance with session data
-	instance, cleanup, err := NewTestInstance(t, "persistence-test").
+	inst, cleanup, err := NewTestInstance(t, "persistence-test").
 		WithProgram("claude").
 		WithPath(tempDir).
 		Build()
@@ -535,10 +538,10 @@ func testSessionDataPersistence(t *testing.T) {
 			"working_dir": tempDir,
 		},
 	}
-	instance.SetClaudeSession(originalSession)
+	inst.SetClaudeSession(originalSession)
 
 	// Start the session
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err)
 	defer func() {
 		if startCleanup != nil {
@@ -549,7 +552,7 @@ func testSessionDataPersistence(t *testing.T) {
 	}()
 
 	// Verify session data is still present
-	retrievedSession := instance.GetClaudeSession()
+	retrievedSession := inst.GetClaudeSession()
 	require.NotNil(t, retrievedSession, "Claude session data should be present")
 	assert.Equal(t, originalSession.ConversationUUID, retrievedSession.ConversationUUID)
 	assert.Equal(t, originalSession.SquadSessionID, retrievedSession.SquadSessionID)
@@ -558,17 +561,17 @@ func testSessionDataPersistence(t *testing.T) {
 	assert.Equal(t, originalSession.Metadata["test_key"], retrievedSession.Metadata["test_key"])
 
 	// Kill and restart
-	err = instance.KillSession()
+	err = inst.KillSession()
 	require.NoError(t, err)
 
-	err = instance.Start(false)
+	err = inst.Start(false)
 	require.NoError(t, err)
 
 	// Verify session data persists across restart — but SessionID is cleared
 	// intentionally so HistoryLinker can re-detect the actual UUID from the
 	// running process's open files (Claude may resume the same session or create
 	// a new one if the old UUID is no longer valid).
-	retrievedAfterRestart := instance.GetClaudeSession()
+	retrievedAfterRestart := inst.GetClaudeSession()
 	require.NotNil(t, retrievedAfterRestart, "Claude session data should persist after restart")
 	assert.Equal(t, "", retrievedAfterRestart.ConversationUUID, "ConversationUUID cleared after cold restore; HistoryLinker will re-detect")
 	assert.Equal(t, "conv-persist", retrievedAfterRestart.SquadSessionID)
@@ -585,7 +588,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create a git repository
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer func() {
 		if err := os.RemoveAll(tempRepo); err != nil {
 			t.Logf("Failed to remove temp repo: %v", err)
@@ -593,7 +596,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	}()
 
 	// Create an instance with worktree and Claude session
-	instance, cleanup, err := NewTestInstance(t, "worktree-claude-test").
+	inst, cleanup, err := NewTestInstance(t, "worktree-claude-test").
 		WithPath(tempRepo).
 		WithProgram("claude").
 		WithSessionType(domain.SessionTypeNewWorktree).
@@ -608,7 +611,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&domain.ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-worktree",
 		ProjectName:      "worktree-project",
@@ -616,7 +619,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	})
 
 	// Start the session (creates worktree)
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Worktree session with Claude should start")
 	defer func() {
 		if startCleanup != nil {
@@ -627,7 +630,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	}()
 
 	// Verify worktree was created
-	gitWorktree, err := instance.GetGitWorktree()
+	gitWorktree, err := inst.GetGitWorktree()
 	require.NoError(t, err)
 	require.NotNil(t, gitWorktree)
 
@@ -636,20 +639,20 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	assert.NoError(t, err, "Worktree should exist")
 
 	// Verify Claude session data is present
-	claudeSession := instance.GetClaudeSession()
+	claudeSession := inst.GetClaudeSession()
 	require.NotNil(t, claudeSession)
 	assert.Equal(t, validSessionID, claudeSession.ConversationUUID)
 
 	// Kill and restart with worktree
-	err = instance.KillSession()
+	err = inst.KillSession()
 	require.NoError(t, err)
 
-	err = instance.Start(false)
+	err = inst.Start(false)
 	require.NoError(t, err, "Restart with worktree and Claude session should work")
 
 	// Verify both worktree and Claude session persist
-	assert.True(t, instance.Started())
-	assert.NotNil(t, instance.GetClaudeSession())
+	assert.True(t, inst.Started())
+	assert.NotNil(t, inst.GetClaudeSession())
 
 	t.Logf("✓ Claude session with git worktree restart succeeded")
 }
@@ -682,7 +685,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
 
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title: "active-restore-test",
 		Path:  t.TempDir(),
 		// Whitespace-split, no shell quoting (see buildBaseLaunchCommand): a quoted
@@ -702,7 +705,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		}
 	}()
 
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err, "Session should start successfully")
 	defer func() {
 		if startCleanup != nil {
@@ -712,8 +715,8 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		}
 	}()
 
-	require.True(t, instance.TmuxAlive(), "tmux session should be alive after Start")
-	require.Equal(t, domain.Active, instance.Status, "instance should be Active after Start")
+	require.True(t, inst.TmuxAlive(), "tmux session should be alive after Start")
+	require.Equal(t, domain.Active, inst.Status, "instance should be Active after Start")
 
 	// A freshly-created tmux server socket can transiently fail "list-sessions"
 	// for a few ms right after creation (server startup lag), independent of
@@ -726,17 +729,17 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 	// FromInstanceData's restore path does: construct a fresh object and
 	// immediately check aliveness on it.
 	wait.RequireEventually(t, func() bool {
-		probe := tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, "staplersquad_", instance.TmuxServerSocket, tmux.WithRegistry(nil))
+		probe := tmux.NewTmuxSessionWithServerSocket(inst.Title, inst.Program, "staplersquad_", inst.TmuxServerSocket, tmux.WithRegistry(nil))
 		return probe.DoesSessionExist()
 	}, 2*time.Second, 10*time.Millisecond, "tmux server should stabilize so a freshly-constructed session object can see it")
 
-	pidBefore, err := instance.GetPanePID()
+	pidBefore, err := inst.GetPanePID()
 	require.NoError(t, err, "should be able to read the pane's foreground PID")
 	require.NotZero(t, pidBefore)
 
 	// Round-trip through the same serialize/deserialize path LoadInstances() uses.
-	data := instance.ToInstanceData()
-	restored, err := FromInstanceData(data)
+	data := inst.ToInstanceData()
+	restored, err := instance.FromInstanceData(data)
 	require.NoError(t, err, "FromInstanceData should succeed for an Active instance with a live tmux session")
 
 	assert.True(t, restored.TmuxAlive(),
@@ -779,7 +782,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 	// Started()" gate, then persist it and kill the underlying tmux session to
 	// simulate a session whose process died (the exact scenario that used to
 	// make LoadInstances cold-restore synchronously, one session at a time).
-	instance, instCleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, instCleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "load-instances-defer-start-test",
 		Path:             t.TempDir(),
 		Program:          "bash -c 'echo hi; exec bash'",
@@ -793,15 +796,15 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 			_ = instCleanup()
 		}
 	}()
-	startCleanup, err := instance.StartWithCleanup(true)
+	startCleanup, err := inst.StartWithCleanup(true)
 	require.NoError(t, err)
 	if startCleanup != nil {
 		defer func() { _ = startCleanup() }()
 	}
-	require.True(t, instance.Started())
+	require.True(t, inst.Started())
 
-	require.NoError(t, storage.SaveInstances([]*Instance{instance}))
-	require.NoError(t, instance.KillSession(), "simulate the process dying before the next server start")
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
+	require.NoError(t, inst.KillSession(), "simulate the process dying before the next server start")
 
 	start := time.Now()
 	instances, err := storage.LoadInstances()
@@ -812,10 +815,10 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 	assert.Lessf(t, elapsed, budget,
 		"LoadInstances took %s — Start() may be getting called synchronously again instead of deferred to the async Step 6 loop", elapsed)
 
-	var found *Instance
-	for _, inst := range instances {
-		if inst.UUID == instance.UUID {
-			found = inst
+	var found *instance.Instance
+	for _, loaded := range instances {
+		if loaded.UUID == inst.UUID {
+			found = loaded
 			break
 		}
 	}

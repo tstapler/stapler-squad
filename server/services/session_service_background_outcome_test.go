@@ -11,13 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func addHiddenInstance(fix *forkTestFixture, title, uuid string, status domain.Status) {
-	fix.poller.AddInstance(&session.Instance{
+	fix.poller.AddInstance(&instance.Instance{
 		Title: title, UUID: uuid, Status: status, Program: "claude", Path: "/tmp/test", Hidden: true,
 	})
 }
@@ -38,7 +38,7 @@ func TestListSessions_should_populateBackgroundOutcome_When_hiddenOnly_And_leave
 	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "outcome"})
 	require.NoError(t, err)
 	_, err = fix.storage.CreateItemSessionWithVerdict(ctx,
-		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "c0000000-0000-0000-0000-000000000001", SessionRole: session.SessionRoleReview},
+		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "c0000000-0000-0000-0000-000000000001", SessionRole: instance.SessionRoleReview},
 		backlogdto.ReviewVerdictData{OverallOutcome: "PASS"})
 	require.NoError(t, err)
 

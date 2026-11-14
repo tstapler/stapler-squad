@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ─── I-GO-01: TestSetGetSessionGoal_roundTrip ─────────────────────────────────
@@ -19,16 +20,16 @@ func TestSetGetSessionGoal_roundTrip(t *testing.T) {
 	defer cleanup()
 
 	sessionUUID := "test-session-uuid-01"
-	tasks := []TaskNode{
-		{ID: "t1", Title: "First task", Status: TaskStatusPending},
+	tasks := []instance.TaskNode{
+		{ID: "t1", Title: "First task", Status: instance.TaskStatusPending},
 	}
 
-	got, err := storage.SetSessionGoal(context.Background(), sessionUUID, "implement feature X", GoalStatusWorking, tasks, "user", "")
+	got, err := storage.SetSessionGoal(context.Background(), sessionUUID, "implement feature X", instance.GoalStatusWorking, tasks, "user", "")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, sessionUUID, got.SessionUUID)
 	assert.Equal(t, "implement feature X", got.Goal)
-	assert.Equal(t, GoalStatusWorking, got.Status)
+	assert.Equal(t, instance.GoalStatusWorking, got.Status)
 	assert.Equal(t, 1, len(got.Tasks))
 
 	loaded, err := storage.GetSessionGoal(context.Background(), sessionUUID)
@@ -49,16 +50,16 @@ func TestSetSessionGoal_upsertReplacesPrevious(t *testing.T) {
 
 	sessionUUID := "test-session-uuid-02"
 
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "first goal", GoalStatusIdle, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "first goal", instance.GoalStatusIdle, nil, "", "")
 	require.NoError(t, err)
 
-	_, err = storage.SetSessionGoal(context.Background(), sessionUUID, "second goal", GoalStatusWorking, nil, "", "")
+	_, err = storage.SetSessionGoal(context.Background(), sessionUUID, "second goal", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 
 	loaded, err := storage.GetSessionGoal(context.Background(), sessionUUID)
 	require.NoError(t, err)
 	assert.Equal(t, "second goal", loaded.Goal)
-	assert.Equal(t, GoalStatusWorking, loaded.Status)
+	assert.Equal(t, instance.GoalStatusWorking, loaded.Status)
 }
 
 // ─── I-GO-03: TestGetSessionGoal_returnsErrNotFoundWhenAbsent ────────────────
@@ -81,18 +82,18 @@ func TestUpdateSessionTaskStatus_updatesCorrectTaskByID(t *testing.T) {
 	defer cleanup()
 
 	sessionUUID := "test-session-uuid-04"
-	tasks := []TaskNode{
-		{ID: "t1", Title: "Task one", Status: TaskStatusPending},
-		{ID: "t2", Title: "Task two", Status: TaskStatusPending},
+	tasks := []instance.TaskNode{
+		{ID: "t1", Title: "Task one", Status: instance.TaskStatusPending},
+		{ID: "t2", Title: "Task two", Status: instance.TaskStatusPending},
 	}
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "my goal", GoalStatusWorking, tasks, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "my goal", instance.GoalStatusWorking, tasks, "", "")
 	require.NoError(t, err)
 
-	updated, err := storage.UpdateSessionTaskStatus(context.Background(), sessionUUID, "t1", TaskStatusDone)
+	updated, err := storage.UpdateSessionTaskStatus(context.Background(), sessionUUID, "t1", instance.TaskStatusDone)
 	require.NoError(t, err)
 
-	assert.Equal(t, TaskStatusDone, updated.Tasks[0].Status)
-	assert.Equal(t, TaskStatusPending, updated.Tasks[1].Status, "t2 should be unchanged")
+	assert.Equal(t, instance.TaskStatusDone, updated.Tasks[0].Status)
+	assert.Equal(t, instance.TaskStatusPending, updated.Tasks[1].Status, "t2 should be unchanged")
 }
 
 // ─── I-GO-05: TestUpdateSessionTaskStatus_updatesNestedTaskByID ──────────────
@@ -103,20 +104,20 @@ func TestUpdateSessionTaskStatus_updatesNestedTaskByID(t *testing.T) {
 	defer cleanup()
 
 	sessionUUID := "test-session-uuid-05"
-	tasks := []TaskNode{
-		{ID: "parent", Title: "Parent task", Status: TaskStatusInProgress, Children: []TaskNode{
-			{ID: "child1", Title: "Child task 1", Status: TaskStatusPending},
+	tasks := []instance.TaskNode{
+		{ID: "parent", Title: "Parent task", Status: instance.TaskStatusInProgress, Children: []instance.TaskNode{
+			{ID: "child1", Title: "Child task 1", Status: instance.TaskStatusPending},
 		}},
 	}
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "nested goal", GoalStatusWorking, tasks, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "nested goal", instance.GoalStatusWorking, tasks, "", "")
 	require.NoError(t, err)
 
-	updated, err := storage.UpdateSessionTaskStatus(context.Background(), sessionUUID, "child1", TaskStatusDone)
+	updated, err := storage.UpdateSessionTaskStatus(context.Background(), sessionUUID, "child1", instance.TaskStatusDone)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, len(updated.Tasks))
 	require.Equal(t, 1, len(updated.Tasks[0].Children))
-	assert.Equal(t, TaskStatusDone, updated.Tasks[0].Children[0].Status)
+	assert.Equal(t, instance.TaskStatusDone, updated.Tasks[0].Children[0].Status)
 }
 
 // ─── I-GO-06: TestUpdateSessionTaskStatus_returnsErrorWhenTaskIDNotFound ─────
@@ -127,10 +128,10 @@ func TestUpdateSessionTaskStatus_returnsErrorWhenTaskIDNotFound(t *testing.T) {
 	defer cleanup()
 
 	sessionUUID := "test-session-uuid-06"
-	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "a goal", GoalStatusIdle, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), sessionUUID, "a goal", instance.GoalStatusIdle, nil, "", "")
 	require.NoError(t, err)
 
-	_, err = storage.UpdateSessionTaskStatus(context.Background(), sessionUUID, "nonexistent-task-id", TaskStatusDone)
+	_, err = storage.UpdateSessionTaskStatus(context.Background(), sessionUUID, "nonexistent-task-id", instance.TaskStatusDone)
 	require.Error(t, err)
 }
 
@@ -141,7 +142,7 @@ func TestInitialPromptPersistenceRoundTrip(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:         "prompt-roundtrip",
 		UUID:          "test-uuid-prompt-rt",
 		Path:          "/tmp/test",
@@ -151,14 +152,14 @@ func TestInitialPromptPersistenceRoundTrip(t *testing.T) {
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 
-	var found *Instance
+	var found *instance.Instance
 	for _, s := range loaded {
 		if s.UUID == inst.UUID {
 			found = s
@@ -177,7 +178,7 @@ func TestSessionGoalLoadedFromEntOnStartup(t *testing.T) {
 	defer cleanup()
 
 	// Create a session.
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "goal-load-test",
 		UUID:      "test-uuid-goal-load",
 		Path:      "/tmp/test",
@@ -186,18 +187,18 @@ func TestSessionGoalLoadedFromEntOnStartup(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	// Set a goal.
-	_, err := storage.SetSessionGoal(context.Background(), inst.UUID, "the goal", GoalStatusWorking, nil, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), inst.UUID, "the goal", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 
 	// LoadInstances should populate SessionGoal.
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
 
-	var found *Instance
+	var found *instance.Instance
 	for _, s := range instances {
 		if s.UUID == inst.UUID {
 			found = s
@@ -216,11 +217,11 @@ func TestSetSessionGoal_validatesMaxTaskCount(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	tasks := make([]TaskNode, 51)
+	tasks := make([]instance.TaskNode, 51)
 	for i := range tasks {
-		tasks[i] = TaskNode{ID: "t", Title: "task", Status: TaskStatusPending}
+		tasks[i] = instance.TaskNode{ID: "t", Title: "task", Status: instance.TaskStatusPending}
 	}
-	_, err := storage.SetSessionGoal(context.Background(), "test-uuid-count", "goal", GoalStatusIdle, tasks, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), "test-uuid-count", "goal", instance.GoalStatusIdle, tasks, "", "")
 	require.Error(t, err)
 }
 
@@ -230,15 +231,15 @@ func TestSetSessionGoal_validatesMaxTaskDepth(t *testing.T) {
 	defer cleanup()
 
 	// Build depth-4 tree (exceeds maxTaskDepth=3).
-	tasks := []TaskNode{
-		{ID: "l1", Title: "L1", Status: TaskStatusPending, Children: []TaskNode{
-			{ID: "l2", Title: "L2", Status: TaskStatusPending, Children: []TaskNode{
-				{ID: "l3", Title: "L3", Status: TaskStatusPending, Children: []TaskNode{
-					{ID: "l4", Title: "L4", Status: TaskStatusPending},
+	tasks := []instance.TaskNode{
+		{ID: "l1", Title: "L1", Status: instance.TaskStatusPending, Children: []instance.TaskNode{
+			{ID: "l2", Title: "L2", Status: instance.TaskStatusPending, Children: []instance.TaskNode{
+				{ID: "l3", Title: "L3", Status: instance.TaskStatusPending, Children: []instance.TaskNode{
+					{ID: "l4", Title: "L4", Status: instance.TaskStatusPending},
 				}},
 			}},
 		}},
 	}
-	_, err := storage.SetSessionGoal(context.Background(), "test-uuid-depth", "goal", GoalStatusIdle, tasks, "", "")
+	_, err := storage.SetSessionGoal(context.Background(), "test-uuid-depth", "goal", instance.GoalStatusIdle, tasks, "", "")
 	require.Error(t, err)
 }

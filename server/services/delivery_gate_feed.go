@@ -1,6 +1,8 @@
 package services
 
-import "github.com/tstapler/stapler-squad/session"
+import (
+	"github.com/tstapler/stapler-squad/session/instance"
+)
 
 // Feed points for the delivery gate's VisibilityIndex (Task 2.2c). Both are
 // nil-safe (services built without a gate) and lock-free on the gate side, so
@@ -9,7 +11,7 @@ import "github.com/tstapler/stapler-squad/session"
 // indexSessionForDelivery upserts inst's visibility. Call it right after the
 // Instance exists and before it is started, so the session's first hook cannot
 // race an un-indexed (fail-open) lookup.
-func (s *SessionService) indexSessionForDelivery(inst *session.Instance) {
+func (s *SessionService) indexSessionForDelivery(inst *instance.Instance) {
 	if s.deliveryGate != nil {
 		s.deliveryGate.UpsertInstance(inst)
 	}

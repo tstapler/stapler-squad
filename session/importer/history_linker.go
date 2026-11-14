@@ -12,8 +12,8 @@ import (
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -43,11 +43,11 @@ type sessionBackoff struct {
 // Sessions that repeatedly yield no JSONL file are throttled via exponential
 // backoff to reduce subprocess spawn rate on idle worktrees.
 type HistoryLinker struct {
-	detector *session.HistoryFileDetector
+	detector *instance.HistoryFileDetector
 	watcher  *HistoryFileWatcher
 
 	mu             deadlock.RWMutex
-	instances      []*session.Instance
+	instances      []*instance.Instance
 	backoffs       map[string]*sessionBackoff
 	extraCallbacks []func(string) // additional per-file callbacks (e.g. TokenStore)
 
@@ -69,14 +69,14 @@ type HistoryLinker struct {
 // (redirected into the isolated config dir under test isolation).
 // This is the production constructor; use NewHistoryLinker in tests.
 func NewHistoryLinkerFromRealInspector() *HistoryLinker {
-	detector := session.NewHistoryFileDetectorWithRealInspector()
+	detector := instance.NewHistoryFileDetectorWithRealInspector()
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		log.Warn("HistoryLinker: failed to get home dir, watcher disabled", "err", err)
 		return &HistoryLinker{
 			detector:  detector,
-			instances: make([]*session.Instance, 0),
+			instances: make([]*instance.Instance, 0),
 			backoffs:  make(map[string]*sessionBackoff),
 		}
 	}
@@ -90,7 +90,7 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 		log.Warn("HistoryLinker: failed to resolve history watch dir, watcher disabled", "err", err)
 		return &HistoryLinker{
 			detector:  detector,
-			instances: make([]*session.Instance, 0),
+			instances: make([]*instance.Instance, 0),
 			backoffs:  make(map[string]*sessionBackoff),
 		}
 	}
@@ -98,7 +98,7 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 	// Build the linker first so the watcher callback can close over it.
 	hl := &HistoryLinker{
 		detector:  detector,
-		instances: make([]*session.Instance, 0),
+		instances: make([]*instance.Instance, 0),
 		backoffs:  make(map[string]*sessionBackoff),
 	}
 	hl.watcher = NewHistoryFileWatcher(watchDir, hl.handleHistoryFileEvent)
@@ -152,7 +152,7 @@ func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
 			// isClaude reads config from disk, so only evaluate it for the
 			// few live unlinked sessions. A parked session still counts: the
 			// rescan is its only wake-up besides the poll's backoff expiry.
-			awaitingLink = awaitingLink || (live && session.IsClaude(snap.Program))
+			awaitingLink = awaitingLink || (live && instance.IsClaude(snap.Program))
 			continue
 		}
 		if live && inst.GetClaudeConversationUUID() == uuid {
@@ -173,27 +173,27 @@ func (hl *HistoryLinker) RegisterFileCallback(cb func(filePath string)) {
 
 // Instances returns a snapshot of the currently monitored instances.
 // Used by shutdown hooks that need the live set (including externally added sessions).
-func (hl *HistoryLinker) Instances() []*session.Instance {
+func (hl *HistoryLinker) Instances() []*instance.Instance {
 	hl.mu.RLock()
 	defer hl.mu.RUnlock()
-	snap := make([]*session.Instance, len(hl.instances))
+	snap := make([]*instance.Instance, len(hl.instances))
 	copy(snap, hl.instances)
 	return snap
 }
 
 // NewHistoryLinker creates a HistoryLinker backed by the given detector and watcher.
 // Call SetInstances (or AddInstance) to register sessions before starting.
-func NewHistoryLinker(detector *session.HistoryFileDetector, watcher *HistoryFileWatcher) *HistoryLinker {
+func NewHistoryLinker(detector *instance.HistoryFileDetector, watcher *HistoryFileWatcher) *HistoryLinker {
 	return &HistoryLinker{
 		detector:  detector,
 		watcher:   watcher,
-		instances: make([]*session.Instance, 0),
+		instances: make([]*instance.Instance, 0),
 		backoffs:  make(map[string]*sessionBackoff),
 	}
 }
 
 // SetInstances replaces the full instance list.
-func (hl *HistoryLinker) SetInstances(instances []*session.Instance) {
+func (hl *HistoryLinker) SetInstances(instances []*instance.Instance) {
 	hl.mu.Lock()
 	defer hl.mu.Unlock()
 	hl.instances = instances
@@ -205,7 +205,7 @@ func (hl *HistoryLinker) SetInstances(instances []*session.Instance) {
 // loadInstancesWithWiring call, including the ListSessions fallback), and an
 // unguarded append would leave duplicate entries in hl.instances, causing
 // correlateSession to run twice per poll tick for the same session.
-func (hl *HistoryLinker) AddInstance(instance *session.Instance) {
+func (hl *HistoryLinker) AddInstance(instance *instance.Instance) {
 	hl.mu.Lock()
 	defer hl.mu.Unlock()
 	for _, existing := range hl.instances {
@@ -220,7 +220,7 @@ func (hl *HistoryLinker) AddInstance(instance *session.Instance) {
 func (hl *HistoryLinker) RemoveInstance(title string) {
 	hl.mu.Lock()
 	defer hl.mu.Unlock()
-	filtered := make([]*session.Instance, 0, len(hl.instances))
+	filtered := make([]*instance.Instance, 0, len(hl.instances))
 	for _, inst := range hl.instances {
 		if !inst.MatchesID(title) {
 			filtered = append(filtered, inst)
@@ -289,7 +289,7 @@ func (hl *HistoryLinker) scanAllOnce() {
 	for k := range hl.backoffs {
 		delete(hl.backoffs, k)
 	}
-	snapshot := make([]*session.Instance, len(hl.instances))
+	snapshot := make([]*instance.Instance, len(hl.instances))
 	copy(snapshot, hl.instances)
 	hl.mu.Unlock()
 
@@ -302,7 +302,7 @@ func (hl *HistoryLinker) scanAllOnce() {
 // avoid unnecessary proc_pidinfo calls on every 5 s tick.
 func (hl *HistoryLinker) scanAllSessions() {
 	hl.mu.RLock()
-	snapshot := make([]*session.Instance, len(hl.instances))
+	snapshot := make([]*instance.Instance, len(hl.instances))
 	copy(snapshot, hl.instances)
 	hl.mu.RUnlock()
 
@@ -320,7 +320,7 @@ func (hl *HistoryLinker) scanAllSessions() {
 // When force=true (fsnotify-triggered or startup scan), already-linked sessions are
 // re-checked so that UUID changes from /clear are detected and stored promptly. This
 // ensures cold restores use the correct --resume UUID rather than a stale pre-/clear one.
-func (hl *HistoryLinker) correlateSession(inst *session.Instance, force bool) {
+func (hl *HistoryLinker) correlateSession(inst *instance.Instance, force bool) {
 	alreadyLinked := inst.HasClaudeSession()
 
 	// In non-force polling mode, skip already-linked sessions for performance.
@@ -369,7 +369,7 @@ func (hl *HistoryLinker) correlateSession(inst *session.Instance, force bool) {
 // detectLink runs the slow detection (tmux pane PID, open files, directory
 // scans) without holding any HistoryLinker lock. viaPath reports that the result
 // came from the claim-sensitive path fallback and must be re-validated at commit.
-func (hl *HistoryLinker) detectLink(inst *session.Instance, alreadyLinked bool) (info *session.HistoryFileInfo, viaPath bool) {
+func (hl *HistoryLinker) detectLink(inst *instance.Instance, alreadyLinked bool) (info *instance.HistoryFileInfo, viaPath bool) {
 	var err error
 
 	// Fast path: inspect open files of the live tmux pane process.
@@ -414,7 +414,7 @@ func (hl *HistoryLinker) detectLink(inst *session.Instance, alreadyLinked bool) 
 // correlation just made (the old global lock made the later one overwrite it).
 // A path-derived guess for a never-linked session that was linked meanwhile is
 // dropped, so a stale guess cannot overwrite the newer link.
-func (hl *HistoryLinker) commitLink(inst *session.Instance, info *session.HistoryFileInfo, viaPath, alreadyLinked bool) *session.HistoryFileInfo {
+func (hl *HistoryLinker) commitLink(inst *instance.Instance, info *instance.HistoryFileInfo, viaPath, alreadyLinked bool) *instance.HistoryFileInfo {
 	prevPath := inst.Snapshot().HistoryFilePath
 	committed := hl.commitLinkLocked(inst, info, viaPath, alreadyLinked)
 	// A file written before the link existed produces no later event, so hand
@@ -425,7 +425,7 @@ func (hl *HistoryLinker) commitLink(inst *session.Instance, info *session.Histor
 	return committed
 }
 
-func (hl *HistoryLinker) commitLinkLocked(inst *session.Instance, info *session.HistoryFileInfo, viaPath, alreadyLinked bool) *session.HistoryFileInfo {
+func (hl *HistoryLinker) commitLinkLocked(inst *instance.Instance, info *instance.HistoryFileInfo, viaPath, alreadyLinked bool) *instance.HistoryFileInfo {
 	hl.claimMu.Lock()
 	defer hl.claimMu.Unlock()
 	if viaPath && !alreadyLinked && inst.HasClaudeSession() {
@@ -449,7 +449,7 @@ func (hl *HistoryLinker) commitLinkLocked(inst *session.Instance, info *session.
 // logLinkChange logs only when a link is new or its UUID changes (e.g. after
 // /clear): correlateSession runs on every poll/force-rescan, so an unconditional
 // log would re-announce the same unchanged link on every tick.
-func logLinkChange(inst *session.Instance, info *session.HistoryFileInfo, alreadyLinked bool) {
+func logLinkChange(inst *instance.Instance, info *instance.HistoryFileInfo, alreadyLinked bool) {
 	if alreadyLinked {
 		cs := inst.GetClaudeSession()
 		if cs != nil && cs.ConversationUUID != info.ConversationUUID {
@@ -466,7 +466,7 @@ func logLinkChange(inst *session.Instance, info *session.HistoryFileInfo, alread
 
 // claimedByOther reports whether a monitored instance other than inst is linked
 // to the conversation.
-func (hl *HistoryLinker) claimedByOther(inst *session.Instance, uuid string) bool {
+func (hl *HistoryLinker) claimedByOther(inst *instance.Instance, uuid string) bool {
 	for _, other := range hl.Instances() {
 		if other != inst && other.GetClaudeConversationUUID() == uuid {
 			return true
@@ -478,7 +478,7 @@ func (hl *HistoryLinker) claimedByOther(inst *session.Instance, uuid string) boo
 // detectUnclaimedByPath is DetectByPath minus conversations linked to another
 // monitored instance and, for a never-linked session, ones that began before it
 // existed. Returns nil, nil when no candidate qualifies.
-func (hl *HistoryLinker) detectUnclaimedByPath(inst *session.Instance, path string, neverLinked bool) (*session.HistoryFileInfo, error) {
+func (hl *HistoryLinker) detectUnclaimedByPath(inst *instance.Instance, path string, neverLinked bool) (*instance.HistoryFileInfo, error) {
 	candidates, err := hl.detector.DetectAllByPath(path)
 	if err != nil || len(candidates) == 0 {
 		return nil, err
@@ -511,7 +511,7 @@ func (hl *HistoryLinker) detectUnclaimedByPath(inst *session.Instance, path stri
 		if notBefore.IsZero() {
 			return &candidates[i], nil
 		}
-		if started, ok := session.JsonlStartTime(candidates[i].HistoryFilePath); ok && started.Before(notBefore) {
+		if started, ok := instance.JsonlStartTime(candidates[i].HistoryFilePath); ok && started.Before(notBefore) {
 			log.Debug("HistoryLinker: skipping conversation that predates session",
 				"session", inst.Title, "conv_uuid", candidates[i].ConversationUUID)
 			continue

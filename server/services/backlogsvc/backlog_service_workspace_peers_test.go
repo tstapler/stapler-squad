@@ -9,9 +9,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndPeerExists
@@ -29,7 +29,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	// A peer session already working in the same repo (path-based key: no GitHub remote).
-	peer := &session.Instance{
+	peer := &instance.Instance{
 		Title:   "peer-session",
 		UUID:    "peer-uuid",
 		Path:    repoPath,
@@ -38,7 +38,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(peer))
-	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "refactor the widget loader", session.GoalStatusWorking, nil, "", "")
+	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "refactor the widget loader", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 
@@ -69,7 +69,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefa
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	peer := &session.Instance{
+	peer := &instance.Instance{
 		Title:   "peer-session",
 		UUID:    "peer-uuid",
 		Path:    repoPath,
@@ -150,7 +150,7 @@ func TestWorkspacePeersBlockFor_should_ExcludeSessionsOnDifferentRepos(t *testin
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	peerOnRepoB := &session.Instance{
+	peerOnRepoB := &instance.Instance{
 		Title: "unrelated-repo-session", UUID: "b-uuid", Path: repoB, Status: domain.Active, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}

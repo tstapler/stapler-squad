@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func completionTestItem(t *testing.T) *backlogdto.BacklogItemData {
@@ -24,8 +25,8 @@ func completionTestItem(t *testing.T) *backlogdto.BacklogItemData {
 
 func TestBuildCompletionReviewContext_should_IncludeAllSections_When_ItemFullyPopulated(t *testing.T) {
 	sessions := []backlogdto.ItemSessionSummary{
-		{Role: SessionRoleWork, LastCommitMessage: "feat: add reviewer", CommitCountSinceSpawn: 3},
-		{Role: SessionRoleReview, ReviewVerdict: &backlogdto.ReviewVerdictSummary{
+		{Role: instance.SessionRoleWork, LastCommitMessage: "feat: add reviewer", CommitCountSinceSpawn: 3},
+		{Role: instance.SessionRoleReview, ReviewVerdict: &backlogdto.ReviewVerdictSummary{
 			OverallOutcome: "PASS", Summary: "all good",
 			PerCriterion: `[{"criterion_index":0,"outcome":"PASS","evidence":"test exists"}]`,
 		}},
@@ -38,7 +39,7 @@ func TestBuildCompletionReviewContext_should_IncludeAllSections_When_ItemFullyPo
 }
 
 func TestBuildCompletionReviewContext_should_OmitVerdictSection_When_NoSessionHasVerdict(t *testing.T) {
-	out := BuildCompletionReviewContext(completionTestItem(t), []backlogdto.ItemSessionSummary{{Role: SessionRoleWork, LastCommitMessage: "x"}})
+	out := BuildCompletionReviewContext(completionTestItem(t), []backlogdto.ItemSessionSummary{{Role: instance.SessionRoleWork, LastCommitMessage: "x"}})
 	assert.NotContains(t, out, "Review Verdict")
 	assert.Contains(t, out, "fires on done")
 }

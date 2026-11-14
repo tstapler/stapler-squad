@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_PublishItemChangedCalled
@@ -265,7 +266,7 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 	require.NoError(t, err)
 	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusInProgress),
-	}, session.TriggeredBySystem)
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Positive confirmation: workspace A's own subscriber sees the event.

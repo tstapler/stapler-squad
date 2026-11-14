@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -77,7 +78,7 @@ func (s *BacklogService) GetBacklogItem(
 		now := time.Now()
 		for i := range isSessions {
 			is := &isSessions[i]
-			if is.Role == string(session.SessionRoleTriage) &&
+			if is.Role == string(instance.SessionRoleTriage) &&
 				is.EndedAt == nil &&
 				strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix) &&
 				time.Since(is.CreatedAt) > maxTriageSessionAge {
@@ -434,7 +435,7 @@ func (s *BacklogService) GetBacklogItemDiff(
 	var earliestWorkSession, mostRecentWorkSession *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if is.Role != session.SessionRoleWork {
+		if is.Role != instance.SessionRoleWork {
 			continue
 		}
 		if earliestWorkSession == nil || is.CreatedAt.Before(earliestWorkSession.CreatedAt) {

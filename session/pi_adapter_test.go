@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript
@@ -22,7 +23,7 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 	require.NoError(t, err)
 	defer file.Close()
 
-	reader := NewPiEventReader(file)
+	reader := instance.NewPiEventReader(file)
 
 	var (
 		events   []any
@@ -37,7 +38,7 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 		events = append(events, event)
 
 		if !sawFirst {
-			sessionEvent, ok := event.(PiSessionEvent)
+			sessionEvent, ok := event.(instance.PiSessionEvent)
 			require.True(t, ok, "first event must be a session header, got %T", event)
 			assert.Equal(t, 3, sessionEvent.Version)
 			assert.Equal(t, "01a065a6-28ae-7973-8b45-c633ab1b138f", sessionEvent.ID)
@@ -61,17 +62,17 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 	)
 	for _, event := range events {
 		switch event.(type) {
-		case PiAgentStartEvent:
+		case instance.PiAgentStartEvent:
 			sawAgentStart = true
-		case PiToolExecutionStartEvent:
+		case instance.PiToolExecutionStartEvent:
 			sawToolExecStart = true
-		case PiToolExecutionEndEvent:
+		case instance.PiToolExecutionEndEvent:
 			sawToolExecEnd = true
-		case PiMessageUpdateEvent:
+		case instance.PiMessageUpdateEvent:
 			sawMessageUpdate = true
-		case PiAgentEndEvent:
+		case instance.PiAgentEndEvent:
 			sawAgentEnd = true
-		case PiAgentSettledEvent:
+		case instance.PiAgentSettledEvent:
 			sawAgentSettled = true
 		}
 	}
@@ -81,24 +82,6 @@ func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *
 	assert.True(t, sawMessageUpdate, "expected a message_update event")
 	assert.True(t, sawAgentEnd, "expected an agent_end event")
 	assert.True(t, sawAgentSettled, "expected an agent_settled event")
-}
-
-// TestPiAdapter_ShouldReturnUnrecognizedTypeError_WhenEventTypeIsUnknown
-// asserts a line with an unrecognized `type` discriminator is reported via a
-// distinct error (so callers can count it per Story 6.1.1) rather than being
-// silently dropped or causing a panic.
-func TestPiAdapter_ShouldReturnUnrecognizedTypeError_WhenEventTypeIsUnknown(t *testing.T) {
-	input := `{"type":"totally_unknown_type","foo":"bar"}` + "\n"
-	reader := NewPiEventReader(strings.NewReader(input))
-
-	event, err := reader.Next()
-
-	require.Error(t, err)
-	assert.Nil(t, event)
-
-	var unrecognized *piUnrecognizedTypeError
-	require.True(t, errors.As(err, &unrecognized), "expected a *piUnrecognizedTypeError, got %T: %v", err, err)
-	assert.Equal(t, "totally_unknown_type", unrecognized.eventType)
 }
 
 // TestPiAdapter_ShouldNotSplitLine_WhenLineContainsEmbeddedU2028Character is
@@ -115,7 +98,7 @@ func TestPiAdapter_ShouldNotSplitLine_WhenLineContainsEmbeddedU2028Character(t *
 	secondLine := `{"type":"agent_settled"}`
 	input := firstLine + "\n" + secondLine + "\n"
 
-	reader := NewPiEventReader(strings.NewReader(input))
+	reader := instance.NewPiEventReader(strings.NewReader(input))
 
 	var events []any
 	for {
@@ -128,10 +111,10 @@ func TestPiAdapter_ShouldNotSplitLine_WhenLineContainsEmbeddedU2028Character(t *
 	}
 
 	require.Len(t, events, 2, "a line with an embedded U+2028 must not be split into extra events")
-	first, ok := events[0].(PiAgentStartEvent)
+	first, ok := events[0].(instance.PiAgentStartEvent)
 	require.True(t, ok, "expected first event to decode as PiAgentStartEvent, got %T", events[0])
 	assert.Equal(t, "agent_start", first.Type)
-	second, ok := events[1].(PiAgentSettledEvent)
+	second, ok := events[1].(instance.PiAgentSettledEvent)
 	require.True(t, ok, "expected second event to decode as PiAgentSettledEvent, got %T", events[1])
 	assert.Equal(t, "agent_settled", second.Type)
 }

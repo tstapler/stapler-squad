@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // clsGateHarness is an Enforce-for-every-class gate over a Configured engine.
@@ -64,7 +65,7 @@ func (c *clsGateHarness) status(t *testing.T, itemID string) string {
 
 // move drives the gate as caller from the item's current status to `to`.
 func (c *clsGateHarness) move(ctx context.Context, caller domain.TransitionCaller, itemID string, to domain.BacklogStatus) error {
-	req := backlogdto.TransitionRequest{Caller: caller, ItemID: itemID, To: to, TriggeredBy: session.TriggeredBySystem}
+	req := backlogdto.TransitionRequest{Caller: caller, ItemID: itemID, To: to, TriggeredBy: instance.TriggeredBySystem}
 	if to == domain.BacklogStatusArchived {
 		_, err := c.svc.storage.GatedArchive(ctx, req)
 		return err
@@ -116,7 +117,7 @@ func TestClassProof_Agent_GenericDelegateIsDeniedWhenAnOperatorDisablesTheEdge(t
 	done, refining := domain.BacklogStatusDone, domain.BacklogStatusRefining
 	edge := enfEdgeID(t, repo, done, refining)
 	item := enfItemAt(t, storage, done)
-	agentCtx := services.WithTransitionActor(t.Context(), session.TriggeredByAgent)
+	agentCtx := services.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
 	require.NoError(t, enfSetEdge(t, svc, edge, false))
 
 	err := enfTransition(agentCtx, svc, item.ID, refining, "")

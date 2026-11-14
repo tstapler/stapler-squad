@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -63,15 +64,15 @@ func PRMirrorDriftSkipped() int64 { return prMirrorDrift.skipped.Load() }
 
 // prMirrorStore is what the reconciler needs from storage.
 type prMirrorStore interface {
-	prMirrorPersister
-	ListPRMirrors(ctx context.Context) (map[string]PRMirror, error)
+	instance.PrMirrorPersister
+	ListPRMirrors(ctx context.Context) (map[string]instance.PRMirror, error)
 }
 
 // PRMirrorReconciler asserts every session's legacy PR columns equal its
 // ActivePR projection. It always runs (no scope condition), corrects drift
 // through the instance actor, and imports nothing (the boot backfill does).
 type PRMirrorReconciler struct {
-	instances func() []*Instance
+	instances func() []*instance.Instance
 	store     prMirrorStore
 	interval  time.Duration
 	wg        sync.WaitGroup
@@ -79,7 +80,7 @@ type PRMirrorReconciler struct {
 }
 
 // NewPRMirrorReconciler builds a reconciler over the instances instances returns.
-func NewPRMirrorReconciler(instances func() []*Instance, store prMirrorStore) *PRMirrorReconciler {
+func NewPRMirrorReconciler(instances func() []*instance.Instance, store prMirrorStore) *PRMirrorReconciler {
 	return &PRMirrorReconciler{instances: instances, store: store, interval: prMirrorReconcileInterval}
 }
 
@@ -95,16 +96,16 @@ func (r *PRMirrorReconciler) RunOnce(ctx context.Context) (corrected, skipped in
 		if ctx.Err() != nil {
 			break
 		}
-		var prior *PRMirror
+		var prior *instance.PRMirror
 		if m, ok := stored[inst.Snapshot().UUID]; ok && err == nil {
 			prior = &m
 		}
 		switch inst.ReconcilePRMirror(prior, r.store) {
-		case mirrorCorrected:
+		case instance.MirrorCorrected:
 			corrected++
-		case mirrorUnrepresentedSkipped:
+		case instance.MirrorUnrepresentedSkipped:
 			skipped++
-		case mirrorInSync:
+		case instance.MirrorInSync:
 		}
 	}
 	prMirrorDrift.add(mirrorKindCorrected, int64(corrected))

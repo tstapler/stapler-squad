@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Characterization of today's single-PR short-circuit (session-multi-pr-tracking
@@ -23,7 +23,7 @@ func TestCreatePullRequest_should_KeepExistingPRColumns_When_ShortCircuiting(t *
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-legacy-shortcircuit", "feature/legacy", mock)
-	inst := &session.Instance{Title: "Legacy short-circuit", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Legacy short-circuit", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 	inst.GitHubPRURL = "https://github.com/tstapler/stapler-squad/pull/999"
 	inst.GitHubPRNumber = 999
@@ -51,7 +51,7 @@ func TestCreatePullRequest_ShouldAttachAsPRCreationService_WhenSessionHasResolve
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-attach", "feature/attach", mock)
-	inst := &session.Instance{Title: "Attach via service", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst := &instance.Instance{Title: "Attach via service", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
 	inst.SetGitWorktree(wt)
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-attach", inst))
 
@@ -74,7 +74,7 @@ func TestCreatePullRequest_ShouldCreateAndAttach_WhenPriorPRMerged(t *testing.T)
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-after-merge", "feat-b", mock)
-	inst := &session.Instance{Title: "After merge", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst := &instance.Instance{Title: "After merge", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
 	inst.SetGitWorktree(wt)
 	r11, err := domain.NewPRRef("", "tstapler", "stapler-squad", 11)
 	require.NoError(t, err)
@@ -97,7 +97,7 @@ func TestCreatePullRequest_ShouldReturnExistingPR_WhenOpenPROnCurrentBranch(t *t
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-open-here", "feat-b", mock)
-	inst := &session.Instance{Title: "Open here", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst := &instance.Instance{Title: "Open here", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
 	inst.SetGitWorktree(wt)
 	r12, err := domain.NewPRRef("", "tstapler", "stapler-squad", 12)
 	require.NoError(t, err)
@@ -123,11 +123,11 @@ func TestOpenPROnBranch_ShouldMatchOnlyNonTerminalPRsWithThatHead(t *testing.T) 
 		return domain.PRView{Ref: ref, State: st, StoredTerminal: st.Terminal(), HeadBranch: head}
 	}
 	prs := []domain.PRView{mk(11, domain.PRStateMerged, "feat-b"), mk(12, domain.PRStateOpen, "feat-a"), mk(13, domain.PRStateOpen, "feat-b")}
-	got, ok := session.OpenPROnBranch(prs, "feat-b")
+	got, ok := instance.OpenPROnBranch(prs, "feat-b")
 	require.True(t, ok)
 	assert.Equal(t, 13, got.Ref.Number())
-	_, ok = session.OpenPROnBranch(prs[:1], "feat-b")
+	_, ok = instance.OpenPROnBranch(prs[:1], "feat-b")
 	assert.False(t, ok, "a merged PR on the branch does not count")
-	_, ok = session.OpenPROnBranch(prs, "")
+	_, ok = instance.OpenPROnBranch(prs, "")
 	assert.False(t, ok, "no current branch, no match")
 }

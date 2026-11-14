@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gh "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"github.com/zalando/go-keyring"
 )
@@ -237,7 +237,7 @@ func TestCreateSessionForPR_should_ReturnExistingSession_When_PRAlreadyHasOne(t 
 	)
 	cache := seedUserPRCacheWithOnePR(t, owner, repo, prNumber, branch, sessionTitle)
 
-	store := &stubStore{instances: []*session.Instance{
+	store := &stubStore{instances: []*instance.Instance{
 		{Title: sessionTitle, Path: t.TempDir(), Status: domain.Active, Program: "claude"},
 	}}
 	ghHandlers := &githubHandlers{cache: cache, store: store, svc: nil}

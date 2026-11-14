@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // KillOutcomeStatus enumerates the possible results of
@@ -61,7 +62,7 @@ func KillExternalOriginalProcess(checker AliveChecker, pid int32, createTimeMs i
 	// below will simply be a no-op / fail on its own terms.
 	_ = session.ResumeOriginalProcess(pid)
 
-	throwaway := &session.Instance{
+	throwaway := &instance.Instance{
 		InstanceType: domain.InstanceTypeExternal,
 		ExternalMetadata: &domain.ExternalInstanceMetadata{
 			TmuxSessionName: tmuxSession,

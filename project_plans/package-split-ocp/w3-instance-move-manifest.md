@@ -65,5 +65,14 @@ Two pre-existing name collisions: `fromInstanceData` vs `FromInstanceData` (fix 
 | W2-g | Guard and path-list updates (above) and the package name / import-alias choice to avoid `instance` shadowing |
 Then W3 = the mechanical `scoping move --lower` of 91 files + `make gazelle`, new budget rows, importer codemod (428 files, ~3.4k lines, mostly mechanical).
 
+## W2-f result: the test partition (compiled on a scratch copy)
+The W3 file list is `w3-instance-move-files.txt` (85 non-test files, the new `instance_hermetic_testing.go`, 71 test files). Command: `scoping move --lower --from session --to session/instance --files "$(paste -sd, project_plans/package-split-ocp/w3-instance-move-files.txt)"`. Run on a scratch copy it exits 0, and `go vet ./session/instance/ ./session/` is clean once these hand steps are done:
+1. Create `session/instance/main_test.go`: `TestMain` calling `dirwatch.ForceFSNotify(true)`, `InstallHermeticHooksForTest()` and `os.Exit(sessiontest.Main(m))`. It cannot exist earlier because it names instance symbols.
+2. `git mv session/testdata/scroll_forward_claude_{before,after}.txt session/instance/testdata/` (two moved tests read them by relative path).
+3. A developer machine whose global gitignore lists `instance/` (the W2-f author's did) needs `git add -f session/instance`.
+Then `go test ./session/instance` passes (about 18 s, no tmux). The 71 moved files hold the tests that need Instance internals and nothing from the staying packages; 22 other files were split by declaration (names unchanged), the instance half moving as `<name>_internal_test.go` or under its own name and the rest staying as `<name>_wiring_test.go`. Stay-behind tests reach Instance only through exported `...ForTest` seams in `instance_testing.go`; helpers both sides use live in `session/internal/fixturetest` (no session import) and `sessiontest`.
+Tests that need a real tmux backend, the staying history adapters or `session/detection/testdata` stay in `session`: the moved binary registers no-op backends via `InstallHermeticHooksForTest`.
+Found after the move, for W2-g/W3: `legacy_pr_readers_test.go`'s allow-list and the other path-keyed guards need the new `session/instance/` paths; any capability interface with an unexported method (`DaemonReadiness` was one, now `EnsureDaemonReady`) silently stops matching a staying backend once the interface moves.
+
 ## Not done / unverified
 Test compile status after the move; `scoping t9` and the budget gate on the scratch; the depguard rule for `session/instance`; whether importers compile after the move; race and lock safety of the exported driver-state API; the history porter test seam; reads of exported fields such as `Status`/`Path` across the move vs `instance-lock-free-reads.md` (legal to compile, compliance unverified).

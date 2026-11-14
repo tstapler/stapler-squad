@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -82,7 +83,7 @@ type ReactiveQueueManager struct {
 	queue         *queue.ReviewQueue
 	poller        *session.ReviewQueuePoller
 	eventBus      *events.EventBus
-	statusManager *session.InstanceStatusManager
+	statusManager *instance.InstanceStatusManager
 	storage       *session.Storage // For persisting timestamps
 
 	// oneShotRunner is set via SetOneShotRunner and drives the opt-in AutoCreatePR
@@ -165,7 +166,7 @@ func NewReactiveQueueManager(
 	queue *queue.ReviewQueue,
 	poller *session.ReviewQueuePoller,
 	eventBus *events.EventBus,
-	statusManager *session.InstanceStatusManager,
+	statusManager *instance.InstanceStatusManager,
 	storage *session.Storage,
 ) *ReactiveQueueManager {
 	// Buffered so senders never block even if the poll loop is momentarily busy.
@@ -337,7 +338,7 @@ func (rqm *ReactiveQueueManager) signalActivity() {
 
 // OnControllerStatusChange is called by a ClaudeController's status-change goroutine
 // when it detects a terminal status transition. Safe to call from any goroutine.
-func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, _ detection.DetectedStatus) {
+func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *instance.Instance, _ detection.DetectedStatus) {
 	rqm.signalActivity()
 	go func() {
 		// baseContext(), not rqm.ctx directly: a controller can report a status
@@ -617,14 +618,14 @@ func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *queue.ReviewItem) {
 // branch falls back to the checked-out one when the snapshot has none; if it is
 // still unknown while the session holds PR links, no-duplicate cannot be proven,
 // so it fails closed.
-func autoCreateBlockedByExistingPR(inst *session.Instance) bool {
+func autoCreateBlockedByExistingPR(inst *instance.Instance) bool {
 	snap := inst.Snapshot()
 	branch := inst.CurrentBranch()
 	if branch == "" && len(snap.GitHub.PRs) > 0 {
 		log.Warn("auto-create-PR: branch unknown and session holds PRs, skipping", "session", inst.Title)
 		return true
 	}
-	_, _, hasPR := session.ExistingPRForCreate(snap, branch)
+	_, _, hasPR := instance.ExistingPRForCreate(snap, branch)
 	return hasPR
 }
 

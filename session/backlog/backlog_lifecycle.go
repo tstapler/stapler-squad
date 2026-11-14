@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
@@ -960,7 +961,7 @@ func (il *instanceBacklogListener) OnLifecycleEvent(event domain.LifecycleEvent,
 
 // WireToInstance creates a per-instance listener shim and registers it on inst.
 // Call this for every Instance that should participate in backlog lifecycle tracking.
-func (l *BacklogLifecycleListener) WireToInstance(inst *session.Instance) {
+func (l *BacklogLifecycleListener) WireToInstance(inst *instance.Instance) {
 	inst.RegisterLifecycleListener(&instanceBacklogListener{
 		parent:       l,
 		instanceUUID: inst.UUID,
@@ -1031,13 +1032,13 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// verdict submitted (or not) by the review session that just exited. Other
 	// non-work roles (e.g. triage) have nothing further to do here.
 	switch is.Role {
-	case session.SessionRoleReview:
+	case instance.SessionRoleReview:
 		// forcePush=false: this is the normal, real-time exit-event path — defer to
 		// a still-live work session's own /backlog/ship instead of pushing
 		// mechanically. See handleReviewSessionExited's doc comment.
 		l.handleReviewSessionExited(ctx, is, false)
 		return
-	case session.SessionRoleWork:
+	case instance.SessionRoleWork:
 		// fall through to the in_progress→review/done logic below.
 	default:
 		return
@@ -1076,7 +1077,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedUpdatedAt: &updatedAt,
 	}
 	if _, err := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); err != nil {
 		logSystemTransitionFailure("onSessionExited", item.ID, toStatus, err)
 		return
@@ -1257,7 +1258,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 			}
 			var active *backlogdto.ItemSessionSummary
 			for i := range sessions {
-				if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+				if sessions[i].Role == instance.SessionRoleWork && sessions[i].EndedAt == nil {
 					active = &sessions[i]
 					break
 				}
@@ -1526,7 +1527,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 		for i := range sessions {
 			// Ascending by CreatedAt (ListItemSessions' query order) — keep
 			// overwriting so this ends up holding the *most recent* work session.
-			if sessions[i].Role == session.SessionRoleWork {
+			if sessions[i].Role == instance.SessionRoleWork {
 				lastWork = &sessions[i]
 			}
 		}
@@ -1693,7 +1694,7 @@ func (l *BacklogLifecycleListener) resolveLatestWorkCommit(ctx context.Context, 
 // ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
 // store, so repoPath may be any checkout of the repo. An absent branch is an error.
 func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
-	return session.ResolveBranchTip(ctx, repoPath, branch)
+	return instance.ResolveBranchTip(ctx, repoPath, branch)
 }
 
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
@@ -1719,7 +1720,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	if status == string(domain.BacklogStatusInProgress) {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
 		if _, err := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: domain.BacklogStatusReview, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: domain.BacklogStatusReview, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 		}); err != nil {
 			return fmt.Errorf("in_progress->review: %w", err)
 		}
@@ -1728,7 +1729,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
 	if _, err := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
@@ -1746,7 +1747,7 @@ func (l *BacklogLifecycleListener) otherPRsHoldItem(ctx context.Context, er *ses
 	if err != nil {
 		return true, "pr set unreadable: " + err.Error()
 	}
-	if session.ItemPRVerdict(prs) == session.ItemVerdictOpen {
+	if instance.ItemPRVerdict(prs) == instance.ItemVerdictOpen {
 		return true, "verdict open"
 	}
 	return false, ""
@@ -1759,7 +1760,7 @@ func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *ses
 		return false
 	}
 	prs, err := er.ItemPRsByID(ctx, itemID)
-	if err != nil || session.ItemPRVerdict(prs) != session.ItemVerdictDone {
+	if err != nil || instance.ItemPRVerdict(prs) != instance.ItemVerdictDone {
 		return false
 	}
 	return l.holdMergedItemForLiveWork(ctx, er, itemID, title)
@@ -1872,14 +1873,15 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// checked, never an arbitrary one, so an unrelated commit merged to
 			// main elsewhere can't produce a false positive.
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
-				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, domain.BounceMainBranch)
+				defaultBranch := git.ResolveDefaultBranchName(item.RepoPath)
+				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, defaultBranch)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) failed", "item", item.ID, "error", transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.
-					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, domain.BounceMainBranch), transErr)
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, defaultBranch), transErr)
 				} else {
-					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", domain.BounceMainBranch)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", defaultBranch)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
@@ -2357,9 +2359,9 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 // AutoReopenForPRFix's/AutoRespawnReview's identical guard.
 func hasActiveSession(sessions []backlogdto.ItemSessionSummary) bool {
 	for _, s := range sessions {
-		if s.EndedAt == nil && (s.Role == session.SessionRoleWork || s.Role == session.SessionRoleReview) {
+		if s.EndedAt == nil && (s.Role == instance.SessionRoleWork || s.Role == instance.SessionRoleReview) {
 			return true
 		}
 	}
-	return session.HasActiveJulesSession(sessions)
+	return instance.HasActiveJulesSession(sessions)
 }

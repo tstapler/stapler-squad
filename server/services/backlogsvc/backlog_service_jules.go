@@ -20,8 +20,8 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SetJulesDispatcher wires the Jules dispatch backend used by DispatchToJules.
@@ -93,7 +93,7 @@ func (s *BacklogService) DispatchToJules(
 		// with what we know rather than erroring an already-successful call.
 		log.WarningLog().Printf("[DispatchToJules] item=%s session=%s: failed to read back item session: %v", item.ID, sessionName, err)
 		return connect.NewResponse(&sessionv1.DispatchToJulesResponse{
-			ItemSession: &sessionv1.ItemSession{SessionUuid: sessionUUID, SessionRole: string(session.SessionRoleJulesWork)},
+			ItemSession: &sessionv1.ItemSession{SessionUuid: sessionUUID, SessionRole: string(instance.SessionRoleJulesWork)},
 		}), nil
 	}
 

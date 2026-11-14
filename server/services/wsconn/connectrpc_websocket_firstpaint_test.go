@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -62,9 +63,9 @@ const (
 	testText   = "plain text screen"
 )
 
-func firstPaintInstance(t *testing.T, pane *paneFake) *session.Instance {
+func firstPaintInstance(t *testing.T, pane *paneFake) *instance.Instance {
 	t.Helper()
-	return session.NewStartedInstanceForTest(t, "first-paint", session.NewTymuxBackend(pane))
+	return instance.NewStartedInstanceForTest(t, "first-paint", session.NewTymuxBackend(pane))
 }
 
 func readOutput(t *testing.T, conn *websocket.Conn) *sessionv1.TerminalOutput {
@@ -85,7 +86,7 @@ func newFirstPaintHandler() *ConnectRPCWebSocketHandler {
 }
 
 // lastMeaningful is when the instance last recorded meaningful output (zero if never).
-func lastMeaningful(inst *session.Instance) time.Time { return inst.LastMeaningfulOutputTime() }
+func lastMeaningful(inst *instance.Instance) time.Time { return inst.LastMeaningfulOutputTime() }
 
 func TestCaptureAndSendInitialSnapshot_should_SendRedrawVerbatim_AndNotCacheIt(t *testing.T) {
 	stream, conn, cleanup := createTestWebSocketPair(t)

@@ -2601,3 +2601,13 @@ call site each time because nothing forced a caller to decide how a human learns
 `TransitionCallerSpec.Surface` is mandatory for every agent/system caller with an edge into review, and a source-level test
 requires every `SurfaceNotifies` site to call a notifier. Other callers are declared `SurfaceReviewFlow` (the review
 pipeline picks the item up); that is a judgement, not a per-caller verification of their notification behaviour.
+||||||| 8d903f6ea
+
+
+## 2026-11-13 update 2: review session spawned in the shared checkout (BUG R1)
+
+**Root cause:** `SpawnReviewSession` created the reviewer with `CreateDirectorySession(ctx, item.RepoPath, ...)` and the prompt never named the work branch, so a reviewer that ran `git diff master...HEAD` judged whatever branch the shared checkout had checked out (item `853746a0`: `sdd/test-effectiveness-critique`, verdict rows 4, 6-8 FAIL). The gate computed the diff against the right worktree and inlined it, but a tool-using reviewer re-derived its own and got the wrong one. `diff_token_count` is 0 on every row because no production code writes it (`DiffTokenCount` is only copied through), not because the diff was empty.
+
+**Fix:** `resolveReviewTarget` (server/services/session_service_diagnose.go) runs the review in the work worktree when it exists, otherwise in the repo path with a preamble forbidding `HEAD` and naming `<base>..<branch>`.
+
+**Recurring shape (new):** "automated spawn takes its working directory from `item.RepoPath`, whose HEAD is arbitrary." Enforcement level: unit test of the resolver plus an AST guard (`TestSpawnReviewSession_ShouldNotPassItemRepoPathToCreateDirectorySession`) so the review spawn cannot pass `item.RepoPath` straight through. `SpawnDiagnosticSession` also uses `item.RepoPath` but is not branch-scoped by design.

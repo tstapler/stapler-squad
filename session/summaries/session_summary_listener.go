@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // summaryGenerator is the narrow consumer-side interface sessionSummaryListener needs
@@ -14,7 +14,7 @@ import (
 // consumed" — *SessionSummaryGenerator (session/summaries/session_summary_service.go) satisfies
 // this structurally, with no explicit "implements" declaration.
 type summaryGenerator interface {
-	GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *session.SessionGoalData, reason string)
+	GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *instance.SessionGoalData, reason string)
 }
 
 // reasonReconcileSessionMissing is the lifecycle-event reason used by the reconciler
@@ -31,7 +31,7 @@ const reasonReconcileSessionMissing = "reconcile-session-missing"
 // non-blocking per the LifecycleListener contract (session/instance.go:90-95).
 type sessionSummaryListener struct {
 	generator summaryGenerator
-	instance  *session.Instance
+	instance  *instance.Instance
 }
 
 // OnLifecycleEvent implements LifecycleListener. It fires on both EventExited and
@@ -66,6 +66,6 @@ func (l *sessionSummaryListener) OnLifecycleEvent(event domain.LifecycleEvent, r
 // Takes the summaryGenerator interface type (not a concrete *SessionSummaryGenerator) so
 // callers can pass any type that structurally satisfies it — a real *SessionSummaryGenerator
 // does so for free.
-func WireSessionSummaryListener(generator summaryGenerator, inst *session.Instance) {
+func WireSessionSummaryListener(generator summaryGenerator, inst *instance.Instance) {
 	inst.RegisterLifecycleListener(&sessionSummaryListener{generator: generator, instance: inst})
 }

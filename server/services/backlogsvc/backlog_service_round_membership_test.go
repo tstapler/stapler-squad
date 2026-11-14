@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // @feature backlog:multi-pr
@@ -32,7 +33,7 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	}))
 	require.NoError(t, err)
 	itemID := created.Msg.Item.Id
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, itemID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	ref := func(n int) domain.PRRef {
@@ -59,7 +60,7 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	}
 
 	s1 := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: s1, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: s1, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	link(session.SessionPROwner(s1), 30)
 

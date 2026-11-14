@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -42,7 +43,7 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 	})
 	require.NoError(t, err)
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("design-review"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("design-review"), nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	// The custom stage is later deleted — e.g. an operator removing a
@@ -150,7 +151,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	})
 	require.NoError(t, err)
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
@@ -190,14 +191,14 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	require.NoError(t, err)
 
 	// First entry into review-a: captures the v1 graph (review-a -> review-b-v1).
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	// Force a measurable CreatedAt delta between the two matching events.
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	// Leave review-a, then change its outgoing graph before re-entering.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusIdea, nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusIdea, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	_, err = client.StageTransition.UpdateOne(edgeV1).SetEnabled(false).Save(ctx)
@@ -210,7 +211,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	// Second entry into review-a: must capture the v2 graph (review-a -> review-b-v2).
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)

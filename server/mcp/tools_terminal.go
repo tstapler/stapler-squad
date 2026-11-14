@@ -11,6 +11,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -39,7 +40,7 @@ const (
 // package degrades to LoadInstances() if not wired, matching the pre-fix
 // behavior rather than breaking outright).
 type liveInstanceFinder interface {
-	FindLiveInstance(id string) *session.Instance
+	FindLiveInstance(id string) *instance.Instance
 }
 
 // terminalHandlers implements terminal I/O and VCS MCP tools.
@@ -50,7 +51,7 @@ type terminalHandlers struct {
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
 	// capturePane reads the live tmux pane; nil means inst.CapturePaneContent.
 	// A seam so tests can supply pane content without a real tmux session.
-	capturePane func(inst *session.Instance) (string, error)
+	capturePane func(inst *instance.Instance) (string, error)
 	// diagnoseCheck gates write_to_session/send_control/run_command/
 	// steer_session away from a dispatched Diagnose & Nudge session — see
 	// diagnose_role_gate.go's denyIfDiagnoseCaller. May be nil (no
@@ -199,13 +200,13 @@ func notReadyResult(sessionID string) *mcpgo.CallToolResult {
 // by terminal stream subscribers (e.g. the web UI), so an MCP-only session has
 // an empty scrollback; in that case fall back to capturing the live tmux pane.
 // The error is non-nil only when neither source is available.
-func (th *terminalHandlers) readOutputBytes(sessionID string, inst *session.Instance) ([]byte, error) {
+func (th *terminalHandlers) readOutputBytes(sessionID string, inst *instance.Instance) ([]byte, error) {
 	if th.scrollback.CurrentSequence(sessionID) != 0 {
 		return th.scrollback.GetRecentBytes(sessionID, maxOutputBytes)
 	}
 	capture := th.capturePane
 	if capture == nil {
-		capture = func(i *session.Instance) (string, error) { return i.CapturePaneContentFinal() }
+		capture = func(i *instance.Instance) (string, error) { return i.CapturePaneContentFinal() }
 	}
 	content, err := capture(inst)
 	if err != nil {
@@ -263,7 +264,7 @@ func (th *terminalHandlers) readSessionOutput(_ context.Context, req mcpgo.CallT
 		truncated = true
 	}
 
-	output := session.RedactMCPProofs(strings.Join(toStringSlice(allLines), "\n"))
+	output := instance.RedactMCPProofs(strings.Join(toStringSlice(allLines), "\n"))
 	if truncated {
 		output = fmt.Sprintf("[... %d lines omitted. Call read_session_output with lines=200 to see earlier output ...]\n", totalLines-lines) + output
 	}
@@ -319,15 +320,15 @@ func (th *terminalHandlers) writeToSession(ctx context.Context, req mcpgo.CallTo
 	// SendKeys writes (session.SubmitDriverContent), never concatenated into
 	// one. Both branches are timeout-bounded so a wedged PTY write can't hang
 	// this handler indefinitely.
-	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	lease, busy := acquireMCPWriteLease(inst, instance.LeaseWriterMCP)
 	if busy != nil {
 		return busy, nil
 	}
 	var err error
 	if pressEnter {
-		err = session.SubmitContentWithEnter(ctx, inst, lease, input)
+		err = instance.SubmitContentWithEnter(ctx, inst, lease, input)
 	} else {
-		err = session.SendKeysWithTimeout(ctx, inst, lease, input, session.DefaultSendKeysTimeout)
+		err = instance.SendKeysWithTimeout(ctx, inst, lease, input, instance.DefaultSendKeysTimeout)
 	}
 	if err != nil {
 		return submitErrResult(err, "input"), nil
@@ -345,10 +346,10 @@ const errWriteInProgress = "WRITE_IN_PROGRESS"
 
 // acquireMCPWriteLease is every MCP pane-writing tool's acquirer (Story 5.0):
 // the second return is the retryable busy result when the lease is held.
-func acquireMCPWriteLease(inst *session.Instance, writer string) (*session.HeldLease, *mcpgo.CallToolResult) {
+func acquireMCPWriteLease(inst *instance.Instance, writer string) (*instance.HeldLease, *mcpgo.CallToolResult) {
 	lease, ok := inst.TryTerminalWriteLease(writer)
 	if !ok {
-		return nil, errResult(errWriteInProgress, session.ErrLeaseBusy.Error(), "Retry in a few seconds")
+		return nil, errResult(errWriteInProgress, instance.ErrLeaseBusy.Error(), "Retry in a few seconds")
 	}
 	return lease, nil
 }
@@ -361,7 +362,7 @@ func acquireMCPWriteLease(inst *session.Instance, writer string) (*session.HeldL
 // anything else is a generic internal error. noun names what was being sent
 // ("input", "command", "message") for the returned messages.
 func submitErrResult(err error, noun string) *mcpgo.CallToolResult {
-	if errors.Is(err, session.ErrSubmitNotConfirmed) {
+	if errors.Is(err, instance.ErrSubmitNotConfirmed) {
 		return errResult("SUBMIT_NOT_CONFIRMED", err.Error(),
 			fmt.Sprintf("The session's terminal may not have registered the %s. Retry, or check with read_session_output.", noun))
 	}
@@ -417,7 +418,7 @@ func (th *terminalHandlers) sendControl(_ context.Context, req mcpgo.CallToolReq
 		return errResult_, nil
 	}
 
-	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	lease, busy := acquireMCPWriteLease(inst, instance.LeaseWriterMCP)
 	if busy != nil {
 		return busy, nil
 	}
@@ -516,14 +517,14 @@ func (th *terminalHandlers) waitForOutput(_ context.Context, req mcpgo.CallToolR
 			matched := false
 			for _, lineBytes := range allLines {
 				if strings.Contains(strings.ToLower(string(lineBytes)), patternLower) {
-					matchedLine = session.RedactMCPProofs(string(lineBytes))
+					matchedLine = instance.RedactMCPProofs(string(lineBytes))
 					matched = true
 					break
 				}
 			}
 
 			if matched {
-				output := session.RedactMCPProofs(strings.Join(toStringSlice(displayLines), "\n"))
+				output := instance.RedactMCPProofs(strings.Join(toStringSlice(displayLines), "\n"))
 				if truncated {
 					output = "[... earlier output omitted ...]\n" + output
 				}
@@ -548,7 +549,7 @@ func (th *terminalHandlers) waitForOutput(_ context.Context, req mcpgo.CallToolR
 				displayLines = allLines[len(allLines)-50:]
 				truncated = true
 			}
-			output := session.RedactMCPProofs(strings.Join(toStringSlice(displayLines), "\n"))
+			output := instance.RedactMCPProofs(strings.Join(toStringSlice(displayLines), "\n"))
 			return okResult(WaitForOutputResult{
 				MCPResult: MCPResult{Success: true, Error: &MCPError{
 					Code:    "WAIT_TIMEOUT",
@@ -614,11 +615,11 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 	// Send the command via session.SubmitContentWithEnter (BUG-031/BUG-047):
 	// content and the submit keystroke must travel as two separate SendKeys
 	// writes, never concatenated into one.
-	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	lease, busy := acquireMCPWriteLease(inst, instance.LeaseWriterMCP)
 	if busy != nil {
 		return busy, nil
 	}
-	if err := session.SubmitContentWithEnter(ctx, inst, lease, command); err != nil {
+	if err := instance.SubmitContentWithEnter(ctx, inst, lease, command); err != nil {
 		return submitErrResult(err, "command"), nil
 	}
 
@@ -629,7 +630,7 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 // output stops changing (or the timeout), then returns the result. It never
 // returns an error result -- the command has already been submitted -- so an
 // unreadable pane yields success with empty output.
-func (th *terminalHandlers) collectCommandOutput(sessionID string, inst *session.Instance, timeoutSecs, lines int) *mcpgo.CallToolResult {
+func (th *terminalHandlers) collectCommandOutput(sessionID string, inst *instance.Instance, timeoutSecs, lines int) *mcpgo.CallToolResult {
 	// Poll until output stops changing for 2 consecutive seconds or timeout expires.
 	deadline := time.Now().Add(time.Duration(timeoutSecs) * time.Second)
 	ticker := time.NewTicker(time.Second)
@@ -753,11 +754,11 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	// Fallback: send via PTY send-keys (interactive sessions or sessions
 	// without UUID), via session.SubmitContentWithEnter (BUG-031) so content
 	// and the submit keystroke travel as two separate SendKeys writes.
-	lease, busy := acquireMCPWriteLease(inst, session.LeaseWriterMCP)
+	lease, busy := acquireMCPWriteLease(inst, instance.LeaseWriterMCP)
 	if busy != nil {
 		return busy, nil
 	}
-	if err := session.SubmitContentWithEnter(ctx, inst, lease, message); err != nil {
+	if err := instance.SubmitContentWithEnter(ctx, inst, lease, message); err != nil {
 		return submitErrResult(err, "message"), nil
 	}
 
@@ -779,7 +780,7 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 // caller relying on LoadInstances()'s broader "every session in storage"
 // coverage; it just stops being the *first* and only path for a session that
 // IS live.
-func (th *terminalHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func (th *terminalHandlers) findInstance(sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	if th.live != nil {
 		if inst := th.live.FindLiveInstance(sessionID); inst != nil {
 			return inst, nil

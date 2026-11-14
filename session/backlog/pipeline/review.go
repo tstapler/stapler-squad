@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
 
@@ -102,7 +103,7 @@ const maxContextExtrasEntries = 20
 func writePriorReviewAttemptsSection(sb *strings.Builder, priorSessions []backlogdto.ItemSessionSummary) {
 	var reviews []backlogdto.ItemSessionSummary
 	for _, s := range priorSessions {
-		if s.Role == session.SessionRoleReview && s.ReviewVerdict != nil {
+		if s.Role == instance.SessionRoleReview && s.ReviewVerdict != nil {
 			reviews = append(reviews, s)
 		}
 	}
@@ -433,7 +434,7 @@ func BuildReviewCallOptions(diff, codebaseWorkDir string) (systemPrompt string, 
 			headless.CallOptions{
 				WorkDir:        codebaseWorkDir,
 				AllowedTools:   headless.CodebaseReadAllowedTools,
-				PermissionMode: session.PermissionModeBypassPermissions,
+				PermissionMode: instance.PermissionModeBypassPermissions,
 			},
 			headless.CodebaseReadCallTimeout,
 			"codebase-read"
@@ -624,7 +625,7 @@ func RecordTerminalReviewVerdict(storage *session.Storage, itemID string, acSnap
 	is, err := storage.CreateItemSessionWithVerdict(cleanupCtx, backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 		AcSnapshot:  acSnapshot,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome:    outcome,

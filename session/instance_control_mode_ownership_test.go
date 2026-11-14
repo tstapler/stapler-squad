@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -55,8 +56,8 @@ func TestInstanceStartControlMode_should_NeverProduceTwoOwners_When_100Goroutine
 		t.Fatalf("failed to start real tmux session %s: %v", name, err)
 	}
 
-	inst := &Instance{Title: name}
-	_ = inst.pm() // lazily initializes processManager as *TmuxBackend before SetTmuxSession
+	inst := &instance.Instance{Title: name}
+	_ = inst.PMForTest() // lazily initializes processManager as *TmuxBackend before SetTmuxSession
 	inst.SetTmuxSession(tmuxSession)
 	t.Cleanup(func() { _ = inst.StopControlMode() })
 

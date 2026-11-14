@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type itemPRFixture struct {
@@ -90,11 +91,11 @@ func (f *itemPRFixture) numbers() []int {
 	return out
 }
 
-func (f *itemPRFixture) verdict() ItemVerdict {
+func (f *itemPRFixture) verdict() instance.ItemVerdict {
 	f.t.Helper()
 	prs, err := f.repo.ItemPRs(context.Background(), f.itemEnt())
 	require.NoError(f.t, err)
-	return ItemPRVerdict(prs)
+	return instance.ItemPRVerdict(prs)
 }
 
 func TestItemPRs_ShouldSynthesizeUnknownPR_WhenLegacyNumberUnrepresented(t *testing.T) {
@@ -106,15 +107,15 @@ func TestItemPRs_ShouldSynthesizeUnknownPR_WhenLegacyNumberUnrepresented(t *test
 	assert.Equal(t, 21, prs[0].Ref.Number())
 	assert.Equal(t, domain.PRStateUnknown, prs[0].State)
 	assert.False(t, prs[0].Terminal())
-	assert.Equal(t, ItemVerdictOpen, ItemPRVerdict(prs), "an unmigrated item is never read as all terminal")
+	assert.Equal(t, instance.ItemVerdictOpen, instance.ItemPRVerdict(prs), "an unmigrated item is never read as all terminal")
 }
 
 func TestItemPRs_ShouldNotSynthesize_WhenNumberRepresentedOnlyBySupersededRound(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
-	s1 := f.session(SessionRoleWork)
+	s1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
-	s2 := f.session(SessionRoleWork)
+	s2 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s2), 31, domain.PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "stale mirror value is not unmigrated")
 }
@@ -123,7 +124,7 @@ func TestItemPRs_ShouldNotSynthesize_WhenAnyTombstoneCoversNumber(t *testing.T) 
 	t.Parallel()
 	t.Run("session tombstone", func(t *testing.T) {
 		f := newItemPRFixture(t, 30)
-		s := f.session(SessionRoleWork)
+		s := f.session(instance.SessionRoleWork)
 		f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 		f.detach(SessionPROwner(s), 30)
 		assert.Empty(t, f.numbers())
@@ -150,7 +151,7 @@ func (c *countingSource) ListBySessionUUIDs(ctx context.Context, uuids []string)
 func TestItemPRs_ShouldShortCircuitFallback_WhenNumberAlreadyInSet(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 21)
-	s := f.session(SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s), 21, domain.PRStateOpen)
 	src := &countingSource{itemPRSource: f.repo}
 	it := f.itemEnt()
@@ -163,7 +164,7 @@ func TestItemPRs_ShouldShortCircuitFallback_WhenNumberAlreadyInSet(t *testing.T)
 func TestItemPRs_ShouldReturnOnePR_WhenSameStateViaItemAndSessionLink(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s := f.session(SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(ItemPROwner(f.itemID), 21, domain.PRStateOpen)
 	f.link(SessionPROwner(s), 21, domain.PRStateOpen)
 	assert.Equal(t, []int{21}, f.numbers())
@@ -172,7 +173,7 @@ func TestItemPRs_ShouldReturnOnePR_WhenSameStateViaItemAndSessionLink(t *testing
 func TestItemPRs_ShouldDropPR_WhenOnlySessionLinkDetachedOrSessionDeleted(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s := f.session(SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 	require.Equal(t, []int{30}, f.numbers())
 	f.detach(SessionPROwner(s), 30)
@@ -182,12 +183,12 @@ func TestItemPRs_ShouldDropPR_WhenOnlySessionLinkDetachedOrSessionDeleted(t *tes
 func TestItemPRs_ShouldUseLatestWorkRoundOnly_WhenReopened(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s1 := f.session(SessionRoleWork)
+	s1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
-	s2 := f.session(SessionRoleWork)
+	s2 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s2), 31, domain.PRStateMerged)
 	assert.Equal(t, []int{31}, f.numbers())
-	assert.Equal(t, ItemVerdictDone, f.verdict(), "verdict is Done regardless of #30")
+	assert.Equal(t, instance.ItemVerdictDone, f.verdict(), "verdict is Done regardless of #30")
 	byS1, err := f.repo.ListBySessionUUIDs(context.Background(), []string{s1})
 	require.NoError(t, err)
 	assert.Len(t, byS1[s1], 1, "#30 stays linked to its own session")
@@ -196,9 +197,9 @@ func TestItemPRs_ShouldUseLatestWorkRoundOnly_WhenReopened(t *testing.T) {
 func TestItemPRs_ShouldNotSupersede_WhenLaterReviewSession(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	w1 := f.session(SessionRoleWork)
+	w1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(w1), 30, domain.PRStateOpen)
-	f.session(SessionRoleReview)
+	f.session(instance.SessionRoleReview)
 	assert.Equal(t, []int{30}, f.numbers())
 }
 
@@ -218,23 +219,23 @@ func TestCurrentRoundSession_ShouldBreakCreatedAtTiesByLargerID(t *testing.T) {
 func TestItemPRs_ShouldNotResurrectEarlierRound_WhenLatestRoundLinkDetached(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s1 := f.session(SessionRoleWork)
+	s1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s1), 30, domain.PRStateMerged)
-	s2 := f.session(SessionRoleWork)
+	s2 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s2), 31, domain.PRStateOpen)
 	f.detach(SessionPROwner(s2), 31)
 	assert.Empty(t, f.numbers())
-	assert.Equal(t, ItemVerdictNoPRs, f.verdict())
+	assert.Equal(t, instance.ItemVerdictNoPRs, f.verdict())
 }
 
 func TestItemPRs_ShouldKeepLivePR_WhenNewerWorkSessionHasNoLinkYet(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s1 := f.session(SessionRoleWork)
+	s1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
-	s2 := f.session(SessionRoleWork)
+	s2 := f.session(instance.SessionRoleWork)
 	assert.Equal(t, []int{30}, f.numbers())
-	assert.Equal(t, ItemVerdictOpen, f.verdict())
+	assert.Equal(t, instance.ItemVerdictOpen, f.verdict())
 	f.link(SessionPROwner(s2), 31, domain.PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "#30 leaves once the new session links")
 }
@@ -243,24 +244,24 @@ func TestItemPRs_ShouldKeepItemDirectPR_WhenRound2Merges(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	f.link(ItemPROwner(f.itemID), 30, domain.PRStateOpen)
-	s2 := f.session(SessionRoleWork)
+	s2 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s2), 31, domain.PRStateMerged)
 	assert.ElementsMatch(t, []int{30, 31}, f.numbers())
-	assert.Equal(t, ItemVerdictOpen, f.verdict())
+	assert.Equal(t, instance.ItemVerdictOpen, f.verdict())
 	f.detach(ItemPROwner(f.itemID), 30)
-	assert.Equal(t, ItemVerdictDone, f.verdict())
+	assert.Equal(t, instance.ItemVerdictDone, f.verdict())
 }
 
 func TestItemPRs_ShouldKeepSharedPR_WhenOneOfTwoRoundsDetaches(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s1 := f.session(SessionRoleWork)
+	s1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
-	s2 := f.session(SessionRoleWork)
+	s2 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s2), 30, domain.PRStateOpen)
 	f.detach(SessionPROwner(s1), 30)
 	assert.Equal(t, []int{30}, f.numbers())
-	assert.Equal(t, ItemVerdictOpen, f.verdict())
+	assert.Equal(t, instance.ItemVerdictOpen, f.verdict())
 
 	f.link(ItemPROwner(f.itemID), 30, domain.PRStateOpen)
 	f.detach(SessionPROwner(s2), 30)
@@ -273,7 +274,7 @@ func TestItemPRs_ShouldKeepSharedPR_WhenOneOfTwoRoundsDetaches(t *testing.T) {
 func TestItemPRs_ShouldIgnoreItemTombstoneOverSessionLink_WhenBothHoldIt(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	s := f.session(SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(ItemPROwner(f.itemID), 30, domain.PRStateUnknown)
 	f.link(SessionPROwner(s), 30, domain.PRStateUnknown)
 	f.detach(ItemPROwner(f.itemID), 30)
@@ -301,7 +302,7 @@ func TestItemPRs_ShouldStillReturnItemDirect_WhenSessionLinkBroken(t *testing.T)
 func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionDerivedPR(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
-	s := f.session(SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 	for run := 0; run < 2; run++ {
 		_, err := f.repo.runPRBackfill(context.Background(), nil)
@@ -310,7 +311,7 @@ func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionD
 		require.NoError(t, err)
 		assert.Empty(t, direct, "run %d: a session-derived PR gets no item-direct link", run)
 	}
-	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, domain.PRStateOpen)
+	f.link(SessionPROwner(f.session(instance.SessionRoleWork)), 31, domain.PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "#30 leaves the set when the next round links #31")
 }
 
@@ -345,7 +346,7 @@ func TestItemMirror_ShouldNeverZeroStoredNumber_WhenSetEmpty(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
 	ctx := context.Background()
-	s := f.session(SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 	f.detach(SessionPROwner(s), 30)
 	require.Empty(t, f.numbers())
@@ -376,13 +377,13 @@ func TestItemMirror_ShouldFollowCurrentRound_WhenLaterWorkSessionLinks(t *testin
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
 	ctx := context.Background()
-	s1 := f.session(SessionRoleWork)
+	s1 := f.session(instance.SessionRoleWork)
 	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
 	for run := 0; run < 2; run++ {
 		_, err := f.repo.runPRBackfill(ctx, nil)
 		require.NoError(t, err)
 	}
-	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, domain.PRStateOpen)
+	f.link(SessionPROwner(f.session(instance.SessionRoleWork)), 31, domain.PRStateOpen)
 	_, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
 	require.NoError(t, err)
 	assert.Equal(t, 31, f.mirror())

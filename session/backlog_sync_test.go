@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeSyncPlugin lets tests control exactly what Fetch returns and inspect the
@@ -774,7 +775,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 
 	// Simulate a manual revert to a pre-work status (e.g. the in-progress
 	// session was abandoned) — no GitHub-side change accompanies this.
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, created.ID, domain.BacklogStatusReady, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, created.ID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Tick 2: same closed issue, same IssueUpdatedAt. If the watermark had

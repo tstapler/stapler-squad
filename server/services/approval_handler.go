@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
@@ -48,8 +49,8 @@ type hookDecision struct {
 // ReviewQueueChecker is an interface for triggering immediate review queue checks.
 // This avoids importing the session package's concrete ReviewQueuePoller type directly.
 type ReviewQueueChecker interface {
-	FindInstance(sessionID string) *session.Instance
-	CheckSession(inst *session.Instance)
+	FindInstance(sessionID string) *instance.Instance
+	CheckSession(inst *instance.Instance)
 }
 
 // approvalNotificationStamper is a narrow interface for stamping approval outcomes

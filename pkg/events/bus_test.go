@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -22,7 +22,7 @@ func TestEventBusBasicSubscribePublish(t *testing.T) {
 	events, subID := bus.Subscribe(ctx)
 
 	// Create a test event
-	testEvent := NewSessionCreatedEvent(&session.Instance{Title: "test-session"})
+	testEvent := NewSessionCreatedEvent(&instance.Instance{Title: "test-session"})
 
 	// Publish event
 	bus.Publish(testEvent)
@@ -322,7 +322,7 @@ func TestEventBusClose(t *testing.T) {
 
 // TestEventBusEventTypes tests all event type constructors.
 func TestEventBusEventTypes(t *testing.T) {
-	testSession := &session.Instance{Title: "test"}
+	testSession := &instance.Instance{Title: "test"}
 
 	tests := []struct {
 		name      string
@@ -365,7 +365,7 @@ func TestEventsSince(t *testing.T) {
 
 	// Publish 5 events.
 	for i := 0; i < 5; i++ {
-		bus.Publish(NewSessionCreatedEvent(&session.Instance{Title: "s"}))
+		bus.Publish(NewSessionCreatedEvent(&instance.Instance{Title: "s"}))
 	}
 
 	// Seq numbers are 1–5 (nextSeq starts at 0, Add(1) gives 1..5).
@@ -399,7 +399,7 @@ func TestEventsSince(t *testing.T) {
 			t.Error("should be nil")
 		}
 		// Publish one more and check Seq increments.
-		e := NewSessionCreatedEvent(&session.Instance{Title: "s"})
+		e := NewSessionCreatedEvent(&instance.Instance{Title: "s"})
 		bus.Publish(e)
 		if e.Seq != 6 {
 			t.Errorf("expected seq 6, got %d", e.Seq)

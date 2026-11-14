@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -339,14 +340,14 @@ func deriveWorkflowSessionTitle(wf *ent.Workflow, arg string) string {
 	if trimmed == "" {
 		return defaultWorkflowSessionTitle(wf)
 	}
-	ref, err := session.ParseGitHubURLWithHosts(trimmed, enterpriseHostnames(config.LoadConfig().GetGitHubEnterpriseHosts()))
+	ref, err := instance.ParseGitHubURLWithHosts(trimmed, enterpriseHostnames(config.LoadConfig().GetGitHubEnterpriseHosts()))
 	if err != nil {
 		return defaultWorkflowSessionTitle(wf)
 	}
 	switch ref.Type {
-	case session.GitHubRefTypePR:
+	case instance.GitHubRefTypePR:
 		return fmt.Sprintf("%s/%s#%d", ref.Owner, ref.Repo, ref.PRNumber)
-	case session.GitHubRefTypeBranch:
+	case instance.GitHubRefTypeBranch:
 		return fmt.Sprintf("%s/%s:%s", ref.Owner, ref.Repo, ref.Branch)
 	default:
 		return fmt.Sprintf("%s/%s", ref.Owner, ref.Repo)

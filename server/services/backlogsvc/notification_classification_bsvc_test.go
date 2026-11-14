@@ -12,9 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestNotificationPushGateClassification is a table-driven regression test mirroring the
@@ -105,7 +105,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		})
 		require.NoError(t, err)
 		_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-			ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+			ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 		sessions, err := storage.ListItemSessions(ctx, item.ID)

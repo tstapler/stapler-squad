@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -30,28 +31,28 @@ type silentPaneProcessManager struct{ fakeSendKeysProcessManager }
 func (s *silentPaneProcessManager) HasUpdated() (bool, bool, string) { return false, false, "" }
 
 type nudgePane interface {
-	ProcessManager
+	instance.ProcessManager
 	recorded() []string
 }
 
-func newNudgeWriterInstance(t *testing.T, paneContent string, pm nudgePane) *Instance {
+func newNudgeWriterInstance(t *testing.T, paneContent string, pm nudgePane) *instance.Instance {
 	t.Helper()
 	cc, _ := claudectltest.NewController(paneContent)
 	inst := minimalInstance(t)
 	inst.ForceStatus(domain.Active)
-	inst.controllerManager.SetController(cc)
-	inst.processManager = pm
-	inst.started.Store(true)
+	inst.SetControllerForTest(cc)
+	inst.SetProcessManagerForTest(pm)
+	inst.MarkStarted()
 	return inst
 }
 
 // testNudgeSeams skips the settle window and shrinks the pane waits.
-func testNudgeSeams(inst *Instance) nudgeSeams {
+func testNudgeSeams(inst *instance.Instance) nudgeSeams {
 	return nudgeSeams{
 		poll:     time.Millisecond,
 		tryLease: inst.TryTerminalWriteLease,
-		submit: func(ctx context.Context, i paneSubmitter, l *HeldLease, content string, _, _ time.Duration) error {
-			return SubmitDriverContent(ctx, i, l, content, time.Millisecond, 20*time.Millisecond)
+		submit: func(ctx context.Context, i instance.PaneSubmitter, l *instance.HeldLease, content string, _, _ time.Duration) error {
+			return instance.SubmitDriverContent(ctx, i, l, content, time.Millisecond, 20*time.Millisecond)
 		},
 	}
 }
@@ -136,7 +137,7 @@ func TestNudgeStalledAutonomousSession_NotIdle_ClaimUntouched(t *testing.T) {
 	require.ErrorIs(t, err, ErrNudgeTargetNotIdle)
 	assert.Zero(t, cc.calls.Load())
 	assert.Empty(t, pm.recorded())
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-2
@@ -144,17 +145,17 @@ func TestNudgeStalledAutonomousSession_LeaseBusy_ClaimUntouched(t *testing.T) {
 	t.Parallel()
 	pm := &fakeSendKeysProcessManager{}
 	inst := newNudgeWriterInstance(t, nudgeTestIdlePane, pm)
-	held, ok := inst.TryTerminalWriteLease(LeaseWriterDriver)
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 	cc := &claimCounter{granted: true}
 
 	err := nudgeStalledWith(context.Background(), inst, cc.claim, testNudgeSeams(inst))
 
-	require.ErrorIs(t, err, ErrLeaseBusy)
+	require.ErrorIs(t, err, instance.ErrLeaseBusy)
 	assert.Zero(t, cc.calls.Load())
 	assert.Empty(t, pm.recorded())
 	held.Release()
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-3
@@ -169,7 +170,7 @@ func TestNudgeStalledAutonomousSession_ClaimLost_ReleasesLeaseNoWrite(t *testing
 	require.ErrorIs(t, err, ErrNudgeSlotUnavailable)
 	assert.EqualValues(t, 1, cc.calls.Load())
 	assert.Empty(t, pm.recorded())
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-4
@@ -177,11 +178,11 @@ func TestNudgeStalledAutonomousSession_RefusesNonActiveArchivedPaused(t *testing
 	t.Parallel()
 	tests := []struct {
 		name  string
-		setup func(*Instance)
+		setup func(*instance.Instance)
 	}{
-		{"not active", func(i *Instance) { i.ForceStatus(domain.Creating) }},
-		{"archived", func(i *Instance) { i.SetArchivedAtIfNil(time.Now()) }},
-		{"paused", func(i *Instance) { i.ForceStatus(domain.Paused) }},
+		{"not active", func(i *instance.Instance) { i.ForceStatus(domain.Creating) }},
+		{"archived", func(i *instance.Instance) { i.SetArchivedAtIfNil(time.Now()) }},
+		{"paused", func(i *instance.Instance) { i.ForceStatus(domain.Paused) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -197,7 +198,7 @@ func TestNudgeStalledAutonomousSession_RefusesNonActiveArchivedPaused(t *testing
 			assert.NotErrorIs(t, err, ErrNudgeTargetNotIdle)
 			assert.Zero(t, cc.calls.Load())
 			assert.Empty(t, pm.recorded())
-			AssertLeaseFree(t, inst)
+			instance.AssertLeaseFree(t, inst)
 		})
 	}
 }
@@ -212,7 +213,7 @@ func TestNudgeStalledAutonomousSession_CancelMidSettle_NoWriteNoLeaseNoClaim(t *
 	var leaseTaken atomic.Int32
 	seams := testNudgeSeams(inst)
 	seams.settleWindow = time.Hour
-	seams.tryLease = func(w string) (*HeldLease, bool) {
+	seams.tryLease = func(w string) (*instance.HeldLease, bool) {
 		leaseTaken.Add(1)
 		return inst.TryTerminalWriteLease(w)
 	}
@@ -224,7 +225,7 @@ func TestNudgeStalledAutonomousSession_CancelMidSettle_NoWriteNoLeaseNoClaim(t *
 	assert.Empty(t, pm.recorded())
 	assert.Zero(t, leaseTaken.Load())
 	assert.Zero(t, cc.calls.Load())
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-6: Err() passes inside the gate, then reports cancelled before the lease.
@@ -235,7 +236,7 @@ func TestNudgeStalledAutonomousSession_CancelAfterGateBeforeLease(t *testing.T) 
 	cc := &claimCounter{granted: true}
 	var leaseTaken atomic.Int32
 	seams := testNudgeSeams(inst)
-	seams.tryLease = func(w string) (*HeldLease, bool) {
+	seams.tryLease = func(w string) (*instance.HeldLease, bool) {
 		leaseTaken.Add(1)
 		return inst.TryTerminalWriteLease(w)
 	}
@@ -247,7 +248,7 @@ func TestNudgeStalledAutonomousSession_CancelAfterGateBeforeLease(t *testing.T) 
 	assert.Empty(t, pm.recorded())
 	assert.Zero(t, leaseTaken.Load())
 	assert.Zero(t, cc.calls.Load())
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-7: an unconfirmed submit keeps the slot (the row count stays
@@ -265,12 +266,12 @@ func TestNudgeStalledAutonomousSession_SubmitNotConfirmed_UncertainNoRefund(t *t
 	err := nudgeStalledWith(ctx, inst, claim, testNudgeSeams(inst))
 
 	require.ErrorIs(t, err, ErrNudgeSubmitUncertain)
-	require.ErrorIs(t, err, ErrSubmitNotConfirmed)
+	require.ErrorIs(t, err, instance.ErrSubmitNotConfirmed)
 	rows, findErr := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, findErr)
 	require.Len(t, rows, 1)
 	assert.Equal(t, int32(1), rows[0].DiagnoseNudgeCount, "no refund after an uncertain delivery")
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-8
@@ -285,7 +286,7 @@ func TestNudgeStalledAutonomousSession_FailureAfterTextSent_Uncertain(t *testing
 	require.ErrorIs(t, err, ErrNudgeSubmitUncertain)
 	require.ErrorIs(t, err, errTestSendKeysFailure)
 	assert.Equal(t, []string{autonomousStallNudgeText}, pm.recorded())
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // NDG-9
@@ -301,8 +302,8 @@ func TestAutonomousStallNudgeText_ExactBytes(t *testing.T) {
 
 	require.NoError(t, nudgeStalledWith(context.Background(), inst, cc.claim, testNudgeSeams(inst)))
 
-	assert.Equal(t, []string{want, EnterKeySequence}, pm.recorded())
-	AssertLeaseFree(t, inst)
+	assert.Equal(t, []string{want, instance.EnterKeySequence}, pm.recorded())
+	instance.AssertLeaseFree(t, inst)
 }
 
 // Status can change between the first check and the lease; the claim must not run.
@@ -312,7 +313,7 @@ func TestNudgeStalledAutonomousSession_StatusChangesWhileTakingLease_ClaimUntouc
 	inst := newNudgeWriterInstance(t, nudgeTestIdlePane, pm)
 	cc := &claimCounter{granted: true}
 	seams := testNudgeSeams(inst)
-	seams.tryLease = func(w string) (*HeldLease, bool) {
+	seams.tryLease = func(w string) (*instance.HeldLease, bool) {
 		lease, ok := inst.TryTerminalWriteLease(w)
 		inst.ForceStatus(domain.Paused)
 		return lease, ok
@@ -323,5 +324,5 @@ func TestNudgeStalledAutonomousSession_StatusChangesWhileTakingLease_ClaimUntouc
 	require.ErrorIs(t, err, ErrNudgeSessionNotActive)
 	assert.Zero(t, cc.calls.Load())
 	assert.Empty(t, pm.recorded())
-	AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }

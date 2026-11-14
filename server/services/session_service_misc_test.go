@@ -12,8 +12,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -105,7 +105,7 @@ func TestClearConversationState_Success(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "clear-test-session",
 		Path:      "/tmp/test",
 		Status:    domain.Paused,

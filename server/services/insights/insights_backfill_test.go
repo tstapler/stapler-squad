@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -29,7 +29,7 @@ func TestBackfillConversationUUIDs(t *testing.T) {
 	t.Parallel()
 	created := time.Now().UTC().Add(-time.Hour)
 	entry := func(id string, at time.Time) backlogdto.ItemSessionBacklogEntry {
-		return backlogdto.ItemSessionBacklogEntry{ItemSessionID: id, SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleWork, CreatedAt: at}
+		return backlogdto.ItemSessionBacklogEntry{ItemSessionID: id, SessionUUID: uuid.NewString(), SessionRole: instance.SessionRoleWork, CreatedAt: at}
 	}
 	wt := "/home/u/.stapler-squad/worktrees/x"
 
@@ -80,7 +80,7 @@ func TestBackfillConversationUUIDs_RespectsCanceledContext(t *testing.T) {
 	created := time.Now().UTC().Add(-time.Hour)
 	wt := "/home/u/.stapler-squad/worktrees/x"
 	entries := []backlogdto.ItemSessionBacklogEntry{
-		{ItemSessionID: "is-1", SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleWork, CreatedAt: created},
+		{ItemSessionID: "is-1", SessionUUID: uuid.NewString(), SessionRole: instance.SessionRoleWork, CreatedAt: created},
 	}
 	results := []*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(4*time.Second))}
 	reader := &stampingBacklogReader{FakeBacklogReader: svctest.FakeBacklogReader{Entries: entries}, stamped: map[string]string{}}

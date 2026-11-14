@@ -3,11 +3,11 @@ package events
 import (
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 )
 
@@ -178,7 +178,7 @@ type Event struct {
 	// Timestamp when the event occurred
 	Timestamp time.Time
 	// Session affected by the event (may be nil for delete events)
-	Session *session.Instance
+	Session *instance.Instance
 	// SessionID for delete events when Session is nil
 	SessionID string
 	// UpdatedFields tracks which fields were modified (for update events).
@@ -221,7 +221,7 @@ type Event struct {
 }
 
 // NewSessionCreatedEvent creates an event for session creation.
-func NewSessionCreatedEvent(sess *session.Instance) *Event {
+func NewSessionCreatedEvent(sess *instance.Instance) *Event {
 	return &Event{
 		Type:      EventSessionCreated,
 		Timestamp: time.Now(),
@@ -230,7 +230,7 @@ func NewSessionCreatedEvent(sess *session.Instance) *Event {
 }
 
 // NewSessionUpdatedEvent creates an event for session updates.
-func NewSessionUpdatedEvent(sess *session.Instance, updatedFields []string) *Event {
+func NewSessionUpdatedEvent(sess *instance.Instance, updatedFields []string) *Event {
 	return &Event{
 		Type:          EventSessionUpdated,
 		Timestamp:     time.Now(),
@@ -244,7 +244,7 @@ func NewSessionUpdatedEvent(sess *session.Instance, updatedFields []string) *Eve
 // Use this instead of NewSessionUpdatedEvent when the detection state is known
 // and should be propagated to frontend clients (e.g. the UpdateSession RPC path).
 func NewSessionUpdatedEventWithDetection(
-	sess *session.Instance,
+	sess *instance.Instance,
 	updatedFields []string,
 	detectedStatus detection.DetectedStatus,
 	detectedContext string,

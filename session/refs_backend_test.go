@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
 )
@@ -23,7 +24,7 @@ func TestGetMainRepoPath_RoutesCommonDirThroughBackend(t *testing.T) {
 	rig.Install(t)
 	rig.GoGit.OnCommonDir = func(backend.RepoLocation) (backend.CommonDir, error) { return "/repos/app/.git", nil }
 
-	got, err := GetMainRepoPath("/repos/app-wt")
+	got, err := instance.GetMainRepoPath("/repos/app-wt")
 
 	require.NoError(t, err)
 	assert.Equal(t, "/repos/app", got)
@@ -36,7 +37,7 @@ func TestGetMainRepoPath_WrapsBackendError(t *testing.T) {
 	boom := errors.New("boom")
 	fake.OnCommonDir = func(backend.RepoLocation) (backend.CommonDir, error) { return "", boom }
 
-	_, err := GetMainRepoPath("/nope")
+	_, err := instance.GetMainRepoPath("/nope")
 
 	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), "failed to get git common dir")
@@ -52,7 +53,7 @@ func TestDetectWorktree_ReadsRemoteURLThroughBackend(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
 
-	info, err := detectWorktreeUncached(repo)
+	info, err := instance.DetectWorktreeUncached(repo)
 
 	require.NoError(t, err)
 	assert.Equal(t, "https://github.com/acme/widgets.git", info.RemoteURL)
@@ -70,7 +71,7 @@ func TestDetectWorktree_UnsetRemoteIsNotAnError(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
 
-	info, err := detectWorktreeUncached(repo)
+	info, err := instance.DetectWorktreeUncached(repo)
 
 	require.NoError(t, err)
 	assert.Empty(t, info.RemoteURL)
@@ -126,11 +127,11 @@ func TestGetMainRepoPath_KeepsSymlinkedSpelling(t *testing.T) {
 		return backend.CommonDir(filepath.Join(realResolved, ".git")), nil
 	}
 
-	got, err := GetMainRepoPath(link)
+	got, err := instance.GetMainRepoPath(link)
 	require.NoError(t, err)
 	assert.Equal(t, link, got)
 
-	got, err = GetMainRepoPath(filepath.Join(link, "sub"))
+	got, err = instance.GetMainRepoPath(filepath.Join(link, "sub"))
 	require.NoError(t, err)
 	assert.Equal(t, link, got, "a subdirectory maps back to the symlinked root")
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -42,9 +42,9 @@ type namedPM struct {
 
 func (n namedPM) GetSessionIdentifier() string { return n.name }
 
-func namedInstance(t *testing.T, tmuxName string) *session.Instance {
+func namedInstance(t *testing.T, tmuxName string) *instance.Instance {
 	t.Helper()
-	return session.NewStartedInstanceForTest(t, "human-active", namedPM{replyPM: &replyPM{}, name: tmuxName})
+	return instance.NewStartedInstanceForTest(t, "human-active", namedPM{replyPM: &replyPM{}, name: tmuxName})
 }
 
 func TestPaneWriter_ShouldRecordHumanActivity_WhenBrowserInputIsSent(t *testing.T) {

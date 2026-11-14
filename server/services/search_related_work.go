@@ -6,13 +6,14 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // toProtoClaudeMessages converts raw conversation messages to their proto
 // representation. Shared by GetClaudeHistoryMessages and the context-window
 // enrichment in SearchClaudeHistory.
-func toProtoClaudeMessages(messages []session.ClaudeConversationMessage) []*sessionv1.ClaudeMessage {
+func toProtoClaudeMessages(messages []instance.ClaudeConversationMessage) []*sessionv1.ClaudeMessage {
 	out := make([]*sessionv1.ClaudeMessage, 0, len(messages))
 	for _, msg := range messages {
 		out = append(out, &sessionv1.ClaudeMessage{
@@ -50,7 +51,7 @@ func groupResultsBySession(results []*sessionv1.SearchResult) []*sessionv1.Searc
 // corresponding boundary, to avoid returning duplicate content across the
 // two fields (e.g. a hit near the start of a long session must not repeat
 // messages[0:3] in both context_window and bookend_first).
-func contextWindowAndBookends(messages []session.ClaudeConversationMessage, hitIndex int) (window, bookendFirst, bookendLast []session.ClaudeConversationMessage) {
+func contextWindowAndBookends(messages []instance.ClaudeConversationMessage, hitIndex int) (window, bookendFirst, bookendLast []instance.ClaudeConversationMessage) {
 	if len(messages) == 0 {
 		return nil, nil, nil
 	}
@@ -104,7 +105,7 @@ func filterInPlace[T any](items []T, exclude func(T) bool) []T {
 // UUID matches sessionID, or nil if none is currently tracked. Shared by
 // isAutomationSession and resolvedProject, which each need this lookup for a
 // different field on the same Instance.
-func findInstanceBySessionID(sessionID string, instances []*session.Instance) *session.Instance {
+func findInstanceBySessionID(sessionID string, instances []*instance.Instance) *instance.Instance {
 	for _, inst := range instances {
 		if inst.GetConversationUUID() == sessionID {
 			return inst
@@ -119,7 +120,7 @@ func findInstanceBySessionID(sessionID string, instances []*session.Instance) *s
 // Best-effort: returns false (not automation) for any session with no
 // live Instance match, since absence of the live record is not evidence
 // either way.
-func isAutomationSession(sessionID string, instances []*session.Instance) bool {
+func isAutomationSession(sessionID string, instances []*instance.Instance) bool {
 	inst := findInstanceBySessionID(sessionID, instances)
 	return inst != nil && inst.Hidden
 }
@@ -129,7 +130,7 @@ func isAutomationSession(sessionID string, instances []*session.Instance) bool {
 // of filterAutomationSessions, sharing the same isAutomationSession
 // predicate. The returned slice aliases entries' backing array (entries[:0]
 // idiom) — callers must not use entries after this call.
-func filterHistoryEntriesByAutomation(entries []session.ClaudeHistoryEntry, instances []*session.Instance) []session.ClaudeHistoryEntry {
+func filterHistoryEntriesByAutomation(entries []session.ClaudeHistoryEntry, instances []*instance.Instance) []session.ClaudeHistoryEntry {
 	return filterInPlace(entries, func(e session.ClaudeHistoryEntry) bool {
 		return isAutomationSession(e.ID, instances)
 	})
@@ -138,7 +139,7 @@ func filterHistoryEntriesByAutomation(entries []session.ClaudeHistoryEntry, inst
 // filterAutomationSessions removes results whose session is a live,
 // Hidden=true Instance. The returned slice aliases results' backing array
 // (results[:0] idiom) — callers must not use results after this call.
-func filterAutomationSessions(results []*sessionv1.SearchResult, instances []*session.Instance) []*sessionv1.SearchResult {
+func filterAutomationSessions(results []*sessionv1.SearchResult, instances []*instance.Instance) []*sessionv1.SearchResult {
 	return filterInPlace(results, func(r *sessionv1.SearchResult) bool {
 		return isAutomationSession(r.SessionId, instances)
 	})
@@ -157,7 +158,7 @@ func filterAutomationSessions(results []*sessionv1.SearchResult, instances []*se
 // distinguish an unresolvable worktree path from a genuinely different
 // project, so this errs toward excluding rather than admitting
 // cross-project noise into scoped results).
-func resolvedProject(sessionID, rawProject string, instances []*session.Instance) string {
+func resolvedProject(sessionID, rawProject string, instances []*instance.Instance) string {
 	inst := findInstanceBySessionID(sessionID, instances)
 	if inst != nil && inst.MainRepoPath != "" {
 		return inst.MainRepoPath
@@ -170,7 +171,7 @@ func resolvedProject(sessionID, rawProject string, instances []*session.Instance
 // empty (matches today's unfiltered behavior). The returned slice aliases
 // results' backing array (results[:0] idiom) — callers must not use
 // results after this call.
-func filterByProject(results []*sessionv1.SearchResult, project string, instances []*session.Instance) []*sessionv1.SearchResult {
+func filterByProject(results []*sessionv1.SearchResult, project string, instances []*instance.Instance) []*sessionv1.SearchResult {
 	if project == "" {
 		return results
 	}
@@ -195,7 +196,7 @@ func (ss *SearchService) applyResultPostProcessing(
 	requestedLimit int,
 	needsPostProcessing bool,
 ) []*sessionv1.SearchResult {
-	var instances []*session.Instance
+	var instances []*instance.Instance
 	if ss.getInstances != nil && (req.GetProject() != "" || req.GetExcludeAutomationSessions()) {
 		instances = ss.getInstances()
 	}

@@ -1,13 +1,16 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/artifacts"
+import (
+	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/instance"
+)
 
 // FindInstanceByHistoryPath returns the title of the session whose JSONL
 // history file matches filePath. Returns ("", false) if not found.
 // HistoryFilePath is a public field set by HistoryLinker; safe to read here
 // since this runs on each HistoryLinker callback, which is the same goroutine
 // that sets the field.
-func FindInstanceByHistoryPath(instances []*Instance, filePath string) (string, bool) {
+func FindInstanceByHistoryPath(instances []*instance.Instance, filePath string) (string, bool) {
 	for _, inst := range instances {
 		if inst.HistoryFilePath == filePath {
 			return inst.Title, true
@@ -18,7 +21,7 @@ func FindInstanceByHistoryPath(instances []*Instance, filePath string) (string, 
 
 // InstanceInfoSlice converts a slice of live Instances to the lightweight
 // InstanceInfo type used by ArtifactExtractor.SeedOffsets.
-func InstanceInfoSlice(instances []*Instance) []artifacts.InstanceInfo {
+func InstanceInfoSlice(instances []*instance.Instance) []artifacts.InstanceInfo {
 	out := make([]artifacts.InstanceInfo, 0, len(instances))
 	for _, inst := range instances {
 		out = append(out, artifacts.InstanceInfo{

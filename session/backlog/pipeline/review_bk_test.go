@@ -15,11 +15,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -332,7 +332,7 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_PriorReviewAttempts_Rendered(t *tes
 	extras := ReviewContextExtras{
 		PriorSessions: []backlogdto.ItemSessionSummary{
 			{
-				Role: session.SessionRoleReview,
+				Role: instance.SessionRoleReview,
 				ReviewVerdict: &backlogdto.ReviewVerdictSummary{
 					OverallOutcome: string(domain.ReviewVerdictUnverifiable),
 					Summary:        "could not locate satisfying code",
@@ -357,7 +357,7 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_PriorReviewAttempts_Omitted(t *t
 	extras := ReviewContextExtras{
 		PriorSessions: []backlogdto.ItemSessionSummary{
 			{
-				Role: session.SessionRoleReview,
+				Role: instance.SessionRoleReview,
 				ReviewVerdict: &backlogdto.ReviewVerdictSummary{
 					OverallOutcome: string(domain.ReviewVerdictUnverifiable),
 					Summary:        "could not locate satisfying code",
@@ -706,7 +706,7 @@ func TestBuildReviewCallOptions_EmptyDiff_ReturnsCodebaseAccessOptionsAndShortTi
 	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), systemPrompt)
 	assert.Equal(t, "/some/worktree", opts.WorkDir)
 	assert.Equal(t, headless.CodebaseReadAllowedTools, opts.AllowedTools)
-	assert.Equal(t, session.PermissionModeBypassPermissions, opts.PermissionMode)
+	assert.Equal(t, instance.PermissionModeBypassPermissions, opts.PermissionMode)
 	assert.Empty(t, opts.DisallowedTools, "DisallowedTools must be empty now that the Bash grant it backed was reverted (ADR-001 2026-07-15 addendum)")
 	assert.Equal(t, headless.CodebaseReadCallTimeout, callTimeout)
 	assert.Equal(t, "codebase-read", path)

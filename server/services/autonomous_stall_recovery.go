@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // stallNudgeRestartTimeout is the driver warm-up after a nudge, the value triage uses.
@@ -23,12 +24,12 @@ const stallNudgeReserve = 1
 // StallNudger types the fixed stall reminder into an idle work session.
 // claim must only touch storage.
 type StallNudger interface {
-	NudgeStalledSession(ctx context.Context, inst *session.Instance, claim func() (bool, error)) error
+	NudgeStalledSession(ctx context.Context, inst *instance.Instance, claim func() (bool, error)) error
 }
 
 type defaultStallNudger struct{}
 
-func (defaultStallNudger) NudgeStalledSession(ctx context.Context, inst *session.Instance, claim func() (bool, error)) error {
+func (defaultStallNudger) NudgeStalledSession(ctx context.Context, inst *instance.Instance, claim func() (bool, error)) error {
 	return session.NudgeStalledAutonomousSession(ctx, inst, claim)
 }
 
@@ -42,7 +43,7 @@ func (a *AutonomousOrchestrationService) SetNudgeFlagReaders(diagnose, stall fun
 }
 
 // SetDriverRestarter replaces how a nudged session's driver is re-attached (tests).
-func (a *AutonomousOrchestrationService) SetDriverRestarter(fn func(*session.Instance, time.Duration) error) {
+func (a *AutonomousOrchestrationService) SetDriverRestarter(fn func(*instance.Instance, time.Duration) error) {
 	a.restartDriver = fn
 }
 
@@ -128,7 +129,7 @@ func (a *AutonomousOrchestrationService) cancelRecovery(title string) {
 // canRestart is the last check before touching a pane or starting a driver: the
 // session is still live, unarchived, not retrying, autonomy was not turned off,
 // and no stop was requested.
-func canRestart(ctx context.Context, inst *session.Instance) bool {
+func canRestart(ctx context.Context, inst *instance.Instance) bool {
 	if ctx.Err() != nil {
 		return false
 	}
@@ -137,7 +138,7 @@ func canRestart(ctx context.Context, inst *session.Instance) bool {
 }
 
 // reattachDriver starts a fresh driver on inst unless one is already registered.
-func (a *AutonomousOrchestrationService) reattachDriver(inst *session.Instance, timeout time.Duration) error {
+func (a *AutonomousOrchestrationService) reattachDriver(inst *instance.Instance, timeout time.Duration) error {
 	if a.restartDriver != nil {
 		return a.restartDriver(inst, timeout)
 	}
@@ -154,7 +155,7 @@ var errNotRestartable = errors.New("session is no longer restartable")
 
 // planStall evaluates the ADR-001 decision table. wouldNudge is the plan with
 // both flags forced on, so a disabled nudge is recorded as such.
-func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, rec stopRecord) (plan domain.StallAction, wouldNudge bool, none noneCause) {
+func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage *session.Storage, inst *instance.Instance, item *backlogdto.BacklogItemData, rec stopRecord) (plan domain.StallAction, wouldNudge bool, none noneCause) {
 	diagnoseOn, stallOn := a.nudgeFlagsOn()
 	in := domain.StallDecisionInput{
 		Reason:           rec.reason(),
@@ -238,7 +239,7 @@ func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 		return nudgeOutcomeSlotUnavailable, false
 	case errors.Is(err, session.ErrNudgeTargetNotIdle):
 		return nudgeOutcomeNotIdle, false
-	case errors.Is(err, session.ErrLeaseBusy):
+	case errors.Is(err, instance.ErrLeaseBusy):
 		return nudgeOutcomeLeaseBusy, false
 	case errors.Is(err, session.ErrNudgeSlotUnavailable):
 		return nudgeOutcomeSlotUnavailable, false
@@ -250,7 +251,7 @@ func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 // nudgeStalledWorkSession runs the nudge plan end to end and returns the action
 // the stop finally took; rec.Recovery carries the outcome for the row and copy.
 // A false return from the fallback means the caller must run the respawn body.
-func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx context.Context, storage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, rec *stopRecord) (respawn, detached bool) {
+func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx context.Context, storage *session.Storage, inst *instance.Instance, item *backlogdto.BacklogItemData, rec *stopRecord) (respawn, detached bool) {
 	nudgeCap := config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault() - stallNudgeReserve
 	rec.Recovery.NudgeCap = nudgeCap
 	// The claim uses the outer ctx on purpose: the writer checks rctx right before it.

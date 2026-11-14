@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // resolveStuckOnManualTransition immediately resolves the durable stuck
@@ -189,7 +190,7 @@ func (s *BacklogService) CreateBacklogItem(
 	if req.Msg.Category != nil {
 		category = *req.Msg.Category
 	}
-	if !session.IsValidBacklogCategory(category) {
+	if !instance.IsValidBacklogCategory(category) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid category %q", category))
 	}
 
@@ -371,7 +372,7 @@ func (s *BacklogService) UpdateBacklogItem(
 	// so an omitted category never clobbers the item's existing category back
 	// to "" (uncategorized).
 	if req.Msg.Category != nil {
-		if !session.IsValidBacklogCategory(*req.Msg.Category) {
+		if !instance.IsValidBacklogCategory(*req.Msg.Category) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid category %q", *req.Msg.Category))
 		}
 		update.Category = req.Msg.Category
@@ -433,8 +434,8 @@ func (s *BacklogService) UpdateBacklogItem(
 		// local repo-name cross-check would close part of this without a
 		// network call, but is new capability (resolving the item's git
 		// remote), not a quick fix — tracked as a follow-up.
-		ref, parseErr := session.ParseGitHubURL(prURL)
-		if parseErr != nil || ref.Type != session.GitHubRefTypePR {
+		ref, parseErr := instance.ParseGitHubURL(prURL)
+		if parseErr != nil || ref.Type != instance.GitHubRefTypePR {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("pr_url is not a recognizable GitHub PR URL: %v", parseErr))
 		}
@@ -506,7 +507,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		setErr := s.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
 			Caller:      domain.CallerOperatorPRAssociation,
 			Observed:    updated,
-			TriggeredBy: session.TriggeredByUser,
+			TriggeredBy: instance.TriggeredByUser,
 		}, backlogdto.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: domain.AttachSourceManual})
 		if setErr != nil {
 			if isTransitionDenial(setErr) {
@@ -570,7 +571,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 	archived, err := s.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
 		Caller:      domain.CallerOperatorArchiveRPC,
 		ItemID:      req.Msg.ItemId,
-		TriggeredBy: session.TriggeredByUser,
+		TriggeredBy: instance.TriggeredByUser,
 		BeforeCommit: func(ctx context.Context) error {
 			if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
 				s.commitAndPushItemWorktrees(ctx, sessions)
@@ -608,7 +609,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 	unarchived, err := s.storage.GatedUnarchive(ctx, backlogdto.TransitionRequest{
 		Caller:      domain.CallerOperatorUnarchiveRPC,
 		ItemID:      req.Msg.ItemId,
-		TriggeredBy: session.TriggeredByUser,
+		TriggeredBy: instance.TriggeredByUser,
 	})
 	if err != nil {
 		return nil, transitionConnectError(err, req.Msg.ItemId, "unarchive backlog item")
@@ -925,7 +926,7 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 	for _, is := range itemSessions {
 		// Ascending by CreatedAt (ListItemSessions' query order) — keep overwriting
 		// so this ends up holding the *most recent* work session.
-		if is.Role == session.SessionRoleWork {
+		if is.Role == instance.SessionRoleWork {
 			lastWorkSessionUUID = is.SessionUUID
 		}
 	}
@@ -1073,7 +1074,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
-	if services.TransitionActorFromContext(ctx) == session.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
+	if services.TransitionActorFromContext(ctx) == instance.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
 		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
 		s.storage.RecordManualNudgeForItem(ctx, req.Msg.ItemId, session.ManualNudgeStatusTransition)
 	}
@@ -1443,7 +1444,7 @@ func (s *BacklogService) OverrideVerdict(
 				ExpectedStatus:    currentItem.Status,
 				ExpectedUpdatedAt: &updatedAt,
 			},
-			TriggeredBy: session.TriggeredByUser,
+			TriggeredBy: instance.TriggeredByUser,
 			// The operator's required reason frees the verdict guards, as the
 			// verdict they just overrode would have blocked them.
 			OverrideReason: req.Msg.OverrideReason,
@@ -1536,7 +1537,7 @@ func (s *BacklogService) SubmitManualReview(
 	is, createErr := s.storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      req.Msg.ItemId,
 		SessionUUID: syntheticUUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 		AcSnapshot:  item.AcceptanceCriteria,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome:    overall,
@@ -1577,7 +1578,7 @@ func (s *BacklogService) SubmitManualReview(
 					ItemID:       req.Msg.ItemId,
 					To:           domain.BacklogStatusDone,
 					Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)},
-					TriggeredBy:  session.TriggeredByUser,
+					TriggeredBy:  instance.TriggeredByUser,
 					Guard:        &guard,
 				}); transErr != nil {
 					if isTransitionDenial(transErr) {

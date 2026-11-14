@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -35,9 +36,9 @@ func TestPortSessionHistory_UnresolvedAdapterPair_ReturnsSentinel(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{Title: "test-session"}
+			inst := &instance.Instance{Title: "test-session"}
 			err := PortSessionHistory(context.Background(), tt.old, tt.new_, inst)
-			if !errors.Is(err, ErrNoHistoryAdapter) {
+			if !errors.Is(err, instance.ErrNoHistoryAdapter) {
 				t.Fatalf("PortSessionHistory(%q, %q) = %v, want ErrNoHistoryAdapter", tt.old, tt.new_, err)
 			}
 		})
@@ -69,7 +70,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	workspace := "/home/test/myproject"
 
 	// Create Claude projects directory and mock transcript using ClaudeProjectDirName
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	err := os.MkdirAll(claudeProjectDir, 0700)
 	if err != nil {
 		t.Fatalf("failed to create claude projects dir: %v", err)
@@ -135,15 +136,12 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	f.Close()
 
 	// Mock Instance
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title: "test-session",
 		Path:  workspace,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: uuid,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: uuid,
+	})
 
 	// Run porting
 	ctx := context.Background()
@@ -248,7 +246,7 @@ func TestPortSessionHistory_ClaudeToOpencode(t *testing.T) {
 	uuid := "550e8400-e29b-41d4-a716-446655440001"
 	workspace := "/home/test/opencode_project"
 
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	err := os.MkdirAll(claudeProjectDir, 0700)
 	if err != nil {
 		t.Fatalf("failed to create claude projects dir: %v", err)
@@ -294,15 +292,12 @@ func TestPortSessionHistory_ClaudeToOpencode(t *testing.T) {
 	}
 	f.Close()
 
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title: "test-opencode-port",
 		Path:  workspace,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: uuid,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: uuid,
+	})
 
 	ctx := context.Background()
 	err = PortSessionHistory(ctx, "claude", "opencode", inst)
@@ -413,7 +408,7 @@ func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 	tf.Close()
 
 	// Mock Instance
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title: "test-session",
 		Path:  workspace,
 	}
@@ -427,7 +422,7 @@ func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 
 	// Assertions
 	// 1. Check Claude transcript file
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	claudeLogPath := filepath.Join(claudeProjectDir, uuid+".jsonl")
 	if _, err := os.Stat(claudeLogPath); os.IsNotExist(err) {
 		t.Fatalf("claude log file does not exist at %s", claudeLogPath)
@@ -489,7 +484,7 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	// inst.Path determines the Claude project dir via ClaudeProjectDirName.
 	// Copy the live file into the path the adapter will compute so it can be found.
 	instWorkspacePath := "/home/tstapler/Programming/stapler-squad"
-	tempProjectsDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(instWorkspacePath))
+	tempProjectsDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(instWorkspacePath))
 	if err := os.MkdirAll(tempProjectsDir, 0700); err != nil {
 		t.Fatalf("failed to create temp projects dir: %v", err)
 	}
@@ -511,15 +506,12 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 		t.Fatalf("failed to copy live log to temp: %v", err)
 	}
 
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title: "live-port-test",
 		Path:  instWorkspacePath,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: liveSessionUUID,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: liveSessionUUID,
+	})
 
 	err = PortSessionHistory(context.Background(), "claude", "agy", inst)
 	if err != nil {
@@ -619,15 +611,12 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	}
 
 	workspace := "/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/stapler-squad-transfer_18bc8392fbd12153"
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title: "live-port-test-agy",
 		Path:  workspace,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: liveSessionUUID,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: liveSessionUUID,
+	})
 
 	err = PortSessionHistory(context.Background(), "agy", "claude", inst)
 	if err != nil {
@@ -635,7 +624,7 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	}
 
 	// Assert Claude transcript is written using ClaudeProjectDirName
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	claudeLogPath := filepath.Join(claudeProjectDir, liveSessionUUID+".jsonl")
 
 	if _, err := os.Stat(claudeLogPath); os.IsNotExist(err) {
@@ -681,7 +670,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	workspace := "/home/test/schemaproject"
 
 	// Write a minimal Claude JSONL fixture.
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	if err := os.MkdirAll(claudeProjectDir, 0700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -701,13 +690,12 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	f.Close()
 
 	// Run the port.
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title:           "schema-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: uuid})
 	if err := portClaudeToAgy(inst); err != nil {
 		t.Fatalf("portClaudeToAgy: %v", err)
 	}
@@ -774,7 +762,7 @@ func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 	uuid := "770e8400-e29b-41d4-a716-446655440000"
 	workspace := "/home/test/secretproject"
 
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", instance.ClaudeProjectDirName(workspace))
 	if err := os.MkdirAll(claudeProjectDir, 0700); err != nil {
 		t.Fatalf("failed to create claude projects dir: %v", err)
 	}
@@ -805,13 +793,12 @@ func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 	f.Close()
 
 	ctx := context.Background()
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title:           "secret-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: uuid})
 
 	if err := PortSessionHistory(ctx, "claude", "agy", inst); err != nil {
 		t.Fatalf("PortSessionHistory failed: %v", err)

@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // BacklogDebugMutateHandler mutates BacklogItem rows directly for the e2e suite.
@@ -171,7 +172,7 @@ func (h *BacklogDebugMutateHandler) HandleTransition(w http.ResponseWriter, r *h
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.DebugForce(ctx, req.ItemID, domain.BacklogStatus(req.TargetStatus), session.TriggeredBySystem); err != nil {
+	if _, err := h.storage.DebugForce(ctx, req.ItemID, domain.BacklogStatus(req.TargetStatus), instance.TriggeredBySystem); err != nil {
 		log.Error("backlog debug mutate: transition failed", "err", err)
 		http.Error(w, "failed to transition backlog item: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -252,7 +253,7 @@ func (h *BacklogDebugMutateHandler) HandleArchive(w http.ResponseWriter, r *http
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.DebugForce(ctx, req.ItemID, domain.BacklogStatusArchived, session.TriggeredByUser); err != nil {
+	if _, err := h.storage.DebugForce(ctx, req.ItemID, domain.BacklogStatusArchived, instance.TriggeredByUser); err != nil {
 		log.Error("backlog debug mutate: archive failed", "err", err)
 		http.Error(w, "failed to archive backlog item: "+err.Error(), http.StatusInternalServerError)
 		return

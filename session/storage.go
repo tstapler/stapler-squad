@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -30,7 +31,7 @@ import (
 // Defining it here (alongside the concrete Storage) allows test fakes to be built without
 // depending on the full Storage implementation.
 type InstanceStore interface {
-	LoadInstances() ([]*Instance, error)
+	LoadInstances() ([]*instance.Instance, error)
 	// ListInstanceData returns raw persisted InstanceData without constructing Instance
 	// objects or spawning PTY processes. Use this for read-only existence/title checks
 	// where calling LoadInstances() would create unnecessary side effects.
@@ -39,8 +40,8 @@ type InstanceStore interface {
 	// matches id via an indexed WHERE clause, rather than ListInstanceData() plus a
 	// linear scan. Returns ErrInstanceDataNotFound when no match exists.
 	FindInstanceDataByID(id string) (*domain.InstanceData, error)
-	SaveInstances([]*Instance) error
-	AddInstance(*Instance) error
+	SaveInstances([]*instance.Instance) error
+	AddInstance(*instance.Instance) error
 	DeleteInstance(title string) error
 	UpdateInstanceLastUserResponse(title string, t time.Time) error
 	UpdateInstanceMetadata(currentTitle string, newTitle, category, note, workingDir *string) error
@@ -142,13 +143,13 @@ func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
 func (s *Storage) Repository() *EntRepository { return s.Repo }
 
 // SaveInstances upserts each started instance into the repository.
-func (s *Storage) SaveInstances(instances []*Instance) error {
+func (s *Storage) SaveInstances(instances []*instance.Instance) error {
 	return s.saveInstancesToRepo(instances)
 }
 
 // saveInstancesToRepo upserts each started instance into the repository.
 // The DB handles concurrent writers so no merging is required.
-func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
+func (s *Storage) saveInstancesToRepo(instances []*instance.Instance) error {
 	ctx := context.Background()
 	for _, inst := range instances {
 		if !inst.Started() {
@@ -162,9 +163,9 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 // saveInstanceToRepo upserts one started instance. It holds the instance's PR
 // persist lock across snapshotting and writing so a concurrent AttachPR persist
 // (which snapshots under the same lock) cannot land an older mirror after this save.
-func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
-	inst.prPersistMu.Lock()
-	defer inst.prPersistMu.Unlock()
+func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *instance.Instance) {
+	unlockPR := inst.LockPRPersist()
+	defer unlockPR()
 	data := inst.ToInstanceData()
 	log.Debug("SaveInstances: converting instance",
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
@@ -178,31 +179,30 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
 				return false
 			}
 		}
-		inst.clearPRPersistPending()
-		inst.terminalClearPending.Store(false)
+		inst.MarkPRPersisted()
 		return true
 	})
 }
 
 // SaveInstancesSync saves instances synchronously (same as SaveInstances for the repo backend).
-func (s *Storage) SaveInstancesSync(instances []*Instance) error {
+func (s *Storage) SaveInstancesSync(instances []*instance.Instance) error {
 	return s.saveInstancesToRepo(instances)
 }
 
 // LoadInstances loads the list of instances from the repository.
-func (s *Storage) LoadInstances() ([]*Instance, error) {
+func (s *Storage) LoadInstances() ([]*instance.Instance, error) {
 	ctx := context.Background()
 	dataSlice, err := s.Repo.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
 	s.hydrateSessionPRs(ctx, dataSlice)
-	instances := make([]*Instance, 0, len(dataSlice))
+	instances := make([]*instance.Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
 		// load (server startup) doesn't block on cold-restoring every dead
 		// session before the HTTP server can bind.
-		inst, err := FromInstanceDataDeferred(data)
+		inst, err := instance.FromInstanceDataDeferred(data)
 		if err != nil {
 			log.Warn("skipping instance from repository", "session", data.Title, "err", err)
 			continue
@@ -214,69 +214,81 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		instances = append(instances, inst)
 	}
 
-	// Bulk-load all session goals in one query (N+1 → 1) and apply to instances.
-	if client := s.GetEntClient(); client != nil && len(instances) > 0 {
-		uuids := make([]string, 0, len(instances))
-		for _, inst := range instances {
-			if inst.UUID != "" {
-				uuids = append(uuids, inst.UUID)
-			}
-		}
-		if len(uuids) > 0 {
-			goals, goalErr := client.SessionGoal.Query().
-				Where(sessiongoal.SessionUUIDIn(uuids...)).
-				All(ctx)
-			if goalErr != nil {
-				log.Warn("LoadInstances: failed to bulk-load session goals", "err", goalErr)
-			} else {
-				goalMap := make(map[string]*SessionGoalData, len(goals))
-				for _, g := range goals {
-					tasks, decodeErr := DecodeTasks(g.Tasks)
-					if decodeErr != nil {
-						log.Warn("LoadInstances: failed to decode tasks JSON", "session_uuid", g.SessionUUID, "err", decodeErr)
-						tasks = []TaskNode{}
-					}
-					goalMap[g.SessionUUID] = &SessionGoalData{
-						UUID:        g.ID.String(),
-						SessionUUID: g.SessionUUID,
-						Goal:        g.Goal,
-						Status:      g.Status,
-						Tasks:       tasks,
-						SetBy:       g.SetBy,
-						UpdatedAt:   g.UpdatedAt,
-					}
-				}
-				for _, inst := range instances {
-					if goal, ok := goalMap[inst.UUID]; ok {
-						inst.SetSessionGoalCached(goal)
-					}
-				}
-			}
-		}
-	}
-
-	// Bulk-load stored artifact blobs so the first render shows cached artifacts
-	// without waiting for ArtifactExtractor's startup walk to complete.
-	// Single bulk query replaces N per-session queries (M-4 fix).
-	if s.GetEntClient() != nil && len(instances) > 0 {
-		allArtifacts, artifErr := s.GetAllInstanceArtifacts()
-		if artifErr != nil {
-			log.Warn("LoadInstances: failed to bulk-load artifacts", "err", artifErr)
-		} else {
-			for _, inst := range instances {
-				raw := allArtifacts[inst.Title]
-				if raw == "" {
-					continue
-				}
-				var blob domain.SessionArtifactsBlob
-				if err := json.Unmarshal([]byte(raw), &blob); err == nil {
-					inst.Artifacts = &blob
-				}
-			}
-		}
-	}
+	s.applyBulkSessionGoals(ctx, instances)
+	s.applyBulkArtifacts(instances)
 
 	return instances, nil
+}
+
+// applyBulkSessionGoals bulk-loads all session goals in one query (N+1 -> 1)
+// and applies them to instances.
+func (s *Storage) applyBulkSessionGoals(ctx context.Context, instances []*instance.Instance) {
+	client := s.GetEntClient()
+	if client == nil || len(instances) == 0 {
+		return
+	}
+	uuids := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		if inst.UUID != "" {
+			uuids = append(uuids, inst.UUID)
+		}
+	}
+	if len(uuids) == 0 {
+		return
+	}
+	goals, goalErr := client.SessionGoal.Query().
+		Where(sessiongoal.SessionUUIDIn(uuids...)).
+		All(ctx)
+	if goalErr != nil {
+		log.Warn("LoadInstances: failed to bulk-load session goals", "err", goalErr)
+		return
+	}
+	goalMap := make(map[string]*instance.SessionGoalData, len(goals))
+	for _, g := range goals {
+		tasks, decodeErr := instance.DecodeTasks(g.Tasks)
+		if decodeErr != nil {
+			log.Warn("LoadInstances: failed to decode tasks JSON", "session_uuid", g.SessionUUID, "err", decodeErr)
+			tasks = []instance.TaskNode{}
+		}
+		goalMap[g.SessionUUID] = &instance.SessionGoalData{
+			UUID:        g.ID.String(),
+			SessionUUID: g.SessionUUID,
+			Goal:        g.Goal,
+			Status:      g.Status,
+			Tasks:       tasks,
+			SetBy:       g.SetBy,
+			UpdatedAt:   g.UpdatedAt,
+		}
+	}
+	for _, inst := range instances {
+		if goal, ok := goalMap[inst.UUID]; ok {
+			inst.SetSessionGoalCached(goal)
+		}
+	}
+}
+
+// applyBulkArtifacts bulk-loads stored artifact blobs so the first render shows
+// cached artifacts without waiting for ArtifactExtractor's startup walk.
+// Single bulk query replaces N per-session queries (M-4 fix).
+func (s *Storage) applyBulkArtifacts(instances []*instance.Instance) {
+	if s.GetEntClient() == nil || len(instances) == 0 {
+		return
+	}
+	allArtifacts, artifErr := s.GetAllInstanceArtifacts()
+	if artifErr != nil {
+		log.Warn("LoadInstances: failed to bulk-load artifacts", "err", artifErr)
+		return
+	}
+	for _, inst := range instances {
+		raw := allArtifacts[inst.Title]
+		if raw == "" {
+			continue
+		}
+		var blob domain.SessionArtifactsBlob
+		if err := json.Unmarshal([]byte(raw), &blob); err == nil {
+			inst.Artifacts = &blob
+		}
+	}
 }
 
 // hydrateSessionPRs attaches each session's PR links to its InstanceData before
@@ -465,7 +477,7 @@ func (s *Storage) DeleteInstance(title string) error {
 	s.saved.forget(title)
 	err := s.Repo.Delete(context.Background(), title)
 	s.saved.forget(title) // an in-flight save may have re-recorded the title before the row went away
-	clearLoggedMissingWorktree(title)
+	instance.ClearLoggedMissingWorktree(title)
 	return err
 }
 
@@ -476,7 +488,7 @@ var ErrTitleConflict = errors.New("session with this title already exists")
 
 // AddInstance adds a new instance to storage.
 // Unlike SaveInstances, this does not require instance.Started() to be true.
-func (s *Storage) AddInstance(instance *Instance) error {
+func (s *Storage) AddInstance(instance *instance.Instance) error {
 	data := instance.ToInstanceData()
 	ctx := context.Background()
 	s.saved.forget(data.Title)
@@ -527,7 +539,7 @@ func (s *Storage) CreateInstanceData(ctx context.Context, data domain.InstanceDa
 }
 
 // UpdateInstance updates an existing instance in storage.
-func (s *Storage) UpdateInstance(instance *Instance) error {
+func (s *Storage) UpdateInstance(instance *instance.Instance) error {
 	data := instance.ToInstanceData()
 	return s.writeRow(data.Title, func() error { return s.Repo.Update(context.Background(), data) })
 }
@@ -557,7 +569,7 @@ func (s *Storage) DeleteAllInstances() error {
 		if err := s.Repo.Delete(ctx, data.Title); err != nil {
 			log.Warn("failed to delete instance", "session", data.Title, "err", err)
 		}
-		clearLoggedMissingWorktree(data.Title)
+		instance.ClearLoggedMissingWorktree(data.Title)
 	}
 	return nil
 }
@@ -644,7 +656,7 @@ func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
 // AttachSessionPR writes one PR link, its state row (insert-if-absent) and the
 // session's legacy mirror columns in a single transaction, keyed by session uuid.
 // See EntRepository.AttachSessionPR for the error contract.
-func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror PRMirror) (domain.PRLinkResult, error) {
+func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror instance.PRMirror) (domain.PRLinkResult, error) {
 	res, err := s.Repo.AttachSessionPR(ctx, sessionUUID, ref, link, mirror)
 	if err == nil {
 		s.saved.reset() // the row changed behind the save fingerprints
@@ -654,7 +666,7 @@ func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref d
 
 // PersistPRMirror writes (or clears) the legacy scalar PR columns of one session.
 func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal bool) error {
-	err := s.Repo.PersistPRMirror(context.Background(), sessionUUID, PRMirror{URL: url, Number: number, Terminal: terminal})
+	err := s.Repo.PersistPRMirror(context.Background(), sessionUUID, instance.PRMirror{URL: url, Number: number, Terminal: terminal})
 	if err == nil {
 		s.saved.reset()
 	}
@@ -722,7 +734,7 @@ func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID strin
 }
 
 // ListPRMirrors returns the stored legacy PR columns by session uuid.
-func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error) {
+func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]instance.PRMirror, error) {
 	return s.Repo.ListPRMirrors(ctx)
 }
 
@@ -959,7 +971,7 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data backlogdto.Backlog
 	// absolute" validation instead of letting it reject the input as
 	// intended (see TestTriggerTriage_should_RejectRelativeRepoPath_Before_CreatingAnyItemSession).
 	if data.RepoPath != "" && filepath.IsAbs(data.RepoPath) {
-		if resolved, err := ResolveMainRepoRoot(data.RepoPath); err == nil {
+		if resolved, err := instance.ResolveMainRepoRoot(data.RepoPath); err == nil {
 			data.RepoPath = resolved
 		}
 	}
@@ -1217,7 +1229,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 	}
 	// The item-direct link is written for every item PR writer, flag on or off, in the
 	// same transaction as the pr_number write.
-	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, domain.BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
+	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, domain.BacklogStatusPRPending, prURL, prNumber, precondition, instance.TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
@@ -1505,7 +1517,7 @@ func (s *Storage) IsDiagnoseCaller(ctx context.Context, sessionUUID string) bool
 	if err != nil {
 		return false
 	}
-	return row.Role == SessionRoleDiagnose
+	return row.Role == instance.SessionRoleDiagnose
 }
 
 // ClaimDiagnoseNudgeAttempt atomically claims sessionUUID's one nudge-write
@@ -1739,7 +1751,7 @@ func (s *Storage) ResolveLatestWorkCommit(ctx context.Context, sessionUUID, repo
 	if wt.BranchName == "" {
 		return ""
 	}
-	sha, revErr := ResolveBranchTip(ctx, repoPath, wt.BranchName)
+	sha, revErr := instance.ResolveBranchTip(ctx, repoPath, wt.BranchName)
 	if revErr != nil {
 		log.Warn("[Storage] ResolveLatestWorkCommit: rev-parse failed", "branch", wt.BranchName, "repo_path", repoPath, "error", revErr)
 		return ""
@@ -1897,15 +1909,15 @@ func (s *Storage) GetDeletedItemSessionCostLedger(ctx context.Context) ([]backlo
 // If a goal already exists for the session, it is replaced.
 // workspaceKey, when non-empty, is stamped in the same upsert as the goal write (rather
 // than a separate follow-up UPDATE) so the two never diverge on a crash between writes.
-func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal string, status string, tasks []TaskNode, setBy string, workspaceKey string) (*SessionGoalData, error) {
+func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal string, status string, tasks []instance.TaskNode, setBy string, workspaceKey string) (*instance.SessionGoalData, error) {
 	client := s.GetEntClient()
 	if client == nil {
 		return nil, fmt.Errorf("goal storage not supported by this backend")
 	}
-	if err := validateTasks(tasks); err != nil {
+	if err := instance.ValidateTasks(tasks); err != nil {
 		return nil, err
 	}
-	tasksJSON, err := EncodeTasks(tasks)
+	tasksJSON, err := instance.EncodeTasks(tasks)
 	if err != nil {
 		return nil, err
 	}
@@ -1945,7 +1957,7 @@ func nonEmptyPtr(s string) *string {
 
 // GetSessionGoal retrieves the goal for a session by session UUID.
 // Returns ErrNotFound if no goal has been set for the session.
-func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*SessionGoalData, error) {
+func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*instance.SessionGoalData, error) {
 	client := s.GetEntClient()
 	if client == nil {
 		return nil, domain.ErrNotFound
@@ -1959,12 +1971,12 @@ func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*Sess
 		}
 		return nil, fmt.Errorf("failed to get session goal: %w", err)
 	}
-	tasks, decodeErr := DecodeTasks(g.Tasks)
+	tasks, decodeErr := instance.DecodeTasks(g.Tasks)
 	if decodeErr != nil {
 		log.Warn("GetSessionGoal: failed to decode tasks JSON", "session_uuid", sessionUUID, "err", decodeErr)
-		tasks = []TaskNode{}
+		tasks = []instance.TaskNode{}
 	}
-	return &SessionGoalData{
+	return &instance.SessionGoalData{
 		UUID:        g.ID.String(),
 		SessionUUID: g.SessionUUID,
 		Goal:        g.Goal,
@@ -1979,7 +1991,7 @@ func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*Sess
 // updates its status, and saves the goal back.
 // Returns ErrNotFound if no goal exists, or an error if task_id is not found in the tree.
 // The read-modify-write is wrapped in a transaction to prevent concurrent update races.
-func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID string, taskID string, newStatus string) (*SessionGoalData, error) {
+func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID string, taskID string, newStatus string) (*instance.SessionGoalData, error) {
 	client := s.GetEntClient()
 	if client == nil {
 		return nil, fmt.Errorf("goal storage not supported by this backend")
@@ -2005,19 +2017,19 @@ func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID strin
 		return nil, fmt.Errorf("failed to get session goal: %w", err)
 	}
 
-	existingTasks, decodeErr := DecodeTasks(g.Tasks)
+	existingTasks, decodeErr := instance.DecodeTasks(g.Tasks)
 	if decodeErr != nil {
 		log.Warn("UpdateSessionTaskStatus: failed to decode tasks JSON", "session_uuid", sessionUUID, "err", decodeErr)
-		existingTasks = []TaskNode{}
+		existingTasks = []instance.TaskNode{}
 	}
 
-	updated, found := findAndUpdateTask(existingTasks, taskID, newStatus)
+	updated, found := instance.FindAndUpdateTask(existingTasks, taskID, newStatus)
 	if !found {
 		err = fmt.Errorf("task %q not found in goal tree", taskID)
 		return nil, err
 	}
 
-	tasksJSON, encErr := EncodeTasks(updated)
+	tasksJSON, encErr := instance.EncodeTasks(updated)
 	if encErr != nil {
 		err = encErr
 		return nil, err
@@ -2036,7 +2048,7 @@ func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID strin
 		return nil, fmt.Errorf("failed to commit task status update: %w", err)
 	}
 
-	return &SessionGoalData{
+	return &instance.SessionGoalData{
 		UUID:        g.ID.String(),
 		SessionUUID: g.SessionUUID,
 		Goal:        g.Goal,

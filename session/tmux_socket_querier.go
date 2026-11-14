@@ -1,6 +1,9 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/tmux"
+import (
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/tmux"
+)
 
 // TmuxSocketQuerier abstracts read-only tmux server-socket queries so that
 // callers needing to know "which sessions are alive on this socket" or "is
@@ -45,8 +48,8 @@ func (realTmuxSocketQuerier) IsServerDown(serverSocket string) bool {
 // instances share one socket -- that assumption previously caused instances on
 // a non-default socket to falsely appear dead (or alive) based on whichever
 // socket happened to be picked, flapping their status on every reconcile pass.
-func groupInstancesBySocket(instances []*Instance) map[string][]*Instance {
-	bySocket := make(map[string][]*Instance, 1)
+func groupInstancesBySocket(instances []*instance.Instance) map[string][]*instance.Instance {
+	bySocket := make(map[string][]*instance.Instance, 1)
 	for _, inst := range instances {
 		bySocket[inst.TmuxServerSocket] = append(bySocket[inst.TmuxServerSocket], inst)
 	}

@@ -16,9 +16,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -193,10 +193,10 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	storage := &fakeJulesPollerStorage{
 		entries: []backlogdto.ItemSessionBacklogEntry{{
 			SessionUUID: "jules-sessions/xyz",
-			SessionRole: session.SessionRoleJulesWork,
+			SessionRole: instance.SessionRoleJulesWork,
 			ItemID:      "item-1",
 		}},
-		summary: backlogdto.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: session.SessionRoleJulesWork},
+		summary: backlogdto.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: instance.SessionRoleJulesWork},
 	}
 	pollerCfg := sessionjules.JulesSessionPollerConfig{
 		PollInterval:  5 * time.Millisecond,

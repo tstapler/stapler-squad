@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // guidance_ack_wiring.go binds the acknowledgement detector to this service's
@@ -55,7 +56,7 @@ func (s *SessionService) ackCapture(_ context.Context, sessionUUID string, under
 		return "", errAckSessionGone
 	}
 	if underLease {
-		lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
+		lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 		if !ok {
 			return "", errAckLeaseBusy
 		}

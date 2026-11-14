@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ReviewGateSpawner can create a short-lived review session for a backlog item.
@@ -23,7 +24,7 @@ import (
 type ReviewGateSpawner interface {
 	// SpawnReviewSession creates a one-shot review session for item using prompt.
 	// itemSessionID is the UUID of the work ItemSession being reviewed.
-	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
+	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error)
 }
 
 // AutoReopenSpawner can automatically reopen a backlog item for rework after a
@@ -464,7 +465,7 @@ func (r *ReviewGateRunner) Run(
 	if _, createErr := r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:        item.ID,
 		SessionUUID:   reviewInst.UUID,
-		SessionRole:   session.SessionRoleReview,
+		SessionRole:   instance.SessionRoleReview,
 		AcSnapshot:    is.AcSnapshot,
 		DiffTruncated: truncated,
 	}); createErr != nil {
@@ -532,7 +533,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 		// Checked/synced here, before any diff is computed, so a clean auto-sync never
 		// even reaches the reviewer, and a real conflict blocks with an explicit,
 		// actionable reason instead of silently producing a misleading diff.
-		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, domain.BounceMainBranch, git.DefaultBranchDriftThreshold); !ok {
+		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, git.ResolveDefaultBranchName(item.RepoPath), git.DefaultBranchDriftThreshold); !ok {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
 			return r.blockReviewWithTerminalVerdict(ctx, gateContext, item, is, "branch-drift", "branch drift", blockedSummary,
 				"Review blocked — branch drifted too far behind main",

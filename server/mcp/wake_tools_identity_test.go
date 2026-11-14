@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // toolOverHTTP runs a registered tool behind the real identity middleware, as
@@ -57,9 +58,9 @@ func TestWakeTools_should_RefuseForgedHeaderAndCrossSessionProof_WithZeroWrites(
 	}
 	attacks := map[string]map[string]string{
 		"forged uuid header, no proof":             {"X-Stapler-Session-UUID": "B"},
-		"garbage proof":                            {"X-Stapler-Session-UUID": "B", session.MCPProofHeader: "ssqmcp1.zzzz"},
-		"session A's valid proof with B's uuid":    {"X-Stapler-Session-UUID": "B", session.MCPProofHeader: proofs.HeaderValue("A")},
-		"valid proof of a session that is deleted": {"X-Stapler-Session-UUID": "gone", session.MCPProofHeader: proofs.HeaderValue("gone")},
+		"garbage proof":                            {"X-Stapler-Session-UUID": "B", instance.MCPProofHeader: "ssqmcp1.zzzz"},
+		"session A's valid proof with B's uuid":    {"X-Stapler-Session-UUID": "B", instance.MCPProofHeader: proofs.HeaderValue("A")},
+		"valid proof of a session that is deleted": {"X-Stapler-Session-UUID": "gone", instance.MCPProofHeader: proofs.HeaderValue("gone")},
 	}
 	for tool, a := range args {
 		for name, headers := range attacks {
@@ -88,7 +89,7 @@ func TestWakeTools_should_Proceed_When_ProofMatchesTheClaimedSession(t *testing.
 		return NewIdentityMiddleware(next, proofs.Verify, func(id string) bool { return id == "A" })
 	}
 	r := newToolRig(t)
-	headers := map[string]string{"X-Stapler-Session-UUID": "A", session.MCPProofHeader: proofs.HeaderValue("A")}
+	headers := map[string]string{"X-Stapler-Session-UUID": "A", instance.MCPProofHeader: proofs.HeaderValue("A")}
 
 	m := toolOverHTTP(t, r, mw, toolScheduleWake, headers, map[string]any{"trigger_type": "at", "message": "m", "delay_minutes": float64(5)})
 

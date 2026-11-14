@@ -8,7 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -24,7 +24,7 @@ import (
 // no input is forwarded before the hub subscriber's capability is upgraded.
 type upgradableWriter struct {
 	handler  *ConnectRPCWebSocketHandler
-	instance *session.Instance
+	instance *instance.Instance
 
 	mu         sync.Mutex
 	writer     services.TerminalWriter
@@ -40,7 +40,7 @@ type upgradableWriter struct {
 	votes      sync.WaitGroup // in-flight asynchronous resize votes
 }
 
-func (h *ConnectRPCWebSocketHandler) newUpgradableWriter(instance *session.Instance) *upgradableWriter {
+func (h *ConnectRPCWebSocketHandler) newUpgradableWriter(instance *instance.Instance) *upgradableWriter {
 	writer, upgradable := h.writerDecision(instance)
 	return &upgradableWriter{handler: h, instance: instance, writer: writer, upgradable: upgradable, done: make(chan struct{})}
 }
@@ -145,7 +145,7 @@ type writerUpgrade struct {
 	hub       *streamhub.StreamHub
 	id        streamhub.SubscriberID
 	writer    *upgradableWriter
-	instance  *session.Instance
+	instance  *instance.Instance
 	handshake *sessionv1.CurrentPaneRequest
 	bus       *events.EventBus                                                          // nil: upgrade only when a client frame next asks for the writer
 	vote      func(ctx context.Context, writer services.TerminalWriter, cols, rows int) // nil: cast it on hub
@@ -252,7 +252,7 @@ func (w writerUpgrade) upgradeOnSessionEvents(connCtx context.Context, ch <-chan
 	}
 }
 
-func isSessionChangeFor(ev *events.Event, instance *session.Instance) bool {
+func isSessionChangeFor(ev *events.Event, instance *instance.Instance) bool {
 	if ev.Type != events.EventSessionUpdated && ev.Type != events.EventSessionArchived {
 		return false
 	}

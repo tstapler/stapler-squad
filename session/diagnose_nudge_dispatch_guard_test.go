@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestClaimDiagnoseNudgeAttempt_SecondClaimFails proves the guard's core
@@ -23,7 +24,7 @@ import (
 func TestClaimDiagnoseNudgeAttempt_SecondClaimFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	storage, sessUUID := newItemSessionRoleFixture(t, SessionRoleDiagnose, "dup-write-guard item")
+	storage, sessUUID := newItemSessionRoleFixture(t, instance.SessionRoleDiagnose, "dup-write-guard item")
 
 	first, err := storage.ClaimDiagnoseNudgeAttempt(ctx, sessUUID)
 	require.NoError(t, err)
@@ -41,7 +42,7 @@ func TestClaimDiagnoseNudgeAttempt_SecondClaimFails(t *testing.T) {
 func TestClaimDiagnoseNudgeAttempt_NonDiagnoseRole_NeverClaims(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	storage, sessUUID := newItemSessionRoleFixture(t, SessionRoleWork, "work session item")
+	storage, sessUUID := newItemSessionRoleFixture(t, instance.SessionRoleWork, "work session item")
 
 	claimed, err := storage.ClaimDiagnoseNudgeAttempt(ctx, sessUUID)
 	require.NoError(t, err)
@@ -53,7 +54,7 @@ func TestClaimDiagnoseNudgeAttempt_NonDiagnoseRole_NeverClaims(t *testing.T) {
 // claim the same dispatched session's one nudge attempt must produce exactly
 // one winner, never zero and never more than one. Run with `go test -race`.
 func TestClaimDiagnoseNudgeAttempt_ExactlyOneWinsConcurrently(t *testing.T) {
-	storage, sessUUID := newItemSessionRoleFixture(t, SessionRoleDiagnose, "concurrent claim item")
+	storage, sessUUID := newItemSessionRoleFixture(t, instance.SessionRoleDiagnose, "concurrent claim item")
 
 	const concurrentAttempts = 10
 	var wg sync.WaitGroup

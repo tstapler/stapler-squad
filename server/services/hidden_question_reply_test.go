@@ -15,8 +15,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
@@ -31,7 +31,7 @@ type replyEnv struct {
 	*steerEnv
 	clock *gateTestClock
 	pm    *replyPM
-	inst  *session.Instance
+	inst  *instance.Instance
 	qid   string
 }
 
@@ -47,7 +47,7 @@ func newReplyEnv(t *testing.T) *replyEnv {
 	clock := newGateTestClock()
 	e.fix.svc.replyNow = clock.Now
 	e.fix.svc.replyPeerAddr = func(connect.AnyRequest) string { return replyLoopbackPeer }
-	e.fix.svc.replyControllerActive = func(*session.Instance) bool { return true }
+	e.fix.svc.replyControllerActive = func(*instance.Instance) bool { return true }
 	// Poll timers fire at once; the 5s send timeout never does (nothing sleeps).
 	e.fix.svc.replyAfter = func(d time.Duration) <-chan time.Time {
 		if d >= time.Second {
@@ -64,7 +64,7 @@ func newReplyEnv(t *testing.T) *replyEnv {
 	dialog := strings.ReplaceAll(replyDialogFixture(t, "question_single_select_3opts.txt"), "2. Green", "2. "+replyColorLabel)
 	pm := &replyPM{dialog: dialog, after: "● User answered Claude's questions\n❯ \n"}
 	pm.probe = func() int { return len(e.readLines()) }
-	inst := session.NewStartedInstanceForTest(t, "reply-hidden", pm)
+	inst := instance.NewStartedInstanceForTest(t, "reply-hidden", pm)
 	inst.UUID = "reply-hidden-uuid"
 	inst.Path = t.TempDir()
 	inst.Status = domain.Active
@@ -78,7 +78,7 @@ func newReplyEnv(t *testing.T) *replyEnv {
 	return re
 }
 
-func (e *replyEnv) register(inst *session.Instance, d panereply.QuestionDialog) string {
+func (e *replyEnv) register(inst *instance.Instance, d panereply.QuestionDialog) string {
 	id := NewQuestionID()
 	e.fix.svc.PendingQuestions().Register(PendingQuestion{
 		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: QuestionToken(d.Question),
@@ -118,7 +118,7 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, resp.Outcome)
 	assert.Equal(t, []string{"2"}, e.pm.writes(), "exactly one one-byte write, no Enter")
 	assert.Equal(t, []int{1}, e.pm.probed, "the fsynced requested line was durable when the digit was written, and the result line was not yet")
-	session.AssertLeaseFree(t, e.inst)
+	instance.AssertLeaseFree(t, e.inst)
 	assert.EqualValues(t, 1, e.counter("sent"))
 	_, still := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.False(t, still, "the answered question is consumed")
@@ -177,8 +177,8 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 		assert.Empty(t, vis.pm.writes())
 	})
 	t.Run("not waiting: no active controller, status value never consulted", func(t *testing.T) {
-		e.fix.svc.replyControllerActive = func(*session.Instance) bool { return false }
-		defer func() { e.fix.svc.replyControllerActive = func(*session.Instance) bool { return true } }()
+		e.fix.svc.replyControllerActive = func(*instance.Instance) bool { return false }
+		defer func() { e.fix.svc.replyControllerActive = func(*instance.Instance) bool { return true } }()
 		assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, e.replyOK("1", "r-nw").Outcome)
 		assert.Empty(t, e.pm.writes())
 	})
@@ -202,7 +202,7 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 	// Every refusal left the question claimable and released the lease.
 	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
-	session.AssertLeaseFree(t, e.inst)
+	instance.AssertLeaseFree(t, e.inst)
 }
 
 // T-RP-06: one ASCII digit 1..N, never N+1 or N+2.
@@ -312,7 +312,7 @@ func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWrite
 	assert.EqualValues(t, 1, e.counter("audit_failed"))
 	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok, "the claim was released: Retry is safe")
-	session.AssertLeaseFree(t, e.inst)
+	instance.AssertLeaseFree(t, e.inst)
 
 	// With the sink back, the same reply_id attempts the write again.
 	e.mfs.failMkdir = nil
@@ -356,7 +356,7 @@ func TestReply_ShouldReturnNotSentAndAllowRetry_WhenTheWriteProvablyWroteNothing
 // T-RP-78: a busy lease is NOT_SENT with zero writes and the claim released.
 func TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy(t *testing.T) {
 	e := newReplyEnv(t)
-	held, ok := e.inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+	held, ok := e.inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 	defer held.Release()
 
@@ -370,7 +370,7 @@ func TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy(t *testing.T
 // other session, whichever of uuid, title or tmux name the request carries.
 func TestReply_ShouldNeverWriteToTheWrongInstance_WhenTwoInstancesSharePath(t *testing.T) {
 	e := newReplyEnv(t)
-	vis := e.addSession("reply-sharing", false, "", func(i *session.Instance) { i.Path = e.inst.Path })
+	vis := e.addSession("reply-sharing", false, "", func(i *instance.Instance) { i.Path = e.inst.Path })
 	for _, id := range []string{vis.inst.UUID, vis.inst.Title} {
 		resp, err := e.reply(id, e.qid, "1", "r-share-"+id)
 		require.NoError(t, err)

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // T5.3.0: the caller-identity check is server-side (the MCP session credential in
@@ -95,7 +96,7 @@ func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNu
 	url := "https://github.com/tstapler/stapler-squad/pull/21"
 	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusPRPending, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	h := &backlogHandlers{storage: storage}
@@ -123,7 +124,7 @@ func pendingItemWithPR21(t *testing.T, storage *session.Storage, itemID string) 
 	n, url := 21, "https://github.com/tstapler/stapler-squad/pull/21"
 	_, err := storage.UpdateBacklogItem(context.Background(), itemID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), itemID, domain.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), itemID, domain.BacklogStatusPRPending, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 }
 

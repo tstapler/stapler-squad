@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ErrTransitionNotAllowed re-exports the domain sentinel next to the other
@@ -424,7 +425,7 @@ func (r *EntRepository) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUU
 	n, err := r.Client.ItemSession.Update().
 		Where(
 			itemsession.SessionUUID(sessionUUID),
-			itemsession.SessionRoleEQ(SessionRoleDiagnose),
+			itemsession.SessionRoleEQ(instance.SessionRoleDiagnose),
 			itemsession.DiagnoseNudgeAttemptedAtIsNil(),
 		).
 		SetDiagnoseNudgeAttemptedAt(time.Now()).
@@ -1009,10 +1010,10 @@ func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.SkipReviewGate(false),
-			backlogitem.Not(backlogitem.HasItemSessionsWith(itemsession.SessionRole(SessionRoleReview))),
+			backlogitem.Not(backlogitem.HasItemSessionsWith(itemsession.SessionRole(instance.SessionRoleReview))),
 		).
 		WithItemSessions(func(q *ent.ItemSessionQuery) {
-			q.Where(itemsession.SessionRole(SessionRoleWork)).
+			q.Where(itemsession.SessionRole(instance.SessionRoleWork)).
 				Order(ent.Desc(itemsession.FieldCreatedAt)).
 				Limit(1)
 		}).
@@ -1043,10 +1044,10 @@ func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.Backlo
 	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
-			backlogitem.HasItemSessionsWith(itemsession.SessionRole(SessionRoleReview)),
+			backlogitem.HasItemSessionsWith(itemsession.SessionRole(instance.SessionRoleReview)),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
-				itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork),
+				itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork),
 			)),
 		).
 		All(ctx)
@@ -1106,7 +1107,7 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 			),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
-				itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork),
+				itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork),
 			)),
 		).
 		All(ctx)
@@ -1513,11 +1514,11 @@ func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.Backl
 			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
-				itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork),
+				itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork),
 			),
 		).
 		WithItemSessions(func(q *ent.ItemSessionQuery) {
-			q.Where(itemsession.EndedAtIsNil(), itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork))
+			q.Where(itemsession.EndedAtIsNil(), itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork))
 		}).
 		All(ctx)
 	if err != nil {
@@ -1544,12 +1545,12 @@ func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Contex
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
-				itemsession.SessionRole(SessionRoleReview),
+				itemsession.SessionRole(instance.SessionRoleReview),
 				itemsession.HasReviewVerdict(),
 			),
 		).
 		WithItemSessions(func(q *ent.ItemSessionQuery) {
-			q.Where(itemsession.SessionRole(SessionRoleReview)).
+			q.Where(itemsession.SessionRole(instance.SessionRoleReview)).
 				WithReviewVerdict().
 				Order(ent.Desc(itemsession.FieldCreatedAt))
 		}).

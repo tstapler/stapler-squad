@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -37,12 +38,12 @@ func newTrackedWorkSession(t *testing.T, storage *session.Storage, itemID, repoP
 	inst := newTestInstance("tracked-work-session")
 	inst.UUID = uuid.New().String()
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -66,7 +67,7 @@ func newUntrackedWorkSessionWithBranchName(t *testing.T, storage *session.Storag
 	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: uuid.New().String(),
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 		BranchName:  branchName,
 	})
 	require.NoError(t, err)
@@ -328,9 +329,9 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -550,7 +551,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_StampedBranchLacksBackl
 
 	listener := NewBacklogLifecycleListener(storage)
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
-	stubMatchingPRByNumberFinder(listener, session.BacklogBranchPrefix+"stapler-squad-triage-error-observability")
+	stubMatchingPRByNumberFinder(listener, instance.BacklogBranchPrefix+"stapler-squad-triage-error-observability")
 
 	listener.ReconcilePRPending(ctx, storage.Repo)
 
@@ -574,7 +575,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives(t
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.New().String(),
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, is.ID, "7a2352ca98deb8e1a81c054fc1d743863fa8802e"))
@@ -690,7 +691,7 @@ func TestPROwnershipFor(t *testing.T) {
 
 	t.Run("bare stamped slug also yields its prefixed branch", func(t *testing.T) {
 		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "x"}, nil)
-		assert.Equal(t, []string{"x", session.BacklogBranchPrefix + "x"}, own.branches)
+		assert.Equal(t, []string{"x", instance.BacklogBranchPrefix + "x"}, own.branches)
 	})
 	t.Run("already-prefixed branch is not double-prefixed and dedupes the worktree copy", func(t *testing.T) {
 		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "backlog/x"}, &domain.GitWorktreeData{BranchName: "backlog/x"})

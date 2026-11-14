@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 	_ "modernc.org/sqlite" // SQLite driver, for the raw-connection schema surgery below
 )
 
@@ -1083,7 +1084,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 
 	_, err = repo.Client.ItemSession.Create().
 		SetSessionUUID(sharedSessionUUID).
-		SetSessionRole(SessionRoleTriage).
+		SetSessionRole(instance.SessionRoleTriage).
 		SetBacklogItemID(itemID).
 		SetCreatedAt(older).
 		Save(ctx)
@@ -1091,7 +1092,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 
 	_, err = repo.Client.ItemSession.Create().
 		SetSessionUUID(sharedSessionUUID).
-		SetSessionRole(SessionRoleWork).
+		SetSessionRole(instance.SessionRoleWork).
 		SetBacklogItemID(itemID).
 		SetCreatedAt(newer).
 		Save(ctx)
@@ -1107,8 +1108,8 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 		}
 	}
 	require.Len(t, matches, 2, "expected both rows for the shared session uuid")
-	assert.Equal(t, SessionRoleWork, matches[0].SessionRole, "newer row (session_role=work) must appear first")
-	assert.Equal(t, SessionRoleTriage, matches[1].SessionRole, "older row (session_role=triage) must appear second")
+	assert.Equal(t, instance.SessionRoleWork, matches[0].SessionRole, "newer row (session_role=work) must appear first")
+	assert.Equal(t, instance.SessionRoleTriage, matches[1].SessionRole, "older row (session_role=triage) must appear second")
 }
 
 // TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents is the
@@ -1142,7 +1143,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 			itemID:      itemID,
 			fromStatus:  string(domain.BacklogStatusIdea),
 			toStatus:    string(domain.BacklogStatusIdea),
-			triggeredBy: TriggeredBySystem,
+			triggeredBy: instance.TriggeredBySystem,
 			note:        fmt.Sprintf("retry #%d", i),
 		})
 	}
@@ -1173,7 +1174,7 @@ func newTestItemSessionForCost(t *testing.T, repo *EntRepository, ctx context.Co
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "cost-test-" + item.ID,
-		SessionRole: SessionRoleTriage,
+		SessionRole: instance.SessionRoleTriage,
 	})
 	require.NoError(t, err)
 	return is

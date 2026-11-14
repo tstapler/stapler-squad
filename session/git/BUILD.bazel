@@ -63,6 +63,7 @@ alias(
 go_test(
     name = "git_test",
     srcs = [
+        "default_branch_test.go",
         "diff_test.go",
         "drift_test.go",
         "gitwiring_test.go",

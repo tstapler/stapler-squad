@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func transitionDeniedRows(t *testing.T, svc *BacklogService, itemID string) []*sessionv1.StuckBacklogItem {
@@ -217,10 +218,10 @@ func TestSpawnPoints_should_SkipOnAnOpenDenialFromTheirStatusOnly(t *testing.T) 
 				case "open denial":
 					denOpenRowFrom(t, svc, itemID, tc.caller, tc.status, tc.to)
 				case "stale row":
-					_, err := svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusRefining, nil, session.TriggeredBySystem)
+					_, err := svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusRefining, nil, instance.TriggeredBySystem)
 					require.NoError(t, err)
 					denOpenRowFrom(t, svc, itemID, tc.caller, domain.BacklogStatusRefining, tc.to)
-					_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, tc.status, nil, session.TriggeredBySystem)
+					_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, tc.status, nil, instance.TriggeredBySystem)
 					require.NoError(t, err)
 				}
 				logs := svctest.CaptureLogs(t)
@@ -295,7 +296,7 @@ func denTriageSessionCount(t *testing.T, svc *BacklogService, itemID string) int
 	require.NoError(t, err)
 	n := 0
 	for _, s := range sessions {
-		if s.Role == string(session.SessionRoleTriage) {
+		if s.Role == string(instance.SessionRoleTriage) {
 			n++
 		}
 	}
@@ -303,7 +304,7 @@ func denTriageSessionCount(t *testing.T, svc *BacklogService, itemID string) int
 }
 
 func TestAutonomousTriageDenied_should_StayQuietAndFinishByItself_When_TheOperatorApproves(t *testing.T) {
-	f := newCharFixture(t, "denied-redrive", session.SessionRoleTriage, domain.BacklogStatusIdea)
+	f := newCharFixture(t, "denied-redrive", instance.SessionRoleTriage, domain.BacklogStatusIdea)
 	svc := NewBacklogService(f.storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	svc.SetHeadlessPool(&fakeHeadlessPool{})
 	bus := events.NewEventBus(64)
@@ -352,7 +353,7 @@ func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved
 	remove := h.blockWithGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	item := systemItemAt(t, svc, domain.BacklogStatusInProgress)
 	ctx := context.Background()
-	workIS, err := svc.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "ended-work", SessionRole: session.SessionRoleWork})
+	workIS, err := svc.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "ended-work", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, svc.storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
 	listener := backlog.NewBacklogLifecycleListener(svc.storage)
@@ -403,7 +404,7 @@ func TestWriterCallersDenied_should_ReportOnceAcrossManyTicks(t *testing.T) {
 
 			for range 5 {
 				_, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
-					Caller: tc.caller, ItemID: item.ID, To: tc.to, TriggeredBy: session.TriggeredBySystem,
+					Caller: tc.caller, ItemID: item.ID, To: tc.to, TriggeredBy: instance.TriggeredBySystem,
 				})
 				require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 			}

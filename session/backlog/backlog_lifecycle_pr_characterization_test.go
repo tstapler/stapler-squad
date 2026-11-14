@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -137,7 +138,7 @@ func TestStuckDetector_ShouldNotRaise_WhenNumberZeroButSetHasItemDirectPR(t *tes
 func TestStuckDetector_ShouldRaise_WhenNumberSetButSetEmptiedByDetach(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
-	s := f.session(session.SessionRoleWork)
+	s := f.session(instance.SessionRoleWork)
 	f.link(session.SessionPROwner(s), 30, domain.PRStateOpen)
 	f.detach(session.SessionPROwner(s), 30)
 	listener := NewBacklogLifecycleListener(f.storage)
@@ -164,9 +165,9 @@ func TestReconcileBouncingItems_ShouldHoldDone_WhenTrackedPRMergedButAnotherPROp
 			f.link(session.ItemPROwner(f.itemID), 172, domain.PRStateMerged)
 			f.link(session.ItemPROwner(f.itemID), 173, domain.PRStateOpen)
 			for i := 0; i < 3; i++ {
-				_, err = f.storage.RawTransitionBacklogItemStatus(ctx, f.itemID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
+				_, err = f.storage.RawTransitionBacklogItemStatus(ctx, f.itemID, domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 				require.NoError(t, err)
-				_, err = f.storage.RawTransitionBacklogItemStatus(ctx, f.itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+				_, err = f.storage.RawTransitionBacklogItemStatus(ctx, f.itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 				require.NoError(t, err)
 			}
 			listener := NewBacklogLifecycleListener(f.storage)

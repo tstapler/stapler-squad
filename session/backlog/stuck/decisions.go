@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Pure, DB-independent decision functions backing the stuck-item detectors in
@@ -347,7 +347,7 @@ func IsTestOnlyReworkCycle(fileListsByAttempt [][]string) bool {
 // session's commit range risks racing an in-flight write (see validation.md).
 func MostRecentCompletedWorkSession(sessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
 	for i := len(sessions) - 1; i >= 0; i-- {
-		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt != nil {
+		if sessions[i].Role == instance.SessionRoleWork && sessions[i].EndedAt != nil {
 			return &sessions[i]
 		}
 	}
@@ -393,7 +393,7 @@ const DefaultNoopDispatchThreshold = 3
 // isNoopWorkSession reports whether is is a finished work session that
 // produced no commits (nothing beyond its spawn-time base).
 func isNoopWorkSession(is backlogdto.ItemSessionSummary) bool {
-	if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
+	if is.Role != string(instance.SessionRoleWork) || is.EndedAt == nil {
 		return false
 	}
 	return is.CommitCountSinceSpawn == 0 && (is.LastCommitSha == "" || is.LastCommitSha == is.BaseCommitSha)
@@ -407,7 +407,7 @@ func ConsecutiveNoopWorkSessions(sessions []backlogdto.ItemSessionSummary) int {
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].CreatedAt.After(sorted[j].CreatedAt) })
 	n := 0
 	for _, is := range sorted {
-		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
+		if is.Role != string(instance.SessionRoleWork) || is.EndedAt == nil {
 			continue
 		}
 		if !isNoopWorkSession(is) {

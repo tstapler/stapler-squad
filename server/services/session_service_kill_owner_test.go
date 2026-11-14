@@ -12,8 +12,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -96,7 +96,7 @@ func deleteNonLiveSession(t *testing.T, title, uuid, marker string, markerErr er
 	}
 
 	svc := NewSessionService(svctest.CreateTestStorage(t), events.NewEventBus(100))
-	require.NoError(t, svc.storage.AddInstance(&session.Instance{
+	require.NoError(t, svc.storage.AddInstance(&instance.Instance{
 		Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))

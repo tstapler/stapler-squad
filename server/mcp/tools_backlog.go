@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
@@ -83,7 +84,7 @@ func callerSessionUUIDForAudit(ctx context.Context) string {
 // Used by post_backlog_update to resolve an explicit session_id param.
 // Delegates to findInstanceByIDInStore (tools_goal.go), the body shared with
 // goalHandlers.findInstanceByID rather than duplicated per handler struct.
-func (h *backlogHandlers) findInstanceByID(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func (h *backlogHandlers) findInstanceByID(sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	return findInstanceByIDInStore(h.store, sessionID)
 }
 
@@ -92,7 +93,7 @@ func (h *backlogHandlers) findInstanceByID(sessionID string) (*session.Instance,
 // lookup that must never fail the call. Delegates to
 // findInstanceByUUIDInStore (tools_goal.go), shared with
 // goalHandlers.findInstanceByUUID.
-func (h *backlogHandlers) findInstanceByUUID(uuid string) (*session.Instance, *mcpgo.CallToolResult) {
+func (h *backlogHandlers) findInstanceByUUID(uuid string) (*instance.Instance, *mcpgo.CallToolResult) {
 	return findInstanceByUUIDInStore(h.store, uuid)
 }
 
@@ -1214,7 +1215,7 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 // a liveness-dead owner is stale, not a conflict, so resuming crashed work isn't blocked.
 func activeWorkSessionOwner(sessions []backlogdto.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
 	for _, s := range sessions {
-		if s.Role != session.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
+		if s.Role != instance.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
 			continue
 		}
 		if liveCheck != nil && !liveCheck(s.SessionUUID) {
@@ -1529,7 +1530,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		reopen := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
 		_, reopenErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerMCPRequestReview, ItemID: itemID, Observed: item,
-			To: domain.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: session.TriggeredByAgent,
+			To: domain.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: instance.TriggeredByAgent,
 		})
 		if reopenErr != nil {
 			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
@@ -1544,7 +1545,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// Past a recovery reopen the item changed, so the gate re-reads it.
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
 	transitionReq := backlogdto.TransitionRequest{
-		Caller: domain.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+		Caller: domain.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: instance.TriggeredByAgent,
 	}
 	if !recoverFromReview {
 		transitionReq.Observed = item
@@ -1692,7 +1693,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	if errRes != nil {
 		return errRes, nil
 	}
-	if itemSession.Role != session.SessionRoleWork {
+	if itemSession.Role != instance.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a blocked item", itemSession.Role), ""), nil
 	}
 
@@ -1730,7 +1731,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
 		if _, transErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
-			TriggeredBy: session.TriggeredByAgent,
+			TriggeredBy: instance.TriggeredByAgent,
 		}); transErr != nil {
 			log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
 			if isTransitionDenied(transErr) {
@@ -1880,7 +1881,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	if errRes != nil {
 		return errRes, nil
 	}
-	if itemSession.Role != session.SessionRoleWork {
+	if itemSession.Role != instance.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may resume work on an item", itemSession.Role), ""), nil
 	}
 
@@ -1898,7 +1899,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady), Note: "resume_work"}
 	if _, transErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: domain.BacklogStatusInProgress, Precondition: precondition,
-		TriggeredBy: session.TriggeredByAgent,
+		TriggeredBy: instance.TriggeredByAgent,
 	}); transErr != nil {
 		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
 		if isTransitionDenied(transErr) {
@@ -2341,7 +2342,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	baseBranch, _ := args["base_branch"].(string)
 	notes, _ := args["notes"].(string)
 	category, _ := args["category"].(string)
-	if category != "" && !session.IsValidBacklogCategory(category) {
+	if category != "" && !instance.IsValidBacklogCategory(category) {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid category %q", category), ""), nil
 	}
 
@@ -2681,7 +2682,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
 	if _, archErr := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+		Caller: domain.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: instance.TriggeredByAgent,
 	}); archErr != nil {
 		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
 		if isTransitionDenied(archErr) {
@@ -2724,7 +2725,7 @@ func (h *backlogHandlers) linkedSessionLive(itemID string, is backlogdto.ItemSes
 		return true
 	}
 	switch is.Role {
-	case session.SessionRoleWork, session.SessionRoleReview, session.SessionRoleDiagnose, session.SessionRoleTriage:
+	case instance.SessionRoleWork, instance.SessionRoleReview, instance.SessionRoleDiagnose, instance.SessionRoleTriage:
 		return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
 	}
 	return true
@@ -2898,7 +2899,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 			itemUpdate.Priority = &priority
 		}
 	}
-	if itemCategory, ok := args["item_category"].(string); ok && itemCategory != "" && session.IsValidBacklogCategory(itemCategory) {
+	if itemCategory, ok := args["item_category"].(string); ok && itemCategory != "" && instance.IsValidBacklogCategory(itemCategory) {
 		itemUpdate.Category = &itemCategory
 	}
 
@@ -2947,7 +2948,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				incomingCriteria = append(incomingCriteria, domain.AcCriterion{Index: idx, Text: ac.Text, Status: domain.AcStatus(status)})
 			}
 
-			acJSON, mergeErr := session.MergeAcCriteria(existing, incomingCriteria)
+			acJSON, mergeErr := instance.MergeAcCriteria(existing, incomingCriteria)
 			if mergeErr != nil {
 				return errResult(ErrInvalidArgument, fmt.Sprintf("merge acceptance_criteria: %v", mergeErr), ""), nil
 			}

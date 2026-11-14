@@ -11,8 +11,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // recordingPRActions records which PR each GitHub action reaches.
@@ -45,7 +45,7 @@ func (f *recordingPRActions) GetPRDiff(_ context.Context, _ github.RepoRef, n in
 // prTargetService serves one instance holding the given PRs through a GitHubService.
 func prTargetService(t *testing.T, prs ...prSpec) (*GitHubService, *recordingPRActions) {
 	t.Helper()
-	inst := &session.Instance{Title: "multi", UUID: "uuid-multi", GitHubOwner: "acme", GitHubRepo: "app"}
+	inst := &instance.Instance{Title: "multi", UUID: "uuid-multi", GitHubOwner: "acme", GitHubRepo: "app"}
 	for i, p := range prs {
 		ref, err := domain.NewPRRef("", "acme", "app", p.number)
 		require.NoError(t, err)
@@ -55,7 +55,7 @@ func prTargetService(t *testing.T, prs ...prSpec) (*GitHubService, *recordingPRA
 	rec := &recordingPRActions{}
 	inst.SetPRActionClient(rec)
 	svc := NewGitHubService(nil)
-	svc.find = func(string) (*session.Instance, error) { return inst, nil }
+	svc.find = func(string) (*instance.Instance, error) { return inst, nil }
 	return svc, rec
 }
 
@@ -89,11 +89,11 @@ func TestResolveTargetPR_ShouldFailPrecondition_WhenUnsetSelectorAndNoPRs(t *tes
 
 func TestResolveTargetPR_ShouldFallBackToLegacyPR_WhenSessionHasNoLinks(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "legacy", UUID: "uuid-legacy", GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 7, GitHubPRURL: "https://github.com/acme/app/pull/7"}
+	inst := &instance.Instance{Title: "legacy", UUID: "uuid-legacy", GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 7, GitHubPRURL: "https://github.com/acme/app/pull/7"}
 	rec := &recordingPRActions{}
 	inst.SetPRActionClient(rec)
 	svc := NewGitHubService(nil)
-	svc.find = func(string) (*session.Instance, error) { return inst, nil }
+	svc.find = func(string) (*instance.Instance, error) { return inst, nil }
 
 	_, err := svc.ClosePR(context.Background(), connect.NewRequest(&sessionv1.ClosePRRequest{Id: "legacy"}))
 	require.NoError(t, err)

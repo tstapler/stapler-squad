@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func mustPRRef(t *testing.T, host, owner, repo string, n int) domain.PRRef {
@@ -18,7 +18,7 @@ func mustPRRef(t *testing.T, host, owner, repo string, n int) domain.PRRef {
 	return ref
 }
 
-func newLegacyTestPoller(client prGitHubClient, insts ...*session.Instance) *PRStatusPoller {
+func newLegacyTestPoller(client prGitHubClient, insts ...*instance.Instance) *PRStatusPoller {
 	poller := NewPRStatusPoller(nil)
 	poller.ghClient = client
 	poller.ctx = context.Background()

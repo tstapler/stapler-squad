@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- test fixtures / helpers -------------------------------------------------
@@ -22,15 +23,15 @@ func sr(sessionID string, score float32) *sessionv1.SearchResult {
 	return &sessionv1.SearchResult{SessionId: sessionID, Score: score}
 }
 
-func newInstance(t *testing.T, conversationUUID string, hidden bool, mainRepoPath string) *session.Instance {
+func newInstance(t *testing.T, conversationUUID string, hidden bool, mainRepoPath string) *instance.Instance {
 	t.Helper()
-	inst := &session.Instance{Hidden: hidden, MainRepoPath: mainRepoPath}
+	inst := &instance.Instance{Hidden: hidden, MainRepoPath: mainRepoPath}
 	inst.SetClaudeConversationUUID(conversationUUID)
 	return inst
 }
 
-func convMsg(role, content string, ts time.Time) session.ClaudeConversationMessage {
-	return session.ClaudeConversationMessage{Role: role, Content: content, Timestamp: ts}
+func convMsg(role, content string, ts time.Time) instance.ClaudeConversationMessage {
+	return instance.ClaudeConversationMessage{Role: role, Content: content, Timestamp: ts}
 }
 
 // testConvMsg is the compact fixture shape used by seedClaudeHome.
@@ -155,8 +156,8 @@ func TestGroupResultsBySession_ReturnsEmptySlice_When_InputEmpty(t *testing.T) {
 
 // --- contextWindowAndBookends -------------------------------------------------
 
-func makeMessages(n int) []session.ClaudeConversationMessage {
-	msgs := make([]session.ClaudeConversationMessage, n)
+func makeMessages(n int) []instance.ClaudeConversationMessage {
+	msgs := make([]instance.ClaudeConversationMessage, n)
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range msgs {
 		msgs[i] = convMsg("user", "msg", base.Add(time.Duration(i)*time.Minute))
@@ -214,7 +215,7 @@ func TestContextWindowAndBookends_EmptySessionReturnsNil(t *testing.T) {
 func TestFilterAutomationSessions_ExcludesSessionsWithHiddenTrue(t *testing.T) {
 	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("c9d2e611", 1.0)}
-	instances := []*session.Instance{newInstance(t, "c9d2e611", true, "")}
+	instances := []*instance.Instance{newInstance(t, "c9d2e611", true, "")}
 
 	got := filterAutomationSessions(results, instances)
 
@@ -234,7 +235,7 @@ func TestFilterAutomationSessions_KeepsSessionsWithNoLiveInstanceMatch(t *testin
 func TestFilterAutomationSessions_KeepsSessionsWithHiddenFalse(t *testing.T) {
 	t.Parallel()
 	results := []*sessionv1.SearchResult{sr("s1", 1.0)}
-	instances := []*session.Instance{newInstance(t, "s1", false, "")}
+	instances := []*instance.Instance{newInstance(t, "s1", false, "")}
 
 	got := filterAutomationSessions(results, instances)
 
@@ -246,7 +247,7 @@ func TestFilterAutomationSessions_KeepsAutonomousModeSessionsThatAreNotHidden(t 
 	results := []*sessionv1.SearchResult{sr("e5f4a833", 1.0)}
 	inst := newInstance(t, "e5f4a833", false, "")
 	inst.AutonomousMode = true
-	instances := []*session.Instance{inst}
+	instances := []*instance.Instance{inst}
 
 	got := filterAutomationSessions(results, instances)
 
@@ -258,7 +259,7 @@ func TestFilterAutomationSessions_KeepsAutonomousModeSessionsThatAreNotHidden(t 
 func TestFilterHistoryEntriesByAutomation_ExcludesEntriesWithHiddenTrue(t *testing.T) {
 	t.Parallel()
 	entries := []session.ClaudeHistoryEntry{{ID: "c9d2e611"}}
-	instances := []*session.Instance{newInstance(t, "c9d2e611", true, "")}
+	instances := []*instance.Instance{newInstance(t, "c9d2e611", true, "")}
 
 	got := filterHistoryEntriesByAutomation(entries, instances)
 
@@ -307,7 +308,7 @@ func TestFilterByProject_ResolvesWorktreePathViaLiveInstanceMainRepoPath(t *test
 	results := []*sessionv1.SearchResult{
 		{SessionId: "g2h3i4j5", Project: "/home/tstapler/.stapler-squad/worktrees/stapler-squad-abc123"},
 	}
-	instances := []*session.Instance{
+	instances := []*instance.Instance{
 		newInstance(t, "g2h3i4j5", false, "/home/tstapler/code/github.com/tstapler/stapler-squad"),
 	}
 

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -27,7 +28,7 @@ import (
 // supports unary and server-streaming RPCs.
 func TestWaitForTerminalResume_Cancelled(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Status: domain.Active}
+	inst := &instance.Instance{Status: domain.Active}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, waitForTerminalResume(ctx, inst), context.Canceled)
@@ -35,7 +36,7 @@ func TestWaitForTerminalResume_Cancelled(t *testing.T) {
 
 func TestWaitForTerminalResume_FailedStartup(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Status: domain.Hibernated}
+	inst := &instance.Instance{Status: domain.Hibernated}
 	require.ErrorContains(t, waitForTerminalResume(context.Background(), inst), "session startup failed")
 }
 
@@ -78,7 +79,7 @@ func newBidiStreamTestServer(t *testing.T) (*SessionService, *httptest.Server) {
 func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	svc, srv := newBidiStreamTestServer(t)
 
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)

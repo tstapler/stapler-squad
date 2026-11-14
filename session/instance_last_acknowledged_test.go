@@ -2,6 +2,7 @@ package session
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 	"time"
 )
@@ -15,7 +16,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 	now := time.Now()
 	lastAck := now.Add(-1 * time.Hour) // 1 hour ago
 
-	instance := &Instance{
+	inst := &instance.Instance{
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
@@ -31,7 +32,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 	}
 
 	// Convert to InstanceData (serialization)
-	data := instance.ToInstanceData()
+	data := inst.ToInstanceData()
 
 	// Verify LastAcknowledged is in the serialized data
 	if data.LastAcknowledged.IsZero() {
@@ -44,7 +45,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 	}
 
 	// Convert back from InstanceData (deserialization)
-	restoredInstance, err := FromInstanceData(data)
+	restoredInstance, err := instance.FromInstanceData(data)
 	if err != nil {
 		t.Fatalf("Failed to restore instance from data: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 
-	instance := &Instance{
+	inst := &instance.Instance{
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
@@ -84,8 +85,8 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 	}
 
 	// Convert to InstanceData and back
-	data := instance.ToInstanceData()
-	restoredInstance, err := FromInstanceData(data)
+	data := inst.ToInstanceData()
+	restoredInstance, err := instance.FromInstanceData(data)
 	if err != nil {
 		t.Fatalf("Failed to restore instance from data: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			instance := &Instance{
+			inst := &instance.Instance{
 				Title:  "Test Instance",
 				Path:   "/path/to/repo",
 				Branch: "test-branch",
@@ -161,7 +162,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 			// Review queue logic: session appears if LastAcknowledged is before LastMeaningfulOutput
 			// or if LastAcknowledged is zero (never dismissed)
 			shouldAppear := tc.lastAcknowledged.IsZero() ||
-				tc.lastAcknowledged.Before(instance.LastMeaningfulOutput)
+				tc.lastAcknowledged.Before(inst.LastMeaningfulOutput)
 
 			if shouldAppear != tc.shouldBeInQueue {
 				t.Errorf("%s: Expected shouldBeInQueue=%v, got %v",

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -34,7 +35,7 @@ func checkPTYAvailable(t *testing.T) {
 }
 
 // T-COMPILE-3: compile-time check that *NativeProcessManager satisfies ProcessManager.
-var _ ProcessManager = (*NativeProcessManager)(nil)
+var _ instance.ProcessManager = (*NativeProcessManager)(nil)
 
 // TestNativeProcessManager_ImplementsProcessManager documents the compile-time check.
 func TestNativeProcessManager_ImplementsProcessManager(t *testing.T) {
@@ -48,7 +49,7 @@ func TestNativeProcessManager_ImplementsProcessManager(t *testing.T) {
 // T-UNIT-10: GetSessionIdentifier returns the stable session name from construction.
 func TestNativeProcessManager_GetSessionIdentifier_IsStable(t *testing.T) {
 	t.Parallel()
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "my-stable-session",
 		Program:     "bash",
 	})
@@ -64,7 +65,7 @@ func TestNativeProcessManager_StartAllocatesPTY(t *testing.T) {
 		t.Skip("requires PTY allocation")
 	}
 	checkPTYAvailable(t)
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "test-pty",
 		Program:     "bash",
 		Args:        []string{"-c", "sleep 60"},
@@ -90,7 +91,7 @@ func TestNativeProcessManager_CloseStopsRestartLoop(t *testing.T) {
 	checkPTYAvailable(t)
 	baseline := runtime.NumGoroutine()
 
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "test-close",
 		Program:     "bash",
 		Args:        []string{"-c", "sleep 60"},
@@ -117,7 +118,7 @@ func TestNativeProcessManagerRestartsAfterKill(t *testing.T) {
 		t.Skip("requires process supervision; takes ~2s")
 	}
 	checkPTYAvailable(t)
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "test-restart",
 		Program:     "bash",
 		Args:        []string{"-c", "echo alive; sleep 60"},
@@ -160,7 +161,7 @@ func TestNativeProcessManager_IsAliveAfterStart(t *testing.T) {
 		t.Skip("integration: requires PTY")
 	}
 	checkPTYAvailable(t)
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "integration-test",
 		Program:     "bash",
 		Args:        []string{"-i"},
@@ -185,7 +186,7 @@ func TestNativeProcessManager_StartAfterClose_Restarts(t *testing.T) {
 		t.Skip("requires PTY allocation")
 	}
 	checkPTYAvailable(t)
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "test-restart-after-close",
 		Program:     "bash",
 		Args:        []string{"-c", "sleep 60"},
@@ -214,7 +215,7 @@ func TestNativeProcessManager_GetCurrentWorkingDirectory_ReturnsStartDir(t *test
 		t.Skip("requires PTY allocation")
 	}
 	checkPTYAvailable(t)
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "test-cwd",
 		Program:     "bash",
 		Args:        []string{"-c", "sleep 60"},
@@ -235,7 +236,7 @@ func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
 		t.Skip("requires PTY allocation")
 	}
 	checkPTYAvailable(t)
-	mgr := NewNativeProcessManager(ProcessManagerOptions{
+	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "test-fanout",
 		Program:     "bash",
 		Args:        []string{"-i"},
@@ -270,7 +271,7 @@ func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
 func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testing.T) {
 	t.Parallel()
 
-	pm, err := NewProcessManager(context.Background(), domain.BackendNative, ProcessManagerOptions{
+	pm, err := NewProcessManager(context.Background(), domain.BackendNative, instance.ProcessManagerOptions{
 		SessionName: "test-native",
 	})
 	require.NoError(t, err)

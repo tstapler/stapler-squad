@@ -10,7 +10,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -92,10 +92,10 @@ func TestSetStreamHubSessionOverride_SetsAndClears(t *testing.T) {
 // including a non-default TmuxPrefix, which the no-instance fallback path
 // alone cannot get right.
 func TestSetStreamHubSessionOverride_HonorsCustomTmuxPrefix(t *testing.T) {
-	inst := &session.Instance{Title: "my-session", TmuxPrefix: "custom_"}
+	inst := &instance.Instance{Title: "my-session", TmuxPrefix: "custom_"}
 	s := NewStreamHubRolloutService(nil)
 	svctest.WithIsolatedStateDir(t)
-	s.findInstance = func(title string) *session.Instance {
+	s.findInstance = func(title string) *instance.Instance {
 		if title == "my-session" {
 			return inst
 		}

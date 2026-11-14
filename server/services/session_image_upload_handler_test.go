@@ -15,15 +15,16 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeInstanceStore is a minimal InstanceStore stub for upload handler tests.
 type fakeInstanceStore struct {
-	instances []*session.Instance
+	instances []*instance.Instance
 	loadErr   error
 }
 
-func (f *fakeInstanceStore) LoadInstances() ([]*session.Instance, error) {
+func (f *fakeInstanceStore) LoadInstances() ([]*instance.Instance, error) {
 	return f.instances, f.loadErr
 }
 
@@ -41,9 +42,9 @@ func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceDat
 	return nil, session.ErrInstanceDataNotFound
 }
 
-func (f *fakeInstanceStore) SaveInstances([]*session.Instance) error { return nil }
+func (f *fakeInstanceStore) SaveInstances([]*instance.Instance) error { return nil }
 
-func (f *fakeInstanceStore) AddInstance(*session.Instance) error { return nil }
+func (f *fakeInstanceStore) AddInstance(*instance.Instance) error { return nil }
 
 func (f *fakeInstanceStore) DeleteInstance(_ string) error { return nil }
 
@@ -112,11 +113,11 @@ func webPMagic() []byte {
 func fixtureStore(t *testing.T) (*fakeInstanceStore, string) {
 	t.Helper()
 	dir := t.TempDir()
-	inst := &session.Instance{}
+	inst := &instance.Instance{}
 	inst.UUID = "session-123"
 	inst.Title = "test-session"
 	inst.Path = dir
-	return &fakeInstanceStore{instances: []*session.Instance{inst}}, dir
+	return &fakeInstanceStore{instances: []*instance.Instance{inst}}, dir
 }
 
 // ── BT-01: JPEG success ──────────────────────────────────────────────────────
@@ -372,11 +373,11 @@ func TestSessionImageUpload_PathTraversalFilename(t *testing.T) {
 
 func TestSessionImageUpload_SessionNoPath(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{}
+	inst := &instance.Instance{}
 	inst.UUID = "session-nopath"
 	inst.Title = "no-path-session"
 	inst.Path = ""
-	store := &fakeInstanceStore{instances: []*session.Instance{inst}}
+	store := &fakeInstanceStore{instances: []*instance.Instance{inst}}
 	h := NewSessionImageUploadHandler(store, nil)
 
 	req := buildUploadRequest(t, "session-nopath", "photo.jpg", jpegMagic())
@@ -395,11 +396,11 @@ func TestSessionImageUpload_SessionNoPath(t *testing.T) {
 
 func TestSessionImageUpload_SessionPathMissingOnDisk(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{}
+	inst := &instance.Instance{}
 	inst.UUID = "session-badpath"
 	inst.Title = "bad-path-session"
 	inst.Path = "/tmp/nonexistent-stapler-test-dir-xyz"
-	store := &fakeInstanceStore{instances: []*session.Instance{inst}}
+	store := &fakeInstanceStore{instances: []*instance.Instance{inst}}
 	h := NewSessionImageUploadHandler(store, nil)
 
 	req := buildUploadRequest(t, "session-badpath", "photo.jpg", jpegMagic())

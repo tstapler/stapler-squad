@@ -4,16 +4,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -45,231 +46,28 @@ func (m *fakeLivenessProcessManager) RestoreWithWorkDir(dir string) error {
 	return m.stuckDialogProcessManager.RestoreWithWorkDir(dir)
 }
 
-func TestBackoffDelay_should_DoubleEachAttempt_When_BelowMaxDelayCap(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		attempt int
-		want    time.Duration
-	}{
-		{0, 10 * time.Second},
-		{1, 20 * time.Second},
-		{2, 40 * time.Second},
-	}
-	for _, tc := range cases {
-		got := backoffDelay(tc.attempt, 10*time.Second, 300*time.Second, 0)
-		if got != tc.want {
-			t.Errorf("backoffDelay(%d, 10s, 300s, 0) = %v, want %v", tc.attempt, got, tc.want)
-		}
-	}
-}
-
-func TestBackoffDelay_should_CapAtMaxDelay_When_AttemptCountCausesShiftOverflow(t *testing.T) {
-	t.Parallel()
-	cases := []int{10, 63, 64, 1000}
-	for _, attempt := range cases {
-		got := backoffDelay(attempt, 10*time.Second, 300*time.Second, 0)
-		if got != 300*time.Second {
-			t.Errorf("backoffDelay(%d, 10s, 300s, 0) = %v, want exactly 300s (cap boundary, not overflowed/negative)", attempt, got)
-		}
-		if got < 0 {
-			t.Errorf("backoffDelay(%d, ...) returned negative duration %v", attempt, got)
-		}
-	}
-}
-
-func TestBackoffDelay_should_ApplyFloor_When_InitialDelayIsZero(t *testing.T) {
-	t.Parallel()
-	// AC7's default policy keeps InitialDelaySeconds at 0; without a floor,
-	// 0*2^0 stays 0 and same-tick shared-cause failures would restart in
-	// lockstep even with jitter (pre-mortem Failure #1).
-	got := backoffDelay(0, 0, 300*time.Second, 0)
-	if got != minAttemptZeroFloor {
-		t.Errorf("backoffDelay(0, 0, 300s, 0) = %v, want the minAttemptZeroFloor %v", got, minAttemptZeroFloor)
-	}
-}
-
-func TestBackoffDelay_should_VaryRunToRun_When_JitterFractionNonzero(t *testing.T) {
-	t.Parallel()
-	seen := map[time.Duration]bool{}
-	for range 50 {
-		d := backoffDelay(2, 10*time.Second, 300*time.Second, defaultJitterFraction)
-		if d < 0 {
-			t.Fatalf("backoffDelay returned negative duration %v", d)
-		}
-		upper := time.Duration(float64(300*time.Second) * (1 + defaultJitterFraction))
-		if d > upper {
-			t.Fatalf("backoffDelay = %v exceeds max*(1+jitterFraction) = %v", d, upper)
-		}
-		seen[d] = true
-	}
-	if len(seen) < 2 {
-		t.Error("expected backoffDelay with nonzero jitterFraction to vary run-to-run, got identical values every time — jitter is not actually being applied at this call site")
-	}
-}
-
 func TestClassifyFailureReason_should_ReturnTmuxExited_When_ProcessManagerNotAlive(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "t", processManager: &fakeLivenessProcessManager{alive: false}}
-	if got := classifyFailureReason(inst); got != "tmux_exited" {
+	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
+	if got := instance.ClassifyFailureReason(inst); got != "tmux_exited" {
 		t.Errorf("classifyFailureReason = %q, want tmux_exited", got)
 	}
 }
 
 func TestClassifyFailureReason_should_ReturnCrashed_When_ProcessManagerAlive(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "t", processManager: &fakeLivenessProcessManager{alive: true}}
-	if got := classifyFailureReason(inst); got != "crashed" {
+	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
+	if got := instance.ClassifyFailureReason(inst); got != "crashed" {
 		t.Errorf("classifyFailureReason = %q, want crashed", got)
-	}
-}
-
-func TestEvaluateSessionRetry_should_ReturnNotEligible_When_ReasonAbsentFromRetryOn(t *testing.T) {
-	t.Parallel()
-	rs := domain.RetryState{RetryAttempt: 2, RetryMaxAttempts: 3}
-	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed"}}
-	now := time.Now()
-	bootTime := now.Add(-time.Hour) // long past any restart-grace window
-
-	got := evaluateSessionRetry(rs, policy, "tmux_exited", now, bootTime)
-	if got != retryDecisionNotEligible {
-		t.Errorf("evaluateSessionRetry(...) = %v, want notEligible (AC2: tmux_exited absent from retry_on)", got)
-	}
-}
-
-func TestEvaluateSessionRetry_should_ReturnExhausted_When_AttemptAtCap(t *testing.T) {
-	t.Parallel()
-	rs := domain.RetryState{RetryAttempt: 3, RetryMaxAttempts: 3}
-	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed"}}
-	now := time.Now()
-	bootTime := now.Add(-time.Hour)
-
-	got := evaluateSessionRetry(rs, policy, "crashed", now, bootTime)
-	if got != retryDecisionExhausted {
-		t.Errorf("evaluateSessionRetry(...) = %v, want exhausted (AC1's terminal transition)", got)
-	}
-}
-
-func TestEvaluateSessionRetry_should_ReturnScheduled_When_BelowCapAndEligible(t *testing.T) {
-	t.Parallel()
-	rs := domain.RetryState{RetryAttempt: 1, RetryMaxAttempts: 3}
-	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed"}}
-	now := time.Now()
-	bootTime := now.Add(-time.Hour)
-
-	got := evaluateSessionRetry(rs, policy, "crashed", now, bootTime)
-	if got != retryDecisionScheduled {
-		t.Errorf("evaluateSessionRetry(...) = %v, want scheduled", got)
-	}
-}
-
-func TestEvaluateSessionRetry_should_ReturnRestartGrace_When_TmuxExitedWithinBootWindow(t *testing.T) {
-	t.Parallel()
-	rs := domain.RetryState{RetryAttempt: 0, RetryMaxAttempts: 1}
-	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
-	bootTime := time.Now()
-	now := bootTime.Add(5 * time.Second)
-
-	got := evaluateSessionRetry(rs, policy, "tmux_exited", now, bootTime)
-	if got != retryDecisionRestartGrace {
-		t.Errorf("evaluateSessionRetry(...) = %v, want restartGrace", got)
-	}
-}
-
-func TestEvaluateSessionRetry_should_ReturnNotEligible_When_PolicyDisabled(t *testing.T) {
-	t.Parallel()
-	rs := domain.RetryState{RetryAttempt: 0, RetryMaxAttempts: 3}
-	policy := RetryPolicy{Enabled: false, RetryOn: []string{"crashed"}}
-	now := time.Now()
-
-	got := evaluateSessionRetry(rs, policy, "crashed", now, now.Add(-time.Hour))
-	if got != retryDecisionNotEligible {
-		t.Errorf("evaluateSessionRetry(...) = %v, want notEligible when policy disabled", got)
-	}
-}
-
-func TestResolveRetryPolicy_should_PreferOverride_When_PerSessionOverrideSet(t *testing.T) {
-	t.Parallel()
-	global := config.RetryPolicyConfig{MaxAttempts: 1}
-	override := &config.RetryPolicyConfig{MaxAttempts: 5}
-
-	got := resolveRetryPolicy(global, override)
-	if got.MaxAttempts != 5 {
-		t.Errorf("MaxAttempts = %d, want 5 (override wins)", got.MaxAttempts)
-	}
-}
-
-func TestResolveRetryPolicy_should_FallBackToGlobal_When_OverrideNil(t *testing.T) {
-	t.Parallel()
-	global := config.RetryPolicyConfig{MaxAttempts: 2}
-
-	got := resolveRetryPolicy(global, nil)
-	if got.MaxAttempts != 2 {
-		t.Errorf("MaxAttempts = %d, want 2 (inherited from global)", got.MaxAttempts)
-	}
-}
-
-func TestResolveRetryPolicy_should_PreferPerFieldOverride_When_OnlySomeFieldsSet(t *testing.T) {
-	t.Parallel()
-	// A narrowed global RetryOn plus an override that only sets MaxAttempts
-	// must NOT silently widen RetryOn back to the all-three fallback that
-	// RetryOnOrDefault() would produce from an empty override field taken in
-	// isolation (architecture-review.md Concerns / adversarial-review.md
-	// Blocker 4).
-	global := config.RetryPolicyConfig{RetryOn: []string{"crashed"}, MaxAttempts: 1}
-	override := &config.RetryPolicyConfig{MaxAttempts: 5}
-
-	got := resolveRetryPolicy(global, override)
-	if got.MaxAttempts != 5 {
-		t.Errorf("MaxAttempts = %d, want 5", got.MaxAttempts)
-	}
-	if len(got.RetryOn) != 1 || got.RetryOn[0] != "crashed" {
-		t.Errorf("RetryOn = %v, want [crashed] (must not widen to the all-three fallback)", got.RetryOn)
-	}
-}
-
-func TestResolveRetryPolicy_should_FallBackToGlobal_When_OverrideRetryOnIsAllUnknownReasons(t *testing.T) {
-	t.Parallel()
-	// A narrowed global RetryOn plus an override RetryOn made entirely of
-	// typo'd/unknown reasons must fall back to the resolved *global* value,
-	// not RetryOnOrDefault()'s own empty-after-filter fallback to all three --
-	// that would silently widen a deliberately narrow override.
-	global := config.RetryPolicyConfig{RetryOn: []string{"crashed"}}
-	override := &config.RetryPolicyConfig{RetryOn: []string{"totally-bogus-reason"}}
-
-	got := resolveRetryPolicy(global, override)
-	if len(got.RetryOn) != 1 || got.RetryOn[0] != "crashed" {
-		t.Errorf("RetryOn = %v, want [crashed] (fall back to global, not widen to all three)", got.RetryOn)
-	}
-}
-
-func TestRetryExhausted_should_ReturnTrue_When_AttemptAtOrAboveMax(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t"}
-	inst.RetryAttempt = 2
-	inst.RetryMaxAttempts = 2
-	if !inst.retryExhausted() {
-		t.Error("retryExhausted() = false, want true when RetryAttempt >= RetryMaxAttempts")
-	}
-}
-
-func TestRetryExhausted_should_ReturnFalse_When_MaxAttemptsUnset(t *testing.T) {
-	t.Parallel()
-	// A fresh Instance (driver never started, RetryMaxAttempts still its
-	// zero value) must not report "exhausted" — that would incorrectly
-	// short-circuit every one-shot/no-policy code path.
-	inst := &Instance{Title: "t"}
-	if inst.retryExhausted() {
-		t.Error("retryExhausted() = true, want false when RetryMaxAttempts is unset (zero)")
 	}
 }
 
 func TestRetryNow_should_ResetRetryStateAndTransitionToActive_When_CalledFromPermanentlyFailed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.PermanentlyFailed,
-		processManager: &fakeLivenessProcessManager{alive: true},
-	}
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.PermanentlyFailed,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
 	inst.LastFailureReason = "crashed"
@@ -314,13 +112,10 @@ func TestRetryNow_should_ResetRetryStateAndTransitionToActive_When_CalledFromPer
 // i.started's prior value.
 func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPermanentlyFailedWithDeadSession(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.PermanentlyFailed,
-		// alive: false simulates a dead/no tmux session (the pane exited along
-		// with the crash that led to PermanentlyFailed).
-		processManager: &fakeLivenessProcessManager{alive: false},
-	}
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
 	inst.LastFailureReason = "crashed"
@@ -329,7 +124,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 	// ErrCannotRestart and Status is left untouched at PermanentlyFailed.
 
 	err := inst.RetryNow("/tmp")
-	if errors.Is(err, ErrCannotRestart) {
+	if errors.Is(err, instance.ErrCannotRestart) {
 		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the PermanentlyFailed/dead-session branch-selection bug has regressed", err)
 	}
 	if err != nil {
@@ -357,20 +152,17 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromPerma
 // same as PermanentlyFailed/Stopped.
 func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFailed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Failed,
-		// alive: false simulates the bootstrap failures that led to Failed
-		// (e.g. tymuxd unresolvable) never having left a live session behind.
-		processManager: &fakeLivenessProcessManager{alive: false},
-	}
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
 	inst.LastFailureReason = "cold restore Start failed: executable file not found in $PATH"
 	// started is left at its zero value (false): if the bug regresses and
 	// Restart() is wrongly taken, Restart() bails out immediately with
 	// ErrCannotRestart and Status is left untouched at Failed.
 
 	err := inst.RetryNow("/tmp")
-	if errors.Is(err, ErrCannotRestart) {
+	if errors.Is(err, instance.ErrCannotRestart) {
 		t.Fatalf("RetryNow() err = %v: took the Restart()-in-place path instead of RecoverFromStopped()+Start() — the Failed/dead-session branch-selection bug has regressed", err)
 	}
 	if err != nil {
@@ -394,7 +186,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFaile
 // recreate it before Start() runs.
 func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestRepository(t)
+	repoPath := fixturetest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoPath, "retry-worktree-recreate")
 	require.NoError(t, err)
@@ -408,12 +200,11 @@ func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 		t.Fatalf("precondition failed: worktree directory still exists after RemoveAll: %v", statErr)
 	}
 
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.PermanentlyFailed,
-		Path:           repoPath,
-		processManager: &fakeLivenessProcessManager{alive: false},
-	}
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.PermanentlyFailed,
+		Path:   repoPath,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
 	inst.GitManager().SetWorktree(wt)
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
@@ -439,14 +230,13 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 	// reaching Start(false).
 	repoPath := t.TempDir()
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
-	wt := newTestGitWorktree(repoPath, worktreePath)
+	wt := fixturetest.NewTestGitWorktree(repoPath, worktreePath)
 
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.PermanentlyFailed,
-		Path:           repoPath,
-		processManager: &fakeLivenessProcessManager{alive: false},
-	}
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.PermanentlyFailed,
+		Path:   repoPath,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
 	inst.GitManager().SetWorktree(wt)
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
@@ -466,11 +256,10 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 // only exercised the PermanentlyFailed (exhausted) starting state.
 func TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.Stopped,
-		processManager: &fakeLivenessProcessManager{alive: true},
-	}
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.Stopped,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
 	inst.RetryAttempt = 1
 	inst.RetryMaxAttempts = 3
 	inst.LastFailureReason = "crashed"
@@ -490,15 +279,14 @@ func TestRetryNow_should_BypassPendingBackoffDelay_When_CalledMidBackoffWait(t *
 
 func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.PermanentlyFailed,
-		processManager: &fakeLivenessProcessManager{alive: true},
-	}
-	inst.retryInFlight.Store(true) // simulate an in-flight restart
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.PermanentlyFailed,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
+	inst.SetRetryInFlightForTest(true) // simulate an in-flight restart
 
 	err := inst.RetryNow("/tmp")
-	if !errors.Is(err, ErrRetryInFlight) {
+	if !errors.Is(err, instance.ErrRetryInFlight) {
 		t.Errorf("RetryNow() err = %v, want ErrRetryInFlight", err)
 	}
 }
@@ -519,15 +307,14 @@ func TestRetryNow_should_ReturnErrRetryInFlight_When_RetryInFlightAlreadyClaimed
 func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetryInFlight(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
-	inst := &Instance{
+	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Stopped,
-		processManager: &fakeLivenessProcessManager{
-			alive:          true,
-			restoreRelease: release,
-		},
-	}
-	policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{
+		alive:          true,
+		restoreRelease: release,
+	})
+	policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
 
 	results := make(chan error, 2)
 	start := make(chan struct{})
@@ -544,7 +331,7 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 	var inFlightCount, otherCount int
 	for i := range 2 {
 		err := <-results
-		if errors.Is(err, ErrRetryInFlight) {
+		if errors.Is(err, instance.ErrRetryInFlight) {
 			inFlightCount++
 		} else {
 			otherCount++
@@ -560,15 +347,14 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 
 // newCrashLoopInstance builds the Instance/ReviewQueue/notifier fixture shared
 // by the crash-loop test's escalating-retry and exhaustion phases.
-func newCrashLoopInstance() (*Instance, *queue.ReviewQueue, *sessiontest.FakeNotifier) {
+func newCrashLoopInstance() (*instance.Instance, *queue.ReviewQueue, *sessiontest.FakeNotifier) {
 	rq := queue.NewReviewQueue()
 	notifier := &sessiontest.FakeNotifier{}
-	inst := &Instance{
-		Title:       "crash-loop",
-		UUID:        "test-uuid-crash-loop",
-		reviewQueue: rq,
-		Status:      domain.Active,
-	}
+	inst := (&instance.Instance{
+		Title:  "crash-loop",
+		UUID:   "test-uuid-crash-loop",
+		Status: domain.Active,
+	}).WithReviewQueueForTest(rq)
 	inst.RetryMaxAttempts = 3
 	inst.SetNotifier(notifier)
 	return inst, rq, notifier
@@ -579,7 +365,7 @@ func newCrashLoopInstance() (*Instance, *queue.ReviewQueue, *sessiontest.FakeNot
 // scheduled backoff delay falls within the jittered window and grew over the
 // previous attempt's delay. It returns the delay so the caller can feed it
 // back in as prevDelay for the next attempt.
-func assertCrashRetryScheduled(t *testing.T, inst *Instance, attempt int, policy RetryPolicy, prevDelay time.Duration) time.Duration {
+func assertCrashRetryScheduled(t *testing.T, inst *instance.Instance, attempt int, policy instance.RetryPolicy, prevDelay time.Duration) time.Duration {
 	t.Helper()
 	before := time.Now()
 	handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
@@ -612,7 +398,7 @@ func assertCrashRetryScheduled(t *testing.T, inst *Instance, attempt int, policy
 	}
 
 	// The real driver poll loop clears NextRetryAt once it consumes a
-	// pending retry and restarts the session (clearNextRetryAt, called
+	// pending retry and restarts the session (ClearNextRetryAt, called
 	// from the restart path) — simulate that here so the next simulated
 	// crash starts from a clean pending-retry state.
 	inst.NextRetryAt = time.Time{}
@@ -633,7 +419,7 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 	t.Parallel()
 	inst, rq, notifier := newCrashLoopInstance()
 
-	policy := RetryPolicy{
+	policy := instance.RetryPolicy{
 		Enabled:      true,
 		MaxAttempts:  3,
 		RetryOn:      []string{"crashed"},
@@ -670,57 +456,6 @@ func TestSessionDriver_should_RetryThreeTimesWithIncreasingBackoffThenPermanentl
 	}
 }
 
-func TestIsRetryPending_should_ReturnTrue_When_NextRetryAtSet(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t"}
-	inst.NextRetryAt = time.Now().Add(time.Minute)
-	if !inst.IsRetryPending() {
-		t.Error("IsRetryPending() = false, want true when NextRetryAt is set")
-	}
-}
-
-func TestBuildRetryContinuationPrompt_should_PrependFailureReasonAndWorktreeHint_When_ReasonGiven(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", InitialPrompt: "do the task"}
-	inst.RetryAttempt = 2
-
-	got := buildRetryContinuationPrompt(inst, "tmux_exited")
-
-	if !containsAll(got, "Previous attempt failed due to tmux_exited.", "retry attempt 2", "worktree itself may be the problem", "do the task") {
-		t.Errorf("buildRetryContinuationPrompt() = %q, missing expected failure-reason prefix, attempt number, worktree-integrity hint, or fallback prompt text", got)
-	}
-}
-
-func TestBuildRetryContinuationPrompt_should_ApplyPrefix_When_JSONLContinuationUnavailable(t *testing.T) {
-	t.Parallel()
-	// No HistoryFilePath set -> buildContinuationPrompt falls back to the
-	// generic message, then to InitialPrompt (AC3's fallback path).
-	inst := &Instance{Title: "t", InitialPrompt: "resume the workflow"}
-
-	got := buildRetryContinuationPrompt(inst, "crashed")
-
-	if !containsAll(got, "Previous attempt failed due to crashed.", "resume the workflow") {
-		t.Errorf("buildRetryContinuationPrompt() = %q, want failure-reason prefix applied even on the fallback prompt path", got)
-	}
-}
-
-func containsAll(s string, substrs ...string) bool {
-	for _, sub := range substrs {
-		if !strings.Contains(s, sub) {
-			return false
-		}
-	}
-	return true
-}
-
-func TestIsRetryPending_should_ReturnFalse_When_NoRetryScheduledOrInFlight(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t"}
-	if inst.IsRetryPending() {
-		t.Error("IsRetryPending() = true, want false for a fresh instance")
-	}
-}
-
 // A PermanentlyFailed session that never started this process (boot Start
 // rejected PermanentlyFailed -> Active) must still be restartable by the user,
 // e.g. "migrate to tymux" via RestartSession; it used to fail with ErrCannotRestart.
@@ -729,12 +464,11 @@ func TestRestart_should_RecoverAndActivate_When_PermanentlyFailedAndNotStarted(t
 	for _, status := range []domain.Status{domain.PermanentlyFailed, domain.Failed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{
-				Title:          "t",
-				Path:           "/tmp",
-				Status:         status,
-				processManager: &fakeLivenessProcessManager{alive: false},
-			}
+			inst := (&instance.Instance{
+				Title:  "t",
+				Path:   "/tmp",
+				Status: status,
+			}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
 
 			if err := inst.Restart(false, ""); err != nil {
 				t.Fatalf("Restart() err = %v, want nil", err)
@@ -756,8 +490,8 @@ func TestRestart_should_ReturnErrCannotRestart_When_NotStartedAndNotPermanentlyF
 	for _, status := range []domain.Status{domain.Stopped, domain.Active, domain.Paused} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{Title: "t", Path: "/tmp", Status: status, processManager: &fakeLivenessProcessManager{alive: false}}
-			if err := inst.Restart(false, ""); !errors.Is(err, ErrCannotRestart) {
+			inst := (&instance.Instance{Title: "t", Path: "/tmp", Status: status}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: false})
+			if err := inst.Restart(false, ""); !errors.Is(err, instance.ErrCannotRestart) {
 				t.Fatalf("Restart() err = %v, want ErrCannotRestart", err)
 			}
 			if inst.Status != status {
@@ -775,12 +509,11 @@ func (m *failingStartProcessManager) Start(string) error { return errors.New("bo
 
 func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
-		Title:          "t",
-		Path:           "/tmp",
-		Status:         domain.PermanentlyFailed,
-		processManager: &failingStartProcessManager{},
-	}
+	inst := (&instance.Instance{
+		Title:  "t",
+		Path:   "/tmp",
+		Status: domain.PermanentlyFailed,
+	}).WithProcessManagerForTest(&failingStartProcessManager{})
 	if err := inst.Restart(false, ""); err == nil {
 		t.Fatal("Restart() err = nil, want the Start failure")
 	}
@@ -796,17 +529,16 @@ func TestRestart_should_RestoreTerminalStatus_When_StartFailsAfterRecover(t *tes
 // else StartSessionDriver is a permanent no-op for the instance.
 func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.PermanentlyFailed,
-		processManager: &fakeLivenessProcessManager{alive: true},
-	}
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.PermanentlyFailed,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
 	require.NoError(t, inst.RetryNow("/tmp"))
 
-	StopSessionDriver(inst)
-	JoinSessionDriver(inst)
+	instance.StopSessionDriver(inst)
+	instance.JoinSessionDriver(inst)
 
 	require.False(t, SessionDriverRunningForTest(inst),
 		"driverRunning stays true after the retry continuation exited, blocking every later StartSessionDriver")
@@ -815,90 +547,83 @@ func TestRestartForRetry_should_ClearDriverRunning_When_ContinuationExits(t *tes
 // The in-loop handoff: a real driver fires its scheduled retry, hands off to a continuation and
 // exits; once the continuation exits too, a later StartSessionDriver must start a driver.
 func TestRunSessionDriver_should_AllowRestart_When_RetryContinuationExited(t *testing.T) {
-	inst := &Instance{Title: "handoff", Status: domain.Stopped}
+	inst := &instance.Instance{Title: "handoff", Status: domain.Stopped}
 	inst.NextRetryAt = time.Now().Add(-time.Minute)
 	inst.RetryAttempt = 1
 	// Mid-restart, mark the instance destroyed (without StopSessionDriver, which would set
 	// driverDestroyed): both the original driver and the continuation then exit at their next
 	// tick gate, so Join below observes a fully quiescent instance without any sleeping.
-	inst.processManager = &fakeLivenessProcessManager{alive: true, onRestore: func() { inst.destroyed.Store(true) }}
+	inst.SetProcessManagerForTest(&fakeLivenessProcessManager{alive: true, onRestore: func() { inst.SetDestroyedForTest(true) }})
 	shrinkDriverTiming(t)
 
 	StartSessionDriver(inst, "/tmp")
-	JoinSessionDriver(inst)
+	instance.JoinSessionDriver(inst)
 
 	require.False(t, inst.IsRetryPending(), "the driver never fired the scheduled retry; the handoff did not happen")
 	require.False(t, SessionDriverRunningForTest(inst), "driverRunning left set after every driver goroutine exited")
 
-	inst.destroyed.Store(false)
+	inst.SetDestroyedForTest(false)
 	var started atomic.Int32
-	SetSessionDriverStartHookForTest(func(*Instance) { started.Add(1) })
+	SetSessionDriverStartHookForTest(func(*instance.Instance) { started.Add(1) })
 	t.Cleanup(func() { SetSessionDriverStartHookForTest(nil) })
 	StartSessionDriver(inst, "/tmp")
-	t.Cleanup(func() { StopSessionDriver(inst); JoinSessionDriver(inst) })
+	t.Cleanup(func() { instance.StopSessionDriver(inst); instance.JoinSessionDriver(inst) })
 	require.Equal(t, int32(1), started.Load(), "a later StartSessionDriver was refused after the continuation exited")
 }
 
 // restartForRetry after Destroy must not spawn a continuation that nothing will stop.
 func TestRestartForRetry_should_NotSpawnContinuation_When_DriverDestroyed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.PermanentlyFailed,
-		processManager: &fakeLivenessProcessManager{alive: true},
-	}
-	StopSessionDriver(inst) // what Destroy does
+	inst := (&instance.Instance{
+		Title:  "t",
+		Status: domain.PermanentlyFailed,
+	}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
+	instance.StopSessionDriver(inst) // what Destroy does
 	require.NoError(t, inst.RetryNow("/tmp"))
 
 	require.False(t, SessionDriverRunningForTest(inst))
-	require.Zero(t, inst.driverGoroutines)
-	JoinSessionDriver(inst)
+	require.Zero(t, inst.DriverGoroutinesForTest())
+	instance.JoinSessionDriver(inst)
 }
 
 // A driver that hands off to a continuation exits first; driverRunning must stay set until the
 // continuation exits too, or a second driver could start alongside it.
 func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRuns(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "t"}
-	inst.driverMu.Lock()
-	inst.driverRunning.Store(true)
-	inst.driverGoroutines = 1
-	inst.driverMu.Unlock()
+	inst := &instance.Instance{Title: "t"}
+	_, err := inst.BeginDriverRun()
+	require.NoError(t, err)
 
-	_, ok := inst.registerContinuation(nil) // restartForRetry spawns the continuation
+	_, ok := inst.RegisterDriverContinuation(nil) // restartForRetry spawns the continuation
 	require.True(t, ok)
-	inst.driverGoroutineExited() // the original driver returns
+	inst.FinishDriverGoroutine() // the original driver returns
 	require.True(t, SessionDriverRunningForTest(inst), "cleared while the continuation still runs")
 
-	inst.driverGoroutineExited() // continuation returns
-	inst.driverWG.Done()
+	inst.FinishDriverGoroutine() // continuation returns
 	require.False(t, SessionDriverRunningForTest(inst))
 }
 
 // A real StartSessionDriver followed by a continuation must count both goroutines, so the first
 // one to exit cannot clear driverRunning under the other.
 func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistered(t *testing.T) {
-	inst := &Instance{Title: "count", Status: domain.Active, processManager: &stuckDialogProcessManager{}}
-	inst.started.Store(true)
+	inst := (&instance.Instance{Title: "count", Status: domain.Active}).WithProcessManagerForTest(&stuckDialogProcessManager{})
+	inst.MarkStarted()
 	shrinkDriverTiming(t)
 
 	StartSessionDriver(inst, "/tmp")
 	release := make(chan struct{})
 	t.Cleanup(func() {
 		close(release)
-		StopSessionDriver(inst)
-		JoinSessionDriver(inst)
+		instance.StopSessionDriver(inst)
+		instance.JoinSessionDriver(inst)
 	})
-	_, ok := inst.registerContinuation(nil)
+	_, ok := inst.RegisterDriverContinuation(nil)
 	require.True(t, ok)
 	go func() {
-		defer inst.driverWG.Done()
-		defer inst.driverGoroutineExited()
+		defer inst.FinishDriverGoroutine()
 		<-release
 	}()
 
-	inst.driverMu.Lock()
-	got := inst.driverGoroutines
-	inst.driverMu.Unlock()
+	got := inst.DriverGoroutinesForTest()
 	require.Equal(t, 2, got, "StartSessionDriver did not count its own goroutine")
 }

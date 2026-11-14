@@ -1,0 +1,428 @@
+// Package fixturetest holds test fixtures that touch no session or Instance symbol, so tests on both sides of
+// the Instance package boundary can share them without importing each other's _test.go files.
+package fixturetest
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sync"
+	"testing"
+	"time"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/git"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.uber.org/goleak"
+)
+
+// KnownBackgroundGoroutines lists process-wide goroutines started by the log
+// package and lumberjack at init/first-log time, plus the signal-handler
+// goroutine started by TestMain that blocks on a signal channel for the
+// lifetime of the test binary.  These are not actor leaks; goleak must be
+// told to ignore them so the actor-leak assertions stay tight.
+var KnownBackgroundGoroutines = []goleak.Option{
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.newAsyncWriter.func1"),
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.(*AsyncHandler).StartDrain.func1"),
+	goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"),
+	// TestMain spawns a signal-handler goroutine (integration_test.go) that
+	// blocks on <-sigCh for the entire test-binary lifetime.  It cannot be
+	// stopped without os.Exit, so we tell goleak to ignore it.
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func1"),
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func2"),
+}
+
+// CapturedRecord is one slog.Record captured by RecordingHandler, flattened
+// to its level/message/attrs for easy assertions.
+type CapturedRecord struct {
+	level slog.Level
+	Msg   string
+	Attrs map[string]any
+}
+
+// RecordingHandler is a minimal slog.Handler that records every record it
+// receives, for asserting exact log counts/fields -- mirrors jules/
+// keychain_test.go's warnHandler precedent, generalized to every level and
+// every attribute (rather than one fixed message) since these tests need to
+// distinguish log.Error from log.Warn and inspect specific field values.
+type RecordingHandler struct {
+	mu      sync.Mutex
+	records []CapturedRecord
+}
+
+func (h *RecordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *RecordingHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := make(map[string]any, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.mu.Lock()
+	h.records = append(h.records, CapturedRecord{level: r.Level, Msg: r.Message, Attrs: attrs})
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *RecordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *RecordingHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *RecordingHandler) RecordsAtLevel(level slog.Level) []CapturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []CapturedRecord
+	for _, r := range h.records {
+		if r.level == level {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (h *RecordingHandler) All() []CapturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]CapturedRecord(nil), h.records...)
+}
+
+// InstallRecordingHandler installs a RecordingHandler as the injectable slog
+// seam (log.SetSlogDefaultForTest) log.Warn/log.Error actually read from --
+// not slog.SetDefault, which log/log.go's logAt no longer consults -- for the
+// duration of the calling test, restoring the prior default via t.Cleanup.
+func InstallRecordingHandler(t *testing.T) *RecordingHandler {
+	t.Helper()
+	h := &RecordingHandler{}
+	prev := log.SetSlogDefaultForTest(slog.New(h))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
+	return h
+}
+
+// MockProcessInspector is a test double for ProcessFileInspector.
+type MockProcessInspector struct {
+	Files []string
+	Err   error
+}
+
+func (m *MockProcessInspector) OpenFiles(pid int32) ([]string, error) {
+	if m.Err != nil {
+		return nil, m.Err
+	}
+	return m.Files, nil
+}
+
+func (m *MockProcessInspector) IsAlive(pid int32, expectedCreateTimeMs int64) bool {
+	return m.Err == nil
+}
+
+// NewTestGitWorktree builds a GitWorktree value for use in unit tests without
+// touching the real filesystem or running git commands.
+func NewTestGitWorktree(repoPath, worktreePath string) *git.GitWorktree {
+	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, "test-session", "test-branch", "abc123")
+}
+
+// CaptureLogInfo redirects the log package's slog seam to a text handler writing into the returned buffer.
+func CaptureLogInfo(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() {
+		log.SetSlogDefaultForTest(prev)
+	})
+	return &buf
+}
+
+// BugfixSeedRule is a minimal TaggingRule mirroring SeedTaggingRules()' seed-tag-bugfix entry,
+// used directly (rather than the full seed set) so these tests assert against one predictable
+// rule instead of every seed rule's incidental side effects.
+func BugfixSeedRule() classifier.TaggingRule {
+	return classifier.TaggingRule{
+		RuleMeta:      classifier.RuleMeta{ID: "seed-bugfix", Name: "Bugfix branch", Priority: 100, Enabled: true, Source: "seed"},
+		BranchPattern: regexp.MustCompile(`^(bugfix|fix)/`),
+		OutputTag:     "Bugfix",
+	}
+}
+
+// CheckTmuxAvailable skips the test if tmux is not installed.
+func CheckTmuxAvailable(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available on this system")
+	}
+}
+
+// ColdRestoreSocket returns a unique tmux server socket name for cold-restore
+// tests and registers a t.Cleanup that kills the isolated server on test exit.
+// The PID is embedded in the name so TestMain's PID-aware sweep can reap this
+// socket on the next run if the current run was killed with SIGKILL.
+func ColdRestoreSocket(t *testing.T) string {
+	t.Helper()
+	name := fmt.Sprintf("test_coldrestore_%d_%d", os.Getpid(), time.Now().UnixNano())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
+	})
+	return name
+}
+
+// StubClaudeBinary writes an executable "claude" stub (a plain `sleep 300`
+// script) to a temp dir and returns its path. Using this as Instance.Program
+// (instead of the literal string "claude") keeps isClaude()'s basename match
+// — so buildLaunchCommand embeds --resume — while guaranteeing the tmux pane
+// can actually exec something that stays alive: the real claude CLI is not
+// installed on CI runners, only on a developer machine that happens to have
+// it in PATH, and a pane whose command exits almost instantly makes
+// TmuxAlive() a race against remain-on-exit instead of a reliable check.
+func StubClaudeBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nsleep 300\n"), 0o755))
+	return path
+}
+
+// MarkStartedRecorder is a test LifecycleListener that records every
+// EventStarted reason it observes, for asserting MarkStartedIfTmuxAlive
+// fires (or doesn't fire) EventStarted as expected.
+type MarkStartedRecorder struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (r *MarkStartedRecorder) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event != domain.EventStarted {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reasons = append(r.reasons, reason)
+}
+
+func (r *MarkStartedRecorder) Count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.reasons)
+}
+
+func NewBugfixTaggingEngine() *classifier.TaggingEngine {
+	engine := classifier.NewTaggingEngine()
+	engine.ReplaceRules([]classifier.TaggingRule{BugfixSeedRule()})
+	return engine
+}
+
+// TestPiMetricReader backs the single real MeterProvider installed for this
+// test binary. Package-level instruments (piStatusSourceEventsTotal) are
+// constructed against OTel's global delegating meter at package-init time,
+// before this file's init() runs -- otel.SetMeterProvider rewires what that
+// delegating meter forwards to, so a process-lifetime manual reader with
+// delta-based (before/after) assertions is the correct fit here, mirroring
+// server/services/session_creation_metrics_test.go's identical pattern.
+var TestPiMetricReader = sdkmetric.NewManualReader()
+
+// Importing this package installs TestPiMetricReader as the global meter provider's reader, for every test binary that uses it.
+func init() {
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(TestPiMetricReader)))
+}
+
+// InitTestRepoForReviewQueue creates and commits a minimal git repository for the
+// uncommitted-changes detection tests below.
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
+func InitTestRepoForReviewQueue(t *testing.T, repoPath string) {
+	t.Helper()
+	repo, err := gogit.PlainInit(repoPath, false)
+	if err != nil {
+		t.Fatalf("Failed to initialize git repo: %v", err)
+	}
+
+	testFile := filepath.Join(repoPath, "test.txt")
+	if err := os.WriteFile(testFile, []byte("initial content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Failed to get worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("Failed to git add: %v", err)
+	}
+	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Failed to git commit: %v", err)
+	}
+}
+
+// AllStatuses lists every Status constant in the new 5-state model.
+var AllStatuses = []domain.Status{domain.Creating, domain.Active, domain.Paused, domain.Stopped, domain.Hibernated}
+
+// ValidTransitionSet is the ground truth for TestCanTransition_ExhaustiveMatrix.
+// Any pair not listed here must return false from CanTransition.
+var ValidTransitionSet = map[[2]domain.Status]bool{
+	// Creating
+	{domain.Creating, domain.Active}:  true,
+	{domain.Creating, domain.Stopped}: true,
+	// Active
+	{domain.Active, domain.Paused}:     true,
+	{domain.Active, domain.Stopped}:    true,
+	{domain.Active, domain.Hibernated}: true,
+	// Paused
+	{domain.Paused, domain.Active}:  true,
+	{domain.Paused, domain.Stopped}: true,
+	// Stopped — recoverable: Stopped → Active is allowed for session revival
+	{domain.Stopped, domain.Active}: true,
+	// Hibernated
+	{domain.Hibernated, domain.Active}:  true,
+	{domain.Hibernated, domain.Stopped}: true,
+}
+
+// FakePaneSettleChecker is a scripted paneSettleChecker: each call to
+// HasUpdated pops the next value off updates (repeating the last one once
+// exhausted), so a test can script "still changing... still changing...
+// settled" without a real tmux pane.
+type FakePaneSettleChecker struct {
+	Updates []bool
+	Calls   int
+}
+
+func (f *FakePaneSettleChecker) HasUpdated() (bool, bool) {
+	idx := f.Calls
+	f.Calls++
+	if idx >= len(f.Updates) {
+		idx = len(f.Updates) - 1
+	}
+	return f.Updates[idx], false
+}
+
+// SetupTestRepository creates a temporary git repository for testing
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
+func SetupTestRepository(t *testing.T) string {
+	t.Helper()
+	dir, err := SetupTestRepositoryCommon(t.TempDir(), "# Test Repository")
+	require.NoError(t, err)
+	return dir
+}
+
+// SetupTestRepositoryCommon is the shared go-git init/add/commit logic behind
+// SetupTestRepository and setupTestRepositoryBench — *testing.T and
+// *testing.B report failures differently (require.NoError vs b.Fatal), so
+// each caller wraps this with its own error handling instead of taking a
+// testing.TB.
+func SetupTestRepositoryCommon(dir, readmeContents string) (string, error) {
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContents), 0644); err != nil {
+		return "", err
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return "", err
+	}
+	if _, err := wt.Add("."); err != nil {
+		return "", err
+	}
+	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		return "", err
+	}
+
+	return dir, nil
+}
+
+// FakePaneSubmitter is a scripted paneSubmitter: it records every SendKeys
+// argument in call order (so a test can assert content and Enter travelled as
+// two separate writes, not one concatenated string) and can be told to fail
+// on a specific call index. HasUpdated pops the next value off updates
+// (repeating the last one once exhausted, mirroring FakePaneSettleChecker),
+// so a test can script both the pre-Enter settle wait and the post-Enter
+// submit-confirmation poll independently.
+type FakePaneSubmitter struct {
+	SendCalls   []string
+	FailOnCall  int // -1 (default) means never fail
+	Updates     []bool
+	updateCalls int
+	OnSend      func(int)
+}
+
+// FakeLeaseOwner is the lease identity every pane fake in this file reports.
+const FakeLeaseOwner = "fake-pane-owner"
+
+func (f *FakePaneSubmitter) LeaseOwnerUUID() string { return FakeLeaseOwner }
+
+func (f *FakePaneSubmitter) SendKeys(keys string) error {
+	idx := len(f.SendCalls)
+	f.SendCalls = append(f.SendCalls, keys)
+	if f.OnSend != nil {
+		f.OnSend(len(f.SendCalls))
+	}
+	if f.FailOnCall == idx {
+		return errors.New("fake send failure")
+	}
+	return nil
+}
+
+func (f *FakePaneSubmitter) HasUpdated() (bool, bool) {
+	if len(f.Updates) == 0 {
+		return false, false
+	}
+	idx := f.updateCalls
+	f.updateCalls++
+	if idx >= len(f.Updates) {
+		idx = len(f.Updates) - 1
+	}
+	return f.Updates[idx], false
+}
+
+// NewFakePaneSubmitter returns a fake that reports a pane update on every
+// HasUpdated call — i.e. content settles immediately and every submit is
+// confirmed — unless the test overrides Updates itself.
+func NewFakePaneSubmitter() *FakePaneSubmitter {
+	return &FakePaneSubmitter{FailOnCall: -1, Updates: []bool{false, true}}
+}
+
+var PrTestEpoch = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+
+func MustPRRef(t *testing.T, host, owner, repo string, n int) domain.PRRef {
+	t.Helper()
+	ref, err := domain.NewPRRef(host, owner, repo, n)
+	if err != nil {
+		t.Fatalf("NewPRRef(%q,%q,%q,%d): %v", host, owner, repo, n, err)
+	}
+	return ref
+}
+
+// PrRow builds a view of acme/app#n attached n minutes after the epoch, so a
+// higher number is newer unless a test overrides AttachedAt.
+func PrRow(t *testing.T, n int, state domain.PRState, head string) domain.PRView {
+	t.Helper()
+	return domain.PRView{
+		StateID:    n,
+		Ref:        MustPRRef(t, "", "acme", "app", n),
+		State:      state,
+		HeadBranch: head,
+		AttachedAt: PrTestEpoch.Add(time.Duration(n) * time.Minute),
+	}
+}

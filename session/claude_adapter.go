@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type ClaudeAdapter struct{}
@@ -54,10 +55,10 @@ type rawClaudeTurn struct {
 	CWD       string `json:"cwd"`
 }
 
-func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
+func (a *ClaudeAdapter) Import(ctx context.Context, inst *instance.Instance) ([]instance.CanonicalTurn, error) {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
-		inst.tryExtractConversationUUID()
+		inst.TryExtractConversationUUID()
 		uuidStr = inst.GetClaudeConversationUUID()
 	}
 	if uuidStr == "" {
@@ -69,9 +70,9 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 		return nil, err
 	}
 
-	workspace := inst.GetWorkingDirectory()
+	workspace := inst.ActiveDir()
 	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
-	claudeLogPath := filepath.Join(claudeProjectsDir, ClaudeProjectDirName(workspace), uuidStr+".jsonl")
+	claudeLogPath := filepath.Join(claudeProjectsDir, instance.ClaudeProjectDirName(workspace), uuidStr+".jsonl")
 
 	return ReadCanonicalTurnsFromFile(claudeLogPath)
 }
@@ -88,7 +89,7 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 // writer) are tolerated: a line that fails to unmarshal as a well-formed
 // turn is simply skipped rather than treated as an error, per the pitfalls
 // research's "tolerate trailing partial lines" requirement.
-func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
+func ReadCanonicalTurnsFromFile(path string) ([]instance.CanonicalTurn, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("claude transcript file not found at %s: %w", path, err)
 	}
@@ -99,7 +100,7 @@ func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
 	}
 	defer file.Close()
 
-	var turns []CanonicalTurn
+	var turns []instance.CanonicalTurn
 	reader := bufio.NewReader(file)
 	turnIdx := 0
 
@@ -133,12 +134,12 @@ func ReadCanonicalTurnsFromFile(path string) ([]CanonicalTurn, error) {
 // buildCanonicalTurnFromRawClaudeTurn converts a single parsed JSONL line
 // (already known to carry a non-nil Message) into a CanonicalTurn, including
 // content-block parsing, role/timestamp normalization, and validation.
-func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (CanonicalTurn, error) {
+func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (instance.CanonicalTurn, error) {
 	canonicalBlocks := parseClaudeMessageContent(raw.Message.Content)
 
-	role := RoleUser
+	role := instance.RoleUser
 	if raw.Message.Role == "assistant" {
-		role = RoleAssistant
+		role = instance.RoleAssistant
 	}
 
 	tTime, parseErr := time.Parse(time.RFC3339Nano, raw.Timestamp)
@@ -146,7 +147,7 @@ func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (Canoni
 		tTime = time.Now()
 	}
 
-	turn := CanonicalTurn{
+	turn := instance.CanonicalTurn{
 		Role:      role,
 		Blocks:    canonicalBlocks,
 		Timestamp: tTime,
@@ -154,7 +155,7 @@ func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (Canoni
 	}
 
 	if err := turn.Validate(); err != nil {
-		return CanonicalTurn{}, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
+		return instance.CanonicalTurn{}, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
 	}
 
 	return turn, nil
@@ -162,12 +163,12 @@ func buildCanonicalTurnFromRawClaudeTurn(raw rawClaudeTurn, turnIdx int) (Canoni
 
 // parseClaudeMessageContent parses a raw Claude message's content field,
 // which may be either a plain string or a list of typed content blocks.
-func parseClaudeMessageContent(content interface{}) []CanonicalBlock {
+func parseClaudeMessageContent(content interface{}) []instance.CanonicalBlock {
 	if contentStr, ok := content.(string); ok {
 		if contentStr == "" {
 			return nil
 		}
-		return []CanonicalBlock{NewTextBlock(contentStr)}
+		return []instance.CanonicalBlock{instance.NewTextBlock(contentStr)}
 	}
 
 	contentList, ok := content.([]interface{})
@@ -175,7 +176,7 @@ func parseClaudeMessageContent(content interface{}) []CanonicalBlock {
 		return nil
 	}
 
-	var canonicalBlocks []CanonicalBlock
+	var canonicalBlocks []instance.CanonicalBlock
 	for _, item := range contentList {
 		if block, ok := parseClaudeContentBlockItem(item); ok {
 			canonicalBlocks = append(canonicalBlocks, block)
@@ -188,31 +189,31 @@ func parseClaudeMessageContent(content interface{}) []CanonicalBlock {
 // content list into a CanonicalBlock. It returns ok=false for entries that
 // fail to unmarshal or carry an unrecognized block type, which are silently
 // skipped by the caller.
-func parseClaudeContentBlockItem(item interface{}) (CanonicalBlock, bool) {
+func parseClaudeContentBlockItem(item interface{}) (instance.CanonicalBlock, bool) {
 	var block rawClaudeMessageBlock
 	itemBytes, err := json.Marshal(item)
 	if err != nil {
-		return CanonicalBlock{}, false
+		return instance.CanonicalBlock{}, false
 	}
 	if err := json.Unmarshal(itemBytes, &block); err != nil {
-		return CanonicalBlock{}, false
+		return instance.CanonicalBlock{}, false
 	}
 
 	switch block.Type {
 	case "text":
-		return NewTextBlock(block.Text), true
+		return instance.NewTextBlock(block.Text), true
 	case "thinking":
-		return NewThinkingBlock(block.Thinking), true
+		return instance.NewThinkingBlock(block.Thinking), true
 	case "tool_use":
-		return NewToolUseBlock(block.ID, block.Name, block.Input), true
+		return instance.NewToolUseBlock(block.ID, block.Name, block.Input), true
 	case "tool_result":
-		return NewToolResultBlock(block.ToolUseID, "", block.Content, block.IsError), true
+		return instance.NewToolResultBlock(block.ToolUseID, "", block.Content, block.IsError), true
 	default:
-		return CanonicalBlock{}, false
+		return instance.CanonicalBlock{}, false
 	}
 }
 
-func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
+func (a *ClaudeAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, inst *instance.Instance) error {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
 		return fmt.Errorf("no claude conversation UUID found")
@@ -223,8 +224,8 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 		return err
 	}
 
-	workspace := inst.GetWorkingDirectory()
-	projectDir := ClaudeProjectDirName(workspace)
+	workspace := inst.ActiveDir()
+	projectDir := instance.ClaudeProjectDirName(workspace)
 	claudeProjectDir := filepath.Join(home, ".claude", "projects", projectDir)
 	if err := os.MkdirAll(claudeProjectDir, 0700); err != nil {
 		return err
@@ -248,17 +249,17 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 		var content []map[string]interface{}
 		for _, block := range turn.Blocks {
 			switch block.Kind {
-			case BlockKindText:
+			case instance.BlockKindText:
 				content = append(content, map[string]interface{}{
 					"type": "text",
 					"text": block.Text,
 				})
-			case BlockKindThinking:
+			case instance.BlockKindThinking:
 				content = append(content, map[string]interface{}{
 					"type":     "thinking",
 					"thinking": block.Text,
 				})
-			case BlockKindToolUse:
+			case instance.BlockKindToolUse:
 				var args map[string]interface{}
 				_ = json.Unmarshal(block.ToolArgs, &args)
 				content = append(content, map[string]interface{}{
@@ -267,20 +268,20 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 					"name":  block.ToolName,
 					"input": args,
 				})
-			case BlockKindToolResult:
+			case instance.BlockKindToolResult:
 				content = append(content, map[string]interface{}{
 					"type":        "tool_result",
 					"tool_use_id": block.ToolResultID,
 					"content":     block.ToolResultContent,
 					"is_error":    block.ToolResultIsError,
 				})
-			case BlockKindImage:
+			case instance.BlockKindImage:
 				return fmt.Errorf("image blocks not yet supported")
 			}
 		}
 
 		roleStr := "user"
-		if turn.Role == RoleAssistant {
+		if turn.Role == instance.RoleAssistant {
 			roleStr = "assistant"
 		}
 

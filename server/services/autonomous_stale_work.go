@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // StaleWorkDisposition is what the stale-work remediator does after inspection.
@@ -43,7 +44,7 @@ func (a *AutonomousOrchestrationService) recoveryLive(title string) bool {
 // to restart it. It runs before UpdateItemSessionEnded, so the capture is
 // deadline-bound (stopCaptureTimeout) and never delays BUG-064's ordering.
 func (a *AutonomousOrchestrationService) InspectStaleWork(ctx context.Context, sessionUUID string, item *backlogdto.BacklogItemData) StaleWorkDisposition {
-	var inst *session.Instance
+	var inst *instance.Instance
 	if a.instanceFinder != nil {
 		inst = a.instanceFinder(sessionUUID)
 	}
@@ -61,7 +62,7 @@ func (a *AutonomousOrchestrationService) InspectStaleWork(ctx context.Context, s
 	rec := stopRecord{
 		Session:  title,
 		ItemID:   item.ID,
-		Role:     session.SessionRoleWork,
+		Role:     instance.SessionRoleWork,
 		Outcome:  session.AutonomousDriverOutcome{StopReason: domain.StopReasonStaleWork, Snapshot: snap},
 		State:    domain.ClassifyObserved(snap),
 		Tail:     sanitizeStopTail(snap.PaneTail),
@@ -85,7 +86,7 @@ func (a *AutonomousOrchestrationService) InspectStaleWork(ctx context.Context, s
 	return a.nudgeStaleWork(ctx, storage, inst, item, rec)
 }
 
-func (a *AutonomousOrchestrationService) captureStaleSnapshot(inst *session.Instance) domain.StopSnapshot {
+func (a *AutonomousOrchestrationService) captureStaleSnapshot(inst *instance.Instance) domain.StopSnapshot {
 	if a.staleSnapshot != nil {
 		return a.staleSnapshot(inst)
 	}
@@ -102,7 +103,7 @@ func (a *AutonomousOrchestrationService) concreteStorage() *session.Storage {
 
 // nudgeStaleWork delivers the nudge under a registered recovery (so a user stop
 // cancels it) and falls back to a restart when the nudge cannot be delivered.
-func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, storage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, rec stopRecord) StaleWorkDisposition {
+func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, storage *session.Storage, inst *instance.Instance, item *backlogdto.BacklogItemData, rec stopRecord) StaleWorkDisposition {
 	title := rec.Session
 	// Register before touching the row: a driver recovery that registered since the
 	// early recoveryLive check must not be overwritten (its cancel would be lost).
@@ -146,7 +147,7 @@ func (a *AutonomousOrchestrationService) RecordDeadPane(sessionUUID, title strin
 	ctx, cancel := context.WithTimeout(a.driverCtx(), deadPaneRecordTimeout)
 	defer cancel()
 	is, err := storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
-	if err != nil || is.Role != session.SessionRoleWork || is.EndedAt != nil {
+	if err != nil || is.Role != instance.SessionRoleWork || is.EndedAt != nil {
 		return
 	}
 	item, err := storage.GetBacklogItem(ctx, is.BacklogItemID)
@@ -156,7 +157,7 @@ func (a *AutonomousOrchestrationService) RecordDeadPane(sessionUUID, title strin
 	a.refreshStuckRow(ctx, storage, item, stopRecord{
 		Session:  title,
 		ItemID:   item.ID,
-		Role:     session.SessionRoleWork,
+		Role:     instance.SessionRoleWork,
 		Outcome:  session.AutonomousDriverOutcome{StopReason: domain.StopReasonDeadPane, Snapshot: snap},
 		State:    state,
 		Tail:     sanitizeStopTail(snap.PaneTail),

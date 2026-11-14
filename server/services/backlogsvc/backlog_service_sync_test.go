@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFails confirms
@@ -40,7 +41,7 @@ func TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFa
 		domain.BacklogStatusReady, domain.BacklogStatusInProgress,
 		domain.BacklogStatusReview, domain.BacklogStatusDone,
 	} {
-		_, err := storage.RawTransitionBacklogItemStatus(t.Context(), itemID, target, nil, session.TriggeredBySystem)
+		_, err := storage.RawTransitionBacklogItemStatus(t.Context(), itemID, target, nil, instance.TriggeredBySystem)
 		require.NoError(t, err, "transition to %s", target)
 	}
 
@@ -83,7 +84,7 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
 
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	resp, err := svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
@@ -132,7 +133,7 @@ func TestAttachSessionToItem_should_RegenerateSlashCommandsWithNewItemID_When_Re
 	item2ID := makeItem("second item", 3)
 
 	const attachUUID = "relink-session-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "relink-target",
 		UUID:  attachUUID,
 		Path:  worktreePath,

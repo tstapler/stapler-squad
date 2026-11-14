@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -26,10 +27,10 @@ func TestWatchSessions_should_DeliverEvent_When_StatusFilterMatchesFailed(t *tes
 	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:   "watch-failed-status-filter",
 		UUID:    "eeeeeeee-0000-0000-0000-000000000001",
 		Status:  domain.Failed,

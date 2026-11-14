@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -38,7 +39,7 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 	is, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictFail,
 		Summary:        "Blocked by security check.",

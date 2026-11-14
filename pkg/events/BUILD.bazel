@@ -13,10 +13,10 @@ go_library(
     importpath = "github.com/tstapler/stapler-squad/pkg/events",
     visibility = ["//visibility:public"],
     deps = [
-        "//session",
         "//session/detection",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/instance",
         "//session/sshremote",
         "//tools/bzl/ent",
     ],
@@ -37,7 +37,7 @@ go_test(
     ],
     embed = [":events"],
     deps = [
-        "//session",
+        "//session/instance",
         "//testutil",
     ],
 )

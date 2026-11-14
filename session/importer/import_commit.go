@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
@@ -52,7 +53,7 @@ var ErrAmbiguousWithoutChoice = errors.New("import commit: correlation is ambigu
 // persist a managed Instance for an external candidate, start it resumed,
 // and suspend the original process.
 type CommitImportParams struct {
-	Detector     *session.HistoryFileDetector
+	Detector     *instance.HistoryFileDetector
 	Storage      session.InstanceStore
 	Registry     *session.Registry
 	Linker       *HistoryLinker
@@ -78,7 +79,7 @@ type CommitImportParams struct {
 
 // CommitImportResult is the domain-level outcome of a successful commit.
 type CommitImportResult struct {
-	Instance *session.Instance
+	Instance *instance.Instance
 	// FreshCreateTimeMs is the caller-supplied OriginalCreateTimeMs, echoed
 	// back for the caller to mint a fresh PIDIdentity in the RPC response
 	// (per import.proto's doc comment on
@@ -132,7 +133,7 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 	}
 
 	commitMu.Lock()
-	instance, err := func() (*session.Instance, error) {
+	instance, err := func() (*instance.Instance, error) {
 		defer commitMu.Unlock()
 
 		if err := CheckPathNotAlreadyManaged(params.Candidate.Path, params.Storage); err != nil {
@@ -142,7 +143,7 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 		title := importInstanceTitle(params.Candidate)
 		cfg := config.LoadConfig()
 		return CreateManagedInstance(ctx, CreateManagedInstanceParams{
-			Options: session.InstanceOptions{
+			Options: instance.InstanceOptions{
 				Title:            title,
 				Path:             params.Candidate.Path,
 				Program:          params.Candidate.Program,
@@ -152,7 +153,7 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 				// (tymux-bundled-integration Epic 4.4.3) so a canary override
 				// applies through this restore-from-state path too; there's no
 				// per-request override concept here.
-				Backend: session.ResolveSessionBackendForTitle(cfg, title, ""),
+				Backend: instance.ResolveSessionBackendForTitle(cfg, title, ""),
 			},
 			Storage:  params.Storage,
 			Registry: params.Registry,
@@ -223,7 +224,7 @@ func resolveResumeUUID(fresh, expected CorrelationResult, disambiguationChoice s
 // unfreeze). If suspension itself fails after the record was persisted, the
 // record is removed again so a subsequent restart doesn't try to resume a
 // process that was never actually stopped.
-func startAndSuspend(_ context.Context, params CommitImportParams, instance *session.Instance) error {
+func startAndSuspend(_ context.Context, params CommitImportParams, instance *instance.Instance) error {
 	if err := instance.Start(false); err != nil {
 		return fmt.Errorf("commit import: failed to start resumed instance: %w", err)
 	}

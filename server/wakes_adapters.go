@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Adapters from the server/wakes ports onto the services they stand in for.
@@ -37,10 +38,10 @@ func (s wakeSteerer) WriteWake(ctx context.Context, sessionUUID, text string) (w
 	return wakes.WriteIfIdle(ctx, instancePane{inst: inst}, text)
 }
 
-type instancePane struct{ inst *session.Instance }
+type instancePane struct{ inst *instance.Instance }
 
 func (p instancePane) Lock() (wakes.PaneLease, bool) {
-	lease, ok := p.inst.TryTerminalWriteLease(session.LeaseWriterSteer)
+	lease, ok := p.inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	if !ok {
 		return nil, false
 	}
@@ -48,8 +49,8 @@ func (p instancePane) Lock() (wakes.PaneLease, bool) {
 }
 
 type instanceLease struct {
-	inst  *session.Instance
-	lease *session.HeldLease
+	inst  *instance.Instance
+	lease *instance.HeldLease
 }
 
 func (l *instanceLease) Capture() (string, error) { return l.inst.CapturePaneContent() }
@@ -59,11 +60,11 @@ func (l *instanceLease) Release() { l.lease.Release() }
 // Submit verifies the tmux pane still belongs to the session (a tmux-name
 // collision would otherwise write into a stranger's pane), then writes.
 func (l *instanceLease) Submit(ctx context.Context, text string) error {
-	if err := session.VerifyPaneOwnershipBeforeWrite(ctx, l.inst); err != nil {
+	if err := instance.VerifyPaneOwnershipBeforeWrite(ctx, l.inst); err != nil {
 		l.lease.Release()
 		return err
 	}
-	return session.SubmitContentWithEnter(ctx, l.inst, l.lease, text)
+	return instance.SubmitContentWithEnter(ctx, l.inst, l.lease, text)
 }
 
 // wakeAdmission is BacklogService.Admit (the WIP cap); without a backlog
@@ -93,7 +94,7 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 		f = wakes.OwnerFacts{
 			Exists:   true,
 			Archived: snap.ArchivedAt != nil,
-			OneShot:  session.IsOneShot(inst),
+			OneShot:  instance.IsOneShot(inst),
 			Live:     snap.Status == domain.Active,
 			Starting: isStartingStatus(snap.Status),
 

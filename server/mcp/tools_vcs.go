@@ -8,6 +8,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type vcsHandlers struct {
@@ -154,7 +155,7 @@ func (vh *vcsHandlers) listSessionBranches(_ context.Context, req mcpgo.CallTool
 // ---- helpers ----
 
 // findInstance loads all sessions and returns the matching Instance.
-func (vh *vcsHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func (vh *vcsHandlers) findInstance(sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	instances, err := vh.store.LoadInstances()
 	if err != nil {
 		return nil, errResult(ErrInternalError, "failed to load sessions", "")
@@ -169,7 +170,7 @@ func (vh *vcsHandlers) findInstance(sessionID string) (*session.Instance, *mcpgo
 
 // openWorktree reconstructs a GitWorktree from the instance's stored paths.
 // This does not require the session to be running.
-func (vh *vcsHandlers) openWorktree(inst *session.Instance) (*git.GitWorktree, error) {
+func (vh *vcsHandlers) openWorktree(inst *instance.Instance) (*git.GitWorktree, error) {
 	ws := inst.Workspace()
 	if ws.ActiveDir == "" {
 		return nil, fmt.Errorf("session has no working directory")

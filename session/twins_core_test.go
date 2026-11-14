@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -75,7 +76,7 @@ func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome domain.Revie
 	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-review-" + uuid.New().String(),
-		SessionRole: SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        "no diff available",
@@ -90,7 +91,7 @@ func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome domain.Revie
 		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid.New().String(),
-			SessionRole: SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 	}
@@ -267,7 +268,7 @@ func (h *gateHarness) status(t *testing.T, id string) string {
 // moveRaw changes the stored status behind the gate's back (a concurrent mover).
 func (h *gateHarness) moveRaw(t *testing.T, id string, to domain.BacklogStatus) {
 	t.Helper()
-	_, err := h.repo.RawTransitionBacklogItemStatus(context.Background(), id, to, nil, TriggeredBySystem)
+	_, err := h.repo.RawTransitionBacklogItemStatus(context.Background(), id, to, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 }
 
@@ -277,7 +278,7 @@ func (h *gateHarness) newStuckInProgressItem(t *testing.T) *backlogdto.BacklogIt
 	ctx := context.Background()
 	item, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck item", Status: string(domain.BacklogStatusInProgress), Notes: "existing notes"})
 	require.NoError(t, err)
-	is, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
+	is, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, h.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now().Add(-time.Minute)))
 	return item

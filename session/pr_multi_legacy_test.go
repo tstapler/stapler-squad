@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ import (
 // the backfill and AttachPR must account for).
 func TestLegacySetGitHubPR_OverwriteLeavesTerminalFlagStale(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:                  "legacy-set-pr-stale",
 		GitHubOwner:            "acme",
 		GitHubRepo:             "app",
@@ -21,7 +22,7 @@ func TestLegacySetGitHubPR_OverwriteLeavesTerminalFlagStale(t *testing.T) {
 		GitHubPRNumber:         11,
 		GitHubPRStatusTerminal: true,
 	}
-	finishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 
 	inst.SetGitHubPR("https://github.com/acme/app/pull/12", 12)
 

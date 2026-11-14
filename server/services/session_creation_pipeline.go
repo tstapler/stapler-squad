@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -36,7 +37,7 @@ const maxCreationResolutionTimeout = 10 * time.Minute
 // than a same-typed-parameter pile -- see
 // .claude/rules/primitive-obsession-checklist.md.
 type creationPipelineParams struct {
-	instance *session.Instance
+	instance *instance.Instance
 	// epoch is instance.CreationEpoch(), captured once at spawn time, before
 	// any phase runs -- the only value the pipeline's one terminal write
 	// (commitTerminalStatus) presents back to win the race against a
@@ -267,9 +268,9 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		// values; that text is still logged in full above for debugging.
 		failureReason := "StartupError"
 		switch {
-		case errors.Is(startErr, session.ErrWorktreeResolutionFailed):
+		case errors.Is(startErr, instance.ErrWorktreeResolutionFailed):
 			failureReason = "WorktreeResolutionFailed"
-		case errors.Is(startErr, session.ErrDirectoryCollision):
+		case errors.Is(startErr, instance.ErrDirectoryCollision):
 			failureReason = "DirectoryCollision"
 		}
 		terminal(pipelineOutcome{domain.Failed, failureReason, SessionCreationOutcomeFailed})

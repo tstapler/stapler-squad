@@ -9,15 +9,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const concurrencyTestGuard = 10 * time.Second // failure guard only; never reached when passing
 
 // blockingPanePM blocks GetPanePID until release is closed, signalling entered.
 type blockingPanePM struct {
-	session.ProcessManager
+	instance.ProcessManager
 	enter   *sync.Once
 	calls   *atomic.Int64
 	entered chan struct{}
@@ -40,15 +40,15 @@ func TestHistoryLinker_Correlate_should_NotBlockOtherSessions_When_OneDetectionI
 	f := newLinkerFixture(t, "/repo/slowio")
 	f.write(t, claimOther, "{}", time.Second)
 
-	slow := &session.Instance{Title: "slow", Path: t.TempDir(), Status: domain.Active}
+	slow := &instance.Instance{Title: "slow", Path: t.TempDir(), Status: domain.Active}
 	pm := blockingPanePM{enter: new(sync.Once), entered: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
 	t.Cleanup(releasePane) // unblock slow even if an assertion fails first
 	slow.SetProcessManagerForTest(pm)
-	fast := &session.Instance{Title: "fast", Path: "/repo/slowio", Status: domain.Active}
+	fast := &instance.Instance{Title: "fast", Path: "/repo/slowio", Status: domain.Active}
 	fast.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
-	f.linker.SetInstances([]*session.Instance{slow, fast})
+	f.linker.SetInstances([]*instance.Instance{slow, fast})
 
 	slowDone := make(chan struct{})
 	go func() { defer close(slowDone); f.linker.correlateSession(slow, false) }()
@@ -75,9 +75,9 @@ func TestHistoryLinker_Correlate_should_LinkConversationToExactlyOneSession_When
 		f := newLinkerFixture(t, "/repo/race")
 		f.write(t, claimOther, "{}", time.Second)
 		const n = 8
-		insts := make([]*session.Instance, n)
+		insts := make([]*instance.Instance, n)
 		for i := range insts {
-			insts[i] = &session.Instance{Title: "racer-" + string(rune('a'+i)), Path: "/repo/race", Status: domain.Active}
+			insts[i] = &instance.Instance{Title: "racer-" + string(rune('a'+i)), Path: "/repo/race", Status: domain.Active}
 			insts[i].SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
 		}
 		f.linker.SetInstances(insts)
@@ -107,10 +107,10 @@ func TestHistoryLinker_Commit_should_NotDoubleLink_When_SiblingClaimsBetweenDete
 	t.Parallel()
 	f := newLinkerFixture(t, "/repo/commit")
 	path := f.write(t, claimOther, "{}", time.Second)
-	a := &session.Instance{Title: "a", Path: "/repo/commit", Status: domain.Active}
+	a := &instance.Instance{Title: "a", Path: "/repo/commit", Status: domain.Active}
 	a.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
-	b := &session.Instance{Title: "b", Path: "/repo/commit", Status: domain.Active}
-	f.linker.SetInstances([]*session.Instance{a, b})
+	b := &instance.Instance{Title: "b", Path: "/repo/commit", Status: domain.Active}
+	f.linker.SetInstances([]*instance.Instance{a, b})
 
 	info, viaPath := f.linker.detectLink(a, false)
 	require.NotNil(t, info)
@@ -131,10 +131,10 @@ func TestHistoryLinker_Commit_should_Reselect_When_ChosenConversationWasClaimed(
 	f := newLinkerFixture(t, "/repo/reselect")
 	f.write(t, claimOwnStart, "{}", 5*time.Second)
 	newest := f.write(t, claimOther, "{}", time.Second)
-	a := &session.Instance{Title: "a", Path: "/repo/reselect", Status: domain.Active}
+	a := &instance.Instance{Title: "a", Path: "/repo/reselect", Status: domain.Active}
 	a.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
-	b := &session.Instance{Title: "b", Path: "/repo/reselect", Status: domain.Active}
-	f.linker.SetInstances([]*session.Instance{a, b})
+	b := &instance.Instance{Title: "b", Path: "/repo/reselect", Status: domain.Active}
+	f.linker.SetInstances([]*instance.Instance{a, b})
 
 	info, viaPath := f.linker.detectLink(a, false)
 	require.Equal(t, claimOther, info.ConversationUUID)
@@ -153,10 +153,10 @@ func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t
 	t.Parallel()
 	f := newLinkerFixture(t, "/repo/stale")
 	f.write(t, claimOwnStart, "{}", 5*time.Second)
-	a := &session.Instance{Title: "a", Path: "/repo/stale", Status: domain.Active}
-	f.linker.SetInstances([]*session.Instance{a})
+	a := &instance.Instance{Title: "a", Path: "/repo/stale", Status: domain.Active}
+	f.linker.SetInstances([]*instance.Instance{a})
 
-	stale := &session.HistoryFileInfo{ConversationUUID: claimOwnStart}
+	stale := &instance.HistoryFileInfo{ConversationUUID: claimOwnStart}
 	a.SetHistoryInfo(claimOther, "/p/"+claimOther+".jsonl") // newer link landed first
 
 	assert.Nil(t, f.linker.commitLink(a, stale, true, false))
@@ -168,12 +168,12 @@ func TestHistoryLinker_Commit_should_KeepNewerLink_When_SessionLinkedMeanwhile(t
 func TestHistoryLinker_Commit_should_OverwriteWithPanePID_When_SessionLinkedMeanwhile(t *testing.T) {
 	t.Parallel()
 	f := newLinkerFixture(t, "/repo/panepid")
-	a := &session.Instance{Title: "a", Path: "/repo/panepid", Status: domain.Active}
-	f.linker.SetInstances([]*session.Instance{a})
+	a := &instance.Instance{Title: "a", Path: "/repo/panepid", Status: domain.Active}
+	f.linker.SetInstances([]*instance.Instance{a})
 
 	a.SetHistoryInfo(claimOther, "/p/"+claimOther+".jsonl") // path guess landed first
 
-	committed := f.linker.commitLink(a, &session.HistoryFileInfo{ConversationUUID: claimOwnStart}, false, false)
+	committed := f.linker.commitLink(a, &instance.HistoryFileInfo{ConversationUUID: claimOwnStart}, false, false)
 	require.NotNil(t, committed)
 	assert.Equal(t, claimOwnStart, a.GetClaudeSession().ConversationUUID)
 }
@@ -186,10 +186,10 @@ func TestHistoryLinker_Correlate_should_RecordMiss_When_SiblingOwnsOnlyCandidate
 	t.Parallel()
 	f := newLinkerFixture(t, "/repo/miss")
 	path := f.write(t, claimOther, "{}", time.Second)
-	a := &session.Instance{Title: "a", Path: "/repo/miss", Status: domain.Active}
+	a := &instance.Instance{Title: "a", Path: "/repo/miss", Status: domain.Active}
 	a.SetProcessManagerForTest(panePIDCountingPM{calls: new(atomic.Int64)})
-	sibling := &session.Instance{Title: "b", Path: "/repo/miss", Status: domain.Active}
-	f.linker.SetInstances([]*session.Instance{a, sibling})
+	sibling := &instance.Instance{Title: "b", Path: "/repo/miss", Status: domain.Active}
+	f.linker.SetInstances([]*instance.Instance{a, sibling})
 
 	f.linker.claimMu.Lock()
 	done := make(chan struct{})
@@ -260,14 +260,14 @@ func TestScanCoalescer_should_RunExactlyTwice_When_ManyCallersJoinDuringOneRun(t
 func TestHistoryLinker_ScanAll_should_CoalesceConcurrentCalls(t *testing.T) {
 	t.Parallel()
 	f := newLinkerFixture(t, "/repo/coalesce")
-	inst := &session.Instance{Title: "slow", Path: t.TempDir(), Status: domain.Active}
+	inst := &instance.Instance{Title: "slow", Path: t.TempDir(), Status: domain.Active}
 	scans := new(atomic.Int64)
 	pm := blockingPanePM{enter: new(sync.Once), calls: scans, entered: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	releasePane := func() { releaseOnce.Do(func() { close(pm.release) }) }
 	t.Cleanup(releasePane)
 	inst.SetProcessManagerForTest(pm)
-	f.linker.SetInstances([]*session.Instance{inst})
+	f.linker.SetInstances([]*instance.Instance{inst})
 
 	var wg sync.WaitGroup
 	wg.Add(1)

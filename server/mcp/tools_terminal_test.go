@@ -9,8 +9,8 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
@@ -30,7 +30,7 @@ func TestMCPPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
 // surface as an explicit, distinguishable error — not the generic internal
 // error every other SendKeys failure gets, and not success.
 func TestSubmitErrResult_MapsErrSubmitNotConfirmedToDistinctErrorCode(t *testing.T) {
-	res := submitErrResult(session.ErrSubmitNotConfirmed, "message")
+	res := submitErrResult(instance.ErrSubmitNotConfirmed, "message")
 	m := parseResult(t, res)
 
 	if success, _ := m["success"].(bool); success {
@@ -91,7 +91,7 @@ func TestReadOutputLineCap(t *testing.T) {
 		t.Fatalf("AppendOutput: %v", err)
 	}
 
-	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: sessionID}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: mgr,
@@ -187,7 +187,7 @@ func TestReadOutputSucceeds_When_ReadyWithNoNewBytes(t *testing.T) {
 		t.Fatalf("AppendOutput: %v", err)
 	}
 
-	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: sessionID}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: mgr,
@@ -208,8 +208,8 @@ func TestReadOutputSucceeds_When_ReadyWithNoNewBytes(t *testing.T) {
 
 // fakePane returns a capturePane seam yielding fixed content, standing in for a
 // live tmux pane so the MCP-only (no stream subscriber) path is testable.
-func fakePane(content string, err error) func(*session.Instance) (string, error) {
-	return func(*session.Instance) (string, error) { return content, err }
+func fakePane(content string, err error) func(*instance.Instance) (string, error) {
+	return func(*instance.Instance) (string, error) { return content, err }
 }
 
 // TestReadSessionOutput_NoStreamSubscriber_FallsBackToPane: scrollback is empty
@@ -217,7 +217,7 @@ func fakePane(content string, err error) func(*session.Instance) (string, error)
 func TestReadSessionOutput_NoStreamSubscriber_FallsBackToPane(t *testing.T) {
 	sessionID := "mcp-only"
 	th := &terminalHandlers{
-		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		store:       &stubStore{instances: []*instance.Instance{{Title: sessionID}}},
 		scrollback:  makeScrollbackMgr(t),
 		writeLim:    newTokenBucket(10, 10),
 		capturePane: fakePane("$ echo hi\nRUN_MARKER_9917\n$ ", nil),
@@ -243,7 +243,7 @@ func TestReadSessionOutput_PrefersScrollbackOverPane(t *testing.T) {
 		t.Fatal(err)
 	}
 	th := &terminalHandlers{
-		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		store:       &stubStore{instances: []*instance.Instance{{Title: sessionID}}},
 		scrollback:  mgr,
 		writeLim:    newTokenBucket(10, 10),
 		capturePane: fakePane("FROM_PANE", nil),
@@ -260,7 +260,7 @@ func TestReadSessionOutput_PrefersScrollbackOverPane(t *testing.T) {
 func TestReadOutputSessionNotReady(t *testing.T) {
 	sessionID := "not-ready-session"
 	th := &terminalHandlers{
-		store:       &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		store:       &stubStore{instances: []*instance.Instance{{Title: sessionID}}},
 		scrollback:  makeScrollbackMgr(t),
 		writeLim:    newTokenBucket(10, 10),
 		capturePane: fakePane("", streamhub.ErrSessionNotStarted),
@@ -284,7 +284,7 @@ func TestReadOutputSessionNotReady(t *testing.T) {
 func TestReadOutputSessionNotReady_RealUnstartedInstance(t *testing.T) {
 	sessionID := "unstarted"
 	th := &terminalHandlers{
-		store:      &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		store:      &stubStore{instances: []*instance.Instance{{Title: sessionID}}},
 		scrollback: makeScrollbackMgr(t),
 		writeLim:   newTokenBucket(10, 10),
 	}
@@ -302,7 +302,7 @@ func TestCollectCommandOutput_NoStreamSubscriber_ReturnsMarker(t *testing.T) {
 		scrollback:  makeScrollbackMgr(t),
 		capturePane: fakePane("$ echo RUN_MARKER_9917\nRUN_MARKER_9917\n$ ", nil),
 	}
-	m := parseResult(t, th.collectCommandOutput("mcp-only", &session.Instance{}, 10, 50))
+	m := parseResult(t, th.collectCommandOutput("mcp-only", &instance.Instance{}, 10, 50))
 	if success, _ := m["success"].(bool); !success {
 		t.Fatalf("expected success=true, got %v", m)
 	}
@@ -314,13 +314,13 @@ func TestCollectCommandOutput_NoStreamSubscriber_ReturnsMarker(t *testing.T) {
 // TestCollectCommandOutput_NeverNotReadyAfterSubmit: an unreadable pane or an
 // empty pane after a successful submit is success with empty output.
 func TestCollectCommandOutput_NeverNotReadyAfterSubmit(t *testing.T) {
-	for name, capture := range map[string]func(*session.Instance) (string, error){
+	for name, capture := range map[string]func(*instance.Instance) (string, error){
 		"empty pane":      fakePane("", nil),
 		"capture failure": fakePane("", streamhub.ErrSessionNotStarted),
 	} {
 		t.Run(name, func(t *testing.T) {
 			th := &terminalHandlers{scrollback: makeScrollbackMgr(t), capturePane: capture}
-			m := parseResult(t, th.collectCommandOutput("s", &session.Instance{}, 10, 50))
+			m := parseResult(t, th.collectCommandOutput("s", &instance.Instance{}, 10, 50))
 			if success, _ := m["success"].(bool); !success {
 				t.Fatalf("expected success=true, got %v", m)
 			}
@@ -334,7 +334,7 @@ func TestCollectCommandOutput_NeverNotReadyAfterSubmit(t *testing.T) {
 // TestWriteInputLengthCap verifies that writeToSession rejects inputs longer
 // than maxInputBytes with an INPUT_TOO_LONG error.  (U-4.9)
 func TestWriteInputLengthCap(t *testing.T) {
-	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: "s1"}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: makeScrollbackMgr(t),
@@ -413,7 +413,7 @@ func TestWaitForOutputTimeout(t *testing.T) {
 		t.Fatalf("AppendOutput: %v", err)
 	}
 
-	store := &stubStore{instances: []*session.Instance{{Title: sessionID}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: sessionID}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: mgr,
@@ -471,7 +471,7 @@ func TestWaitForOutputTimeout(t *testing.T) {
 // ─── U-GO-32: TestSteerSessionMCP_rejectsEmptyMessage ────────────────────────
 
 func TestSteerSessionMCP_rejectsEmptyMessage(t *testing.T) {
-	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: "s1"}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: makeScrollbackMgr(t),
@@ -495,7 +495,7 @@ func TestSteerSessionMCP_rejectsEmptyMessage(t *testing.T) {
 // ─── U-GO-33: TestSteerSessionMCP_rejectsMessageExceeding4096Bytes ────────────
 
 func TestSteerSessionMCP_rejectsMessageExceeding4096Bytes(t *testing.T) {
-	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: "s1"}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: makeScrollbackMgr(t),
@@ -528,7 +528,7 @@ func TestSteerSessionMCP_rejectsMessageExceeding4096Bytes(t *testing.T) {
 // ─── U-GO-34: TestSteerSessionMCP_stripsNullBytes ─────────────────────────────
 
 func TestSteerSessionMCP_stripsNullBytes(t *testing.T) {
-	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	store := &stubStore{instances: []*instance.Instance{{Title: "s1"}}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: makeScrollbackMgr(t),
@@ -564,12 +564,12 @@ func TestSteerSessionMCP_stripsNullBytes(t *testing.T) {
 // path was reached.
 
 func TestSteerSessionMCP_passesValidationAndReachesSendKeys(t *testing.T) {
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:   "active-session",
 		Status:  domain.Active,
 		Program: "claude",
 	}
-	store := &stubStore{instances: []*session.Instance{inst}}
+	store := &stubStore{instances: []*instance.Instance{inst}}
 	th := &terminalHandlers{
 		store:      store,
 		scrollback: makeScrollbackMgr(t),
@@ -610,10 +610,10 @@ func TestSteerSessionMCP_passesValidationAndReachesSendKeys(t *testing.T) {
 // fakeLiveInstanceFinder is a test double implementing liveInstanceFinder,
 // returning a scripted instance (or nil) per session ID.
 type fakeLiveInstanceFinder struct {
-	instances map[string]*session.Instance
+	instances map[string]*instance.Instance
 }
 
-func (f *fakeLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
+func (f *fakeLiveInstanceFinder) FindLiveInstance(id string) *instance.Instance {
 	return f.instances[id]
 }
 
@@ -631,12 +631,12 @@ func (f *fakeLiveInstanceFinder) FindLiveInstance(id string) *session.Instance {
 // WorkingDir) for the same session ID from each source and asserting the
 // live one wins.
 func TestFindInstance_should_returnLiveInstance_When_LiveFinderHasIt(t *testing.T) {
-	liveInst := &session.Instance{Title: "s1", WorkingDir: "/live/path"}
-	staleInst := &session.Instance{Title: "s1", WorkingDir: "/stale/reconstructed/path"}
+	liveInst := &instance.Instance{Title: "s1", WorkingDir: "/live/path"}
+	staleInst := &instance.Instance{Title: "s1", WorkingDir: "/stale/reconstructed/path"}
 
 	th := &terminalHandlers{
-		store: &stubStore{instances: []*session.Instance{staleInst}},
-		live:  &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"s1": liveInst}},
+		store: &stubStore{instances: []*instance.Instance{staleInst}},
+		live:  &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{"s1": liveInst}},
 	}
 
 	got, errRes := th.findInstance("s1")
@@ -653,10 +653,10 @@ func TestFindInstance_should_returnLiveInstance_When_LiveFinderHasIt(t *testing.
 // the review queue poller's scope) must still be found via the pre-fix
 // LoadInstances() path rather than returning SESSION_NOT_FOUND.
 func TestFindInstance_should_fallBackToStore_When_LiveFinderDoesNotHaveIt(t *testing.T) {
-	staleInst := &session.Instance{Title: "s1"}
+	staleInst := &instance.Instance{Title: "s1"}
 	th := &terminalHandlers{
-		store: &stubStore{instances: []*session.Instance{staleInst}},
-		live:  &fakeLiveInstanceFinder{instances: map[string]*session.Instance{}}, // wired, but doesn't have "s1"
+		store: &stubStore{instances: []*instance.Instance{staleInst}},
+		live:  &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{}}, // wired, but doesn't have "s1"
 	}
 
 	got, errRes := th.findInstance("s1")
@@ -672,8 +672,8 @@ func TestFindInstance_should_fallBackToStore_When_LiveFinderDoesNotHaveIt(t *tes
 // nil-safety guard — th.live unset (as in every pre-existing test in this
 // file) must behave exactly as before this fix, not panic.
 func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
-	staleInst := &session.Instance{Title: "s1"}
-	th := &terminalHandlers{store: &stubStore{instances: []*session.Instance{staleInst}}}
+	staleInst := &instance.Instance{Title: "s1"}
+	th := &terminalHandlers{store: &stubStore{instances: []*instance.Instance{staleInst}}}
 
 	got, errRes := th.findInstance("s1")
 	if errRes != nil {
@@ -689,7 +689,7 @@ func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
 // state, write_to_session and send_control return the identical result for a
 // hidden and a visible session, and neither is a read-only refusal.
 func TestMCPWriteTools_ShouldBehaveAsBeforeForHidden_WhenWriteToSessionAndSendControlCalled(t *testing.T) {
-	store := &stubStore{instances: []*session.Instance{
+	store := &stubStore{instances: []*instance.Instance{
 		{Title: "visible-s", Status: domain.Active, Program: "claude"},
 		{Title: "hidden-s", Status: domain.Active, Program: "claude", Hidden: true},
 	}}

@@ -146,9 +146,13 @@ for (const renderer of ['xterm', 'ghostty'] as RendererKind[]) {
         w.__frames = 0;
         w.__sampling = true;
         const scratch = document.createElement('canvas').getContext('2d');
-        // One-colour test of the renderer's canvas, read back through a 2D canvas so WebGL canvases work too.
+        // A WebGL renderer (xterm's addon) clears its buffer after each composite, so a requestAnimationFrame
+        // readback is blank by design and its overlay layers (links) are always one colour: nothing is readable.
+        // getContext('2d') is null for a canvas that already holds a WebGL context.
+        const webgl = Array.from(root.querySelectorAll('canvas')).some((c) => c.getContext('2d') === null);
+        // One-colour test of the renderer's 2D canvas (ghostty), read back through a scratch 2D canvas.
         const canvasBlank = (src: HTMLCanvasElement): boolean | null => {
-          if (!scratch || src.width === 0 || src.height === 0) return null;
+          if (!scratch || webgl || src.width === 0 || src.height === 0) return null;
           try {
             scratch.canvas.width = Math.min(src.width, 400);
             scratch.canvas.height = Math.min(src.height, 400);
@@ -177,6 +181,8 @@ for (const renderer of ['xterm', 'ghostty'] as RendererKind[]) {
       await imeCompose(page, 'world');
       await imeCommit(page, 'world');
       await expect.poll(() => term.promptLine()).toBe('$ echo world');
+      // The rewrite can finish between two frames on a loaded runner; keep sampling until one has been read.
+      await expect.poll(() => page.evaluate(() => (window as unknown as { __frames: number }).__frames)).toBeGreaterThan(0);
       const { frames, blank, read } = await page.evaluate(() => {
         const w = window as unknown as { __sampling: boolean; __blank: number; __read: number; __frames: number };
         w.__sampling = false;

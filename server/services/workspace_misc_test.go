@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ func TestGetWorkspaceInfo_NoSession(t *testing.T) {
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+	require.NoError(t, fix.storage.AddInstance(&instance.Instance{
 		Title:   "non-vcs-session",
 		Path:    "/tmp",
 		Status:  domain.Paused,
@@ -121,7 +121,7 @@ func TestListWorkspaceTargets_NoConfig(t *testing.T) {
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+	require.NoError(t, fix.storage.AddInstance(&instance.Instance{
 		Title:   "non-vcs-targets-session",
 		Path:    "/tmp",
 		Status:  domain.Paused,

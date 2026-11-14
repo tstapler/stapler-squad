@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
@@ -34,13 +35,13 @@ func TestConsentEnrichmentProbe_ResumesOriginalKeyForEachRoot(t *testing.T) {
 	}, nil, nil)
 	probe := ConsentEnrichmentProbe(gate)
 	_, err = probe(work)
-	require.True(t, errors.Is(err, errEnrichmentParked))
+	require.True(t, errors.Is(err, instance.ErrEnrichmentParked))
 	require.Len(t, gate.Roots(), 1)
 	paths, err := gate.Continue(gate.Roots()[0].ID)
 	require.NoError(t, err)
 	require.Equal(t, []string{work}, paths)
 	_, err = probe(work)
-	require.ErrorIs(t, err, errEnrichmentParked)
+	require.ErrorIs(t, err, instance.ErrEnrichmentParked)
 	require.Len(t, gate.Roots(), 2)
 	for _, r := range gate.Roots() {
 		if !r.Consented {

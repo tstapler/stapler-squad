@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- fixtures --------------------------------------------------------------
@@ -37,7 +38,7 @@ func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionF
 	ctx := context.Background()
 
 	item := h.newItem(t, domain.BacklogStatusReady)
-	got, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerQueueBacklogItem, ItemID: item.ID, To: domain.BacklogStatusQueued, TriggeredBy: TriggeredBySystem})
+	got, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerQueueBacklogItem, ItemID: item.ID, To: domain.BacklogStatusQueued, TriggeredBy: instance.TriggeredBySystem})
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusQueued), got.Status)
 	require.Equal(t, string(domain.BacklogStatusReady), lastEvent(t, h, item.ID).FromStatus, "from is the observed status")
@@ -48,7 +49,7 @@ func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionF
 	require.NoError(t, err)
 	h.moveRaw(t, stale.ID, domain.BacklogStatusQueued)
 
-	_, err = h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerQueueBacklogItem, Observed: observed, To: domain.BacklogStatusIdea, TriggeredBy: TriggeredBySystem})
+	_, err = h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerQueueBacklogItem, Observed: observed, To: domain.BacklogStatusIdea, TriggeredBy: instance.TriggeredBySystem})
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.NotErrorIs(t, err, ErrTransitionNotAllowed)
 	require.Equal(t, string(domain.BacklogStatusQueued), h.status(t, stale.ID), "nothing is written")
@@ -87,14 +88,14 @@ func TestGatedTransition_PassesWholePreconditionThrough_AndRecordsNoteAndTrigger
 	fresh, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	_, err = h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerQueueBacklogItem, ItemID: item.ID, To: domain.BacklogStatusQueued, TriggeredBy: TriggeredBySystem,
+		Caller: domain.CallerQueueBacklogItem, ItemID: item.ID, To: domain.BacklogStatusQueued, TriggeredBy: instance.TriggeredBySystem,
 		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedUpdatedAt: &fresh.UpdatedAt, Note: "WIP cap hit"},
 	})
 	require.NoError(t, err)
 	ev := lastEvent(t, h, item.ID)
 	require.NotNil(t, ev.Note)
 	require.Equal(t, "WIP cap hit", *ev.Note)
-	require.Equal(t, TriggeredBySystem, ev.TriggeredBy)
+	require.Equal(t, instance.TriggeredBySystem, ev.TriggeredBy)
 }
 
 func TestGatedTransition_PinsUpdatedAtOnlyWhenGuardInputAndObservedSupplied(t *testing.T) {
@@ -459,17 +460,17 @@ func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusQueued)
 
-	_, err := h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, nil, TriggeredBySystem)
+	_, err := h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.ErrorIs(t, err, backlogdto.ErrInvalidTransitionRequest)
-	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{}, TriggeredBySystem)
+	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{}, instance.TriggeredBySystem)
 	require.ErrorIs(t, err, backlogdto.ErrInvalidTransitionRequest)
 
 	before := EngineBypassCount(backlogdto.CallerRollback)
-	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}, TriggeredBySystem)
+	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}, instance.TriggeredBySystem)
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, before, EngineBypassCount(backlogdto.CallerRollback), "a lost CAS is not a bypass write")
 
-	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusQueued)}, TriggeredBySystem)
+	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusQueued)}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusReady), h.status(t, item.ID))
 	require.Equal(t, before+1, EngineBypassCount(backlogdto.CallerRollback))
@@ -482,11 +483,11 @@ func TestDebugForce_WritesAnyStatusUnchecked_AndCountsBypass(t *testing.T) {
 	item := h.newItem(t, domain.BacklogStatusIdea)
 
 	before := EngineBypassCount(backlogdto.CallerDebug)
-	_, err := h.storage.DebugForce(ctx, item.ID, domain.BacklogStatusDone, TriggeredByUser) // idea->done has no edge
+	_, err := h.storage.DebugForce(ctx, item.ID, domain.BacklogStatusDone, instance.TriggeredByUser) // idea->done has no edge
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusDone), h.status(t, item.ID))
 
-	_, err = h.storage.DebugForce(ctx, item.ID, domain.BacklogStatusArchived, TriggeredByUser)
+	_, err = h.storage.DebugForce(ctx, item.ID, domain.BacklogStatusArchived, instance.TriggeredByUser)
 	require.NoError(t, err)
 	archived, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -504,7 +505,7 @@ func TestGatedArchive_ArchivesFromAnyStatus_AndBeforeCommitRunsFirst(t *testing.
 		item := h.newItem(t, domain.BacklogStatusInProgress)
 		var statusInHook string
 		got, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser,
+			Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: instance.TriggeredByUser,
 			Precondition: &backlogdto.BacklogItemPrecondition{Note: "operator archived"},
 			BeforeCommit: func(context.Context) error { statusInHook = h.status(t, item.ID); return nil },
 		})
@@ -525,10 +526,10 @@ func TestGatedArchive_AlreadyArchived_DecidesOnSystemRequiredEdgeAndRewrites(t *
 	for _, mode := range []EngineMode{ModeOff, ModeShadow, ModeEnforce} {
 		h := newGateHarness(t, mode)
 		item := h.newItem(t, domain.BacklogStatusReady)
-		_, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser})
+		_, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: instance.TriggeredByUser})
 		require.NoError(t, err)
 
-		again, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser})
+		again, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: instance.TriggeredByUser})
 		require.NoError(t, err, "re-archive is allowed in mode %d", mode)
 		require.Equal(t, string(domain.BacklogStatusArchived), again.Status)
 		require.Equal(t, string(domain.BacklogStatusArchived), lastEvent(t, h, item.ID).FromStatus, "the second write is archived->archived")
@@ -690,7 +691,7 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	require.Equal(t, string(domain.BacklogStatusReview), got.Status)
 	require.Equal(t, "existing notes\n[auto] Transitioned to review: all work sessions ended.", got.Notes)
 	ev := lastEvent(t, h, approved.ID)
-	require.Equal(t, TriggeredBySystem, ev.TriggeredBy)
+	require.Equal(t, instance.TriggeredBySystem, ev.TriggeredBy)
 	require.Equal(t, string(domain.BacklogStatusInProgress), ev.FromStatus)
 	require.Equal(t, string(domain.BacklogStatusReview), ev.ToStatus)
 	require.Len(t, got.StatusEvents, 1, "one status event for the moved item")
@@ -717,7 +718,7 @@ func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenId
 
 	item, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "running", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
+	_, err = h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	moved, err = h.storage.GatedReconcileStuck(ctx)
 	require.NoError(t, err)

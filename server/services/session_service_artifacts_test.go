@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 )
 
@@ -31,7 +31,7 @@ func TestRescanSessionArtifacts_ShouldResetPositionAndScan_WhenAnyState(t *testi
 			line := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"https://github.com/o/r/pull/4"}]}}` + "\n"
 			require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
 
-			inst := &session.Instance{Title: "rescan-me", Status: status}
+			inst := &instance.Instance{Title: "rescan-me", Status: status}
 			inst.SetHistoryInfo("conv", path)
 
 			var scans atomic.Int32
@@ -47,7 +47,7 @@ func TestRescanSessionArtifacts_ShouldResetPositionAndScan_WhenAnyState(t *testi
 			ae.OnHistoryFileChanged(path)
 			require.Eventually(t, func() bool { return scans.Load() == 1 }, 10*time.Second, 10*time.Millisecond)
 
-			svc := &ArtifactService{rescanner: ae, findInstance: func(string) *session.Instance { return inst }}
+			svc := &ArtifactService{rescanner: ae, findInstance: func(string) *instance.Instance { return inst }}
 			resp, err := svc.RescanSessionArtifacts(ctx, rescanReq("rescan-me"))
 
 			require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestRescanSessionArtifacts_ShouldFail_WhenSessionMissing(t *testing.T) {
 	t.Parallel()
 	svc := &ArtifactService{
 		rescanner:    artifacts.NewArtifactExtractor(nil, nil, nil),
-		findInstance: func(string) *session.Instance { return nil },
+		findInstance: func(string) *instance.Instance { return nil },
 	}
 	_, err := svc.RescanSessionArtifacts(context.Background(), rescanReq("nope"))
 	require.Error(t, err)
@@ -76,7 +76,7 @@ func TestRescanSessionArtifacts_ShouldReportNotStarted_WhenNoTranscriptLinked(t 
 	t.Parallel()
 	svc := &ArtifactService{
 		rescanner:    artifacts.NewArtifactExtractor(nil, nil, nil),
-		findInstance: func(string) *session.Instance { return &session.Instance{Title: "unlinked"} },
+		findInstance: func(string) *instance.Instance { return &instance.Instance{Title: "unlinked"} },
 	}
 	resp, err := svc.RescanSessionArtifacts(context.Background(), rescanReq("unlinked"))
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestRescanSessionArtifacts_ShouldReportNotStarted_WhenNoTranscriptLinked(t 
 
 func TestRescanSessionArtifacts_ShouldFail_WhenExtractorNotRunning(t *testing.T) {
 	t.Parallel()
-	svc := &ArtifactService{findInstance: func(string) *session.Instance { return &session.Instance{} }}
+	svc := &ArtifactService{findInstance: func(string) *instance.Instance { return &instance.Instance{} }}
 	_, err := svc.RescanSessionArtifacts(context.Background(), rescanReq("x"))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }

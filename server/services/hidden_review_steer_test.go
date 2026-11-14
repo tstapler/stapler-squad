@@ -16,9 +16,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // steerEnv is a SessionService with an audit sink on an in-memory file system,
@@ -33,7 +33,7 @@ type steerEnv struct {
 }
 
 type steerTarget struct {
-	inst        *session.Instance
+	inst        *instance.Instance
 	pm          *steerRecordingPM
 	itemSession string
 }
@@ -54,10 +54,10 @@ func newSteerEnv(t *testing.T) *steerEnv {
 
 // addSession registers a started instance on a recording pane. role "" leaves
 // it with no item_session row.
-func (e *steerEnv) addSession(title string, hidden bool, role string, tweak ...func(*session.Instance)) *steerTarget {
+func (e *steerEnv) addSession(title string, hidden bool, role string, tweak ...func(*instance.Instance)) *steerTarget {
 	e.t.Helper()
 	pm := &steerRecordingPM{}
-	inst := session.NewStartedInstanceForTest(e.t, title, pm)
+	inst := instance.NewStartedInstanceForTest(e.t, title, pm)
 	inst.UUID = title + "-uuid"
 	inst.Path = e.t.TempDir()
 	inst.Status = domain.Active
@@ -75,7 +75,7 @@ func (e *steerEnv) addSession(title string, hidden bool, role string, tweak ...f
 	return tgt
 }
 
-func (e *steerEnv) linkRow(inst *session.Instance, role string) string {
+func (e *steerEnv) linkRow(inst *instance.Instance, role string) string {
 	e.t.Helper()
 	ctx := context.Background()
 	item, err := e.fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
@@ -149,22 +149,22 @@ func steerLines(all []AuditLine, kind string) []AuditLine {
 // T-RO-23
 func TestBacklogSteer_ShouldSucceedWithOneAuditPairAndMetric_WhenHiddenLiveLinkedReviewAndFailPreconditionWithZeroWrites_WhenTriageDiagnoseOtherUnlinkedOrEnded(t *testing.T) {
 	e := newSteerEnv(t)
-	review := e.addSession("review-ok", true, session.SessionRoleReview)
+	review := e.addSession("review-ok", true, instance.SessionRoleReview)
 	const msg = "re-check the acceptance criteria"
 
 	require.NoError(t, e.steer(e.localCtx(), review.inst.Title, msg))
-	assert.Equal(t, []string{msg, session.EnterKeySequence}, review.pm.writes())
+	assert.Equal(t, []string{msg, instance.EnterKeySequence}, review.pm.writes())
 	assert.EqualValues(t, 1, e.count(steerOutcomeSent))
-	session.AssertLeaseFree(t, review.inst)
+	instance.AssertLeaseFree(t, review.inst)
 
-	for _, role := range []string{session.SessionRoleDiagnose, session.SessionRoleTriage, session.SessionRoleExternal, ""} {
+	for _, role := range []string{instance.SessionRoleDiagnose, instance.SessionRoleTriage, instance.SessionRoleExternal, ""} {
 		tgt := e.addSession("hidden-"+role+"-x", true, role)
 		err := e.steer(e.localCtx(), tgt.inst.Title, msg)
 		require.Error(t, err, role)
 		assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err), role)
 		assert.Empty(t, tgt.pm.writes(), "role %q: 0 writes", role)
 	}
-	ended := e.addSession("review-ended", true, session.SessionRoleReview)
+	ended := e.addSession("review-ended", true, instance.SessionRoleReview)
 	e.endRow(ended.itemSession)
 	err := e.steer(e.localCtx(), ended.inst.Title, msg)
 	require.Error(t, err)
@@ -194,7 +194,7 @@ func TestBacklogSteer_ShouldSucceedWithOneAuditPairAndMetric_WhenHiddenLiveLinke
 
 func TestBacklogSteer_ShouldRecordOnlyThe80CharacterPreview_WhenTheMessageIsLong(t *testing.T) {
 	e := newSteerEnv(t)
-	review := e.addSession("review-long", true, session.SessionRoleReview)
+	review := e.addSession("review-long", true, instance.SessionRoleReview)
 	msg := strings.Repeat("a", 79) + "é" + strings.Repeat("b", 500)
 
 	require.NoError(t, e.steer(e.localCtx(), review.inst.Title, msg))
@@ -206,7 +206,7 @@ func TestBacklogSteer_ShouldRecordOnlyThe80CharacterPreview_WhenTheMessageIsLong
 // T-RO-25
 func TestBacklogSteer_ShouldReturnInternalWithZeroWritesAndAuditFailedMetric_WhenPreWriteAuditAppendFails(t *testing.T) {
 	e := newSteerEnv(t)
-	review := e.addSession("review-audit", true, session.SessionRoleReview)
+	review := e.addSession("review-audit", true, instance.SessionRoleReview)
 	e.mfs.setFailWrite(errors.New("disk full"))
 
 	err := e.steer(e.localCtx(), review.inst.Title, "go")
@@ -215,7 +215,7 @@ func TestBacklogSteer_ShouldReturnInternalWithZeroWritesAndAuditFailedMetric_Whe
 	assert.Contains(t, strings.ToLower(err.Error()), "audit log unavailable")
 	assert.Empty(t, review.pm.writes())
 	assert.EqualValues(t, 1, e.count(steerOutcomeAuditFailed))
-	session.AssertLeaseFree(t, review.inst)
+	instance.AssertLeaseFree(t, review.inst)
 }
 
 // T-RO-27
@@ -228,17 +228,17 @@ func TestBacklogReviewLink_ShouldKeyOnNewestDurableItemSessionRoleReviewAndEnded
 		return ok
 	}
 
-	untagged := e.addSession("review-untagged", true, session.SessionRoleReview)
+	untagged := e.addSession("review-untagged", true, instance.SessionRoleReview)
 	require.NoError(t, untagged.inst.SetTags(nil))
 	assert.True(t, resolve(untagged), "a review row links with no backlog:review tag")
 
-	tagged := e.addSession("diagnose-tagged", true, session.SessionRoleDiagnose)
+	tagged := e.addSession("diagnose-tagged", true, instance.SessionRoleDiagnose)
 	require.NoError(t, tagged.inst.SetTags([]string{"backlog:review"}))
 	assert.False(t, resolve(tagged), "the tag does not make a diagnose row a review link")
 
 	// The newest row wins: a review row followed by a diagnose row is not a review link.
-	both := e.addSession("review-then-diagnose", true, session.SessionRoleReview)
-	e.linkRow(both.inst, session.SessionRoleDiagnose)
+	both := e.addSession("review-then-diagnose", true, instance.SessionRoleReview)
+	e.linkRow(both.inst, instance.SessionRoleDiagnose)
 	assert.False(t, resolve(both))
 
 	// A tag edit in the same request never changes eligibility.
@@ -252,7 +252,7 @@ func TestBacklogReviewLink_ShouldKeyOnNewestDurableItemSessionRoleReviewAndEnded
 func TestBacklogSteer_ShouldReturnNoLinkWithZeroWrites_WhenInstanceStoppedEndedAtNotYetWrittenOrSessionEndsBetweenFirstCheckAndPostAuditRecheck(t *testing.T) {
 	t.Run("instance stopped before EndedAt is written", func(t *testing.T) {
 		e := newSteerEnv(t)
-		tgt := e.addSession("review-stopped", true, session.SessionRoleReview)
+		tgt := e.addSession("review-stopped", true, instance.SessionRoleReview)
 		tgt.inst.Status = domain.Stopped
 
 		err := e.steer(e.localCtx(), tgt.inst.Title, "go")
@@ -262,10 +262,10 @@ func TestBacklogSteer_ShouldReturnNoLinkWithZeroWrites_WhenInstanceStoppedEndedA
 	})
 	t.Run("ends between the first check and the post-audit re-check", func(t *testing.T) {
 		e := newSteerEnv(t)
-		tgt := e.addSession("review-racing", true, session.SessionRoleReview)
+		tgt := e.addSession("review-racing", true, instance.SessionRoleReview)
 		real := e.fix.svc.backlogLinks
 		calls := 0
-		e.fix.svc.backlogLinks = linkResolverFunc(func(ctx context.Context, inst *session.Instance) (BacklogReviewLink, bool, error) {
+		e.fix.svc.backlogLinks = linkResolverFunc(func(ctx context.Context, inst *instance.Instance) (BacklogReviewLink, bool, error) {
 			calls++
 			if calls > 1 {
 				return BacklogReviewLink{}, false, nil
@@ -278,7 +278,7 @@ func TestBacklogSteer_ShouldReturnNoLinkWithZeroWrites_WhenInstanceStoppedEndedA
 		assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 		assert.Empty(t, tgt.pm.writes())
 		assert.EqualValues(t, 1, e.count(steerOutcomeNoLink))
-		session.AssertLeaseFree(t, tgt.inst)
+		instance.AssertLeaseFree(t, tgt.inst)
 
 		all := steerLines(e.auditLines(), auditKindBacklogSteer)
 		require.Len(t, all, 2)
@@ -286,16 +286,16 @@ func TestBacklogSteer_ShouldReturnNoLinkWithZeroWrites_WhenInstanceStoppedEndedA
 	})
 }
 
-type linkResolverFunc func(ctx context.Context, inst *session.Instance) (BacklogReviewLink, bool, error)
+type linkResolverFunc func(ctx context.Context, inst *instance.Instance) (BacklogReviewLink, bool, error)
 
-func (f linkResolverFunc) ResolveLiveReviewLink(ctx context.Context, inst *session.Instance) (BacklogReviewLink, bool, error) {
+func (f linkResolverFunc) ResolveLiveReviewLink(ctx context.Context, inst *instance.Instance) (BacklogReviewLink, bool, error) {
 	return f(ctx, inst)
 }
 
 // T-RO-33
 func TestBacklogSteer_ShouldRejectEscC1BidiAndU2028CharactersButAcceptLfAndTabUpTo10000Bytes_WhenSteerMessageValidated(t *testing.T) {
 	e := newSteerEnv(t)
-	review := e.addSession("review-text", true, session.SessionRoleReview)
+	review := e.addSession("review-text", true, instance.SessionRoleReview)
 
 	for name, bad := range map[string]string{
 		"esc":  "go\x1b[31m",
@@ -314,7 +314,7 @@ func TestBacklogSteer_ShouldRejectEscC1BidiAndU2028CharactersButAcceptLfAndTabUp
 	require.NoError(t, e.steer(e.localCtx(), review.inst.Title, "line one\n\tindented\u200dzwj"))
 	assert.Len(t, review.pm.writes(), 2)
 
-	exact := strings.Repeat("x", session.MaxSteerMessageLength)
+	exact := strings.Repeat("x", instance.MaxSteerMessageLength)
 	require.NoError(t, validateBacklogSteerText(exact))
 	require.Error(t, validateBacklogSteerText(exact+"x"))
 }
@@ -322,7 +322,7 @@ func TestBacklogSteer_ShouldRejectEscC1BidiAndU2028CharactersButAcceptLfAndTabUp
 // T-RO-34
 func TestBacklogSteer_ShouldReturnPermissionDeniedWithZeroWritesOnHostRebindingOrForeignOrigin_AndStillSteerAVerifiedLanHostnameBrowserOnAWildcardBindWithAuthOff_AndOnTheAuthenticatedChainWithAnUndetectedHostOrAnIpLiteralHost(t *testing.T) {
 	e := newSteerEnv(t)
-	review := e.addSession("review-host", true, session.SessionRoleReview)
+	review := e.addSession("review-host", true, instance.SessionRoleReview)
 
 	denied := []struct {
 		name string
@@ -352,7 +352,7 @@ func TestBacklogSteer_ShouldReturnPermissionDeniedWithZeroWritesOnHostRebindingO
 // T-RO-26
 func TestUpdateSession_ShouldDecideSteerAccessFirstAndRejectSteerCombinedWithOtherFieldsForHidden_LeavingTitleTagsCategoryAndNoteUnchanged(t *testing.T) {
 	e := newSteerEnv(t)
-	review := e.addSession("review-alone", true, session.SessionRoleReview)
+	review := e.addSession("review-alone", true, instance.SessionRoleReview)
 	review.inst.Category = "orig-cat"
 	review.inst.Note = "orig note"
 	steer, title, cat, note := "go", "renamed", "new-cat", "new note"
@@ -370,7 +370,7 @@ func TestUpdateSession_ShouldDecideSteerAccessFirstAndRejectSteerCombinedWithOth
 	assert.Empty(t, review.pm.writes())
 
 	// A hidden non-qualifying target is refused before any other field applies.
-	tri := e.addSession("triage-x", true, session.SessionRoleTriage)
+	tri := e.addSession("triage-x", true, instance.SessionRoleTriage)
 	_, err = e.fix.svc.UpdateSession(e.localCtx(), connect.NewRequest(&sessionv1.UpdateSessionRequest{
 		Id: tri.inst.Title, SteerMessage: &steer, Note: &note,
 	}))
@@ -381,7 +381,7 @@ func TestUpdateSession_ShouldDecideSteerAccessFirstAndRejectSteerCombinedWithOth
 // T-RO-15
 func TestUpdateSessionSteer_ShouldRejectHiddenTriageDiagnoseOtherUnlinkedOrEndedButReadRPCsAndSteerActiveSessionSucceed(t *testing.T) {
 	e := newSteerEnv(t)
-	tgt := e.addSession("hidden-triage-read", true, session.SessionRoleTriage)
+	tgt := e.addSession("hidden-triage-read", true, instance.SessionRoleTriage)
 
 	err := e.steer(e.localCtx(), tgt.inst.Title, "go")
 	require.Error(t, err)
@@ -391,9 +391,9 @@ func TestUpdateSessionSteer_ShouldRejectHiddenTriageDiagnoseOtherUnlinkedOrEnded
 	_, err = e.fix.svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{Id: tgt.inst.Title}))
 	require.NoError(t, err, "read RPCs stay open")
 
-	e.fix.svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return notReadyNone }
+	e.fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
 	require.NoError(t, e.fix.svc.SteerActiveSession(context.Background(), tgt.inst.UUID, "internal go"))
-	assert.Equal(t, []string{"internal go", session.EnterKeySequence}, tgt.pm.writes(), "the internal steer is characterized and unchanged")
+	assert.Equal(t, []string{"internal go", instance.EnterKeySequence}, tgt.pm.writes(), "the internal steer is characterized and unchanged")
 }
 
 func TestUpdateSessionSteer_ShouldBeUnchanged_WhenTheTargetIsVisible(t *testing.T) {
@@ -401,7 +401,7 @@ func TestUpdateSessionSteer_ShouldBeUnchanged_WhenTheTargetIsVisible(t *testing.
 	vis := e.addSession("visible-steer", false, "")
 
 	require.NoError(t, e.steer(context.Background(), vis.inst.Title, "hello"), "no request record is needed for a visible target")
-	assert.Equal(t, []string{"hello", session.EnterKeySequence}, vis.pm.writes())
+	assert.Equal(t, []string{"hello", instance.EnterKeySequence}, vis.pm.writes())
 	assert.Empty(t, e.auditLines(), "a visible steer writes no audit line")
 }
 
@@ -411,22 +411,22 @@ func TestSteerAuthorized_ShouldRefuseAndWriteNothing_WhenTokenInstanceUuidDiffer
 	a := e.addSession("steer-a", false, "")
 	b := e.addSession("steer-b", false, "")
 	ctx := context.Background()
-	acquire := func(inst *session.Instance) *session.HeldLease {
-		l, ok := inst.TryTerminalWriteLease(session.LeaseWriterSteer)
+	acquire := func(inst *instance.Instance) *instance.HeldLease {
+		l, ok := inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 		require.True(t, ok)
 		return l
 	}
 
 	cases := map[string]struct {
 		auth  steerAuthorization
-		inst  *session.Instance
-		lease func() *session.HeldLease
+		inst  *instance.Instance
+		lease func() *instance.HeldLease
 		want  error
 	}{
-		"token for another instance": {internalSteerAuthorization(a.inst), b.inst, func() *session.HeldLease { return acquire(b.inst) }, errSteerAuthTargetDiffer},
-		"zero token":                 {steerAuthorization{}, b.inst, func() *session.HeldLease { return acquire(b.inst) }, errSteerNoAuthorization},
-		"lease of another instance":  {internalSteerAuthorization(b.inst), b.inst, func() *session.HeldLease { return acquire(a.inst) }, session.ErrLeaseMismatch},
-		"nil lease":                  {internalSteerAuthorization(b.inst), b.inst, func() *session.HeldLease { return nil }, session.ErrNoLease},
+		"token for another instance": {internalSteerAuthorization(a.inst), b.inst, func() *instance.HeldLease { return acquire(b.inst) }, errSteerAuthTargetDiffer},
+		"zero token":                 {steerAuthorization{}, b.inst, func() *instance.HeldLease { return acquire(b.inst) }, errSteerNoAuthorization},
+		"lease of another instance":  {internalSteerAuthorization(b.inst), b.inst, func() *instance.HeldLease { return acquire(a.inst) }, instance.ErrLeaseMismatch},
+		"nil lease":                  {internalSteerAuthorization(b.inst), b.inst, func() *instance.HeldLease { return nil }, instance.ErrNoLease},
 	}
 	for name, c := range cases {
 		err := e.fix.svc.steerAuthorized(ctx, c.auth, c.lease(), c.inst, "x")
@@ -434,8 +434,8 @@ func TestSteerAuthorized_ShouldRefuseAndWriteNothing_WhenTokenInstanceUuidDiffer
 	}
 	assert.Empty(t, a.pm.writes())
 	assert.Empty(t, b.pm.writes())
-	session.AssertLeaseFree(t, a.inst)
-	session.AssertLeaseFree(t, b.inst)
+	instance.AssertLeaseFree(t, a.inst)
+	instance.AssertLeaseFree(t, b.inst)
 
 	// Each kind steers its own instance.
 	for _, auth := range []steerAuthorization{
@@ -452,7 +452,7 @@ func TestSteerAuthorized_ShouldRefuseAndWriteNothing_WhenTokenInstanceUuidDiffer
 func TestSteerChains_ShouldWriteOnceOnAFreeLeaseAndReturnRetryableBusyOnAHeldLeaseWithoutAnyLinkReturningBusyToItself_WhenUpdateSessionSteerBacklogSteerAndSteerActiveSessionRun(t *testing.T) {
 	e := newSteerEnv(t)
 	vis := e.addSession("chain-visible", false, "")
-	review := e.addSession("chain-review", true, session.SessionRoleReview)
+	review := e.addSession("chain-review", true, instance.SessionRoleReview)
 	internal := e.addSession("chain-internal", true, "")
 
 	chains := map[string]struct {
@@ -466,17 +466,17 @@ func TestSteerChains_ShouldWriteOnceOnAFreeLeaseAndReturnRetryableBusyOnAHeldLea
 		}},
 	}
 	for name, c := range chains {
-		held, ok := c.tgt.inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+		held, ok := c.tgt.inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 		require.True(t, ok, name)
 		err := c.run()
 		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), session.ErrLeaseBusy.Error(), name)
+		assert.Contains(t, err.Error(), instance.ErrLeaseBusy.Error(), name)
 		assert.Empty(t, c.tgt.pm.writes(), "%s: 0 writes while the lease is held", name)
 		held.Release()
 
 		require.NoError(t, c.run(), name)
-		assert.Equal(t, []string{"m", session.EnterKeySequence}, c.tgt.pm.writes(), "%s: exactly one write on a free lease", name)
-		session.AssertLeaseFree(t, c.tgt.inst)
+		assert.Equal(t, []string{"m", instance.EnterKeySequence}, c.tgt.pm.writes(), "%s: exactly one write on a free lease", name)
+		instance.AssertLeaseFree(t, c.tgt.inst)
 	}
 }
 
@@ -484,6 +484,6 @@ func TestSteerChains_ShouldWriteOnceOnAFreeLeaseAndReturnRetryableBusyOnAHeldLea
 func TestSteerErrorToConnect_ShouldMapAuditBusyAndInvalid(t *testing.T) {
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(steerErrorToConnect(errSteerAuditUnavailable)))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(steerErrorToConnect(validateBacklogSteerText("a\x1bb"))))
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(steerErrorToConnect(session.ErrLeaseBusy)))
+	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(steerErrorToConnect(instance.ErrLeaseBusy)))
 	assert.Equal(t, connect.CodeDeadlineExceeded, connect.CodeOf(steerErrorToConnect(context.DeadlineExceeded)))
 }

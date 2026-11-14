@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // mcp_proof.go is the per-session MCP credential of ADR-007 rule 0:
@@ -37,13 +37,13 @@ func NewMcpProofs(keys *HookProofs, configDir string) *McpProofs {
 
 // HeaderValue is the X-Stapler-Session-Proof value for sessionUUID.
 func (m *McpProofs) HeaderValue(sessionUUID string) string {
-	return session.MCPProofValuePrefix + m.keys.macForDomain(mcpProofDomain, sessionUUID)
+	return instance.MCPProofValuePrefix + m.keys.macForDomain(mcpProofDomain, sessionUUID)
 }
 
 // Verify reports whether value is sessionUUID's proof, in constant time. A
 // proof minted for another session, or a hook proof, never verifies.
 func (m *McpProofs) Verify(sessionUUID, value string) bool {
-	if !session.ValidMCPSessionUUID(sessionUUID) || !strings.HasPrefix(value, session.MCPProofValuePrefix) {
+	if !instance.ValidMCPSessionUUID(sessionUUID) || !strings.HasPrefix(value, instance.MCPProofValuePrefix) {
 		return false
 	}
 	return hmac.Equal([]byte(value), []byte(m.HeaderValue(sessionUUID)))
@@ -52,14 +52,14 @@ func (m *McpProofs) Verify(sessionUUID, value string) bool {
 // ProofFilePath is the session's proof file (read by the stdio proxy and by
 // OpenCode's {file:} substitution).
 func (m *McpProofs) ProofFilePath(sessionUUID string) string {
-	return session.MCPProofFilePath(m.configDir, sessionUUID)
+	return instance.MCPProofFilePath(m.configDir, sessionUUID)
 }
 
 // EnsureFile (re)writes the session's proof file: the bare header value, no
 // newline (OpenCode substitutes the file's content verbatim), 0600 in a 0700
 // directory, atomically. Idempotent.
 func (m *McpProofs) EnsureFile(sessionUUID string) error {
-	if !session.ValidMCPSessionUUID(sessionUUID) {
+	if !instance.ValidMCPSessionUUID(sessionUUID) {
 		return errors.New("invalid session uuid for an mcp proof file")
 	}
 	return writeFileAtomic0600(m.ProofFilePath(sessionUUID), []byte(m.HeaderValue(sessionUUID)))
@@ -71,7 +71,7 @@ func (m *McpProofs) EnsureFile(sessionUUID string) error {
 // stdio-proxy and OpenCode paths, which read the file, are then unverified.
 func (m *McpProofs) Provider() func(sessionUUID string) (string, bool) {
 	return func(sessionUUID string) (string, bool) {
-		if !session.ValidMCPSessionUUID(sessionUUID) {
+		if !instance.ValidMCPSessionUUID(sessionUUID) {
 			return "", false
 		}
 		if err := m.EnsureFile(sessionUUID); err != nil {
@@ -83,7 +83,7 @@ func (m *McpProofs) Provider() func(sessionUUID string) (string, bool) {
 
 // sessionFiles lists every file that holds or references sessionUUID's proof.
 func (m *McpProofs) sessionFiles(sessionUUID string) []string {
-	mcpDir := filepath.Join(m.configDir, session.MCPConfigDirName)
+	mcpDir := filepath.Join(m.configDir, instance.MCPConfigDirName)
 	return []string{
 		m.ProofFilePath(sessionUUID),
 		filepath.Join(mcpDir, sessionUUID+".json"),
@@ -94,7 +94,7 @@ func (m *McpProofs) sessionFiles(sessionUUID string) []string {
 // RemoveFiles deletes the session's proof file and per-session configs
 // (idempotent). Called when the session is deleted.
 func (m *McpProofs) RemoveFiles(sessionUUID string) {
-	if !session.ValidMCPSessionUUID(sessionUUID) {
+	if !instance.ValidMCPSessionUUID(sessionUUID) {
 		return
 	}
 	for _, path := range m.sessionFiles(sessionUUID) {
@@ -110,8 +110,8 @@ func (m *McpProofs) RemoveFiles(sessionUUID string) {
 func (m *McpProofs) SweepStale(known func(sessionUUID string) bool) int {
 	removed := 0
 	for _, dir := range []string{
-		filepath.Join(m.configDir, session.MCPProofsDirName),
-		filepath.Join(m.configDir, session.MCPConfigDirName),
+		filepath.Join(m.configDir, instance.MCPProofsDirName),
+		filepath.Join(m.configDir, instance.MCPConfigDirName),
 	} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {

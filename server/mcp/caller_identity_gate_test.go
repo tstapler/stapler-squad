@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 var newToolNames = []string{toolScheduleWake, toolListWakes, toolCancelWake, toolRequestHelp, toolAnswerHelp, toolRequestOwnerAction}
@@ -105,10 +106,10 @@ func TestIdentityGate_should_DenyRolesOutsideTheAllowlistAndCount(t *testing.T) 
 
 func TestRoleOfItemSession_should_MapHiddenRolesAndDefaultToWork(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, roleTriage, roleOfItemSession(session.SessionRoleTriage))
-	assert.Equal(t, roleReview, roleOfItemSession(session.SessionRoleReview))
-	assert.Equal(t, roleDiagnose, roleOfItemSession(session.SessionRoleDiagnose))
-	assert.Equal(t, roleWork, roleOfItemSession(session.SessionRoleWork))
+	assert.Equal(t, roleTriage, roleOfItemSession(instance.SessionRoleTriage))
+	assert.Equal(t, roleReview, roleOfItemSession(instance.SessionRoleReview))
+	assert.Equal(t, roleDiagnose, roleOfItemSession(instance.SessionRoleDiagnose))
+	assert.Equal(t, roleWork, roleOfItemSession(instance.SessionRoleWork))
 	assert.Equal(t, roleWork, roleOfItemSession(""))
 }
 
@@ -121,7 +122,7 @@ func TestRoleLookupFrom_should_FailClosedOnTransientError_And_DefaultToWorkOnNot
 	}
 	ctx := context.Background()
 	assert.Equal(t, roleWork, lookup(fmt.Errorf("%w: no link", domain.ErrNotFound), "")(ctx, "s"))
-	assert.Equal(t, roleReview, lookup(nil, session.SessionRoleReview)(ctx, "s"))
+	assert.Equal(t, roleReview, lookup(nil, instance.SessionRoleReview)(ctx, "s"))
 	assert.Equal(t, roleUnknown, lookup(errors.New("database is locked"), "")(ctx, "s"))
 }
 

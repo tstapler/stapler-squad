@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // hook_proof.go is the best-effort sender provenance of a permission-request
@@ -203,7 +203,7 @@ func ensureHookProofFile(sessionUUID string) {
 // Claude Code reads the rewritten settings.local.json at its next dialog; Spike
 // 1.3g h8). It is a no-op for a remote session, a session with no UUID or an
 // unwired process. Idempotent.
-func RefreshInstanceHookProof(inst *session.Instance) {
+func RefreshInstanceHookProof(inst *instance.Instance) {
 	if DefaultHookProofs() == nil || inst == nil || inst.UUID == "" || inst.IsRemote() {
 		return
 	}
@@ -218,7 +218,7 @@ func RefreshInstanceHookProof(inst *session.Instance) {
 
 // RefreshHookProofs refreshes every live local session once, at service boot.
 // A session whose entry already has the current command is left untouched.
-func RefreshHookProofs(instances []*session.Instance) int {
+func RefreshHookProofs(instances []*instance.Instance) int {
 	n := 0
 	for _, inst := range instances {
 		if inst == nil || !inst.Started() || inst.Snapshot().Status.IsSuspended() {

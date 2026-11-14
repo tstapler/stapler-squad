@@ -17,8 +17,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const writeSessionID = "test-session"
@@ -542,11 +542,11 @@ func TestWriteFile_ShouldNotAlterResponse_When_TelemetryRecorderIsSlow(t *testin
 }
 
 // staticFinder is a LiveInstanceFinder over one instance (any id resolves to it).
-type staticFinder struct{ inst *session.Instance }
+type staticFinder struct{ inst *instance.Instance }
 
-func (f staticFinder) FindLiveInstance(string) *session.Instance { return f.inst }
+func (f staticFinder) FindLiveInstance(string) *instance.Instance { return f.inst }
 
-func newArchivedInstanceForTest(t *testing.T) *session.Instance {
+func newArchivedInstanceForTest(t *testing.T) *instance.Instance {
 	t.Helper()
 	inst := hiddenInstance(t, false)
 	now := time.Now()

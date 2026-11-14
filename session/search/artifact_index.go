@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 )
 
@@ -249,7 +249,7 @@ func (x *ArtifactIndex) SessionsForSHAPrefix(prefix string) []string {
 // orphans. Artifact records never seed SessionPR.
 func (x *ArtifactIndex) SessionsForPR(ctx context.Context, ref domain.PRRef) ([]SessionPRHit, error) {
 	if ref.IsZero() {
-		return nil, session.ErrZeroPRRef
+		return nil, instance.ErrZeroPRRef
 	}
 	var linked []string
 	if x.links != nil {

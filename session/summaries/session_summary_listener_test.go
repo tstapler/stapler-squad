@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeSummaryGenerator is a test double satisfying the summaryGenerator interface.
@@ -20,7 +20,7 @@ func newFakeSummaryGenerator() *fakeSummaryGenerator {
 	return &fakeSummaryGenerator{calls: make(chan string, 4)}
 }
 
-func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID, _ string, _ time.Time, _ DiffSnapshot, _ string, _ *session.SessionGoalData, _ string) {
+func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID, _ string, _ time.Time, _ DiffSnapshot, _ string, _ *instance.SessionGoalData, _ string) {
 	f.calls <- sessionUUID
 }
 
@@ -38,7 +38,7 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			gen := newFakeSummaryGenerator()
-			inst := &session.Instance{Title: "test-session", UUID: "sess-123", CreatedAt: time.Now()}
+			inst := &instance.Instance{Title: "test-session", UUID: "sess-123", CreatedAt: time.Now()}
 			l := &sessionSummaryListener{generator: gen, instance: inst}
 
 			l.OnLifecycleEvent(event, "pty-eof")
@@ -58,7 +58,7 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissing(t *testing.T) {
 	t.Parallel()
 	gen := newFakeSummaryGenerator()
-	inst := &session.Instance{Title: "test-session", UUID: "sess-456", CreatedAt: time.Now()}
+	inst := &instance.Instance{Title: "test-session", UUID: "sess-456", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
 
 	l.OnLifecycleEvent(domain.EventExited, reasonReconcileSessionMissing)
@@ -74,7 +74,7 @@ func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissin
 func TestOnLifecycleEvent_should_NotDispatch_When_EventStarted(t *testing.T) {
 	t.Parallel()
 	gen := newFakeSummaryGenerator()
-	inst := &session.Instance{Title: "test-session", UUID: "sess-789", CreatedAt: time.Now()}
+	inst := &instance.Instance{Title: "test-session", UUID: "sess-789", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
 
 	l.OnLifecycleEvent(domain.EventStarted, "")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Sentinel errors returned by CreateManagedInstance, wrapped with
@@ -93,7 +94,7 @@ type CreateManagedInstanceParams struct {
 // a distinct name in this file so CreateManagedInstanceParams reads clearly
 // at call sites (options for the instance to create) without forcing every
 // caller to spell out the full InstanceOptions literal inline.
-type CreateInstanceOptions = session.InstanceOptions
+type CreateInstanceOptions = instance.InstanceOptions
 
 // CreateManagedInstance resolves path/session-type concerns, constructs a
 // real *Instance via NewInstance, registers it in the live-handle registry
@@ -107,7 +108,7 @@ type CreateInstanceOptions = session.InstanceOptions
 // On any failure after a successful Registry.Register, the registration is
 // rolled back via Registry.ForceRelease before returning the error, so no
 // phantom live-handle entry is left behind.
-func CreateManagedInstance(ctx context.Context, params CreateManagedInstanceParams) (*session.Instance, error) {
+func CreateManagedInstance(ctx context.Context, params CreateManagedInstanceParams) (*instance.Instance, error) {
 	if params.Storage == nil {
 		return nil, fmt.Errorf("create managed instance: Storage is required")
 	}
@@ -144,7 +145,7 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 		}
 	}
 
-	instance, err := session.NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInstanceConstructionFailed, err)
 	}
@@ -157,19 +158,19 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// refcount to 2, making plain release() decrement 2->1 and leave a
 	// phantom entry alive.
 	if params.Registry != nil {
-		live := session.NewLiveInstance(instance)
+		live := instance.NewLiveInstance(inst)
 		if _, regErr := params.Registry.Register(live); regErr != nil {
 			live.Stop()
 			return nil, fmt.Errorf("%w: %w", ErrInstanceRegistrationFailed, regErr)
 		}
 	}
 
-	if err := params.Storage.AddInstance(instance); err != nil {
+	if err := params.Storage.AddInstance(inst); err != nil {
 		if params.Registry != nil {
-			params.Registry.ForceRelease(instance.GetStableID())
+			params.Registry.ForceRelease(inst.GetStableID())
 		}
 		return nil, fmt.Errorf("%w: %w", ErrInstanceSaveFailed, err)
 	}
 
-	return instance, nil
+	return inst, nil
 }

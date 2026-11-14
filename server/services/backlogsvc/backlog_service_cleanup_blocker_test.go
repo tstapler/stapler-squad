@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // blockerHarness is a done item with one work session whose worktree row points at a
@@ -51,7 +52,7 @@ func newBlockerHarness(t *testing.T, status domain.BacklogStatus) *blockerHarnes
 		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: domain.GitWorktreeData{RepoPath: filepath.Dir(h.path), WorktreePath: h.path, SessionName: h.uuid, BranchName: "backlog/x", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
-	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	return h
 }
@@ -230,7 +231,7 @@ func TestCleanupGate_ShouldRecheckBeforeEachRemoval_WhenPRAttachesMidCleanup(t *
 		Title: second, UUID: second, Path: path2, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: domain.GitWorktreeData{RepoPath: filepath.Dir(path2), WorktreePath: path2, SessionName: second, BranchName: "backlog/y", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
-	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: session.SessionRoleWork})
+	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	h.svc.cleanup.removeFn = func(wt domain.GitWorktreeData) error {
 		h.removed = append(h.removed, wt.WorktreePath)

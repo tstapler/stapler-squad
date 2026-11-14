@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // PRFixSpawner can reopen a pr_pending item for rework when CI checks fail or
@@ -140,7 +141,7 @@ func defaultPRPendingCheckerFactory(repoPath string) prPendingChecker {
 // unchanged when no PR exists — see reconcileOrphanedAgentPRs, which treats
 // that as "no match yet", not a failure.
 func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, session.EnterpriseHostsForRemoteParsing())
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, instance.EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +157,7 @@ func defaultOrphanedPRFinder(ctx context.Context, repoPath, branch string) (*git
 // production default installed by newListenerBase for
 // verifyPRBelongsToItem's live-GitHub re-check.
 func defaultPRByNumberFinder(ctx context.Context, repoPath string, prNumber int) (*github.PRInfo, error) {
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, session.EnterpriseHostsForRemoteParsing())
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, instance.EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +305,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		// mostRecentWorkCommitShippedToMain's identical pattern above.
 		var lastWorkSessionUUID string
 		for _, is := range sessions {
-			if is.Role == session.SessionRoleWork {
+			if is.Role == instance.SessionRoleWork {
 				lastWorkSessionUUID = is.SessionUUID
 			}
 		}
@@ -356,7 +357,7 @@ func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, it
 		return fmt.Errorf("%w: item %s is %q, not review", domain.ErrPreconditionFailed, itemID, observed.Status)
 	}
 	return l.storage.GatedSetPRAndTransition(ctx,
-		backlogdto.TransitionRequest{Caller: domain.CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: session.TriggeredBySystem},
+		backlogdto.TransitionRequest{Caller: domain.CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: instance.TriggeredBySystem},
 		backlogdto.PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary, Source: domain.AttachSourcePRCreationService})
 }
 
@@ -382,7 +383,7 @@ func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context
 	for _, is := range itemSessions {
 		// ListItemSessions orders ascending by CreatedAt — keep overwriting so
 		// this ends up holding the *most recent* work session.
-		if is.Role == session.SessionRoleWork {
+		if is.Role == instance.SessionRoleWork {
 			lastWorkSessionUUID = is.SessionUUID
 		}
 	}
@@ -409,11 +410,12 @@ func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context
 	// (work committed directly to main, no separate feature branch ever used)
 	// legitimately has sha == base == "shipped" by construction; that case
 	// must still fall through to the IsCommitOnMain check below unchanged.
+	defaultBranch := git.ResolveDefaultBranchName(repoPath)
 	if wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWorkSessionUUID); wtErr == nil &&
-		wt.BranchName != domain.BounceMainBranch && wt.BaseCommitSHA != "" && sha == wt.BaseCommitSHA {
+		wt.BranchName != defaultBranch && wt.BaseCommitSHA != "" && sha == wt.BaseCommitSHA {
 		return sha, false // no new commits yet on this branch — nothing to have shipped
 	}
-	onMain, mainErr := git.IsCommitOnMain(repoPath, domain.BounceMainBranch, sha)
+	onMain, mainErr := git.IsCommitOnMain(repoPath, defaultBranch, sha)
 	if mainErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain IsCommitOnMain item=%s sha=%s: %v", itemID, sha, mainErr)
 		return sha, false
@@ -596,7 +598,7 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 	// call below simply no-ops with a (deliberately ignored) precondition
 	// error rather than double-applying anything.
 	prNumber := 0
-	if ref, parseErr := session.ParseGitHubURL(prURL); parseErr == nil {
+	if ref, parseErr := instance.ParseGitHubURL(prURL); parseErr == nil {
 		prNumber = ref.PRNumber
 	}
 	// BUG-063: prNumber<=0 (an unparseable/irrelevant prURL — e.g. the agent's
@@ -649,7 +651,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		// No status precondition: item may be at review or ready depending on when
 		// the PASS verdict was delivered relative to other transitions.
 		if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerPushCreatePRFallback, ItemID: item.ID, To: domain.BacklogStatusDone, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerPushCreatePRFallback, ItemID: item.ID, To: domain.BacklogStatusDone, TriggeredBy: instance.TriggeredBySystem,
 		}); transErr != nil {
 			logSystemTransitionFailure("pushAndCreatePR fallback done", item.ID, domain.BacklogStatusDone, transErr)
 			if errors.Is(transErr, domain.ErrPreconditionFailed) {
@@ -708,10 +710,11 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		// an unresolvable push_failed row. Any error from the check itself is
 		// treated as inconclusive (HasCommitsAheadOfMain returns true), so a
 		// broken check never blocks a real PR creation attempt.
-		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(domain.BounceMainBranch); aheadErr != nil {
+		defaultBranch := git.ResolveDefaultBranchName(wt.RepoPath)
+		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(defaultBranch); aheadErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR HasCommitsAheadOfMain item=%s: %v; proceeding with PR creation attempt", item.ID, aheadErr)
 		} else if !hasCommits {
-			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, domain.BounceMainBranch))
+			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, defaultBranch))
 			return
 		}
 
@@ -848,7 +851,7 @@ func (l *BacklogLifecycleListener) autoMergePreflight(repoPath, itemID string) b
 	if seam.Cached == nil || seam.Fetch == nil {
 		return false
 	}
-	ref, err := github.GetOwnerRepoFromRemote(repoPath, session.EnterpriseHostsForRemoteParsing())
+	ref, err := github.GetOwnerRepoFromRemote(repoPath, instance.EnterpriseHostsForRemoteParsing())
 	if err != nil || !ref.IsValid() {
 		return false
 	}
@@ -986,7 +989,7 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemID, note, caller string) error {
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview), Note: note}
 	if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerResolveToPRPending, ItemID: itemID, To: domain.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerResolveToPRPending, ItemID: itemID, To: domain.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); transErr != nil {
 		return transErr
 	}
@@ -1017,7 +1020,7 @@ func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, ite
 			caller, item.PrNumber, item.PrURL, item.Status),
 	}
 	if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerRecoverDriftedPR, ItemID: item.ID, To: domain.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerRecoverDriftedPR, ItemID: item.ID, To: domain.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); transErr != nil {
 		if domain.IsGateDenial(transErr) {
 			log.Debug("[BacklogLifecycle] recoverDriftedPRItem: transition denied, will retry next tick", "caller", caller, "item", item.ID, "error", transErr)
@@ -1295,7 +1298,7 @@ func (l *BacklogLifecycleListener) attemptPushRemediation(ctx context.Context, i
 		// overwriting so this ends up holding the *most recent* work
 		// session, mirroring the identical pattern in ReconcilePRPending's
 		// ship-snapshot path.
-		if sessions[i].Role == session.SessionRoleWork {
+		if sessions[i].Role == instance.SessionRoleWork {
 			s := sessions[i]
 			lastWork = &s
 		}
@@ -1743,7 +1746,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 				// keep overwriting so this ends up holding the *most
 				// recent* work session, mirroring
 				// backlog_service_ship_status.go:51-58.
-				if sessions[i].Role == session.SessionRoleWork {
+				if sessions[i].Role == instance.SessionRoleWork {
 					lastWork = &sessions[i]
 				}
 			}
@@ -1798,7 +1801,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusPRPending)}
 		if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerReconcilePRPendingMerge, ItemID: item.ID.String(), To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerReconcilePRPendingMerge, ItemID: item.ID.String(), To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 		}); transErr != nil {
 			// A gate denial is reported once by the gate; the item stays pr_pending and is retried next tick.
 			logSystemTransitionFailure("ReconcilePRPending done", item.ID.String(), domain.BacklogStatusDone, transErr)
@@ -2066,7 +2069,7 @@ func (l *BacklogLifecycleListener) holdMergedPRPendingItem(ctx context.Context, 
 		log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s verdict unreadable, holding: %v", item.ID, err)
 		return true
 	}
-	if verdict != session.ItemVerdictDone {
+	if verdict != instance.ItemVerdictDone {
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s: tracked PR #%d merged but the item PR set verdict is %v — staying pr_pending", item.ID, item.PrNumber, verdict)
 		return true
 	}
@@ -2122,7 +2125,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *session.EntRepository, r
 		if item.PrNumber != prNumber {
 			continue
 		}
-		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath, session.EnterpriseHostsForRemoteParsing())
+		ref, refErr := github.GetOwnerRepoFromRemote(item.RepoPath, instance.EnterpriseHostsForRemoteParsing())
 		if refErr != nil || !ref.IsValid() {
 			continue
 		}
@@ -2272,8 +2275,8 @@ func prOwnershipFor(lastWork *backlogdto.ItemSessionSummary, wt *domain.GitWorkt
 	}
 	addWithPrefix := func(name string) {
 		add(name)
-		if name != "" && !strings.HasPrefix(name, session.BacklogBranchPrefix) {
-			add(session.BacklogWorkBranchName(name))
+		if name != "" && !strings.HasPrefix(name, instance.BacklogBranchPrefix) {
+			add(instance.BacklogWorkBranchName(name))
 		}
 	}
 	if lastWork != nil {
@@ -2351,7 +2354,7 @@ func (l *BacklogLifecycleListener) verifyPRAssociationForFixSpawn(ctx context.Co
 		// Ascending by CreatedAt (ListItemSessions' query order) — keep
 		// overwriting so this ends up holding the *most recent* work
 		// session, mirroring the identical pattern elsewhere in this file.
-		if sessions[i].Role == session.SessionRoleWork {
+		if sessions[i].Role == instance.SessionRoleWork {
 			lastWork = &sessions[i]
 		}
 	}
@@ -2410,7 +2413,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		// Ascending by CreatedAt (ListItemSessions' query order) — keep
 		// overwriting so this ends up holding the *most recent* work session,
 		// mirroring the identical pattern elsewhere in this file.
-		if sessions[i].Role == session.SessionRoleWork {
+		if sessions[i].Role == instance.SessionRoleWork {
 			lastWork = &sessions[i]
 		}
 	}
@@ -2454,7 +2457,11 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		return false
 	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, domain.BounceMainBranch, lastCommitSha)
+	// Deliberately still the literal "main" (not ResolveDefaultBranchName): this
+	// closes a live PR as superseded, and on a master-default repo the resolved
+	// branch would newly activate that destructive path. Revisit with its own soak.
+	supersedeBranch := domain.BounceMainBranch
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, supersedeBranch, lastCommitSha)
 	if mainErr != nil {
 		log.DebugLog().Printf("[BacklogLifecycle] closeIfSupersededByMain IsCommitOnMain item=%s sha=%s: %v", item.ID, lastCommitSha, mainErr)
 		return false
@@ -2464,7 +2471,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	}
 
 	log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: last commit %s is already on %s — PR #%d is superseded, closing instead of spawning another fix cycle",
-		item.ID, lastCommitSha, domain.BounceMainBranch, item.PrNumber)
+		item.ID, lastCommitSha, supersedeBranch, item.PrNumber)
 
 	// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a live
 	// GitHub lookup, that PR #item.PrNumber's head branch still matches this
@@ -2485,7 +2492,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
-		lastCommitSha, domain.BounceMainBranch)
+		lastCommitSha, supersedeBranch)
 	if closeErr := checker.ClosePR(ctx, item.PrNumber, closeComment); closeErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain ClosePR item=%s pr=%d: %v", item.ID, item.PrNumber, closeErr)
 		// Still proceed — the item's code is on main regardless of whether the
@@ -2504,10 +2511,10 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	precondition := &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusPRPending),
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
-			closedPrNum, lastCommitSha, domain.BounceMainBranch),
+			closedPrNum, lastCommitSha, supersedeBranch),
 	}
 	if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerCloseSupersededPR, ItemID: item.ID, To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerCloseSupersededPR, ItemID: item.ID, To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); transErr != nil {
 		logSystemTransitionFailure("closeIfSupersededByMain done", item.ID, domain.BacklogStatusDone, transErr)
 		return false

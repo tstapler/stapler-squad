@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // notifyTriagePersistFailure publishes an operator-facing notification when one or more of
@@ -215,7 +216,7 @@ func retitleTriageWorktreeToFinalBranch(itemID, repoPath, title string, wt *git.
 	if title == "" {
 		return
 	}
-	finalBranch := session.BacklogWorkBranchName(backlogWorkBranchSlug(repoPath, title))
+	finalBranch := instance.BacklogWorkBranchName(backlogWorkBranchSlug(repoPath, title))
 
 	if renameErr := wt.RenameBranch(finalBranch); renameErr != nil {
 		log.Warn("[TriggerTriage] failed to rename triage worktree branch", "item", itemID, "branch", finalBranch, "error", renameErr)
@@ -383,7 +384,7 @@ func (s *BacklogService) TriggerTriage(
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}
 		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: domain.BacklogStatusIdea,
-			Precondition: precondition, TriggeredBy: session.TriggeredByUser,
+			Precondition: precondition, TriggeredBy: instance.TriggeredByUser,
 		}); transErr != nil {
 			return nil, triageResetError(req.Msg.ItemId, transErr)
 		}
@@ -467,7 +468,7 @@ func (s *BacklogService) TriggerTriage(
 	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              triageSessionUUID,
-		SessionRole:              session.SessionRoleTriage,
+		SessionRole:              instance.SessionRoleTriage,
 		AcSnapshot:               item.AcceptanceCriteria,
 		PipelineModeSnapshot:     item.PipelineMode,
 		PipelineModeSnapshotHash: triagePipelineModeSnapshotHash,
@@ -571,7 +572,7 @@ func (s *BacklogService) TriggerTriage(
 		// triage directly in itemRepoPath, both unchanged from before — a bad
 		// BaseBranch is still caught loudly later, when the real work session is
 		// spawned via CreateBacklogWorktree, which hard-errors instead.
-		triageRepoRoot, mainRepoErr := session.ResolveMainRepoRoot(itemRepoPath)
+		triageRepoRoot, mainRepoErr := instance.ResolveMainRepoRoot(itemRepoPath)
 		if mainRepoErr != nil {
 			triageRepoRoot = itemRepoPath
 		}
@@ -884,7 +885,7 @@ func (s *BacklogService) TriggerTriage(
 		statusAdvanced := true
 		if _, transErr := s.storage.GatedTransition(persistCtx, backlogdto.TransitionRequest{
 			Caller: domain.CallerTriageComplete, ItemID: itemID, To: domain.BacklogStatusReady,
-			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 		}); transErr != nil {
 			log.Error("[TriggerTriage] status transition idea→ready failed", "item", itemID, "error", transErr)
 			persistFailures = append(persistFailures, "advancing the item to Ready")
@@ -938,7 +939,7 @@ func (s *BacklogService) CancelTriage(
 	cancelled := false
 	now := time.Now()
 	for _, is := range existingSessions {
-		if is.Role != string(session.SessionRoleTriage) || is.EndedAt != nil {
+		if is.Role != string(instance.SessionRoleTriage) || is.EndedAt != nil {
 			continue
 		}
 		if s.sessionStopper != nil {
@@ -956,7 +957,7 @@ func (s *BacklogService) CancelTriage(
 func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (pipeline.HeadlessTriageResult, bool) {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		is := sessions[i]
-		if is.Role != string(session.SessionRoleTriage) || is.TriageResult == "" {
+		if is.Role != string(instance.SessionRoleTriage) || is.TriageResult == "" {
 			continue
 		}
 		var result pipeline.HeadlessTriageResult
@@ -1005,7 +1006,7 @@ func applyTriageResultToUpdate(result *pipeline.HeadlessTriageResult, update *ba
 	// IsValidBacklogCategory also accepts "" (its own "uncategorized" convention),
 	// which must NOT be treated as a real assessment here — an omitted
 	// item_category means "no assessment", not "clear the existing category".
-	if result.ItemCategory != "" && session.IsValidBacklogCategory(result.ItemCategory) {
+	if result.ItemCategory != "" && instance.IsValidBacklogCategory(result.ItemCategory) {
 		c := result.ItemCategory
 		update.Category = &c
 	}

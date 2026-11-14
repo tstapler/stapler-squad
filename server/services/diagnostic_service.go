@@ -18,13 +18,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // DiagnosticSpawner is the narrow slice of *SessionService DiagnosticService
 // needs to dispatch a hidden, one-shot diagnostic agent — mirrors
 // session.ReviewGateSpawner's shape for the sibling dispatch case.
 type DiagnosticSpawner interface {
-	SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*session.Instance, error)
+	SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error)
 }
 
 // DiagnosticService backs the DiagnosticService RPCs for "Diagnose & Nudge"
@@ -58,7 +59,7 @@ func (d *DiagnosticService) SetExternalDiscovery(disc *session.ExternalSessionDi
 
 // findInstance mirrors TerminalService.findInstance's poller ->
 // external-discovery fallback chain.
-func (d *DiagnosticService) findInstance(id string) *session.Instance {
+func (d *DiagnosticService) findInstance(id string) *instance.Instance {
 	if d.poller != nil {
 		if inst := d.poller.FindInstance(id); inst != nil {
 			return inst
@@ -135,7 +136,7 @@ func (d *DiagnosticService) DispatchDiagnose(
 	if _, createErr := d.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleDiagnose,
+		SessionRole: instance.SessionRoleDiagnose,
 	}); createErr != nil {
 		log.Warn("[DiagnosticService] failed to link diagnostic ItemSession", "item", item.ID, "session", inst.UUID, "err", createErr)
 	}

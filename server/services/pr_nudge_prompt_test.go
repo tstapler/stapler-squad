@@ -13,7 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func nudgeKey(t *testing.T) githubpkg.PRKey {
@@ -104,7 +104,7 @@ func TestBuildPRNudgePrompt_should_StripEscapesOmitBodyCapNamesAndBoundBytes_Whe
 		threads = append(threads, githubpkg.PRThreadRef{AuthorLogin: strings.Repeat("世", 100), Path: strings.Repeat("世", 300), URL: strings.Repeat("u", 900)})
 	}
 	big, _ := BuildPRNudgePrompt(githubpkg.PRNudgeDetail{Key: nudgeKey(t), State: "open", FailingChecks: checks, UnresolvedThreads: threads})
-	require.LessOrEqual(t, len(big), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(big), instance.MaxSteerMessageLength)
 	require.True(t, utf8.ValidString(big))
 	require.Contains(t, big, "...and 20 more")
 }

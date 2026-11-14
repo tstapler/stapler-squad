@@ -9,11 +9,11 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 // streamLatency holds one stream's backend and listener labels. The listener is known at
@@ -82,7 +82,7 @@ func (t *WebSocketTransport) LatencyLabels() termlat.Labels {
 
 // keystrokeDelivery carries one browser keystroke to a session pane and times each stage.
 type keystrokeDelivery struct {
-	instance    *session.Instance
+	instance    *instance.Instance
 	latency     *streamLatency
 	bookkeeper  *inputBookkeeper
 	logPrefix   string

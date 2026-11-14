@@ -7,7 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
 
@@ -26,7 +26,7 @@ func TestServicesPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
 // swallowed submit (session.ErrSubmitNotConfirmed) must surface as a
 // distinguishable connect error code, not CodeInternal.
 func TestSubmitErrToConnectError_MapsErrSubmitNotConfirmedToAborted(t *testing.T) {
-	err := submitErrToConnectError(session.ErrSubmitNotConfirmed)
+	err := submitErrToConnectError(instance.ErrSubmitNotConfirmed)
 	if connect.CodeOf(err) != connect.CodeAborted {
 		t.Errorf("expected CodeAborted, got %v", connect.CodeOf(err))
 	}

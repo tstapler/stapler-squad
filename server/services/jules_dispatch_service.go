@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // julesSessionUUIDPrefix is prepended to a jules.JulesSessionName to form
@@ -326,7 +327,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 	reservation, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: reservationUUID,
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	if err != nil {
 		return "", fmt.Errorf("jules: creating item session reservation: %w", err)
@@ -360,7 +361,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 	// hasBlockers is guaranteed false here — step 5 already returned early
 	// otherwise — so this call site can never drift back out of sync with
 	// the real check above if the guard sequence is ever reordered.
-	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, domain.BacklogStatusInProgress, precondition, session.TriggeredByUser, hasBlockers); err != nil {
+	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, domain.BacklogStatusInProgress, precondition, instance.TriggeredByUser, hasBlockers); err != nil {
 		return "", fmt.Errorf("jules: transitioning item %s to in_progress: %w", item.ID, err)
 	}
 
@@ -475,7 +476,7 @@ func resolveJulesOwnerRepo(repoPath string) (githubpkg.RepoRef, error) {
 	}
 	// A GitHub URL (e.g. the settings panel's test-connection field) has no
 	// local git remote to read; parse it directly.
-	if parsed, perr := session.ParseGitHubURLWithHosts(repoPath, enterpriseHosts); perr == nil {
+	if parsed, perr := instance.ParseGitHubURLWithHosts(repoPath, enterpriseHosts); perr == nil {
 		return githubpkg.NewRepoRef(parsed.Owner, parsed.Repo)
 	}
 	ref, err := githubpkg.GetOwnerRepoFromRemote(repoPath, enterpriseHosts)

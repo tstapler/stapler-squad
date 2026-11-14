@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -61,12 +62,12 @@ func TestArchiveStaleDoneItems_Shadow_ArchivesDespiteOperatorGate(t *testing.T) 
 
 // ruleLSweepFixture is a done item with one work session, a recording archiver, the
 // real settledTracker and an injected sweep clock.
-func ruleLSweepFixture(t *testing.T, probe session.LiveWorkProbe, reader bool) (*BacklogLifecycleListener, *fakeSessionArchiver, *itemPRFixture, *time.Time) {
+func ruleLSweepFixture(t *testing.T, probe instance.LiveWorkProbe, reader bool) (*BacklogLifecycleListener, *fakeSessionArchiver, *itemPRFixture, *time.Time) {
 	t.Helper()
 	f := newItemPRFixture(t, 0)
 	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(domain.BacklogStatusDone)).Save(context.Background())
 	require.NoError(t, err)
-	f.session(session.SessionRoleWork)
+	f.session(instance.SessionRoleWork)
 	now := prTestEpoch
 	l := NewBacklogLifecycleListener(f.storage)
 	l.backlogReaderOverride = func() bool { return reader }
@@ -108,7 +109,7 @@ func TestReconcileTerminalItemSessions_ShouldArchiveAsToday_WhenScopeOffOrProbeN
 	t.Parallel()
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
-		probe     session.LiveWorkProbe
+		probe     instance.LiveWorkProbe
 		reader    bool
 		wantEmpty bool
 	}{

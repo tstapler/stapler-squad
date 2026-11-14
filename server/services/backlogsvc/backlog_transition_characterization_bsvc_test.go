@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type transitionCase struct {
@@ -41,7 +41,7 @@ func seedReviewItemWithVerdict(t *testing.T, svc *BacklogService, status domain.
 		_, err := svc.storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 			ItemID:      id,
 			SessionUUID: "char-review-session-" + id,
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		}, backlogdto.ReviewVerdictData{OverallOutcome: outcome})
 		require.NoError(t, err)
 	}

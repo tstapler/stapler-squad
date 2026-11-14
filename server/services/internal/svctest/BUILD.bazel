@@ -55,6 +55,7 @@ go_library(
         "//session/domain/backlogdto",
         "//session/headless",
         "//session/hostclaim",
+        "//session/instance",
         "//session/queue",
         "//session/tmux",
         "//session/tokens",

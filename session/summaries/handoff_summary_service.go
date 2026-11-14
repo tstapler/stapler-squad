@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // HandoffSummaryStatus mirrors SessionSummaryStatus's shape (session_summary_service.go)
@@ -213,7 +214,7 @@ func (g *HandoffSummaryGenerator) ReconcileStaleness(ctx context.Context, row *H
 // helper, not a shared type, because session/headless cannot import session
 // (session already imports session/headless — see
 // headless.HandoffTranscriptMessage's doc comment).
-func toHandoffMessages(messages []session.ClaudeConversationMessage) []headless.HandoffTranscriptMessage {
+func toHandoffMessages(messages []instance.ClaudeConversationMessage) []headless.HandoffTranscriptMessage {
 	out := make([]headless.HandoffTranscriptMessage, len(messages))
 	for i, msg := range messages {
 		out[i] = headless.HandoffTranscriptMessage{

@@ -74,6 +74,37 @@ func ResolveDefaultBranchSHA(repoPath string) (branch, sha string, err error) {
 	return "", "", fmt.Errorf("no candidate default branch (%v) exists on origin: %w", CandidateDefaultBranches, errors.Join(errs...))
 }
 
+// ResolveDefaultBranchName returns repoPath's default branch name from local refs only
+// (no fetch): origin/HEAD's target when set, else the first of CandidateDefaultBranches
+// that exists as a remote-tracking or local branch, else "main" so callers keep their
+// previous behaviour on an unreadable or ref-less repo. Backlog code must use this
+// rather than a "main" literal — see TestBacklogCode_should_NotHardcodeDefaultBranch.
+func ResolveDefaultBranchName(repoPath string) string {
+	const fallback = "main"
+	repo, err := OpenRepo(repoPath)
+	if err != nil {
+		return fallback
+	}
+	originHead := plumbing.NewRemoteReferenceName("origin", "HEAD")
+	if head, headErr := repo.Reference(originHead, false); headErr == nil &&
+		head.Type() == plumbing.SymbolicReference && head.Target().IsRemote() {
+		if name := strings.TrimPrefix(head.Target().Short(), "origin/"); name != "" {
+			if _, refErr := repo.Reference(head.Target(), true); refErr == nil {
+				return name
+			}
+		}
+	}
+	for _, candidate := range CandidateDefaultBranches {
+		if _, refErr := repo.Reference(plumbing.NewRemoteReferenceName("origin", candidate), true); refErr == nil {
+			return candidate
+		}
+		if _, refErr := repo.Reference(plumbing.NewBranchReferenceName(candidate), true); refErr == nil {
+			return candidate
+		}
+	}
+	return fallback
+}
+
 // ResolveOriginBranchSHA fetches mainBranch from origin into repoPath and returns the
 // resulting origin/mainBranch tip commit SHA. Unlike a bare `rev-parse HEAD` against
 // repoPath's own checkout, this always fetches first, so the returned SHA reflects

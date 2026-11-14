@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // IT-001: Create item → transition to ready → spawn marker → verify in_progress
@@ -33,13 +34,13 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	require.Equal(t, string(domain.BacklogStatusIdea), createdItem.Status)
 
 	// 2. Transition to "ready"
-	readyItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusReady, nil, TriggeredByUser)
+	readyItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusReady, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusReady), readyItem.Status)
 
 	// 3. Approve plan and transition to "in_progress"
 	readyItem.PlanApproved = true
-	inProgressItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusInProgress, nil, TriggeredByUser)
+	inProgressItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusInProgress), inProgressItem.Status)
 
@@ -123,7 +124,7 @@ func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Archive a freshly-created item (no prior transitions/events) straight from "idea".
-	_, err = storage.RawArchiveBacklogItem(ctx, createdItem.ID, nil, TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, createdItem.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -133,7 +134,7 @@ func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
 	require.Len(t, fetchedItem.StatusEvents, 1)
 	require.Equal(t, string(domain.BacklogStatusIdea), fetchedItem.StatusEvents[0].FromStatus)
 	require.Equal(t, string(domain.BacklogStatusArchived), fetchedItem.StatusEvents[0].ToStatus)
-	require.Equal(t, TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, instance.TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
 }
 
 // TransitionBacklogItemStatus records the triggeredBy value the caller passes,
@@ -155,16 +156,16 @@ func TestBacklogIntegration_TransitionRecordsTriggeredBy(t *testing.T) {
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusReady, nil, TriggeredByUser)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusReady, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 	require.Len(t, fetchedItem.StatusEvents, 2)
-	require.Equal(t, TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
-	require.Equal(t, TriggeredBySystem, fetchedItem.StatusEvents[1].TriggeredBy)
+	require.Equal(t, instance.TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, instance.TriggeredBySystem, fetchedItem.StatusEvents[1].TriggeredBy)
 }
 
 // IT-007: Multiple ItemSessions for same item

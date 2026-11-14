@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // question_answer_router.go is the AnswerRouter of ADR-005: it picks a delivery
@@ -36,7 +37,7 @@ const (
 
 // routedSession is a session lookup result.
 type routedSession struct {
-	inst  *session.Instance
+	inst  *instance.Instance
 	phase answerPhase
 }
 
@@ -196,7 +197,7 @@ func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit
 // writeVisible runs the shared PaneReplyCore against a visible session. The
 // dispatcher already ran the local-caller verdict on the real peer; the core's
 // audit line records the in-process peer as the hidden path does.
-func (r *AnswerRouter) writeVisible(ctx context.Context, inst *session.Instance, in QuestionAnswer, digit byte) (ActionResult, error) {
+func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in QuestionAnswer, digit byte) (ActionResult, error) {
 	refusal, err := EvaluateLocalWrite(ctx, inProcessPeerAddr, LocalWriteLocalCaller)
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil

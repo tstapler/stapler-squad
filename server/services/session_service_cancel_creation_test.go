@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Epic 3.2 (async-session-creation): CancelSessionCreation RPC. See
@@ -31,9 +32,9 @@ import (
 // TryForceStatusIfEpoch; the simpler unit tests don't race anything and use
 // the unlocked direct-call fallback sendSyncErr takes with no live actor
 // registered.
-func newCancelTestInstance(t *testing.T, svc *SessionService, storage *session.Storage, title string, wrapLive bool) *session.Instance {
+func newCancelTestInstance(t *testing.T, svc *SessionService, storage *session.Storage, title string, wrapLive bool) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   title,
 		Path:    t.TempDir(),
 		Program: "claude",
@@ -41,7 +42,7 @@ func newCancelTestInstance(t *testing.T, svc *SessionService, storage *session.S
 	require.NoError(t, err)
 	require.NoError(t, storage.AddInstance(inst))
 	if wrapLive {
-		live := session.NewLiveInstance(inst)
+		live := instance.NewLiveInstance(inst)
 		t.Cleanup(live.Stop)
 	}
 	svc.ReviewQueuePoller.AddInstance(inst)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -49,14 +49,14 @@ func TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCa
 	resolvedPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, resolvedPath)
 	resolved := make(chan struct{})
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		select {
 		case <-time.After(300 * time.Millisecond):
 		case <-ctx.Done():
 			return "", nil, ctx.Err()
 		}
 		defer close(resolved)
-		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
+		return resolvedPath, &instance.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
 	}
 
 	rpcCtx, rpcCancel := context.WithCancel(context.Background())
@@ -96,7 +96,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailed_When_ResolutionExceedsT
 	fix.svc.creationResolutionTimeout = 50 * time.Millisecond
 
 	sawTimeout := make(chan struct{})
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		<-ctx.Done()
 		close(sawTimeout)
 		return "", nil, ctx.Err()
@@ -143,8 +143,8 @@ func TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_Github
 
 	resolvedPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, resolvedPath)
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
-		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
+		return resolvedPath, &instance.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
 	}
 
 	var mu sync.Mutex
@@ -187,7 +187,7 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 	t.Cleanup(fix.cleanup)
 
 	var resolverCalled atomic.Bool
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		resolverCalled.Store(true)
 		return "", nil, fmt.Errorf("githubResolver must not be called for a plain directory session")
 	}
@@ -249,7 +249,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailedAndNotCrashProcess_When_
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		panic("simulated phase panic")
 	}
 
@@ -282,8 +282,8 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 
 	resolvedPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, resolvedPath)
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
-		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "feature-x"}, nil
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
+		return resolvedPath, &instance.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "feature-x"}, nil
 	}
 
 	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -344,7 +344,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 
 	dir := t.TempDir()
 	instance, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-		Options: session.InstanceOptions{
+		Options: instance.InstanceOptions{
 			Title:            "epic22-stale-epoch",
 			Path:             dir,
 			Program:          "claude",
@@ -424,7 +424,7 @@ func TestCreateSession_should_PublishExactlyOneTerminalEvent_When_CancelRacesSuc
 	// TestTryForceStatusIfEpoch_should_ProduceExactlyOneWinner_When_CalledConcurrently
 	// (session/instance_epoch_test.go) for the same requirement on the
 	// lower-level primitive this test races at the commitTerminalStatus layer.
-	li := session.NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	ch, _ := bus.Subscribe(context.Background())
@@ -486,7 +486,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	instance, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-		Options: session.InstanceOptions{
+		Options: instance.InstanceOptions{
 			Title:            "epic42-hook-config-worktree",
 			Path:             repoDir,
 			Program:          "sh",
@@ -576,7 +576,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 
 	// Session B: forced to resolve to the identical, already-live directory.
 	instanceB, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-		Options: session.InstanceOptions{
+		Options: instance.InstanceOptions{
 			Title:            "epic45-collision-target",
 			Path:             repoDir,
 			Program:          "sh",
@@ -647,10 +647,10 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
 
-	newContender := func(title string) *session.Instance {
+	newContender := func(title string) *instance.Instance {
 		t.Helper()
 		inst, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-			Options: session.InstanceOptions{
+			Options: instance.InstanceOptions{
 				Title:            title,
 				Path:             repoDir,
 				Program:          "sh",
@@ -672,7 +672,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for _, inst := range []*session.Instance{instA, instB} {
+	for _, inst := range []*instance.Instance{instA, instB} {
 		inst := inst
 		go func() {
 			defer wg.Done()
@@ -690,7 +690,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 
 	results := map[domain.Status]int{}
 	var failureReasons []string
-	for _, inst := range []*session.Instance{instA, instB} {
+	for _, inst := range []*instance.Instance{instA, instB} {
 		status := domain.Status(inst.GetStatus())
 		results[status]++
 		if status == domain.Failed {

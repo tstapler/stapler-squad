@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -241,7 +244,7 @@ func TestExtractPRURL_NoURL(t *testing.T) {
 // TestAutonomousDriver_run_should_*/TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged
 // tests below).
 type fakeSendKeysProcessManager struct {
-	ProcessManager
+	instance.ProcessManager
 	mu            sync.Mutex
 	sent          []string
 	failOn        map[int]bool // 1-based call index -> force an error for that call
@@ -304,7 +307,7 @@ var errTestSendKeysFailure = errors.New("fakeSendKeysProcessManager: forced Send
 // letting a test script distinct pane content across the pre-call tail
 // capture, the post-SendKeys delivery-time capture, and later turns'
 // pre-call captures — without needing a real tmux-backed Instance. Mirrors
-// fakePaneSettleChecker's pop-with-repeat pattern.
+// fixturetest.FakePaneSettleChecker's pop-with-repeat pattern.
 type fakePanePreviewer struct {
 	mu        sync.Mutex
 	snapshots []string
@@ -360,13 +363,13 @@ func TestAutonomousDriver_run_should_suppressSend_When_NextMessageMatchesLastNud
 		"DONE: finished",
 	}}
 
-	inst := &Instance{Title: "test-suppress", UUID: "abcdefgh-1234"}
+	inst := &instance.Instance{Title: "test-suppress", UUID: "abcdefgh-1234"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -425,13 +428,13 @@ func TestAutonomousDriver_run_should_sendBoth_When_NextMessagesDiffer(t *testing
 		"DONE: finished",
 	}}
 
-	inst := &Instance{Title: "test-distinct", UUID: "abcdefgh-5678"}
+	inst := &instance.Instance{Title: "test-distinct", UUID: "abcdefgh-5678"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -497,13 +500,13 @@ func TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged(t *testing
 		"DONE: finished",
 	}}
 
-	inst := &Instance{Title: "test-suppress-pane-unchanged", UUID: "abcdefgh-punc"}
+	inst := &instance.Instance{Title: "test-suppress-pane-unchanged", UUID: "abcdefgh-punc"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	// Every Preview() call (pre-call tail, post-SendKeys delivery capture,
 	// and the DONE-branch capture) returns identical content, simulating a
@@ -580,13 +583,13 @@ func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDur
 		"DONE: finished",
 	}}
 
-	inst := &Instance{Title: "test-delivery-snapshot", UUID: "abcdefgh-dsnap"}
+	inst := &instance.Instance{Title: "test-delivery-snapshot", UUID: "abcdefgh-dsnap"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	// Preview() call order within run(): turn1 pre-call tail, turn1
 	// post-SendKeys delivery capture, turn2 pre-call tail, (DONE branch
@@ -650,9 +653,9 @@ func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDur
 func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
 	pool := &fakeHeadlessPool{}
 
-	inst := &Instance{Title: "test-max-turns", UUID: "abcdefgh-1234"}
+	inst := &instance.Instance{Title: "test-max-turns", UUID: "abcdefgh-1234"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -696,9 +699,9 @@ func TestAutonomousDriver_DoneSignal(t *testing.T) {
 		},
 	}
 
-	inst := &Instance{Title: "test-done", UUID: "abcdefgh-5678"}
+	inst := &instance.Instance{Title: "test-done", UUID: "abcdefgh-5678"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -742,9 +745,9 @@ func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
 		responses: []string{"DONE: done"},
 	}
 
-	inst := &Instance{Title: "test-idempotent", UUID: "abcdefgh-9999"}
+	inst := &instance.Instance{Title: "test-idempotent", UUID: "abcdefgh-9999"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -779,9 +782,9 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 		responses: []string{"DONE: complete"},
 	}
 
-	inst := &Instance{Title: "test-channel", UUID: "abcdefgh-7777"}
+	inst := &instance.Instance{Title: "test-channel", UUID: "abcdefgh-7777"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -818,9 +821,9 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 	pool := &panicPool{}
 
-	inst := &Instance{Title: "test-panic", UUID: "abcdefgh-panic0"}
+	inst := &instance.Instance{Title: "test-panic", UUID: "abcdefgh-panic0"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -852,9 +855,9 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 	pool := &fakeHeadlessPool{firstCallCh: make(chan struct{})}
 
-	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
+	inst := &instance.Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -901,9 +904,9 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 		firstCallCh: make(chan struct{}),
 	}
 
-	inst := &Instance{Title: "test-stop-suppressed", UUID: "abcdefgh-stop1"}
+	inst := &instance.Instance{Title: "test-stop-suppressed", UUID: "abcdefgh-stop1"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -972,9 +975,9 @@ func (p *blockingPool) CallBlocking(ctx context.Context, _ headless.FeatureKey, 
 func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
 	pool := &blockingPool{entered: make(chan struct{})}
 
-	inst := &Instance{Title: "test-wait-blocks", UUID: "abcdefgh-wait0"}
+	inst := &instance.Instance{Title: "test-wait-blocks", UUID: "abcdefgh-wait0"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -1032,9 +1035,9 @@ func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
 func TestAutonomousDriver_Wait_RespectsOwnContextTimeout(t *testing.T) {
 	pool := &blockingPool{}
 
-	inst := &Instance{Title: "test-wait-timeout", UUID: "abcdefgh-wait1"}
+	inst := &instance.Instance{Title: "test-wait-timeout", UUID: "abcdefgh-wait1"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -1089,9 +1092,9 @@ func (p *panicPool) CallBlocking(_ context.Context, _ headless.FeatureKey, _, _ 
 // when headlessPool is nil, matching the Copilot review comment.
 func TestAutonomousDriver_NilPool_Start(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-nil-pool", UUID: "abcdef12-nil"}
+	inst := &instance.Instance{Title: "test-nil-pool", UUID: "abcdef12-nil"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -1111,9 +1114,9 @@ func TestAutonomousDriver_ShortUUID(t *testing.T) {
 	pool := &fakeHeadlessPool{
 		responses: []string{"DONE: ok"},
 	}
-	inst := &Instance{Title: "short-uuid-test", UUID: "abc"} // 3 chars, less than 8
+	inst := &instance.Instance{Title: "short-uuid-test", UUID: "abc"} // 3 chars, less than 8
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -1212,7 +1215,7 @@ func TestBuildOrchestrationPrompt_should_omitLastNudgeSection_When_NoNudgeSentYe
 // first-idle-signal-wins behavior with no debounce.
 func TestWaitForIdle_should_returnImmediately_When_SettleWindowIsZero(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-waitforidle-zero", UUID: "abcdefgh-wfi0"}
+	inst := &instance.Instance{Title: "test-waitforidle-zero", UUID: "abcdefgh-wfi0"}
 	cc, _ := claudectl.NewClaudeController(inst)
 
 	statusCh := make(chan detection.DetectedStatus, 1)
@@ -1240,7 +1243,7 @@ func TestWaitForIdle_should_returnImmediately_When_SettleWindowIsZero(t *testing
 // the full window.
 func TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-waitforidle-sustain", UUID: "abcdefgh-wfi1"}
+	inst := &instance.Instance{Title: "test-waitforidle-sustain", UUID: "abcdefgh-wfi1"}
 	cc, _ := claudectl.NewClaudeController(inst)
 
 	settleWindow := 80 * time.Millisecond
@@ -1272,7 +1275,7 @@ func TestWaitForIdle_should_requireSustainedIdle_When_SettleWindowIsSet(t *testi
 // entirely — those already mean the session needs redirection right now.
 func TestWaitForIdle_should_returnImmediately_When_ExplicitStatusArrives(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-waitforidle-explicit", UUID: "abcdefgh-wfi2"}
+	inst := &instance.Instance{Title: "test-waitforidle-explicit", UUID: "abcdefgh-wfi2"}
 	cc, _ := claudectl.NewClaudeController(inst)
 
 	statusCh := make(chan detection.DetectedStatus, 1)
@@ -1298,7 +1301,7 @@ func TestWaitForIdle_should_returnImmediately_When_ExplicitStatusArrives(t *test
 // out via ctx rather than hanging or returning a false positive.
 func TestWaitForIdle_should_returnFalse_When_ContextExpiresBeforeSettleWindowElapses(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-waitforidle-ctxexpire", UUID: "abcdefgh-wfi3"}
+	inst := &instance.Instance{Title: "test-waitforidle-ctxexpire", UUID: "abcdefgh-wfi3"}
 	cc, _ := claudectl.NewClaudeController(inst)
 
 	statusCh := make(chan detection.DetectedStatus, 1)
@@ -1387,9 +1390,9 @@ func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolC
 
 	pool := &fakeHeadlessPool{}
 
-	inst := &Instance{Title: "test-batched-summary-startup", UUID: "abcdefgh-wfi5"}
+	inst := &instance.Instance{Title: "test-batched-summary-startup", UUID: "abcdefgh-wfi5"}
 	cc, _ := claudectltest.NewController(batchedSummary)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := NewAutonomousDriver(inst, pool, "goal", 5, WithStartupTimeout(150*time.Millisecond))
 
@@ -1429,9 +1432,9 @@ func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolC
 func TestNewAutonomousDriver_ConfigurableStartupTimeout(t *testing.T) {
 	t.Parallel()
 	pool := &fakeHeadlessPool{}
-	inst := &Instance{Title: "test-timeout", UUID: "abcdefgh-tout"}
+	inst := &instance.Instance{Title: "test-timeout", UUID: "abcdefgh-tout"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	// Custom timeout
 	d := NewAutonomousDriver(inst, pool, "goal", 0, WithStartupTimeout(5*time.Minute))
@@ -1467,24 +1470,6 @@ func strContains(s, substr string) bool {
 
 // --- BUG-031: waitForPaneSettle (paste/submit race regression) ---
 
-// fakePaneSettleChecker is a scripted paneSettleChecker: each call to
-// HasUpdated pops the next value off updates (repeating the last one once
-// exhausted), so a test can script "still changing... still changing...
-// settled" without a real tmux pane.
-type fakePaneSettleChecker struct {
-	updates []bool
-	calls   int
-}
-
-func (f *fakePaneSettleChecker) HasUpdated() (bool, bool) {
-	idx := f.calls
-	f.calls++
-	if idx >= len(f.updates) {
-		idx = len(f.updates) - 1
-	}
-	return f.updates[idx], false
-}
-
 // Shrunk pane-settle poll/deadline values shared by the waitForPaneSettle
 // tests below, so they run in milliseconds instead of waiting out the real
 // 150ms/2s production defaults.
@@ -1510,10 +1495,10 @@ const (
 // keystroke follow the content write as soon as the TUI has actually
 // finished rendering it, not just eventually.
 func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly(t *testing.T) {
-	checker := &fakePaneSettleChecker{updates: []bool{true, true, false, false, false}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{true, true, false, false, false}}
 
 	start := time.Now()
-	waitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
+	instance.WaitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
 	elapsed := time.Since(start)
 
 	// A relative margin (half the deadline) rather than a thin absolute one:
@@ -1524,8 +1509,8 @@ func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEar
 	if halfDeadline := testPaneSettleMaxWait / 2; elapsed >= halfDeadline {
 		t.Errorf("expected early return once settled, took %v (>= half of deadline %v)", elapsed, halfDeadline)
 	}
-	if checker.calls < 4 {
-		t.Errorf("expected at least 4 polls (2 changing + 2 stable), got %d", checker.calls)
+	if checker.Calls < 4 {
+		t.Errorf("expected at least 4 polls (2 changing + 2 stable), got %d", checker.Calls)
 	}
 }
 
@@ -1534,10 +1519,10 @@ func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEar
 // hang waitForPaneSettle forever — it must still return once maxWait elapses,
 // so the caller's submit keystroke is never permanently blocked.
 func TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles(t *testing.T) {
-	checker := &fakePaneSettleChecker{updates: []bool{true}} // always "still changing"
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{true}} // always "still changing"
 
 	start := time.Now()
-	waitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
+	instance.WaitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
 	elapsed := time.Since(start)
 
 	if elapsed < testPaneSettleMaxWait {
@@ -1549,12 +1534,12 @@ func TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles(t *test
 // a cancelled context stops the poll loop right away rather than waiting out
 // maxWait.
 func TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled(t *testing.T) {
-	checker := &fakePaneSettleChecker{updates: []bool{true}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{true}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	start := time.Now()
-	waitForPaneSettle(ctx, checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
+	instance.WaitForPaneSettle(ctx, checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
 	elapsed := time.Since(start)
 
 	if elapsed >= testPaneSettlePollInterval {

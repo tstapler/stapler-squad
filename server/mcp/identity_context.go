@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // IdentityUnverifiedMessage is the error copy for a caller without a verified
@@ -44,7 +44,7 @@ func NewIdentityMiddleware(next http.Handler, verify ProofVerifier, sessionExist
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if id := r.Header.Get(sessionUUIDHeader); id != "" {
 			ctx := WithSessionUUID(r.Context(), id)
-			if proof := r.Header.Get(session.MCPProofHeader); proof != "" && verify != nil && verify(id, proof) &&
+			if proof := r.Header.Get(instance.MCPProofHeader); proof != "" && verify != nil && verify(id, proof) &&
 				sessionExists != nil && sessionExists(id) {
 				ctx = WithVerifiedSessionUUID(ctx, id)
 			}
@@ -58,5 +58,5 @@ func NewIdentityMiddleware(next http.Handler, verify ProofVerifier, sessionExist
 // is never read or returned.
 func sessionHasMCPProof(sessionUUID string) bool {
 	dir, err := config.GetConfigDir()
-	return err == nil && session.MCPProofFilePresent(dir, sessionUUID)
+	return err == nil && instance.MCPProofFilePresent(dir, sessionUUID)
 }

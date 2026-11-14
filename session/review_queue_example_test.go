@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"testing"
 	"time"
@@ -104,7 +105,7 @@ func TestReviewQueueIntegrationWithInstance(t *testing.T) {
 	queue := queuepkg.NewReviewQueue()
 
 	// Create a session instance
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "test-session",
 		Status: domain.Active,
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func seedItemDirectPR(t *testing.T, fix *forkTestFixture, status domain.BacklogStatus, number int) (string, domain.PRRef) {
@@ -98,18 +99,18 @@ func TestDetachItemPullRequest_ShouldRemovePRFromVerdict_WhenAlsoReachableViaCur
 	ctx := context.Background()
 	itemID, _ := seedItemDirectPR(t, fix, domain.BacklogStatus("in_progress"), 42)
 	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, domain.PRStateOpen, false})
-	_, err := fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: session.SessionRoleWork})
+	_, err := fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	before, err := fix.storage.ItemPRs(ctx, itemID)
 	require.NoError(t, err)
-	require.Equal(t, session.ItemVerdictOpen, session.ItemPRVerdict(before))
+	require.Equal(t, instance.ItemVerdictOpen, instance.ItemPRVerdict(before))
 
 	_, err = fix.svc.DetachItemPullRequest(ctx, connect.NewRequest(&sessionv1.DetachItemPullRequestRequest{ItemId: itemID, Pr: protoRef(42)}))
 	require.NoError(t, err)
 
 	after, err := fix.storage.ItemPRs(ctx, itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ItemVerdictNoPRs, session.ItemPRVerdict(after), "the round's own link no longer counts for the item")
+	assert.Equal(t, instance.ItemVerdictNoPRs, instance.ItemPRVerdict(after), "the round's own link no longer counts for the item")
 	views, err := fix.storage.ListSessionPRViewsByUUIDs(ctx, []string{"uuid-u1"})
 	require.NoError(t, err)
 	assert.Len(t, views["uuid-u1"], 1, "but the session keeps its link (and its worktree hold)")

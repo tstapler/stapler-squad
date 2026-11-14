@@ -7,6 +7,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -32,10 +35,10 @@ type fakePRCall struct {
 	uuid   string
 	ref    domain.PRRef
 	link   domain.PRLink
-	mirror PRMirror
+	mirror instance.PRMirror
 }
 
-func (f *fakePRPersister) AttachSessionPR(_ context.Context, uuid string, ref domain.PRRef, link domain.PRLink, m PRMirror) (domain.PRLinkResult, error) {
+func (f *fakePRPersister) AttachSessionPR(_ context.Context, uuid string, ref domain.PRRef, link domain.PRLink, m instance.PRMirror) (domain.PRLinkResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakePRCall{uuid, ref, link, m})
@@ -57,17 +60,17 @@ func (f *fakePRPersister) callCount() int {
 	return len(f.calls)
 }
 
-func newPRTestInstance(t *testing.T) *Instance {
+func newPRTestInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title: "multi-pr", UUID: "uuid-multi-pr", Path: t.TempDir(), Program: "echo", Branch: "feat/x",
 		GitHubOwner: "acme", GitHubRepo: "app",
 	}
-	finishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	return inst
 }
 
-func attachNumbers(t *testing.T, inst *Instance) []int {
+func attachNumbers(t *testing.T, inst *instance.Instance) []int {
 	t.Helper()
 	prs := inst.Snapshot().GitHub.PRs
 	out := make([]int, 0, len(prs))
@@ -80,7 +83,7 @@ func attachNumbers(t *testing.T, inst *Instance) []int {
 func TestAttachPR_ShouldKeepBoth_WhenTwoGoroutinesAttach(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	r12, r13 := mustPRRef(t, "", "acme", "app", 12), mustPRRef(t, "", "acme", "app", 13)
+	r12, r13 := fixturetest.MustPRRef(t, "", "acme", "app", 12), fixturetest.MustPRRef(t, "", "acme", "app", 13)
 
 	var wg sync.WaitGroup
 	for _, c := range []struct {
@@ -112,11 +115,11 @@ func TestAttachPR_ShouldKeepBoth_WhenTwoGoroutinesAttach(t *testing.T) {
 func TestAttachPR_ShouldNotMutatePublishedSnapshot_WhenAdding(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
+	if err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
 		t.Fatal(err)
 	}
 	earlier := inst.Snapshot()
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
+	if err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 13), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(earlier.GitHub.PRs); got != 1 {
@@ -129,15 +132,15 @@ func TestAttachPR_ShouldNotMutatePublishedSnapshot_WhenAdding(t *testing.T) {
 
 func TestAttachPR_ShouldProjectActivePRToLegacyFields_WhenAnyScopeState(t *testing.T) {
 	t.Parallel()
-	h := installRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	inst := newPRTestInstance(t)
-	r11 := mustPRRef(t, "", "acme", "app", 11)
+	r11 := fixturetest.MustPRRef(t, "", "acme", "app", 11)
 	if err := inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
 		t.Fatal(err)
 	}
 	inst.MarkPRTerminal(r11, domain.PRStateMerged)
 
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
+	if err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -146,13 +149,13 @@ func TestAttachPR_ShouldProjectActivePRToLegacyFields_WhenAnyScopeState(t *testi
 		t.Errorf("mirror = %d %q terminal=%v, want 12 + url + false", g.GitHubPRNumber, g.GitHubPRURL, g.GitHubPRStatusTerminal)
 	}
 	if !loggedActivePRChange(h, 11, 12) {
-		t.Errorf("no 'session active pr changed' record with from=11 to=12 in %v", h.all())
+		t.Errorf("no 'session active pr changed' record with from=11 to=12 in %v", h.All())
 	}
 }
 
-func loggedActivePRChange(h *recordingHandler, from, to int64) bool {
-	for _, r := range h.recordsAtLevel(slog.LevelInfo) {
-		if r.msg != "session active pr changed" {
+func loggedActivePRChange(h *fixturetest.RecordingHandler, from, to int64) bool {
+	for _, r := range h.RecordsAtLevel(slog.LevelInfo) {
+		if r.Msg != "session active pr changed" {
 			continue
 		}
 		if intAttr(r, "from") == from && intAttr(r, "to") == to {
@@ -165,7 +168,7 @@ func loggedActivePRChange(h *recordingHandler, from, to int64) bool {
 func TestAttachPR_ShouldShowNewestNonTerminal_WhenNoBranchMatch(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	r11, r12 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 12)
+	r11, r12 := fixturetest.MustPRRef(t, "", "acme", "app", 11), fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	if err := inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen, HeadBranch: "other-a"}); err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +187,8 @@ func TestAttachPR_ShouldReturnErrNoSessionUUID_WhenUUIDEmpty(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.UUID = ""
-	finishInstanceConstruction(inst)
-	err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{})
+	instance.FinishInstanceConstruction(inst)
+	err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{})
 	if !errors.Is(err, domain.ErrNoSessionUUID) {
 		t.Fatalf("AttachPR err = %v, want domain.ErrNoSessionUUID", err)
 	}
@@ -219,7 +222,7 @@ func TestAttachPR_ShouldPersistFromSnapshot_WhenPersisterInjected(t *testing.T) 
 	inst := newPRTestInstance(t)
 	p := &fakePRPersister{}
 	inst.SetPRPersister(p)
-	r12 := mustPRRef(t, "", "acme", "app", 12)
+	r12 := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	if err := inst.AttachPR(r12, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +251,7 @@ func TestAttachPR_ShouldMarkPending_WhenSessionRowMissingOrPersistFails(t *testi
 			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.SetPRPersister(&fakePRPersister{err: perr})
-			if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceCreatedFromURL, domain.PRInitial{}); err != nil {
+			if err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceCreatedFromURL, domain.PRInitial{}); err != nil {
 				t.Fatalf("AttachPR returned %v; persist failures must not fail the attach", err)
 			}
 			if !inst.PRPersistPending() {
@@ -265,7 +268,7 @@ func TestAttachPR_ShouldDropLink_WhenRepositoryReportsTombstone(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.SetPRPersister(&fakePRPersister{res: domain.PRLinkResult{Tombstoned: true}})
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
+	if err := inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := attachNumbers(t, inst); len(got) != 0 {
@@ -276,14 +279,14 @@ func TestAttachPR_ShouldDropLink_WhenRepositoryReportsTombstone(t *testing.T) {
 func TestDetachPinApply_ShouldUpdateSetAndFlags(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	r11, r12 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 12)
+	r11, r12 := fixturetest.MustPRRef(t, "", "acme", "app", 11), fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	_ = inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})
 	_ = inst.AttachPR(r12, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})
 
 	if !inst.PinPR(r11, true) || inst.Snapshot().GitHub.GitHubPRNumber != 11 {
 		t.Errorf("pin did not make #11 active: %d", inst.Snapshot().GitHub.GitHubPRNumber)
 	}
-	if !inst.ApplyPRUpdate(r12, PRStatusUpdate{State: "merged", Terminal: true}) {
+	if !inst.ApplyPRUpdate(r12, instance.PRStatusUpdate{State: "merged", Terminal: true}) {
 		t.Fatal("ApplyPRUpdate did not find #12")
 	}
 	if inst.MarkPRTerminal(r12, domain.PRStateOpen) {
@@ -313,8 +316,8 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.GitHubPRNumber, inst.LegacyPRUnrepresented = 11, true
-			finishInstanceConstruction(inst)
-			_ = inst.AttachPR(mustPRRef(t, "", "acme", "app", tt.attach), domain.AttachSourceBackfill, domain.PRInitial{})
+			instance.FinishInstanceConstruction(inst)
+			_ = inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", tt.attach), domain.AttachSourceBackfill, domain.PRInitial{})
 			if got := inst.Snapshot().GitHub.LegacyPRUnrepresented; got != tt.wantSet {
 				t.Errorf("LegacyPRUnrepresented = %v, want %v", got, tt.wantSet)
 			}
@@ -325,7 +328,7 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 func TestDetachPR_ShouldClearLegacyScalars_WhenLastLinkRemoved(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen, Terminal: true}))
 	require.True(t, inst.DetachPR(ref))
 
@@ -335,8 +338,8 @@ func TestDetachPR_ShouldClearLegacyScalars_WhenLastLinkRemoved(t *testing.T) {
 	assert.False(t, snap.GitHubPRStatusTerminal)
 }
 
-func intAttr(r capturedRecord, key string) int64 {
-	switch v := r.attrs[key].(type) {
+func intAttr(r fixturetest.CapturedRecord, key string) int64 {
+	switch v := r.Attrs[key].(type) {
 	case int:
 		return int64(v)
 	case int64:
@@ -348,7 +351,7 @@ func intAttr(r capturedRecord, key string) int64 {
 func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 
 	inst.SetGitHubResolution(domain.GitHubResolution{
 		Path: inst.Snapshot().Path, Owner: "acme", Repo: "app",
@@ -363,7 +366,7 @@ func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR
 
 func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T) {
 	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "from-pr", Path: t.TempDir(), Program: "echo",
 		GitHubOwner: "acme", GitHubRepo: "app",
 		GitHubPRNumber: 12, GitHubPRURL: "https://github.com/acme/app/pull/12",
@@ -380,9 +383,9 @@ func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T)
 func TestAttachPR_ShouldObservePRCountThree_WhenThirdPRAttaches(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	before := SessionPRCountObservations(3)
+	before := instance.SessionPRCountObservations(3)
 	for _, n := range []int{11, 12, 13} {
-		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", n), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+		require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", n), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	}
-	assert.GreaterOrEqual(t, SessionPRCountObservations(3), before+1, "third attach observed ssq_session_pr_count=3")
+	assert.GreaterOrEqual(t, instance.SessionPRCountObservations(3), before+1, "third attach observed ssq_session_pr_count=3")
 }

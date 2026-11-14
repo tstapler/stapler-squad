@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // seedItemWithRounds creates an in_progress backlog item plus one work-role
@@ -33,7 +34,7 @@ func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []tim
 		is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid,
-			SessionRole: session.SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 		require.NoError(t, session.TestBackdateItemSessionCreatedAt(t, storage, is.ID, createdAt))

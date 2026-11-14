@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeDiagnosticSpawner is a DiagnosticSpawner test double recording the
@@ -23,10 +24,10 @@ type fakeDiagnosticSpawner struct {
 	instUUID   string
 }
 
-func (f *fakeDiagnosticSpawner) SpawnDiagnosticSession(_ context.Context, item *backlogdto.BacklogItemData, prompt string) (*session.Instance, error) {
+func (f *fakeDiagnosticSpawner) SpawnDiagnosticSession(_ context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error) {
 	f.lastItemID = item.ID
 	f.lastPrompt = prompt
-	inst := &session.Instance{UUID: f.instUUID}
+	inst := &instance.Instance{UUID: f.instUUID}
 	return inst, nil
 }
 
@@ -88,7 +89,7 @@ func TestDispatchDiagnose_should_LinkItemSession_When_DispatchSucceeds(t *testin
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
-	assert.Equal(t, session.SessionRoleDiagnose, sessions[0].Role)
+	assert.Equal(t, instance.SessionRoleDiagnose, sessions[0].Role)
 	assert.Equal(t, "diag-sess-1", sessions[0].SessionUUID)
 }
 

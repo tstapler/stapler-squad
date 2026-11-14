@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -256,7 +257,7 @@ func TestTriageResultTitle_should_MatchSanitizedTitle_When_PersistedAndReReadFor
 			require.NoError(t, err)
 
 			sessions := []backlogdto.ItemSessionSummary{
-				{Role: string(session.SessionRoleTriage), TriageResult: string(payloadJSON)},
+				{Role: string(instance.SessionRoleTriage), TriageResult: string(payloadJSON)},
 			}
 
 			// Spawn-time read: what a later work-session spawn recovers from the
@@ -313,7 +314,7 @@ func TestResolveSessionPath_should_FallBackToDirectory_When_RepoIsNotGitManaged(
 
 	require.NoError(t, err)
 	assert.False(t, useWorktree)
-	resolved, resolveErr := session.ResolveSessionPath(repoPath)
+	resolved, resolveErr := instance.ResolveSessionPath(repoPath)
 	require.NoError(t, resolveErr)
 	assert.Equal(t, resolved, path)
 }
@@ -362,8 +363,8 @@ func TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWork
 
 	endedAt := time.Now()
 	sessions := []backlogdto.ItemSessionSummary{
-		{ID: "s1", Role: session.SessionRoleWork, BaseCommitSha: baseSHA, LastCommitSha: attempt1SHA, EndedAt: &endedAt},
-		{ID: "s2", Role: session.SessionRoleWork, BaseCommitSha: attempt1SHA, LastCommitSha: attempt2SHA, EndedAt: &endedAt},
+		{ID: "s1", Role: instance.SessionRoleWork, BaseCommitSha: baseSHA, LastCommitSha: attempt1SHA, EndedAt: &endedAt},
+		{ID: "s2", Role: instance.SessionRoleWork, BaseCommitSha: attempt1SHA, LastCommitSha: attempt2SHA, EndedAt: &endedAt},
 	}
 
 	got := recentWorkSessionFileLists(repoPath, sessions, 2)
@@ -391,9 +392,9 @@ func TestRecentWorkSessionFileLists_should_skipNonWorkAndInProgressSessions_When
 
 	endedAt := time.Now()
 	sessions := []backlogdto.ItemSessionSummary{
-		{ID: "s1", Role: session.SessionRoleWork, BaseCommitSha: baseSHA, LastCommitSha: attempt1SHA, EndedAt: &endedAt},
-		{ID: "s2", Role: session.SessionRoleReview, EndedAt: &endedAt},
-		{ID: "s3", Role: session.SessionRoleWork, BaseCommitSha: attempt1SHA, LastCommitSha: attempt1SHA, EndedAt: nil},
+		{ID: "s1", Role: instance.SessionRoleWork, BaseCommitSha: baseSHA, LastCommitSha: attempt1SHA, EndedAt: &endedAt},
+		{ID: "s2", Role: instance.SessionRoleReview, EndedAt: &endedAt},
+		{ID: "s3", Role: instance.SessionRoleWork, BaseCommitSha: attempt1SHA, LastCommitSha: attempt1SHA, EndedAt: nil},
 	}
 
 	got := recentWorkSessionFileLists(repoPath, sessions, 2)
@@ -413,7 +414,7 @@ func TestRecentWorkSessionFileLists_should_returnEmptyListForSlot_When_ShasMissi
 
 	endedAt := time.Now()
 	sessions := []backlogdto.ItemSessionSummary{
-		{ID: "s1", Role: session.SessionRoleWork, EndedAt: &endedAt},
+		{ID: "s1", Role: instance.SessionRoleWork, EndedAt: &endedAt},
 	}
 
 	got := recentWorkSessionFileLists(repoPath, sessions, 2)
@@ -674,7 +675,7 @@ func TestDequeueNextQueuedItems_SpawnsOldestQueuedItemFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), inProgressIDs[0], domain.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), inProgressIDs[0], domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
@@ -798,7 +799,7 @@ func TestDequeue_ConcurrentClaimsAreExclusive(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
+			_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, precondition, instance.TriggeredBySystem)
 			results <- err
 		}()
 	}
@@ -1014,7 +1015,7 @@ func TestDequeueNextQueuedItems_should_SpawnHigherPriorityReadyItemFirst_When_On
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), sessions[0].ID, time.Now()))
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), inProgressIDs[0], domain.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), inProgressIDs[0], domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DequeueNextQueuedItems(t.Context()))
@@ -1093,7 +1094,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SkipsWithoutStatusChurn(t *testing
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1140,7 +1141,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive(t *tes
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1192,7 +1193,7 @@ func TestAutoReopenForPRFix_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveR
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "ended-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
@@ -1240,7 +1241,7 @@ func TestAutoReopenForPRFix_DeadWorkSession_TombstonesThenReopens(t *testing.T) 
 	deadIS, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "dead-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1291,7 +1292,7 @@ func TestAutoRespawnAutonomousWork_ActiveWorkSession_RecordsRespawnBlockedActive
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1338,7 +1339,7 @@ func TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlocked
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "ended-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
@@ -1409,7 +1410,7 @@ func TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetr
 		is, isErr := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "prior-review-" + string(rune('a'+i)),
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, isErr)
 		require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
@@ -1464,7 +1465,7 @@ func TestAutoReopenAfterFailedReview_RepeatedFailureThreeTimes_ParksAfterEscalat
 		is, isErr := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "prior-review-" + string(rune('a'+i)),
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, isErr)
 		require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
@@ -1524,7 +1525,7 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "still-alive-work-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1542,7 +1543,7 @@ func TestAutoReopenAfterFailedReview_ActiveWorkSession_StillTransitionsToInProgr
 	require.NoError(t, err)
 	workCount := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork {
+		if is.Role == instance.SessionRoleWork {
 			workCount++
 		}
 	}
@@ -1579,7 +1580,7 @@ func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawni
 	svc.SetSessionStopper(sessSvc)
 
 	const workUUID = "map-miss-alive-work-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title:            title,
 		UUID:             workUUID,
 		Path:             t.TempDir(),
@@ -1599,7 +1600,7 @@ func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawni
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1619,7 +1620,7 @@ func TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawni
 	require.NoError(t, err)
 	workSessions := 0
 	for _, is := range sessions {
-		if is.Role != session.SessionRoleWork {
+		if is.Role != instance.SessionRoleWork {
 			continue
 		}
 		workSessions++
@@ -1660,7 +1661,7 @@ func TestAutoReopenAfterFailedReview_CalledTwiceForSameItem_SecondCallFailsHarml
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "still-alive-work-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1705,7 +1706,7 @@ func TestAutoReopenAfterFailedReview_LikelyFlaky_MarksStuckWithoutAlteringReopen
 		is, isErr := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "prior-review-" + string(rune('a'+i)),
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, isErr)
 		require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
@@ -1722,7 +1723,7 @@ func TestAutoReopenAfterFailedReview_LikelyFlaky_MarksStuckWithoutAlteringReopen
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "still-alive-work-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1796,7 +1797,7 @@ func TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne(t *testing
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "ended-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	sessions, err := storage.ListItemSessions(context.Background(), item.ID)
@@ -1865,7 +1866,7 @@ func TestAutoReopenAfterFailedReview_ActiveStaleWorkSession_NotifiesOperator(t *
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1934,7 +1935,7 @@ func TestAutoReopenAfterFailedReview_ActiveFreshWorkSession_NoNotification(t *te
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1984,7 +1985,7 @@ func TestNotifyIfActiveWorkSessionStale_should_notFire_When_IdleUnder15Min(t *te
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2015,7 +2016,7 @@ func TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min(t *testin
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2054,7 +2055,7 @@ func TestNotifyIfActiveWorkSessionStale_should_skipGracefully_When_StatusPrecond
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2112,7 +2113,7 @@ func TestNotifyIfActiveWorkSessionStale_should_addSecondOpenReason_When_ItemAlre
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2169,7 +2170,7 @@ func TestAutoRespawnReview_ReworkCapHit_LeavesInReviewAndNotifies(t *testing.T) 
 		is, isErr := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "prior-re-review-" + string(rune('a'+i)),
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, isErr)
 		require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
@@ -2209,7 +2210,7 @@ func TestAutoRespawnReview_ReworkCapHit_UsesConfiguredCap_When_MaxAutoReworkIter
 	is, isErr := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "prior-re-review-only-one",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, isErr)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
@@ -2251,7 +2252,7 @@ func TestAutoRespawnReview_ReworkCapOverride_AllowsMoreRoundsThanGlobalDefault(t
 		is, isErr := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "prior-re-review-" + string(rune('a'+i)),
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, isErr)
 		require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
@@ -2289,7 +2290,7 @@ func TestAutoRespawnReview_ReworkCapOverride_ZeroMeansUnlimited(t *testing.T) {
 		is, isErr := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "prior-re-review-" + string(rune('a'+i)),
-			SessionRole: session.SessionRoleReview,
+			SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, isErr)
 		require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
@@ -2328,7 +2329,7 @@ func TestAutoRespawnReview_ActiveReviewSession_SkipsWithoutDoubleSpawn(t *testin
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-review-uuid",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -2365,7 +2366,7 @@ func TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive(t *te
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "active-review-uuid",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -2418,7 +2419,7 @@ func TestAutoRespawnReview_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRo
 	is, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "ended-review-uuid",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now()))
@@ -2478,7 +2479,7 @@ func TestAutoRespawnReview_DeadWorkSession_TombstonedThenRespawns(t *testing.T) 
 	deadIS, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "dead-work-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2644,7 +2645,7 @@ func TestAutoRespawnTriage_should_noop_When_ItemNoLongerIdea(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	respawnErr := svc.AutoRespawnTriage(t.Context(), item.ID)
@@ -2712,7 +2713,7 @@ func attachPRFixWorkSession(t *testing.T, storage *session.Storage, repo *sessio
 	is, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), is.ID, time.Now().Add(-time.Hour)))
@@ -2964,7 +2965,7 @@ func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowM
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -3022,7 +3023,7 @@ func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotE
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -3447,7 +3448,7 @@ func endWorkSessionRoundsThrough(t *testing.T, storage *session.Storage, ctx con
 		is, createErr := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      itemID,
 			SessionUUID: fmt.Sprintf("round-%d-uuid", i),
-			SessionRole: session.SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, createErr)
 		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
@@ -3487,7 +3488,7 @@ func TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossMany
 	round5, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: round5UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, round5.ID, time.Now()))
@@ -3983,7 +3984,7 @@ func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_
 	// Caller 2: AttachSessionToItem writes into a second, independent directory.
 	attachPath := t.TempDir()
 	const attachUUID = "attach-parity-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "attach-target",
 		UUID:  attachUUID,
 		Path:  attachPath,
@@ -4034,7 +4035,7 @@ func TestTriggerTriage_NeverPublishesUntaggedNotification_OnHeadlessPoolFailureO
 				return false
 			}
 			for _, is := range sessions {
-				if is.Role == session.SessionRoleTriage && is.EndedAt != nil {
+				if is.Role == instance.SessionRoleTriage && is.EndedAt != nil {
 					return true
 				}
 			}
@@ -4170,7 +4171,7 @@ func waitForTriageFailureCaptured(t *testing.T, storage *session.Storage, itemID
 			return false
 		}
 		for _, is := range sessions {
-			if is.Role == session.SessionRoleTriage && is.EndedAt != nil && is.FailureCapturePath != "" {
+			if is.Role == instance.SessionRoleTriage && is.EndedAt != nil && is.FailureCapturePath != "" {
 				found = is
 				return true
 			}
@@ -4694,7 +4695,7 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 	workIS, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), workIS.ID, time.Now()))
@@ -4784,7 +4785,7 @@ func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsB
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -4860,7 +4861,7 @@ func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMisma
 	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -4928,7 +4929,7 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 	workIS, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), workIS.ID, time.Now()))
@@ -5005,7 +5006,7 @@ func TestTriggerReReview_should_PersistFailureCapture_When_HeadlessCallItselfErr
 
 	var captured *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role == string(session.SessionRoleReview) && sessions[i].FailureCapturePath != "" {
+		if sessions[i].Role == string(instance.SessionRoleReview) && sessions[i].FailureCapturePath != "" {
 			captured = &sessions[i]
 			break
 		}
@@ -5107,7 +5108,7 @@ func TestTriggerReReview_should_BlockInsteadOfReviewingSharedCheckout_When_Workt
 	workIS, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: reapedSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), workIS.ID, time.Now()))
@@ -5405,7 +5406,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_resolveStuckRow_When_Sessio
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkBlockedStale, domain.BacklogStatusReview, "was stale")
@@ -5440,7 +5441,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_leaveRowOpen_When_StillStal
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonReworkBlockedStale, domain.BacklogStatusReview, "still stale")
@@ -5477,7 +5478,7 @@ func TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSes
 	})
 	require.NoError(t, err)
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
@@ -5529,7 +5530,7 @@ func TestReworkBlockedStale_should_markAndLaterResolve_When_SessionStallsThenRec
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -5658,7 +5659,7 @@ func TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirect
 	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
 	require.NoError(t, listErr)
 	require.Len(t, sessions, 1, "a valid repo_path must still create the triage ItemSession")
-	assert.Equal(t, string(session.SessionRoleTriage), sessions[0].Role)
+	assert.Equal(t, string(instance.SessionRoleTriage), sessions[0].Role)
 }
 
 // TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThreshold
@@ -5688,7 +5689,7 @@ func TestTriggerTriage_should_EmitBudgetWarningLogLine_When_CostCrossesItemThres
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "prior-triage-session",
-		SessionRole:      string(session.SessionRoleTriage),
+		SessionRole:      string(instance.SessionRoleTriage),
 		EstimatedCostUsd: 4.90,
 	})
 	require.NoError(t, err)
@@ -6041,7 +6042,7 @@ func TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphore
 			return false
 		}
 		for _, is := range sessions {
-			if is.Role == string(session.SessionRoleTriage) && is.EndedAt != nil {
+			if is.Role == string(instance.SessionRoleTriage) && is.EndedAt != nil {
 				return is.EndReason == "shutdown"
 			}
 		}
@@ -6163,10 +6164,10 @@ func TestBacklogWorkBranchSlug_TwoItemsWithCollidingTitles_ShareOneWorktree(t *t
 	slugB := backlogWorkBranchSlug(repoDir, titleB)
 	require.Equal(t, slugA, slugB, "fixture requires titleA/titleB to collide on the same slug")
 
-	pathA, err := session.CreateBacklogWorktree(repoDir, slugA, "")
+	pathA, err := instance.CreateBacklogWorktree(repoDir, slugA, "")
 	require.NoError(t, err)
 
-	pathB, err := session.CreateBacklogWorktree(repoDir, slugB, "")
+	pathB, err := instance.CreateBacklogWorktree(repoDir, slugB, "")
 	require.NoError(t, err)
 
 	assert.Equal(t, pathA, pathB,
@@ -6194,7 +6195,7 @@ func TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_Whe
 	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "jules-sessions/spawn-guard",
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
 
@@ -6224,7 +6225,7 @@ func TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPrese
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "jules-sessions/autonomous-guard",
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
 
@@ -6233,7 +6234,7 @@ func TestAutoRespawnAutonomousWork_should_SkipRespawn_When_OpenJulesSessionPrese
 	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1, "no new ItemSession row must be created while the Jules session is active")
-	assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
+	assert.Equal(t, instance.SessionRoleJulesWork, sessions[0].Role)
 }
 
 // TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent guards
@@ -6257,7 +6258,7 @@ func TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent(t *te
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "jules-sessions/review-guard",
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
 
@@ -6266,7 +6267,7 @@ func TestAutoRespawnReview_should_SkipRespawn_When_OpenJulesSessionPresent(t *te
 	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
 	require.NoError(t, err)
 	for _, is := range sessions {
-		assert.NotEqual(t, session.SessionRoleReview, is.Role, "no review session must be spawned while a Jules session is active")
+		assert.NotEqual(t, instance.SessionRoleReview, is.Role, "no review session must be spawned while a Jules session is active")
 	}
 }
 
@@ -6294,7 +6295,7 @@ func TestSteerActiveSessionForPRFix_should_LogErrorAndSkipTmuxWrite_When_ActiveS
 
 	active := &backlogdto.ItemSessionSummary{
 		SessionUUID: "jules-sessions/invariant-violation",
-		Role:        session.SessionRoleJulesWork,
+		Role:        instance.SessionRoleJulesWork,
 	}
 
 	svc.steerActiveSessionForPRFix(t.Context(), item.ID, item.Title, domain.BacklogStatusPRPending, active, "some fix context")
@@ -6319,7 +6320,7 @@ func TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRole
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "jules-sessions/wip-carveout",
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
 
@@ -6348,7 +6349,7 @@ func TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsAc
 	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: liveUUID,
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, err)
 
@@ -6394,12 +6395,12 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 	t1 := t0.Add(time.Hour)
 	t2 := t1.Add(time.Hour)
 
-	work1 := backlogdto.ItemSessionSummary{SessionUUID: "work-r1", Role: session.SessionRoleWork, CreatedAt: t0}
-	work2 := backlogdto.ItemSessionSummary{SessionUUID: "work-r2", Role: session.SessionRoleWork, CreatedAt: t1}
-	work3 := backlogdto.ItemSessionSummary{SessionUUID: "work-r3", Role: session.SessionRoleWork, CreatedAt: t2}
-	review1 := backlogdto.ItemSessionSummary{SessionUUID: "review-r1", Role: session.SessionRoleReview, CreatedAt: t0}
-	review2 := backlogdto.ItemSessionSummary{SessionUUID: "review-r2", Role: session.SessionRoleReview, CreatedAt: t2}
-	nonTmux := backlogdto.ItemSessionSummary{SessionUUID: "jules-1", Role: session.SessionRoleJulesWork, CreatedAt: t0}
+	work1 := backlogdto.ItemSessionSummary{SessionUUID: "work-r1", Role: instance.SessionRoleWork, CreatedAt: t0}
+	work2 := backlogdto.ItemSessionSummary{SessionUUID: "work-r2", Role: instance.SessionRoleWork, CreatedAt: t1}
+	work3 := backlogdto.ItemSessionSummary{SessionUUID: "work-r3", Role: instance.SessionRoleWork, CreatedAt: t2}
+	review1 := backlogdto.ItemSessionSummary{SessionUUID: "review-r1", Role: instance.SessionRoleReview, CreatedAt: t0}
+	review2 := backlogdto.ItemSessionSummary{SessionUUID: "review-r2", Role: instance.SessionRoleReview, CreatedAt: t2}
+	nonTmux := backlogdto.ItemSessionSummary{SessionUUID: "jules-1", Role: instance.SessionRoleJulesWork, CreatedAt: t0}
 
 	cases := []struct {
 		name           string
@@ -6428,7 +6429,7 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 		},
 		{
 			name:           "near-simultaneous rounds tie-break identically to findMostRecentSessions",
-			sessions:       []backlogdto.ItemSessionSummary{{SessionUUID: "a", Role: session.SessionRoleWork, CreatedAt: t0}, {SessionUUID: "b", Role: session.SessionRoleWork, CreatedAt: t0}},
+			sessions:       []backlogdto.ItemSessionSummary{{SessionUUID: "a", Role: instance.SessionRoleWork, CreatedAt: t0}, {SessionUUID: "b", Role: instance.SessionRoleWork, CreatedAt: t0}},
 			wantSuperseded: []string{"b"}, // findMostRecentSessions only replaces on strict After, so the first-seen wins ties
 		},
 	}
@@ -6446,11 +6447,11 @@ func TestFindSupersededSessions_should_KeepOnlyLatestPerRole_When_MultipleRounds
 			// Cross-check against the existing tie-break truth source directly.
 			currentReview, currentWork := services.FindMostRecentSessions(tc.sessions)
 			for _, is := range got {
-				if is.Role == session.SessionRoleWork {
+				if is.Role == instance.SessionRoleWork {
 					require.NotNil(t, currentWork)
 					assert.NotEqual(t, currentWork.SessionUUID, is.SessionUUID)
 				}
-				if is.Role == session.SessionRoleReview {
+				if is.Role == instance.SessionRoleReview {
 					require.NotNil(t, currentReview)
 					assert.NotEqual(t, currentReview.SessionUUID, is.SessionUUID)
 				}
@@ -6483,7 +6484,7 @@ func TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacke
 	priorReview, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "prior-review-uuid",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -6521,7 +6522,7 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 	endedSession, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "work-0",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), endedSession.ID, time.Now()))
@@ -6529,14 +6530,14 @@ func TestStopLiveWorkSessions_should_StopUnendedWorkAndReviewSessions_When_Calle
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "work-1",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "review-1",
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -6578,7 +6579,7 @@ func TestStopLiveWorkSessions_should_LogAndContinue_When_SessionStopperReturnsEr
 	workSession, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "work-err-1",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -6758,7 +6759,7 @@ func TestEndItemSessionForCallError_should_RecordDetailOnlyForOtherBucket(t *tes
 			})
 			require.NoError(t, err)
 			is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
-				ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: session.SessionRoleTriage,
+				ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: instance.SessionRoleTriage,
 			})
 			require.NoError(t, err)
 

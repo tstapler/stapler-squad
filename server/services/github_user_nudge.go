@@ -13,6 +13,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -35,10 +36,10 @@ const (
 // PRNudger is the slice of SessionService the nudge handler needs. It is
 // consumer-side so tests substitute a fake with no tmux.
 type PRNudger interface {
-	FindLiveInstance(id string) *session.Instance
-	SteerInstanceGuarded(ctx context.Context, inst *session.Instance, sig, msg string) (SteerOutcome, error)
+	FindLiveInstance(id string) *instance.Instance
+	SteerInstanceGuarded(ctx context.Context, inst *instance.Instance, sig, msg string) (SteerOutcome, error)
 	// InstanceReadyForSteer is the idle gate SteerInstanceGuarded applies.
-	InstanceReadyForSteer(inst *session.Instance) bool
+	InstanceReadyForSteer(inst *instance.Instance) bool
 }
 
 var _ PRNudger = (*SessionService)(nil)
@@ -290,7 +291,7 @@ func (s *GitHubUserService) runNudge(ctx context.Context, call *nudgeCall, req *
 
 // resolveSession looks the live instance up ONCE and checks it can take a
 // request. A nil instance means the call ends with early/err instead.
-func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (inst *session.Instance, early *sessionv1.NudgeSessionForPRResponse, err error) {
+func (s *GitHubUserService) resolveSession(call *nudgeCall, sessionID string) (inst *instance.Instance, early *sessionv1.NudgeSessionForPRResponse, err error) {
 	inst = s.nudge.nudger.FindLiveInstance(sessionID)
 	if inst == nil {
 		return nil, nudgeResponse(sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nil, "", nudgeNotTrackedDetail), nil
@@ -401,7 +402,7 @@ func nudgeRateLimitMessage(resume func() (bool, time.Time)) string {
 
 // deliver writes the prompt through the guarded steer and maps every
 // SteerOutcome to a typed response or Connect error.
-func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *session.Instance, prompt string) (*sessionv1.NudgeSessionForPRResponse, error) {
+func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *instance.Instance, prompt string) (*sessionv1.NudgeSessionForPRResponse, error) {
 	key, reasons := call.key, call.reasons
 	if err := ctxDoneError(ctx); err != nil {
 		return nil, err
