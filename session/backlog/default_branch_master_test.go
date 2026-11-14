@@ -9,10 +9,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Regression: a master-default repo (e.g. kibitzer) made every shipped-without-a-PR
@@ -41,13 +41,13 @@ func TestMostRecentWorkCommitShippedToMain_should_DetectShipped_When_DefaultBran
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "master-work-session", SessionRole: session.SessionRoleWork,
+		ItemID: item.ID, SessionUUID: "master-work-session", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	inst := newTestInstance("master-work-instance")
 	inst.UUID = "master-work-session"
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(dir, dir, "master-work-instance", "master", sha)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	listener := NewBacklogLifecycleListener(storage)
 	gotSHA, shipped := listener.mostRecentWorkCommitShippedToMain(ctx, item.ID, dir)
