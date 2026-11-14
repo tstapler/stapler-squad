@@ -79,3 +79,10 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+# Read by server/services' flag-registration guard, which resolves config.* flag-name consts from source.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
+)

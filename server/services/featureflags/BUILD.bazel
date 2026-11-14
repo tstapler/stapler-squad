@@ -25,3 +25,10 @@ go_test(
     srcs = ["registry_test.go"],
     embed = [":featureflags"],
 )
+
+# Read by server/services' flag-registration guard, which scans flag-name consts from source.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
+)

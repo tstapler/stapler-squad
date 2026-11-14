@@ -783,6 +783,7 @@ go_test(
         "testdata/**",
     ]) + [
         "//:go.mod",
+        "//config:go_sources",
         "//config/clihelp:testdata",
         "//contracts:webhook_management_v1",
         "//scripts:ssq-hook-handler",
@@ -790,6 +791,7 @@ go_test(
         "//server/mcp:go_sources",
         "//server/services/backlogsvc:go_sources",
         "//server/services/debugseed:go_sources",
+        "//server/services/featureflags:go_sources",
         "//server/services/wsconn:go_sources",
         "//session:go_sources",
         "//session/backlog:go_sources",
@@ -917,6 +919,6 @@ filegroup(
 
 # Read by web-app Jest (flagStore.test.ts cross-checks the mobile_input_layer default); //web-app:jest repo_data.
 exports_files(
-    ["feature_flag_service.go"],
+    ["feature_flag_specs.go"],
     visibility = ["//web-app:__pkg__"],
 )

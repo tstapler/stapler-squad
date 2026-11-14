@@ -18,7 +18,7 @@ export interface FilesFlags {
   onFlagOff: () => Promise<void>;
 }
 
-// Server defaults (server/services/feature_flag_service.go); editing and the ADR-036 flags fail closed.
+// Server defaults (server/services/feature_flag_specs.go); editing and the ADR-036 flags fail closed.
 const DEFAULTS = {
   editing: false, viewerV2: true, mergePhone: true, rangeRead: false, deltaWrite: false, editLarge: false,
 } as const;
