@@ -66,6 +66,7 @@ go_test(
         "//internal/termlat",
         "//pkg/events",
         "//session",
+        "//session/dbpool",
         "//session/domain",
         "//session/instance",
         "//tools/bzl/ent",

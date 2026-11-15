@@ -11,6 +11,8 @@ go_library(
         "open.go",
         "profile.go",
         "registry.go",
+        "restore.go",
+        "schema_mu.go",
         "spec.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/dbpool",

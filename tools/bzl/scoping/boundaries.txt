@@ -33,6 +33,7 @@ server/services/insights !server/web
 server/services/debugseed !server/web
 session/instance !server
 session/historyadapters !server
+session/internal/entdbtest !server
 session/webhookstore !server
 session/webhookstore !github
 session/flowstore !server

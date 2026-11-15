@@ -637,6 +637,7 @@ go_test(
         "//session/claudectl",
         "//session/claudectl/claudectltest",
         "//session/dbobs",
+        "//session/dbpool",
         "//session/detection",
         "//session/detection/ratelimit",
         "//session/domain",
