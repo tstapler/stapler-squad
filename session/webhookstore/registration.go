@@ -1,4 +1,4 @@
-package session
+package webhookstore
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // single-connection SQLite pool (SetMaxOpenConns(1)) means a transaction excludes all
 // other writers, so the ledger check, version CAS and mutation below are atomic with
 // respect to each other. Code inside a transaction must use only the tx client: calling
-// r.client while a tx holds the one connection would deadlock.
+// s.client while a tx holds the one connection would deadlock.
 
 var (
 	// ErrIdempotencyKeyReused: a request ID was replayed with a different request body.
@@ -163,12 +163,12 @@ func registrationByScope(ctx context.Context, c *ent.WebhookRegistrationClient, 
 
 // InspectWebhookRegistration returns the caller's registration for instanceID. A
 // registration owned by any other scope is indistinguishable from a missing one.
-func (r *EntRepository) InspectWebhookRegistration(ctx context.Context, scope WebhookScope, instanceID string) (*WebhookRegistrationView, error) {
-	reg, err := registrationByScope(ctx, r.Client.WebhookRegistration, scope, instanceID)
+func (s *Store) InspectWebhookRegistration(ctx context.Context, scope WebhookScope, instanceID string) (*WebhookRegistrationView, error) {
+	reg, err := registrationByScope(ctx, s.client.WebhookRegistration, scope, instanceID)
 	if err != nil {
 		return nil, err
 	}
-	wf, err := r.Client.Workflow.Get(ctx, reg.WorkflowID)
+	wf, err := s.client.Workflow.Get(ctx, reg.WorkflowID)
 	if ent.IsNotFound(err) {
 		return nil, ErrRegistrationOrphaned
 	}
@@ -181,8 +181,8 @@ func (r *EntRepository) InspectWebhookRegistration(ctx context.Context, scope We
 
 // ReconcileWebhookRegistration applies in idempotently. See the package comment for the
 // atomicity argument. On any error the transaction rolls back and nothing is written.
-func (r *EntRepository) ReconcileWebhookRegistration(ctx context.Context, in WebhookReconcileInput) (*WebhookReconcileResult, error) {
-	tx, err := r.Client.Tx(ctx)
+func (s *Store) ReconcileWebhookRegistration(ctx context.Context, in WebhookReconcileInput) (*WebhookReconcileResult, error) {
+	tx, err := s.client.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin webhook reconcile transaction: %w", err)
 	}

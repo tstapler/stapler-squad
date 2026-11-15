@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/webhookstore"
 )
 
 // The webhook-management tables are purely additive: ent's Schema.Create adds them on
@@ -68,7 +69,7 @@ func TestWebhookManagementTables_should_BeAddedWithoutTouchingExistingWorkflows_
 		// A workflow whose registration row is gone is now simply user-managed: the API
 		// must neither adopt nor modify it.
 		_, err = upgraded.ReconcileWebhookRegistration(ctx, baseReconcileInput(scopeA, "req-after-upgrade"))
-		assert.ErrorIs(t, err, ErrWebhookSlugUnavailable)
+		assert.ErrorIs(t, err, webhookstore.ErrWebhookSlugUnavailable)
 		orphan, err := upgraded.Client.Workflow.Get(ctx, managed.Registration.WorkflowID)
 		require.NoError(t, err)
 		assert.Equal(t, "gh-signal main", orphan.Name)

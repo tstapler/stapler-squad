@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "webhookstore",
+    srcs = [
+        "lifecycle.go",
+        "registration.go",
+        "store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/webhookstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:webhookregistration",
+        "//tools/bzl/ent:webhookrequestledger",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":webhookstore",
+    visibility = ["//visibility:public"],
+)
