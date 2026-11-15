@@ -131,6 +131,18 @@ linters:
             - entgo.io/ent/dialect
             - github.com/tstapler/stapler-squad/session/ent
             - github.com/tstapler/stapler-squad/log
+        # session/webhookstore is a persistence leaf embedded by session.EntRepository: it never imports
+        # session, github or server.
+        isolate_webhookstore:
+          list-mode: strict
+          files:
+            - "**/session/webhookstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and EntFlowReader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.

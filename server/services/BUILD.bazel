@@ -360,6 +360,7 @@ go_library(
         "//session/unfinished",
         "//session/vc",
         "//session/vcs",
+        "//session/webhookstore",
         "//telemetry",
         "//tools/bzl/ent",
         "//tools/bzl/ent:errorevent",

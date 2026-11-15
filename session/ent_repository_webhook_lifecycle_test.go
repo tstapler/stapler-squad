@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/webhookstore"
 )
 
 // consistentTuple returns provenance whose digest really is the SHA-256 of its bytes, as the
@@ -22,7 +23,7 @@ func consistentTuple() (tuple, digest string) {
 	return tuple, hex.EncodeToString(sum[:])
 }
 
-func seedConsistent(t *testing.T, r *EntRepository) *WebhookReconcileResult {
+func seedConsistent(t *testing.T, r *EntRepository) *webhookstore.WebhookReconcileResult {
 	t.Helper()
 	in := baseReconcileInput(scopeA, "seed-req-1")
 	in.CompatTuple, in.CompatTupleSHA256 = consistentTuple()
@@ -31,9 +32,9 @@ func seedConsistent(t *testing.T, r *EntRepository) *WebhookReconcileResult {
 	return res
 }
 
-func consistentLifecycle(requestID string, action WebhookLifecycleAction, expected int64) WebhookLifecycleInput {
+func consistentLifecycle(requestID string, action webhookstore.WebhookLifecycleAction, expected int64) webhookstore.WebhookLifecycleInput {
 	tuple, digest := consistentTuple()
-	return WebhookLifecycleInput{
+	return webhookstore.WebhookLifecycleInput{
 		Scope: scopeA, RequestID: requestID, Fingerprint: "fp-" + requestID + "-" + string(action),
 		InstanceID: "inst-1", Action: action, ExpectedVersion: expected,
 		CompatTuple: tuple, CompatTupleSHA256: digest,
@@ -44,17 +45,17 @@ func TestApplyWebhookLifecycle_should_DisableOnceAndBumpVersion_When_Requested(t
 	r := NewTestEntRepository(t)
 	seedConsistent(t, r)
 
-	res, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("d-1", WebhookActionDisable, 1))
+	res, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("d-1", webhookstore.WebhookActionDisable, 1))
 	require.NoError(t, err)
 
-	assert.Equal(t, WebhookOutcomeDisabled, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeDisabled, res.Outcome)
 	assert.EqualValues(t, 2, res.Registration.Version)
 	assert.False(t, res.Registration.Workflow.Enabled)
 	require.NotNil(t, res.ChangedWorkflow)
 
-	again, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("d-2", WebhookActionDisable, 2))
+	again, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("d-2", webhookstore.WebhookActionDisable, 2))
 	require.NoError(t, err)
-	assert.Equal(t, WebhookOutcomeUnchanged, again.Outcome, "disabling a disabled registration is a no-op")
+	assert.Equal(t, webhookstore.WebhookOutcomeUnchanged, again.Outcome, "disabling a disabled registration is a no-op")
 	assert.EqualValues(t, 2, again.Registration.Version)
 	assert.Nil(t, again.ChangedWorkflow)
 }
@@ -62,7 +63,7 @@ func TestApplyWebhookLifecycle_should_DisableOnceAndBumpVersion_When_Requested(t
 func TestApplyWebhookLifecycle_should_ReplayStoredResult_When_SameRequestRepeatedEvenAfterStateMoved(t *testing.T) {
 	r := NewTestEntRepository(t)
 	seedConsistent(t, r)
-	in := consistentLifecycle("d-1", WebhookActionDisable, 1)
+	in := consistentLifecycle("d-1", webhookstore.WebhookActionDisable, 1)
 	first, err := r.ApplyWebhookLifecycle(context.Background(), in)
 	require.NoError(t, err)
 
@@ -79,12 +80,12 @@ func TestApplyWebhookLifecycle_should_ReplayStoredResult_When_SameRequestRepeate
 func TestApplyWebhookLifecycle_should_RejectReuse_When_RequestIDCarriesADifferentAction(t *testing.T) {
 	r := NewTestEntRepository(t)
 	seedConsistent(t, r)
-	_, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("shared-id", WebhookActionDisable, 1))
+	_, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("shared-id", webhookstore.WebhookActionDisable, 1))
 	require.NoError(t, err)
 
-	_, err = r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("shared-id", WebhookActionDelete, 2))
+	_, err = r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("shared-id", webhookstore.WebhookActionDelete, 2))
 
-	assert.ErrorIs(t, err, ErrIdempotencyKeyReused)
+	assert.ErrorIs(t, err, webhookstore.ErrIdempotencyKeyReused)
 	w, g, _ := countRows(t, r)
 	assert.Equal(t, []int{1, 1}, []int{w, g}, "the conflicting delete must not have run")
 }
@@ -93,9 +94,9 @@ func TestApplyWebhookLifecycle_should_ReturnConflictWithoutMutation_When_Expecte
 	r := NewTestEntRepository(t)
 	seedConsistent(t, r)
 
-	_, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("d-1", WebhookActionDisable, 7))
+	_, err := r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("d-1", webhookstore.WebhookActionDisable, 7))
 
-	var conflict *WebhookVersionConflictError
+	var conflict *webhookstore.WebhookVersionConflictError
 	require.True(t, errors.As(err, &conflict))
 	assert.EqualValues(t, 1, conflict.CurrentVersion)
 	view, err := r.InspectWebhookRegistration(context.Background(), scopeA, "inst-1")
@@ -110,12 +111,12 @@ func TestApplyWebhookLifecycle_should_RefuseWithoutMutation_When_ProvenanceDiffe
 	t.Run("request tuple differs from the persisted one", func(t *testing.T) {
 		r := NewTestEntRepository(t)
 		seedConsistent(t, r)
-		in := consistentLifecycle("d-1", WebhookActionDelete, 1)
+		in := consistentLifecycle("d-1", webhookstore.WebhookActionDelete, 1)
 		in.CompatTuple = `{"contract_version":"v1","tampered":true}`
 
 		_, err := r.ApplyWebhookLifecycle(ctx, in)
 
-		assert.ErrorIs(t, err, ErrCompatTupleMismatch)
+		assert.ErrorIs(t, err, webhookstore.ErrCompatTupleMismatch)
 		w, g, _ := countRows(t, r)
 		assert.Equal(t, []int{1, 1}, []int{w, g})
 	})
@@ -123,24 +124,24 @@ func TestApplyWebhookLifecycle_should_RefuseWithoutMutation_When_ProvenanceDiffe
 	t.Run("request hash differs from the persisted one", func(t *testing.T) {
 		r := NewTestEntRepository(t)
 		seedConsistent(t, r)
-		in := consistentLifecycle("d-1", WebhookActionDelete, 1)
+		in := consistentLifecycle("d-1", webhookstore.WebhookActionDelete, 1)
 		in.CompatTupleSHA256 = "0000"
 
 		_, err := r.ApplyWebhookLifecycle(ctx, in)
 
-		assert.ErrorIs(t, err, ErrCompatTupleMismatch)
+		assert.ErrorIs(t, err, webhookstore.ErrCompatTupleMismatch)
 	})
 
 	t.Run("persisted tuple no longer hashes to its stored digest", func(t *testing.T) {
 		r := NewTestEntRepository(t)
 		seedConsistent(t, r)
 		require.NoError(t, r.Client.WebhookRegistration.Update().SetCompatTuple(`{"corrupted":true}`).Exec(ctx))
-		in := consistentLifecycle("d-1", WebhookActionDelete, 1)
+		in := consistentLifecycle("d-1", webhookstore.WebhookActionDelete, 1)
 		in.CompatTuple = `{"corrupted":true}` // even a request that matches the corrupted bytes must fail closed
 
 		_, err := r.ApplyWebhookLifecycle(ctx, in)
 
-		assert.ErrorIs(t, err, ErrCompatTupleMismatch)
+		assert.ErrorIs(t, err, webhookstore.ErrCompatTupleMismatch)
 		w, g, _ := countRows(t, r)
 		assert.Equal(t, []int{1, 1}, []int{w, g})
 	})
@@ -149,7 +150,7 @@ func TestApplyWebhookLifecycle_should_RefuseWithoutMutation_When_ProvenanceDiffe
 func TestApplyWebhookLifecycle_should_ReturnNotFound_When_ScopeDoesNotOwnTheRegistration(t *testing.T) {
 	r := NewTestEntRepository(t)
 	seedConsistent(t, r)
-	in := consistentLifecycle("d-1", WebhookActionDelete, 1)
+	in := consistentLifecycle("d-1", webhookstore.WebhookActionDelete, 1)
 	in.Scope = scopeB
 
 	_, err := r.ApplyWebhookLifecycle(context.Background(), in)
@@ -162,12 +163,12 @@ func TestApplyWebhookLifecycle_should_ReturnNotFound_When_ScopeDoesNotOwnTheRegi
 func TestApplyWebhookLifecycle_should_DeleteWorkflowAndRegistrationButKeepLedger_When_Deleted(t *testing.T) {
 	r := NewTestEntRepository(t)
 	seed := seedConsistent(t, r)
-	in := consistentLifecycle("del-1", WebhookActionDelete, 1)
+	in := consistentLifecycle("del-1", webhookstore.WebhookActionDelete, 1)
 
 	res, err := r.ApplyWebhookLifecycle(context.Background(), in)
 	require.NoError(t, err)
 
-	assert.Equal(t, WebhookOutcomeDeleted, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeDeleted, res.Outcome)
 	assert.Equal(t, seed.Registration.WorkflowID, res.Registration.WorkflowID)
 	assert.Equal(t, "gh-signal main", res.Registration.Workflow.Name, "the result describes the state immediately before deletion")
 	w, g, l := countRows(t, r)
@@ -178,9 +179,9 @@ func TestApplyWebhookLifecycle_should_DeleteWorkflowAndRegistrationButKeepLedger
 	replay, err := r.ApplyWebhookLifecycle(context.Background(), in)
 	require.NoError(t, err)
 	assert.True(t, replay.Replayed, "a replayed delete answers from the ledger even though the registration is gone")
-	assert.Equal(t, WebhookOutcomeDeleted, replay.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeDeleted, replay.Outcome)
 
-	_, err = r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("del-2", WebhookActionDelete, 1))
+	_, err = r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("del-2", webhookstore.WebhookActionDelete, 1))
 	assert.ErrorIs(t, err, domain.ErrNotFound, "a fresh delete of a missing registration is not found, not success")
 }
 
@@ -190,12 +191,12 @@ func TestApplyWebhookLifecycle_should_CleanUpOrphanedRegistration_When_WorkflowW
 	seed := seedConsistent(t, r)
 	require.NoError(t, r.Client.Workflow.DeleteOneID(seed.Registration.WorkflowID).Exec(ctx))
 
-	_, errDisable := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("d-1", WebhookActionDisable, 1))
-	res, errDelete := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("del-1", WebhookActionDelete, 1))
+	_, errDisable := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("d-1", webhookstore.WebhookActionDisable, 1))
+	res, errDelete := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("del-1", webhookstore.WebhookActionDelete, 1))
 
-	assert.ErrorIs(t, errDisable, ErrRegistrationOrphaned)
+	assert.ErrorIs(t, errDisable, webhookstore.ErrRegistrationOrphaned)
 	require.NoError(t, errDelete)
-	assert.Equal(t, WebhookOutcomeDeleted, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeDeleted, res.Outcome)
 	_, g, _ := countRows(t, r)
 	assert.Zero(t, g)
 }
@@ -204,7 +205,7 @@ func TestApplyWebhookLifecycle_should_AllowRecreate_When_InstanceWasDeleted(t *t
 	r := NewTestEntRepository(t)
 	ctx := context.Background()
 	seedConsistent(t, r)
-	_, err := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("del-1", WebhookActionDelete, 1))
+	_, err := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("del-1", webhookstore.WebhookActionDelete, 1))
 	require.NoError(t, err)
 
 	again := baseReconcileInput(scopeA, "recreate-1")
@@ -212,7 +213,7 @@ func TestApplyWebhookLifecycle_should_AllowRecreate_When_InstanceWasDeleted(t *t
 	res, err := r.ReconcileWebhookRegistration(ctx, again)
 
 	require.NoError(t, err)
-	assert.Equal(t, WebhookOutcomeCreated, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeCreated, res.Outcome)
 	assert.EqualValues(t, 1, res.Registration.Version)
 }
 
@@ -222,9 +223,9 @@ func TestApplyWebhookLifecycle_should_ApplyExactlyOnce_When_DeleteRacesConcurren
 	t.Run("same request id", func(t *testing.T) {
 		r := NewTestEntRepository(t)
 		seedConsistent(t, r)
-		in := consistentLifecycle("race-same", WebhookActionDelete, 1)
+		in := consistentLifecycle("race-same", webhookstore.WebhookActionDelete, 1)
 		const racers = 12
-		results := make([]*WebhookReconcileResult, racers)
+		results := make([]*webhookstore.WebhookReconcileResult, racers)
 		errs := make([]error, racers)
 		var wg sync.WaitGroup
 		for i := 0; i < racers; i++ {
@@ -253,7 +254,7 @@ func TestApplyWebhookLifecycle_should_ApplyExactlyOnce_When_DeleteRacesConcurren
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				_, errs[i] = r.ApplyWebhookLifecycle(ctx, consistentLifecycle(fmt.Sprintf("race-%d", i), WebhookActionDelete, 1))
+				_, errs[i] = r.ApplyWebhookLifecycle(ctx, consistentLifecycle(fmt.Sprintf("race-%d", i), webhookstore.WebhookActionDelete, 1))
 			}(i)
 		}
 		wg.Wait()
