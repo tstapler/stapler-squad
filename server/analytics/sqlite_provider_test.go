@@ -12,7 +12,7 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 
 	"github.com/stretchr/testify/assert"
@@ -133,9 +133,9 @@ func countedClient(t *testing.T) (*ent.Client, *atomic.Int64) {
 		}
 	})
 	client := ent.NewClient(ent.Driver(drv))
-	session.EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	err = client.Schema.Create(context.Background())
-	session.EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 	require.NoError(t, err)
 	count.Store(true)
 	return client, &n

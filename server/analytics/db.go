@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 
 	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -42,13 +42,13 @@ func OpenAnalyticsDBWithDriver(ctx context.Context, dataDir string) (*ent.Client
 	client := ent.NewClient(ent.Driver(drv))
 
 	// Auto-migrate the AnalyticsEvent table (and any future schema additions).
-	// Serialized via session.EntSchemaCreateMu — see its doc comment for why:
+	// Serialized via dbpool.EntSchemaCreateMu — see its doc comment for why:
 	// entgo.io/ent/dialect/sql/schema.(*Atlas) has package-level state that
 	// races when multiple goroutines run schema creation concurrently, even
 	// across independent *ent.Client instances.
-	session.EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	err = client.Schema.Create(ctx)
-	session.EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("analytics db: schema migration: %w", err)

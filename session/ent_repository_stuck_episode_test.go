@@ -17,7 +17,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckepisode"
@@ -111,9 +113,9 @@ func TestMigration_should_BeReversible_When_StuckEpisodeTableAndIndexCreatedAndD
 	require.NoError(t, err)
 
 	// Re-running Schema.Create recreates it (additive migration).
-	EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	err = repo.Client.Schema.Create(ctx)
-	EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 	require.NoError(t, err)
 	assert.Contains(t, openEpisodeIndexSQL(t, repo), "WHERE resolved_at IS NULL")
 }
