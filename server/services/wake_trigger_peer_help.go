@@ -8,7 +8,6 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -38,7 +37,7 @@ func (s *WakeTriggerService) ListPeerHelpRequests(
 	return connect.NewResponse(out), nil
 }
 
-func (s *WakeTriggerService) peerInfoOf(r *session.GuidanceRequestData, facts func(string) wakes.OwnerFacts) *sessionv1.PeerHelpInfo {
+func (s *WakeTriggerService) peerInfoOf(r *domain.GuidanceRequestData, facts func(string) wakes.OwnerFacts) *sessionv1.PeerHelpInfo {
 	info := &sessionv1.PeerHelpInfo{
 		Id: r.ID, AskerSessionUuid: r.AskerSessionUUID, AskerTitle: s.title(r.AskerSessionUUID),
 		AnswererSessionUuid: r.AnswererSessionUUID, AnswererTitle: s.title(r.AnswererSessionUUID),
@@ -46,9 +45,9 @@ func (s *WakeTriggerService) peerInfoOf(r *session.GuidanceRequestData, facts fu
 		CreatedAt: timestamppb.New(r.CreatedAt), AnsweredAt: tsOrNil(r.AnsweredAt),
 	}
 	switch r.Status() {
-	case session.GuidanceRequestStatusCancelled:
+	case domain.GuidanceRequestStatusCancelled:
 		info.State, info.StateReason = peerStateCancelled, cancelText(r.CancelReason)
-	case session.GuidanceRequestStatusAnswered:
+	case domain.GuidanceRequestStatusAnswered:
 		info.State, info.Answer = peerStateAnswered, r.Answer
 		info.AnsweredBy = s.answeredBy(r)
 		if r.AnswererKind == domain.AnswererKindHuman && r.AnswererSessionUUID != "" {

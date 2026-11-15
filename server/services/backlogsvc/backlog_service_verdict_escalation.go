@@ -11,7 +11,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -62,7 +61,7 @@ func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *backl
 	if prior, found := s.priorEscalation(ctx, item.ID, questionText); found {
 		return prior.Answer != ownerChoiceFixed
 	}
-	row, err := s.storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	row, err := s.storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &id,
 		QuestionText: questionText,
@@ -88,7 +87,7 @@ func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *backl
 
 // priorEscalation finds an earlier request with the same text, so a sweep that re-runs the
 // router neither re-asks a pending question nor re-asks one the owner already answered.
-func (s *BacklogService) priorEscalation(ctx context.Context, itemID, questionText string) (*session.GuidanceRequestData, bool) {
+func (s *BacklogService) priorEscalation(ctx context.Context, itemID, questionText string) (*domain.GuidanceRequestData, bool) {
 	rows, _, _, err := s.storage.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, itemID, 0)
 	if err != nil {
 		return nil, false

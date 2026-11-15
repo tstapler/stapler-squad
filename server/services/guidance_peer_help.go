@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -20,7 +19,7 @@ var ErrNotPeerHelp = errors.New("not a peer help request")
 // and wakes the asker through its guidance_answered trigger so it stops
 // waiting ("cancelled"). applied is false when the request was already
 // answered or cancelled; data then holds the current state.
-func (s *GuidanceRequestService) CancelPeerHelp(ctx context.Context, id string) (data *session.GuidanceRequestData, applied bool, err error) {
+func (s *GuidanceRequestService) CancelPeerHelp(ctx context.Context, id string) (data *domain.GuidanceRequestData, applied bool, err error) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid guidance request id: %w", err)

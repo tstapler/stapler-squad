@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -41,7 +40,7 @@ const (
 // judgeRow classifies capture against row. A row with no rebuildable dialog
 // (multi-select, view-only) cannot be told from "another dialog", so a visible
 // dialog is indeterminate for it and only a positively absent one is gone.
-func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialogVerdict {
+func judgeRow(row *domain.GuidanceRequestData, capture string, err error) dialogVerdict {
 	if err != nil {
 		return verdictIndeterminate
 	}
@@ -88,7 +87,7 @@ func (v dialogVerdict) cancelReason() (domain.CancelReason, bool) {
 }
 
 type samplerStore interface {
-	ListAllPendingGuidanceRequests(ctx context.Context) ([]*session.GuidanceRequestData, error)
+	ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error)
 }
 
 type samplerClearer interface {
@@ -121,11 +120,11 @@ func NewDialogGoneSampler(store samplerStore, capture func(context.Context, stri
 }
 
 // watched reports whether row is a hook row still inside the sampling bound.
-func (s *DialogGoneSampler) watched(row *session.GuidanceRequestData, now time.Time) bool {
+func (s *DialogGoneSampler) watched(row *domain.GuidanceRequestData, now time.Time) bool {
 	return row.Source == domain.QuestionSourceHook && row.AskerSessionUUID != "" && now.Sub(row.CreatedAt) <= samplerStopAfter
 }
 
-func (s *DialogGoneSampler) due(row *session.GuidanceRequestData, now time.Time) bool {
+func (s *DialogGoneSampler) due(row *domain.GuidanceRequestData, now time.Time) bool {
 	st := s.states[row.ID]
 	if st == nil {
 		return true
@@ -146,7 +145,7 @@ func (s *DialogGoneSampler) Tick(ctx context.Context) {
 	}
 	now := s.now()
 	open := make(map[string]bool, len(rows))
-	var due []*session.GuidanceRequestData
+	var due []*domain.GuidanceRequestData
 	for _, row := range rows {
 		open[row.ID] = true
 		if s.watched(row, now) && s.due(row, now) {
@@ -167,8 +166,8 @@ func (s *DialogGoneSampler) Tick(ctx context.Context) {
 	}
 }
 
-func sortLongestUnsampled(rows []*session.GuidanceRequestData, states map[string]*sampleState) {
-	last := func(r *session.GuidanceRequestData) time.Time {
+func sortLongestUnsampled(rows []*domain.GuidanceRequestData, states map[string]*sampleState) {
+	last := func(r *domain.GuidanceRequestData) time.Time {
 		if st := states[r.ID]; st != nil {
 			return st.last
 		}
@@ -177,7 +176,7 @@ func sortLongestUnsampled(rows []*session.GuidanceRequestData, states map[string
 	sort.SliceStable(rows, func(i, j int) bool { return last(rows[i]).Before(last(rows[j])) })
 }
 
-func (s *DialogGoneSampler) sample(ctx context.Context, row *session.GuidanceRequestData, now time.Time) {
+func (s *DialogGoneSampler) sample(ctx context.Context, row *domain.GuidanceRequestData, now time.Time) {
 	capture, err := s.capture(ctx, row.AskerSessionUUID)
 	v := judgeRow(row, capture, err)
 	st := s.states[row.ID]

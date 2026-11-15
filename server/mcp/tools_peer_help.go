@@ -158,9 +158,9 @@ func (h *peerHelpHandlers) rejectPeer(ctx context.Context, deps *WakeToolDeps, c
 	return nil
 }
 
-func (h *peerHelpHandlers) createRequest(ctx context.Context, deps *WakeToolDeps, caller, peer, question string) (*session.GuidanceRequestData, error) {
+func (h *peerHelpHandlers) createRequest(ctx context.Context, deps *WakeToolDeps, caller, peer, question string) (*domain.GuidanceRequestData, error) {
 	if peer == peerHuman {
-		return h.storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+		return h.storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 			Scope: domain.RequestScopeSession, SessionUUID: caller, QuestionText: question, QuestionType: domain.QuestionTypeShortAnswer,
 		})
 	}
@@ -176,7 +176,7 @@ func (h *peerHelpHandlers) createRequest(ctx context.Context, deps *WakeToolDeps
 }
 
 func (h *peerHelpHandlers) createErrorResult(err error) *mcpgo.CallToolResult {
-	if errors.Is(err, session.ErrPendingCapExceeded) {
+	if errors.Is(err, domain.ErrPendingCapExceeded) {
 		h.gate.metrics.Inc(wakes.MetricLimitHit, wakes.LimitPeerOpenPerAsker, wakes.PhaseCreate)
 		return rawTypedError(typedError{
 			MCPError: MCPError{Code: CodeCapExceeded, Message: err.Error(), Remediation: "Wait for an open request to be answered, or cancel it."},

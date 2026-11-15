@@ -61,7 +61,7 @@ func newReaperFixture(t *testing.T, ends fakeSessionEnds) *reaperFixture {
 	require.NoError(t, err)
 	f.peerID = peerRow.ID
 
-	agent, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	agent, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: mirrorSession, QuestionText: "Deploy now?", QuestionType: domain.QuestionTypeYesNo,
 	})
 	require.NoError(t, err)

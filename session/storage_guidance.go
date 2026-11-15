@@ -15,7 +15,7 @@ import (
 // convention (see e.g. BacklogService/GitHubService's constructors).
 
 // CreateGuidanceRequest forwards to EntRepository.CreateGuidanceRequest.
-func (s *Storage) CreateGuidanceRequest(ctx context.Context, in CreateGuidanceRequestInput) (*GuidanceRequestData, error) {
+func (s *Storage) CreateGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
 	return s.Repo.CreateGuidanceRequest(ctx, in)
 }
 
@@ -35,21 +35,21 @@ func (s *Storage) CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reaso
 }
 
 // GetGuidanceRequest forwards to EntRepository.GetGuidanceRequest.
-func (s *Storage) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*GuidanceRequestData, error) {
+func (s *Storage) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error) {
 	return s.Repo.GetGuidanceRequest(ctx, id)
 }
 
 // ListPendingGuidanceRequests forwards to EntRepository.ListPendingGuidanceRequests.
-func (s *Storage) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+func (s *Storage) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
 	return s.Repo.ListPendingGuidanceRequests(ctx, scope, scopeKey, cap)
 }
 
 // ListGuidanceRequestsForScope forwards to EntRepository.ListGuidanceRequestsForScope.
-func (s *Storage) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+func (s *Storage) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
 	return s.Repo.ListGuidanceRequestsForScope(ctx, scope, scopeKey, cap)
 }
 
 // ListAllPendingGuidanceRequests forwards to EntRepository.ListAllPendingGuidanceRequests.
-func (s *Storage) ListAllPendingGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
+func (s *Storage) ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error) {
 	return s.Repo.ListAllPendingGuidanceRequests(ctx)
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -27,7 +26,7 @@ type ackMove struct {
 type fakeAckStore struct {
 	mu    sync.Mutex
 	moves []ackMove
-	sent  []*session.GuidanceRequestData
+	sent  []*domain.GuidanceRequestData
 }
 
 func (f *fakeAckStore) SetGuidanceDelivery(_ context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, _ int) (bool, error) {
@@ -37,7 +36,7 @@ func (f *fakeAckStore) SetGuidanceDelivery(_ context.Context, id uuid.UUID, rout
 	return true, nil
 }
 
-func (f *fakeAckStore) ListGuidanceByDelivery(context.Context, domain.DeliveryRoute, domain.DeliveryState) ([]*session.GuidanceRequestData, error) {
+func (f *fakeAckStore) ListGuidanceByDelivery(context.Context, domain.DeliveryRoute, domain.DeliveryState) ([]*domain.GuidanceRequestData, error) {
 	return f.sent, nil
 }
 
@@ -203,7 +202,7 @@ func TestAckDetector_ShouldStopTrackingWithoutChangingState_WhenTheSessionEnds(t
 
 func TestAckDetector_ShouldResumeTrackingSentRows_WhenRestored(t *testing.T) {
 	e := newAckEnv(t)
-	e.store.sent = []*session.GuidanceRequestData{{
+	e.store.sent = []*domain.GuidanceRequestData{{
 		ID: e.rowID, AskerSessionUUID: "s1", DeliveryRoute: domain.DeliveryRouteLiveKeystroke, DeliveryState: domain.DeliveryStateSent,
 	}}
 

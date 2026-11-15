@@ -8,7 +8,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -28,7 +27,7 @@ type HookReplier interface {
 }
 
 type hookReplyRows interface {
-	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*session.GuidanceRequestData, error)
+	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error)
 	AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error)
 	SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error)
 }
@@ -76,7 +75,7 @@ func (r *hookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolI
 	return nil
 }
 
-func (r *hookReplyResolver) serve(ctx context.Context, row *session.GuidanceRequestData, sessionUUID string, asked AskedQuestion, toolInput map[string]interface{}) *hookipc.HookOutput {
+func (r *hookReplyResolver) serve(ctx context.Context, row *domain.GuidanceRequestData, sessionUUID string, asked AskedQuestion, toolInput map[string]interface{}) *hookipc.HookOutput {
 	if row.AnsweredAt == nil || row.CancelledAt != nil || (row.AskerSessionUUID != sessionUUID && row.SessionUUID != sessionUUID) {
 		return nil
 	}
