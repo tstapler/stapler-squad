@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/flow"
+	"github.com/tstapler/stapler-squad/session/flowstore"
 )
 
 var _ sessionv1connect.BacklogFlowServiceHandler = (*BacklogFlowService)(nil)
@@ -57,7 +58,7 @@ func NewFlowServiceFromStorage(storage *session.Storage, opts ...flow.Aggregator
 	if storage == nil || storage.GetEntClient() == nil {
 		return &BacklogFlowService{}
 	}
-	reader := session.NewEntFlowReader(storage.GetEntClient())
+	reader := flowstore.New(storage.GetEntClient(), session.NewDefaultWorkflowEngine())
 	src := flow.Sources{Events: reader, Verdicts: reader, Stuck: reader, Items: reader, Markers: reader}
 	// Prepended so a caller-supplied WithCaptureSince still wins.
 	opts = append([]flow.AggregatorOption{flow.WithCaptureSince(reader.CaptureSince)}, opts...)

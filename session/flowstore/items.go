@@ -1,4 +1,4 @@
-package session
+package flowstore
 
 import (
 	"context"
@@ -9,15 +9,15 @@ import (
 )
 
 var (
-	_ flow.VerdictSource = (*EntFlowReader)(nil)
-	_ flow.StuckSource   = (*EntFlowReader)(nil)
-	_ flow.ItemSource    = (*EntFlowReader)(nil)
+	_ flow.VerdictSource = (*Reader)(nil)
+	_ flow.StuckSource   = (*Reader)(nil)
+	_ flow.ItemSource    = (*Reader)(nil)
 )
 
 // Items returns raw status and title for each listed item that exists. Titles
 // are returned unmodified: sanitization for agent consumption happens once, in
 // the MCP adapter, never in the reader.
-func (r *EntFlowReader) Items(ctx context.Context, ids []flow.ItemID) ([]flow.ItemMeta, error) {
+func (r *Reader) Items(ctx context.Context, ids []flow.ItemID) ([]flow.ItemMeta, error) {
 	uids := parseFlowItemIDs(ids)
 	if len(uids) == 0 {
 		return nil, nil
@@ -37,7 +37,7 @@ func (r *EntFlowReader) Items(ctx context.Context, ids []flow.ItemID) ([]flow.It
 }
 
 // OpenItemIDs returns every item whose status is not terminal (done, archived).
-func (r *EntFlowReader) OpenItemIDs(ctx context.Context) ([]flow.ItemID, error) {
+func (r *Reader) OpenItemIDs(ctx context.Context) ([]flow.ItemID, error) {
 	uids, err := r.client.BacklogItem.Query().
 		Where(backlogitem.StatusNotIn(string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived))).
 		IDs(ctx)
@@ -52,12 +52,22 @@ func (r *EntFlowReader) OpenItemIDs(ctx context.Context) ([]flow.ItemID, error) 
 }
 
 // Stages returns the pipeline's statuses in pipeline order (see PipelineStages).
-func (r *EntFlowReader) Stages(context.Context) ([]domain.BacklogStatus, error) {
-	engine := r.engine
-	if engine == nil {
-		engine = NewDefaultWorkflowEngine()
-	}
-	return PipelineStages(engine), nil
+func (r *Reader) Stages(context.Context) ([]domain.BacklogStatus, error) {
+	return PipelineStages(r.engine), nil
+}
+
+// pipelineBuiltInStages mirrors BuiltInStageOrder so this file needs nothing from the session core;
+// TestReader_should_ReturnBuiltInStagesInPipelineOrder_When_DefaultEngine pins them together.
+var pipelineBuiltInStages = []domain.BacklogStatus{
+	domain.BacklogStatusIdea,
+	domain.BacklogStatusRefining,
+	domain.BacklogStatusReady,
+	domain.BacklogStatusQueued,
+	domain.BacklogStatusInProgress,
+	domain.BacklogStatusReview,
+	domain.BacklogStatusPRPending,
+	domain.BacklogStatusDone,
+	domain.BacklogStatusArchived,
 }
 
 // PipelineStages derives the stage order from a WorkflowEngine's transition
@@ -84,7 +94,7 @@ func PipelineStages(engine domain.WorkflowEngine) []domain.BacklogStatus {
 		after[anchor] = append(after[anchor], c)
 	}
 	var out []domain.BacklogStatus
-	for _, b := range BuiltInStageOrder {
+	for _, b := range pipelineBuiltInStages {
 		if b == domain.BacklogStatusArchived {
 			out = append(out, after[b]...)
 		}
@@ -103,7 +113,7 @@ func PipelineStages(engine domain.WorkflowEngine) []domain.BacklogStatus {
 func walkStageGraph(engine domain.WorkflowEngine) (known map[domain.BacklogStatus]bool, preds map[domain.BacklogStatus][]domain.BacklogStatus) {
 	known = map[domain.BacklogStatus]bool{}
 	preds = map[domain.BacklogStatus][]domain.BacklogStatus{}
-	queue := append([]domain.BacklogStatus(nil), BuiltInStageOrder...)
+	queue := append([]domain.BacklogStatus(nil), pipelineBuiltInStages...)
 	seen := map[domain.BacklogStatus]bool{}
 	for len(queue) > 0 {
 		from := queue[0]
@@ -126,7 +136,7 @@ func walkStageGraph(engine domain.WorkflowEngine) (known map[domain.BacklogStatu
 }
 
 func isBuiltInStage(s domain.BacklogStatus) bool {
-	for _, b := range BuiltInStageOrder {
+	for _, b := range pipelineBuiltInStages {
 		if b == s {
 			return true
 		}
@@ -135,7 +145,7 @@ func isBuiltInStage(s domain.BacklogStatus) bool {
 }
 
 func earliestBuiltIn(candidates []domain.BacklogStatus) (domain.BacklogStatus, bool) {
-	for _, b := range BuiltInStageOrder {
+	for _, b := range pipelineBuiltInStages {
 		for _, c := range candidates {
 			if c == b {
 				return b, true

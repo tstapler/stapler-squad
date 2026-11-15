@@ -26,7 +26,7 @@ func TestFlowRead_should_NotBlockWriter_When_StreamEventsPausedOnBarrier(t *test
 	readDone := make(chan error, 1)
 	go func() {
 		first := true
-		readDone <- NewEntFlowReader(c).StreamEvents(context.Background(),
+		readDone <- newFlowReader(c).StreamEvents(context.Background(),
 			flow.EventRange{From: at.Add(-time.Hour), ChunkItems: 1},
 			func([]flow.Event) error {
 				if first {
