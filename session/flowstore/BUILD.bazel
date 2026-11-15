@@ -34,3 +34,10 @@ alias(
     actual = ":flowstore",
     visibility = ["//visibility:public"],
 )
+
+# Read by session's legacy item-PR reader scan.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)
