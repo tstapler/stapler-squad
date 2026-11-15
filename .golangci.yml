@@ -326,6 +326,7 @@ linters:
             - "!**/server/services/backlogsvc/backlog_service_query.go"
             - "!**/server/services/backlogsvc/backlog_service_lifecycle.go"
             - "!**/server/services/backlogsvc/backlog_service_triage.go"
+            - "!**/server/services/backlogsvc/backlog_service_headless_run.go"
             # TriggerTriage's ent.IsNotFound check moved here from
             # backlog_service_triage.go above (2026-09-12 hotspot split) — same
             # pre-existing usage, not newly introduced.
