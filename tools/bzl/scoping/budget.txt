@@ -1,9 +1,10 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # Values are the measured tree rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered; raising one
 # needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`).
-session files=179 loc=45520 imports=85
+session files=173 loc=43926 imports=86
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
+session/historyadapters files=7 loc=1657 imports=6
 session/claudectl files=3 loc=1400 imports=9
 session/claudectl/claudectltest files=1 loc=45 imports=3
 session/panereply files=6 loc=1303 imports=7
@@ -27,7 +28,7 @@ session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/prpoller files=7 loc=2080 imports=8
-server/services files=291 loc=72877 imports=71
+server/services files=291 loc=72877 imports=72
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3

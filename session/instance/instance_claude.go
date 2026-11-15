@@ -529,7 +529,7 @@ func (i *Instance) WithClaudeSession(fn func(*domain.ClaudeSessionData)) {
 }
 
 // RecordPortedClaudeSession stamps the Claude session data after a history port and
-// fires the saved-callback outside the lock (called by history_post_export.go).
+// fires the saved-callback outside the lock (called by session/historyadapters/history_post_export.go).
 func (i *Instance) RecordPortedClaudeSession(uuidStr, workspace string) {
 	i.claudeSessionMu.Lock()
 	if i.claudeSession == nil {

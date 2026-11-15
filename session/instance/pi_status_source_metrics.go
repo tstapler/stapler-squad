@@ -16,7 +16,7 @@ import (
 )
 
 // piEventTypeUnrecognized is the fixed "type" attribute value recorded for
-// any event whose JSON "type" discriminator isn't one of pi_adapter.go's
+// any event whose JSON "type" discriminator isn't one of session/historyadapters/pi_adapter.go's
 // known event structs. Every unrecognized type is bucketed under this one
 // fixed label rather than the raw, pi-CLI-controlled string, to keep this
 // metric's cardinality bounded -- Story 6.1.1's AC only requires that an
@@ -31,11 +31,11 @@ const piEventTypeUnrecognized = "unrecognized"
 // Label scheme: "type" is the event's own JSON `type` field (e.g.
 // "agent_start", "tool_execution_end") for a recognized event, or the fixed
 // value piEventTypeUnrecognized ("unrecognized") for a line whose `type`
-// discriminator pi_adapter.go's PiEventReader doesn't decode.
+// discriminator session/historyadapters/pi_adapter.go's PiEventReader doesn't decode.
 //
 // Feeds plan.md's Observability Plan / PITFALL-3 early-warning use case: a
 // sudden rise in the "unrecognized" bucket signals pi's event vocabulary has
-// drifted from what pi_adapter.go decodes, worth investigating before it
+// drifted from what session/historyadapters/pi_adapter.go decodes, worth investigating before it
 // silently degrades PiStatusSource's status inference.
 var piStatusSourceEventsTotal = mustPiStatusSourceEventsCounter()
 
