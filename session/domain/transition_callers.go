@@ -103,6 +103,7 @@ const (
 	fileLifecycle    = "server/services/backlogsvc/backlog_service_lifecycle.go"
 	fileNotifyAction = "server/services/notification_action_backlog.go"
 	fileTriage       = "server/services/backlogsvc/backlog_service_triage.go"
+	fileHeadlessRun  = "server/services/backlogsvc/backlog_service_headless_run.go"
 	fileTriggerTri   = "server/services/backlogsvc/backlog_service_trigger_triage.go"
 	fileSync         = "server/services/backlogsvc/backlog_service_sync.go"
 	fileAutonomous   = "server/services/autonomous_orchestration_service.go"
@@ -276,7 +277,7 @@ var transitionCallers = []TransitionCallerSpec{
 	specUnchecked(CallerSpawnSessionAfterGates, []SystemEdge{edge(stReady, stInProg)}, site(fileTriage, "BacklogService.spawnSessionAfterGates", 1)),
 	specUnchecked(CallerRespawnTriage, []SystemEdge{edge(stQueued, stIdea)}, site(fileTriage, "BacklogService.respawnTriage", 1)),
 	specUnchecked(CallerMaybeTriggerTriage, []SystemEdge{edge(stIdea, stReady)}, site(fileTriage, "BacklogService.skipTriageForNewItem", 1)),
-	specUnchecked(CallerTriggerReReview, []SystemEdge{edge(stReview, stDone)}, site(fileTriage, "BacklogService.TriggerReReview", 1)),
+	specUnchecked(CallerTriggerReReview, []SystemEdge{edge(stReview, stDone)}, site(fileHeadlessRun, "BacklogService.TriggerReReview", 1)),
 	specUnchecked(CallerTriageComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileTriggerTri, "BacklogService.TriggerTriage", 1)),
 	withSurface(specUnchecked(CallerSessionExited, []SystemEdge{edge(stInProg, stReview), edge(stInProg, stDone)}, site(fileSessLife, "BacklogLifecycleListener.onSessionExited", 1)), SurfaceReviewFlow),
 	withSurface(specUnchecked(CallerBouncingToDone, []SystemEdge{edge(stInProg, stReview), edge(stReview, stDone)}, site(fileSessLife, "BacklogLifecycleListener.transitionBouncingItemToDone", 2)), SurfaceReviewFlow),
