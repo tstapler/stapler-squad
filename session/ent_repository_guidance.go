@@ -17,6 +17,19 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/guidancerequest"
 )
 
+// guidanceHooks are the guidance store's only calls out to the rest of the
+// repository, so the store itself needs no other session symbol. Wired by
+// EntRepository.initStores; every field is required.
+type guidanceHooks struct {
+	// answered observes a just-applied answer's latency (best effort).
+	answered func(ctx context.Context, id uuid.UUID)
+	// delivered counts a delivery transition that was applied.
+	delivered func(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState)
+	// itemPendingChanged republishes the owning item after its
+	// has_pending_guidance_requests flag may have flipped.
+	itemPendingChanged func(ctx context.Context, item *ent.BacklogItem)
+}
+
 // DefaultGuidanceRequestPendingCap is the fallback per-(scope, scope_key)
 // pending cap used when a caller doesn't supply one (CreateGuidanceRequestInput.Cap
 // == 0). Phase 4 of the durable-guidance-request plan wires a real,
@@ -377,7 +390,7 @@ func (r *EntRepository) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID,
 		return false, fmt.Errorf("answer guidance request %s: %w", id, err)
 	}
 	if n > 0 {
-		r.recordGuidanceAnswered(ctx, id)
+		r.guidanceHooks.answered(ctx, id)
 		r.publishGuidanceChangeByID(ctx, id)
 	}
 	return n > 0, nil
@@ -618,8 +631,7 @@ func (r *EntRepository) publishGuidanceChange(ctx context.Context, scope string,
 		}
 		return
 	}
-	item := BacklogItemToData(row)
-	r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+	r.guidanceHooks.itemPendingChanged(ctx, row)
 }
 
 func (r *EntRepository) publishGuidanceChangeByID(ctx context.Context, id uuid.UUID) {
