@@ -1,4 +1,4 @@
-package session
+package flowstore
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // query is its own plain SELECT on the reader pool with a rng.BatchTimeout
 // budget, so a slow batch is cancelled at the driver and fails with a
 // *flow.BatchError. An error from fn stops the stream and is returned as is.
-func (r *EntFlowReader) StreamEvents(ctx context.Context, rng flow.EventRange, fn func(batch []flow.Event) error) error {
+func (r *Reader) StreamEvents(ctx context.Context, rng flow.EventRange, fn func(batch []flow.Event) error) error {
 	def := flow.DefaultReaderLimits()
 	chunk, timeout := rng.ChunkItems, rng.BatchTimeout
 	if chunk <= 0 {
@@ -51,7 +51,7 @@ func (r *EntFlowReader) StreamEvents(ctx context.Context, rng flow.EventRange, f
 }
 
 // distinctItems lists the item ids the prefilter matches, in id order.
-func (r *EntFlowReader) distinctItems(ctx context.Context, rng flow.EventRange) ([]flow.ItemID, error) {
+func (r *Reader) distinctItems(ctx context.Context, rng flow.EventRange) ([]flow.ItemID, error) {
 	var rows []struct {
 		ItemID uuid.UUID `json:"item_id"`
 	}
@@ -68,7 +68,7 @@ func (r *EntFlowReader) distinctItems(ctx context.Context, rng flow.EventRange) 
 	return ids, nil
 }
 
-func (r *EntFlowReader) readBatch(ctx context.Context, rng flow.EventRange, ids []flow.ItemID, timeout time.Duration) ([]flow.Event, error) {
+func (r *Reader) readBatch(ctx context.Context, rng flow.EventRange, ids []flow.ItemID, timeout time.Duration) ([]flow.Event, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	batchRng := rng

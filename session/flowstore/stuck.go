@@ -1,4 +1,4 @@
-package session
+package flowstore
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	_ flow.StuckSource        = (*EntFlowReader)(nil)
-	_ flow.StuckCaptureSource = (*EntFlowReader)(nil)
+	_ flow.StuckSource        = (*Reader)(nil)
+	_ flow.StuckCaptureSource = (*Reader)(nil)
 )
 
 // stuckEpisodeTableMissingLogged limits the missing-table warning to once per process.
@@ -28,7 +28,7 @@ type stuckKey struct {
 // stuckRows loads legacy state rows and episodes. A missing episode table
 // (older database) yields no episodes, never an error, so the stuck section
 // degrades to legacy-only instead of failing.
-func (r *EntFlowReader) stuckRows(ctx context.Context) ([]*ent.BacklogStuckState, []*ent.BacklogStuckEpisode, error) {
+func (r *Reader) stuckRows(ctx context.Context) ([]*ent.BacklogStuckState, []*ent.BacklogStuckEpisode, error) {
 	//nolint:entfullscan the stuck-state table is small (hundreds of rows) and every interval is needed to bound open and closed durations.
 	states, err := r.client.BacklogStuckState.Query().All(ctx)
 	if err != nil {
@@ -39,7 +39,7 @@ func (r *EntFlowReader) stuckRows(ctx context.Context) ([]*ent.BacklogStuckState
 	if err != nil {
 		if isMissingTableErr(err) {
 			if stuckEpisodeTableMissingLogged.CompareAndSwap(false, true) {
-				log.WarningLog().Printf("[EntFlowReader] backlog_stuck_episodes missing; stuck history is legacy-only: %v", err)
+				log.WarningLog().Printf("[Reader] backlog_stuck_episodes missing; stuck history is legacy-only: %v", err)
 			}
 			return states, nil, nil
 		}
@@ -59,7 +59,7 @@ func isMissingTableErr(err error) bool {
 // authoritative); an earlier one is kept and its end clipped to E when it is
 // open or ends later. Legacy intervals stay lower bounds (Episode=false). All
 // times are normalized to UTC before comparison: MarkStuck wrote local time.
-func (r *EntFlowReader) StuckIntervals(ctx context.Context) ([]flow.StuckInterval, error) {
+func (r *Reader) StuckIntervals(ctx context.Context) ([]flow.StuckInterval, error) {
 	states, episodes, err := r.stuckRows(ctx)
 	if err != nil {
 		return nil, err
@@ -73,12 +73,12 @@ func (r *EntFlowReader) StuckIntervals(ctx context.Context) ([]flow.StuckInterva
 			earliest[k] = opened
 		}
 		iv := flow.StuckInterval{ItemID: flow.ItemID(ep.ItemID.String()), Reason: ep.Reason, FirstDetectedAt: opened, Episode: true}
-		iv.ResolvedAt = utcPtr(ep.ResolvedAt)
+		iv.ResolvedAt = utcOrNil(ep.ResolvedAt)
 		out = append(out, iv)
 	}
 	for _, row := range states {
 		first := row.FirstDetectedAt.UTC()
-		iv := flow.StuckInterval{ItemID: flow.ItemID(row.ItemID.String()), Reason: row.Reason, FirstDetectedAt: first, ResolvedAt: utcPtr(row.ResolvedAt)}
+		iv := flow.StuckInterval{ItemID: flow.ItemID(row.ItemID.String()), Reason: row.Reason, FirstDetectedAt: first, ResolvedAt: utcOrNil(row.ResolvedAt)}
 		if e, ok := earliest[stuckKey{row.ItemID, row.Reason}]; ok {
 			if !first.Before(e) {
 				continue
@@ -95,7 +95,7 @@ func (r *EntFlowReader) StuckIntervals(ctx context.Context) ([]flow.StuckInterva
 // StuckCapture reports when episode capture began and the open counts that
 // should agree: open episodes versus open legacy rows first detected at or
 // after capture began (earlier open rows are legacy history, not drift).
-func (r *EntFlowReader) StuckCapture(ctx context.Context) (flow.StuckCapture, error) {
+func (r *Reader) StuckCapture(ctx context.Context) (flow.StuckCapture, error) {
 	states, episodes, err := r.stuckRows(ctx)
 	if err != nil {
 		return flow.StuckCapture{}, err
@@ -118,4 +118,13 @@ func (r *EntFlowReader) StuckCapture(ctx context.Context) (flow.StuckCapture, er
 		}
 	}
 	return c, nil
+}
+
+// utcOrNil duplicates the session package's utcPtr so this file needs nothing from it.
+func utcOrNil(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }

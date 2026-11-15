@@ -1,4 +1,4 @@
-package session
+package flowstore
 
 import (
 	"fmt"
@@ -7,27 +7,21 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
-// EntFlowReader implements the flow analytics source interfaces (events,
+// Reader implements the flow analytics source interfaces (events,
 // verdicts, stuck rows, items) over the repository's ent client (ADR-004).
 //
 // Every query is a plain single-statement SELECT, so dbsplit routes it to the
 // query_only reader pool (label "ent-read") and never holds the writer's
 // connection. It opens no database handle of its own.
-type EntFlowReader struct {
+type Reader struct {
 	client *ent.Client
-	engine domain.WorkflowEngine // source of Stages; nil means the default engine
+	engine domain.WorkflowEngine // source of Stages
 }
 
-// WithWorkflowEngine returns a copy of r whose Stages come from engine.
-func (r *EntFlowReader) WithWorkflowEngine(engine domain.WorkflowEngine) *EntFlowReader {
-	cp := *r
-	cp.engine = engine
-	return &cp
-}
-
-// NewEntFlowReader returns a reader over client, normally repo.GetEntClient().
-func NewEntFlowReader(client *ent.Client) *EntFlowReader {
-	return &EntFlowReader{client: client}
+// New returns a reader over client, normally repo.GetEntClient().
+// engine supplies Stages and is required.
+func New(client *ent.Client, engine domain.WorkflowEngine) *Reader {
+	return &Reader{client: client, engine: engine}
 }
 
 // FlowReadError wraps a failed flow read with the operation name so callers

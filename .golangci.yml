@@ -159,8 +159,23 @@ linters:
             - github.com/tstapler/stapler-squad/telemetry
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/flowstore is the flow-analytics ent reader: it never imports session, github or server
+        # (the workflow engine is injected through New).
+        isolate_flowstore:
+          list-mode: strict
+          files:
+            - "**/session/flowstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/flow
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
-        # BacklogFlowService, the MCP tools and EntFlowReader depend on it, never the reverse.
+        # BacklogFlowService, the MCP tools and flowstore.Reader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.
         isolate_flow_core:
           list-mode: strict

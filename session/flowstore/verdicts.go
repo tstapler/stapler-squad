@@ -1,4 +1,4 @@
-package session
+package flowstore
 
 import (
 	"context"
@@ -31,7 +31,7 @@ type FlowDoneClaim struct {
 // attributed to its item through item_sessions (one verdict per session, so
 // sessions without a verdict contribute nothing). Two bulk queries via eager
 // loading, no per-row lookups.
-func (r *EntFlowReader) Verdicts(ctx context.Context, w flow.FlowWindow) ([]flow.Verdict, error) {
+func (r *Reader) Verdicts(ctx context.Context, w flow.FlowWindow) ([]flow.Verdict, error) {
 	rows, err := r.client.ReviewVerdict.Query().
 		Where(
 			reviewverdict.CreatedAtGTE(w.Start().UTC().Add(-maxOffsetSkew)),
@@ -93,7 +93,7 @@ func parsePerCriterion(raw string) []flow.CriterionResult {
 // AgentDoneClaims reports per item whether the agent last claimed done, before
 // a non-PASS verdict, on a criterion that verdict did not pass. Informational
 // only (ADR-005).
-func (r *EntFlowReader) AgentDoneClaims(ctx context.Context, w flow.FlowWindow) (map[flow.ItemID]bool, error) {
+func (r *Reader) AgentDoneClaims(ctx context.Context, w flow.FlowWindow) (map[flow.ItemID]bool, error) {
 	details, err := r.AgentDoneClaimDetails(ctx, w)
 	if err != nil {
 		return nil, err
@@ -110,7 +110,7 @@ func (r *EntFlowReader) AgentDoneClaims(ctx context.Context, w flow.FlowWindow) 
 // AgentDoneClaimDetails returns, for every criterion in each verdict inside w, the
 // status of the agent's latest progress note before that verdict. Criteria
 // with no earlier note are omitted.
-func (r *EntFlowReader) AgentDoneClaimDetails(ctx context.Context, w flow.FlowWindow) ([]FlowDoneClaim, error) {
+func (r *Reader) AgentDoneClaimDetails(ctx context.Context, w flow.FlowWindow) ([]FlowDoneClaim, error) {
 	verdicts, err := r.Verdicts(ctx, w)
 	if err != nil {
 		return nil, err

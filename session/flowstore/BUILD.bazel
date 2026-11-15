@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "flowstore",
+    srcs = [
+        "events.go",
+        "items.go",
+        "markers.go",
+        "store.go",
+        "stream.go",
+        "stuck.go",
+        "verdicts.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/flowstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/domain",
+        "//session/flow",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogflowmarker",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:backlogprogressnote",
+        "//tools/bzl/ent:backlogstatusevent",
+        "//tools/bzl/ent:predicate",
+        "//tools/bzl/ent:reviewverdict",
+        "@com_github_google_uuid//:uuid",
+        "@io_entgo_ent//dialect/sql",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":flowstore",
+    visibility = ["//visibility:public"],
+)
+
+# Read by session's legacy item-PR reader scan.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)
