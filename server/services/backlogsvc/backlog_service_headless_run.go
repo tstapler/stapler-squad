@@ -164,6 +164,8 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 
 // TriggerReReview re-runs the review gate for a backlog item.
 // +api: backlog:trigger-re-review
+//
+//nolint:gocognit,gocyclo,funlen // pre-existing complexity relocated verbatim from backlog_service_triage.go; reducing it is a separate follow-up, not a file move
 func (s *BacklogService) TriggerReReview(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TriggerReReviewRequest],
