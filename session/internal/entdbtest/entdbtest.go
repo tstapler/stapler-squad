@@ -69,6 +69,7 @@ func template() (string, error) {
 			templateErr = err
 			return
 		}
+		_ = templateKeeper // held, not read: the open connection is what keeps the database alive
 		templateURI = uri
 	})
 	return templateURI, templateErr
