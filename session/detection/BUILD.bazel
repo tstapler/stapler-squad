@@ -80,5 +80,8 @@ go_test(
 filegroup(
     name = "testdata",
     srcs = glob(["testdata/**"]),
-    visibility = ["//session:__pkg__"],
+    visibility = [
+        "//session:__pkg__",
+        "//session/historyadapters:__pkg__",
+    ],
 )
