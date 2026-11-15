@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // AdminFileWriter is the atomic write-temp-then-rename-then-fsync primitive
@@ -90,15 +92,44 @@ func (w *AdminFileWriter) renameAndSyncDir(tmpPath, name string) error {
 	return nil
 }
 
-// renameFailureState reports which side of a failed rename is missing. A "no such file" rename after a successful
-// CreateTemp has been seen only on CI runners; this tells the next occurrence whether the admin dir or the temp file vanished.
+// renameFailureState reports which side of a failed rename is missing and, when the admin dir itself is gone, how far up
+// the deletion went. A "no such file" rename after a successful CreateTemp has been seen only on CI (grep CI logs for
+// "admin-file-rename-failed"); the first existing ancestor, its mtime and its entries name what removed the tree.
 func (w *AdminFileWriter) renameFailureState(tmpPath string) string {
 	_, dirErr := os.Stat(w.dir)
 	_, tmpErr := os.Lstat(tmpPath)
-	entries, _ := os.ReadDir(w.dir)
+	return fmt.Sprintf(" (admin-file-rename-failed: now=%s dir stat err=%v, temp lstat err=%v, dir entries=%v, ancestors=%s)",
+		time.Now().Format(time.RFC3339Nano), dirErr, tmpErr, dirEntryNames(w.dir), ancestorState(w.dir))
+}
+
+func dirEntryNames(dir string) []string {
+	entries, _ := os.ReadDir(dir)
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	return fmt.Sprintf(" (state after failure: dir stat err=%v, temp lstat err=%v, dir entries=%v)", dirErr, tmpErr, names)
+	return names
+}
+
+// ancestorState walks up from dir (.git/worktrees, .git, repo root, ...) reporting each level until the first that
+// exists, whose mtime and entries (capped) are included.
+func ancestorState(dir string) string {
+	const maxEntries = 20
+	var parts []string
+	for cur := filepath.Dir(dir); ; cur = filepath.Dir(cur) {
+		info, err := os.Stat(cur)
+		if err == nil {
+			names := dirEntryNames(cur)
+			if len(names) > maxEntries {
+				names = append(names[:maxEntries], "...")
+			}
+			parts = append(parts, fmt.Sprintf("%s=exists(mtime=%s, entries=%v)", cur, info.ModTime().Format(time.RFC3339Nano), names))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s=missing(%v)", cur, err))
+		if filepath.Dir(cur) == cur {
+			break
+		}
+	}
+	return strings.Join(parts, "; ")
 }
