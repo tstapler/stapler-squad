@@ -3,8 +3,45 @@ package native
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestAdminFileWriter_RenameFailure_should_NameFirstSurvivingAncestor_When_AdminDirVanishesAfterCreateTemp injects the
+// CI-only symptom (admin dir deleted between CreateTemp and rename) and asserts the error reports how far up the
+// deletion went, so the next CI hit names what was removed.
+func TestAdminFileWriter_RenameFailure_should_NameFirstSurvivingAncestor_When_AdminDirVanishesAfterCreateTemp(t *testing.T) {
+	t.Parallel()
+
+	repo := t.TempDir()
+	adminDir := filepath.Join(repo, ".git", "worktrees", "wt")
+	if err := os.MkdirAll(adminDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	w := NewAdminFileWriter(adminDir)
+	tmpPath, err := w.writeTemp("locked", []byte("initializing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(repo, ".git", "worktrees")); err != nil {
+		t.Fatal(err)
+	}
+
+	err = w.renameAndSyncDir(tmpPath, "locked")
+	if err == nil {
+		t.Fatal("expected rename failure")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"admin-file-rename-failed",
+		filepath.Join(repo, ".git", "worktrees") + "=missing",
+		filepath.Join(repo, ".git") + "=exists(",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error missing %q:\n%s", want, msg)
+		}
+	}
+}
 
 // TestAdminFileWriter_WriteFile_ReplacesExistingContentAtomically covers Epic
 // 1.1's first acceptance criterion (plan.md Story 1.1.1): a crash between the
