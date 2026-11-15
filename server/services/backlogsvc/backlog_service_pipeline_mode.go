@@ -157,34 +157,10 @@ func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[
 	return out
 }
 
-// pipelineCacheInvalidator is a narrow, consumer-defined interface (per
-// the `interface-pollution-checklist` skill — defined where consumed,
-// not next to CachingPipelineEngine) matched via duck typing against
-// s.pipelineEngine. CachingPipelineEngine.InvalidateCache satisfies it;
-// PipelineEngine itself intentionally does NOT declare this method (it is a
-// write-side operational concern, not part of the read-side resolution
-// contract every PipelineEngine implementation must offer).
-type pipelineCacheInvalidator interface {
-	InvalidateCache(ctx context.Context) error
-}
-
-// invalidatePipelineCache re-fetches enabled pipeline modes into
-// s.pipelineEngine's cache after a successful Create/Update/Delete. id is
-// used only for the Warn log line if invalidation fails. No-op (silently) if
-// pipelineEngine is unwired or doesn't support cache invalidation — neither
-// case is an error worth surfacing here.
-//
-// Deliberately returns nothing: per Story 2.2.1's acceptance criteria, an
-// invalidation failure after a successful DB write must never fail the RPC,
-// so there is no error for callers to (mis)propagate.
+// invalidatePipelineCache refreshes s.pipelineEngine's cache after a successful
+// Create/Update/Delete (Story 2.2.1: an invalidation failure never fails the RPC).
 func (s *BacklogService) invalidatePipelineCache(ctx context.Context, id string) {
-	invalidator, ok := s.pipelineEngine.(pipelineCacheInvalidator)
-	if !ok {
-		return
-	}
-	if err := invalidator.InvalidateCache(ctx); err != nil {
-		log.WarningLog().Printf("[PipelineEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
-	}
+	invalidateEngineCache(ctx, s.pipelineEngine, engineLabelPipeline, id)
 }
 
 // CreatePipelineMode registers a new runtime-definable pipeline mode.

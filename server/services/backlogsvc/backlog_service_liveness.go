@@ -28,7 +28,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -68,34 +67,10 @@ func livenessDefinitionToProto(row *liveness.LivenessDefinitionRecord) *sessionv
 	return msg
 }
 
-// livenessCacheInvalidator is a narrow, consumer-defined interface (per the
-// `interface-pollution-checklist` skill) matched via duck typing against
-// s.livenessEngine. *session.CachingLivenessEngine.InvalidateCache satisfies
-// it; the session.LivenessEngine interface itself intentionally does NOT
-// declare this method — it's a write-side operational concern, not part of
-// the read-side resolution contract every LivenessEngine implementation must
-// offer. Mirrors pipelineCacheInvalidator (backlog_service_pipeline_mode.go)
-// exactly.
-type livenessCacheInvalidator interface {
-	InvalidateCache(ctx context.Context) error
-}
-
-// invalidateLivenessCache re-fetches liveness definitions into
-// s.livenessEngine's cache after a successful Create/Update/Delete. id is
-// used only for the Warn log line if invalidation fails. No-op (silently) if
-// livenessEngine is unwired or doesn't support cache invalidation.
-//
-// Deliberately returns nothing: an invalidation failure after a successful
-// DB write must never fail the RPC (mirrors invalidatePipelineCache's
-// contract), so there is no error for callers to (mis)propagate.
+// invalidateLivenessCache refreshes s.livenessEngine's cache after a successful
+// Create/Update/Delete; a failure never fails the RPC.
 func (s *BacklogService) invalidateLivenessCache(ctx context.Context, id string) {
-	invalidator, ok := s.livenessEngine.(livenessCacheInvalidator)
-	if !ok {
-		return
-	}
-	if err := invalidator.InvalidateCache(ctx); err != nil {
-		log.WarningLog().Printf("[LivenessEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
-	}
+	invalidateEngineCache(ctx, s.livenessEngine, engineLabelLiveness, id)
 }
 
 // livenessDefinitionFromCreateRequest builds a session.LivenessDefinition

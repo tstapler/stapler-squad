@@ -361,7 +361,7 @@ type BacklogService struct {
 	// the stage/transition/gate CRUD write handlers invalidate on success.
 	// Wired post-construction via SetStageConfigEngine. May be nil; cache
 	// invalidation is then a no-op, mirroring livenessEngine above.
-	stageConfigEngine stageConfigCacheInvalidator
+	stageConfigEngine CacheInvalidator
 	// gateSatisfactionRepo backs the RecordGateApproval RPC (Epic 2.4, Story
 	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
 	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
@@ -369,12 +369,35 @@ type BacklogService struct {
 	gateSatisfactionRepo session.GateSatisfactionRepository
 }
 
-// stageConfigCacheInvalidator is a narrow, consumer-defined interface (see
-// pipelineCacheInvalidator's identical rationale in
-// backlog_service_pipeline_mode.go) matched via duck typing against
-// s.stageConfigEngine. *session.ConfiguredWorkflowEngine satisfies it.
-type stageConfigCacheInvalidator interface {
+// CacheInvalidator is the narrow, consumer-defined write-side hook the CRUD
+// handlers call after a successful write. Matched via duck typing: the read-side
+// engine interfaces deliberately do not declare it. Implemented by
+// pipeline.CachingPipelineEngine, liveness.CachingLivenessEngine and
+// *session.ConfiguredWorkflowEngine.
+type CacheInvalidator interface {
 	InvalidateCache(ctx context.Context) error
+}
+
+// engineLabel tags the Warn line of a failed invalidation.
+type engineLabel string
+
+const (
+	engineLabelPipeline engineLabel = "PipelineEngine"
+	engineLabelLiveness engineLabel = "LivenessEngine"
+	engineLabelWorkflow engineLabel = "ConfiguredWorkflowEngine"
+)
+
+// invalidateEngineCache re-fetches engine's cache after a successful write, if
+// engine supports it. name and id only label the Warn line. It returns nothing:
+// an invalidation failure after a successful DB write must never fail the RPC.
+func invalidateEngineCache(ctx context.Context, engine any, name engineLabel, id string) {
+	invalidator, ok := engine.(CacheInvalidator)
+	if !ok {
+		return
+	}
+	if err := invalidator.InvalidateCache(ctx); err != nil {
+		log.WarningLog().Printf("[%s] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", name, id, err)
+	}
 }
 
 // SetStageCRUDRepository wires the repository backing the Stage/
@@ -387,23 +410,17 @@ func (s *BacklogService) SetStageCRUDRepository(repo session.StageCRUDRepository
 // SetStageConfigEngine wires the engine whose stageConfigCache the stage/
 // transition/gate CRUD write handlers invalidate on success. nil (the
 // default) makes cache invalidation a no-op.
-func (s *BacklogService) SetStageConfigEngine(engine stageConfigCacheInvalidator) {
+func (s *BacklogService) SetStageConfigEngine(engine CacheInvalidator) {
 	s.stageConfigEngine = engine
 }
 
-// invalidateStageConfigCache re-fetches the enabled stage/transition graph
-// into s.stageConfigEngine's cache after a successful stage/transition/gate
-// write. id is used only for the Warn log line if invalidation fails.
-// No-op (silently) if stageConfigEngine is unwired. Deliberately returns
-// nothing — mirrors invalidatePipelineCache's rationale: a cache-invalidation
-// failure after a successful DB write must never fail the RPC.
+// invalidateStageConfigCache refreshes the stage/transition graph cache after a
+// successful stage/transition/gate write. No-op if stageConfigEngine is unwired.
 func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id string) {
 	if s.stageConfigEngine == nil {
 		return
 	}
-	if err := s.stageConfigEngine.InvalidateCache(ctx); err != nil {
-		log.WarningLog().Printf("[ConfiguredWorkflowEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
-	}
+	invalidateEngineCache(ctx, s.stageConfigEngine, engineLabelWorkflow, id)
 }
 
 // SetGateSatisfactionRepository wires the repository backing the
