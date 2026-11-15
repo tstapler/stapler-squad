@@ -386,7 +386,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []instance.Canonical
 		}
 	}
 
-	title := inst.Title
+	title := inst.Snapshot().Title
 	if title == "" {
 		title = "Session " + uuidStr
 	}
@@ -410,7 +410,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []instance.Canonical
 		return fmt.Errorf("failed to commit opencode transaction: %w", err)
 	}
 
-	log.Info("OpencodeAdapter: exported session history", "session", inst.Title, "uuid", uuidStr, "turns", len(turns))
+	log.Info("OpencodeAdapter: exported session history", "session", inst.Snapshot().Title, "uuid", uuidStr, "turns", len(turns))
 	return nil
 }
 

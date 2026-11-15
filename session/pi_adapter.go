@@ -172,6 +172,6 @@ func (a *PiAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, 
 		}
 	}
 
-	log.Info("PiAdapter: exported session history", "session", inst.Title, "session_id", sessionID, "turns", len(turns))
+	log.Info("PiAdapter: exported session history", "session", inst.Snapshot().Title, "session_id", sessionID, "turns", len(turns))
 	return nil
 }

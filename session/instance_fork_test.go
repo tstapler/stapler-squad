@@ -139,7 +139,9 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 
 	// Every line must be valid JSON with a non-nil message field (real user/assistant turn).
 	for i, line := range lines {
-		var raw rawClaudeTurn
+		var raw struct {
+			Message *json.RawMessage `json:"message"`
+		}
 		require.NoError(t, json.Unmarshal([]byte(line), &raw), "line %d must be valid JSON", i)
 		assert.NotNil(t, raw.Message, "line %d should not be a skipped turn (it's a real user/assistant turn)", i)
 	}
