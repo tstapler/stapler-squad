@@ -171,6 +171,6 @@ func (a *GeminiAdapter) Export(ctx context.Context, turns []instance.CanonicalTu
 		}
 	}
 
-	log.Info("GeminiAdapter: exported session history", "session", inst.Title, "uuid", uuidStr, "turns", len(turns))
+	log.Info("GeminiAdapter: exported session history", "session", inst.Snapshot().Title, "uuid", uuidStr, "turns", len(turns))
 	return nil
 }

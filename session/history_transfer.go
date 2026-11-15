@@ -8,6 +8,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
+// PostExporter is an optional HistoryAdapter hook run after a successful Export so the
+// target CLI's own post-switch bookkeeping lives with its adapter, not in PortSessionHistory.
+type PostExporter interface {
+	AfterExport(ctx context.Context, inst *instance.Instance) error
+}
+
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *instance.Instance) error {
 	srcAdapter := i.HistoryRegistry().Resolve(oldProgram)
@@ -42,7 +48,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *i
 		}
 	}
 
-	log.Info("PortSessionHistory: ported session history using canonical formats", "from", srcAdapter.Name(), "to", dstAdapter.Name(), "session", i.Title)
+	log.Info("PortSessionHistory: ported session history using canonical formats", "from", srcAdapter.Name(), "to", dstAdapter.Name(), "session", i.Snapshot().Title)
 	return nil
 }
 
