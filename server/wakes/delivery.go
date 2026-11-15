@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -31,10 +30,10 @@ type deliveryStore interface {
 // EndedFunc is told when a held wake ends without a delivery (missed or
 // skipped) so the dispatcher can notify the operator and release its limits
 // reservation.
-type EndedFunc func(ctx context.Context, row *session.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason)
+type EndedFunc func(ctx context.Context, row *domain.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason)
 
 // ReviveFunc is called after a held wake moved to needs_revive.
-type ReviveFunc func(ctx context.Context, row *session.WakeTriggerData)
+type ReviveFunc func(ctx context.Context, row *domain.WakeTriggerData)
 
 // SteerDeliveryConfig wires a SteerDelivery.
 type SteerDeliveryConfig struct {
@@ -60,7 +59,7 @@ type SteerDelivery struct {
 	cfg SteerDeliveryConfig
 
 	mu   sync.Mutex
-	held map[string]*session.WakeTriggerData
+	held map[string]*domain.WakeTriggerData
 	kick chan struct{}
 
 	attemptMu sync.Mutex
@@ -71,7 +70,7 @@ func NewSteerDelivery(cfg SteerDeliveryConfig) *SteerDelivery {
 	if cfg.RetryInterval <= 0 {
 		cfg.RetryInterval = DefaultRetryInterval
 	}
-	return &SteerDelivery{cfg: cfg, held: map[string]*session.WakeTriggerData{}, kick: make(chan struct{}, 1)}
+	return &SteerDelivery{cfg: cfg, held: map[string]*domain.WakeTriggerData{}, kick: make(chan struct{}, 1)}
 }
 
 // Holds reports whether a claimed row is waiting in the cache. The periodic
@@ -92,7 +91,7 @@ func (d *SteerDelivery) Len() int {
 
 // Enqueue holds a freshly claimed (or re-queued) row and makes one delivery
 // attempt now. A row already held is ignored.
-func (d *SteerDelivery) Enqueue(ctx context.Context, row *session.WakeTriggerData) {
+func (d *SteerDelivery) Enqueue(ctx context.Context, row *domain.WakeTriggerData) {
 	d.mu.Lock()
 	if _, dup := d.held[row.ID]; dup {
 		d.mu.Unlock()
@@ -112,7 +111,7 @@ func (d *SteerDelivery) Enqueue(ctx context.Context, row *session.WakeTriggerDat
 // AttemptAll retries every held wake once.
 func (d *SteerDelivery) AttemptAll(ctx context.Context) {
 	d.mu.Lock()
-	rows := make([]*session.WakeTriggerData, 0, len(d.held))
+	rows := make([]*domain.WakeTriggerData, 0, len(d.held))
 	for _, r := range d.held {
 		rows = append(rows, r)
 	}
@@ -152,7 +151,7 @@ func (d *SteerDelivery) drop(id string) {
 
 // attempt is one pass over a held row: expiry, the owner-state table, the
 // readiness check, the guarded write, then the confirmed MarkWakeDelivered.
-func (d *SteerDelivery) attempt(ctx context.Context, row *session.WakeTriggerData) {
+func (d *SteerDelivery) attempt(ctx context.Context, row *domain.WakeTriggerData) {
 	d.attemptMu.Lock()
 	defer d.attemptMu.Unlock()
 	if !d.Holds(row.ID) {
@@ -194,14 +193,14 @@ func (d *SteerDelivery) attempt(ctx context.Context, row *session.WakeTriggerDat
 
 // endIfBusyTooLong turns a claim that has waited out the busy-owner hold into
 // missed(owner_busy_timeout); it is never silently dropped (pre-mortem #9).
-func (d *SteerDelivery) endIfBusyTooLong(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
+func (d *SteerDelivery) endIfBusyTooLong(ctx context.Context, row *domain.WakeTriggerData, id uuid.UUID, now time.Time) {
 	if d.cfg.BusyHold <= 0 || row.ClaimedAt == nil || now.Sub(*row.ClaimedAt) < d.cfg.BusyHold {
 		return
 	}
 	d.end(ctx, row, id, domain.WakeStatusMissed, domain.WakeReasonOwnerBusyTimeout, now)
 }
 
-func (d *SteerDelivery) write(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
+func (d *SteerDelivery) write(ctx context.Context, row *domain.WakeTriggerData, id uuid.UUID, now time.Time) {
 	outcome, err := d.cfg.Steerer.WriteWake(ctx, row.OwnerSessionUUID, RenderWake(row))
 	if err != nil {
 		if tymux.IsFinalExit(err) {
@@ -239,7 +238,7 @@ func (d *SteerDelivery) write(ctx context.Context, row *session.WakeTriggerData,
 	d.drop(row.ID)
 }
 
-func (d *SteerDelivery) toNeedsRevive(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, now time.Time) {
+func (d *SteerDelivery) toNeedsRevive(ctx context.Context, row *domain.WakeTriggerData, id uuid.UUID, now time.Time) {
 	applied, err := d.cfg.Store.MarkWakeNeedsRevive(ctx, id, now)
 	if err != nil {
 		log.Warn("wake delivery: mark needs_revive failed", "trigger_id", row.ID, errKey, err)
@@ -255,7 +254,7 @@ func (d *SteerDelivery) toNeedsRevive(ctx context.Context, row *session.WakeTrig
 	}
 }
 
-func (d *SteerDelivery) end(ctx context.Context, row *session.WakeTriggerData, id uuid.UUID, state domain.WakeStatus, reason domain.WakeReason, now time.Time) {
+func (d *SteerDelivery) end(ctx context.Context, row *domain.WakeTriggerData, id uuid.UUID, state domain.WakeStatus, reason domain.WakeReason, now time.Time) {
 	var applied bool
 	var err error
 	if state == domain.WakeStatusMissed {
@@ -279,7 +278,7 @@ func (d *SteerDelivery) end(ctx context.Context, row *session.WakeTriggerData, i
 
 // nextFireAfter is the re-arm time for a recurring row once the occurrence it
 // was claimed for has been delivered at now; zero for everything else.
-func nextFireAfter(row *session.WakeTriggerData, now time.Time) time.Time {
+func nextFireAfter(row *domain.WakeTriggerData, now time.Time) time.Time {
 	spec, ok := row.Spec.(domain.CronSpec)
 	if !ok || row.NextFireAt == nil {
 		return time.Time{}
@@ -298,7 +297,7 @@ func nextFireAfter(row *session.WakeTriggerData, now time.Time) time.Time {
 // RenderWake builds the text written into the owner's pane: a provenance
 // header carrying the wake id and fire count, the delimiter-escaped payload and
 // the standing sentence that makes a duplicate harmless (ADR-006 rule 10).
-func RenderWake(row *session.WakeTriggerData) string {
+func RenderWake(row *domain.WakeTriggerData) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<wake id=%q n=%d from=%q>\n", row.ID, row.FireCount+1, wakeProvenance(row.Type))
 	b.WriteString(escapeWakePayload(row.Action.Payload))

@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -30,27 +29,27 @@ var ErrNotLeader = errors.New("wakes: another process holds the wake dispatcher 
 // *session.Storage and *session.EntRepository satisfy it.
 type timerStore interface {
 	NextWakeFireAt(ctx context.Context) (time.Time, bool, error)
-	ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*session.WakeTriggerData, error)
+	ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*domain.WakeTriggerData, error)
 	ClaimWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
 	MarkWakeMissed(ctx context.Context, id uuid.UUID, reason domain.WakeReason, now time.Time) (bool, error)
 }
 
 // ClaimedFunc receives a row the timer just claimed (pending -> claimed). The
 // dispatcher (Story 4.3) delivers it and later confirms with MarkWakeDelivered.
-type ClaimedFunc func(ctx context.Context, claimed *session.WakeTriggerData)
+type ClaimedFunc func(ctx context.Context, claimed *domain.WakeTriggerData)
 
 // AdmitFunc decides, just before a due row would be claimed, whether the claim
 // may proceed. It returns false when it already dealt with the row (deferred it
 // for a rate limit, skipped it); the timer then leaves the row alone.
-type AdmitFunc func(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool
+type AdmitFunc func(ctx context.Context, row *domain.WakeTriggerData, now time.Time) bool
 
 // HoldFunc reports a due row that must stay pending untouched (its trigger
 // type is switched off). The loop re-checks it every storeRetryDelay instead of
 // spinning on a row that is due but not claimable.
-type HoldFunc func(row *session.WakeTriggerData) bool
+type HoldFunc func(row *domain.WakeTriggerData) bool
 
 // MissedFunc is told about a row that expired before the timer could claim it.
-type MissedFunc func(ctx context.Context, missed *session.WakeTriggerData)
+type MissedFunc func(ctx context.Context, missed *domain.WakeTriggerData)
 
 // Timekeeper owns the single timer on min(next_fire_at) over the durable
 // table. It sleeps until the next due row (no row-scanning ticker), claims
@@ -236,7 +235,7 @@ func (t *Timekeeper) fireDue(ctx context.Context) (ok bool) {
 
 // handleDue reports false when the row stayed pending because of a store
 // error, so the loop backs off instead of re-selecting it immediately.
-func (t *Timekeeper) handleDue(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool {
+func (t *Timekeeper) handleDue(ctx context.Context, row *domain.WakeTriggerData, now time.Time) bool {
 	id, err := uuid.Parse(row.ID)
 	if err != nil {
 		log.Error("wake timer: unparseable trigger id", "id", row.ID, errKey, err)
@@ -265,7 +264,7 @@ func (t *Timekeeper) handleDue(ctx context.Context, row *session.WakeTriggerData
 	return true
 }
 
-func (t *Timekeeper) markMissed(ctx context.Context, id uuid.UUID, row *session.WakeTriggerData, now time.Time) bool {
+func (t *Timekeeper) markMissed(ctx context.Context, id uuid.UUID, row *domain.WakeTriggerData, now time.Time) bool {
 	applied, err := t.store.MarkWakeMissed(ctx, id, domain.WakeReasonExpired, now)
 	if err != nil {
 		log.Warn("wake timer: mark missed failed", "trigger_id", row.ID, errKey, err)

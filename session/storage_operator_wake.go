@@ -10,7 +10,7 @@ import (
 )
 
 // ListWakeTriggersByStatus forwards to the repository.
-func (s *Storage) ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*WakeTriggerData, error) {
+func (s *Storage) ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListWakeTriggersByStatus(ctx, statuses...)
 }
 

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -30,7 +29,7 @@ func snippet(s string) string {
 // reaching its owner. It is failure class (ERROR) and bound to the owner so a
 // hidden-session owner still gets through the delivery gate (a routine type
 // would be suppressed for hidden sessions).
-func failureNotification(row *session.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason) Notification {
+func failureNotification(row *domain.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason) Notification {
 	return Notification{
 		Kind:             NotifyFailure,
 		OwnerSessionUUID: row.OwnerSessionUUID,
@@ -43,7 +42,7 @@ func failureNotification(row *session.WakeTriggerData, state domain.WakeStatus, 
 // wake. The owner is only a link target: the notification carries no session
 // binding, so the hidden-session gate cannot suppress a reminder about a
 // finished review session.
-func reminderNotification(row *session.WakeTriggerData, ownerExists bool) Notification {
+func reminderNotification(row *domain.WakeTriggerData, ownerExists bool) Notification {
 	msg := snippet(row.Action.Payload)
 	if !ownerExists {
 		msg = ownerGoneText + ": " + msg

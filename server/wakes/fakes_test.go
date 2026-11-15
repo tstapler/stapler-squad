@@ -209,7 +209,7 @@ type rowOpts struct {
 }
 
 // newRow creates a pending row.
-func newRow(t *testing.T, repo *session.EntRepository, o rowOpts) *session.WakeTriggerData {
+func newRow(t *testing.T, repo *session.EntRepository, o rowOpts) *domain.WakeTriggerData {
 	t.Helper()
 	if o.owner == "" {
 		o.owner = "owner-1"
@@ -227,7 +227,7 @@ func newRow(t *testing.T, repo *session.EntRepository, o rowOpts) *session.WakeT
 	}
 	action, err := domain.NewWakeAction(o.action, o.payload)
 	require.NoError(t, err)
-	d, _, err := repo.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	d, _, err := repo.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: o.owner, Spec: o.spec, Action: action, NextFireAt: o.nextFire,
 		ExpiresAt: o.expiresAt, AllowRevive: o.allowRevive, MaxFires: o.maxFires, Generation: o.generation,
 		PendingCap: 100,
@@ -237,7 +237,7 @@ func newRow(t *testing.T, repo *session.EntRepository, o rowOpts) *session.WakeT
 }
 
 // claimedRow creates a row and claims it at now.
-func claimedRow(t *testing.T, repo *session.EntRepository, now time.Time, o rowOpts) *session.WakeTriggerData {
+func claimedRow(t *testing.T, repo *session.EntRepository, now time.Time, o rowOpts) *domain.WakeTriggerData {
 	t.Helper()
 	d := newRow(t, repo, o)
 	applied, err := repo.ClaimWakeTrigger(context.Background(), uuid.MustParse(d.ID), now)

@@ -75,7 +75,7 @@ func TestWakeDispatcher_should_DeliverDueTrigger_When_NoWorkflowSchedulerExists(
 	due := time.Now().Add(-time.Minute)
 	action, err := domain.NewWakeAction(domain.WakeActionSteerText, "due")
 	require.NoError(t, err)
-	created, _, err := repo.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	created, _, err := repo.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: "owner", Spec: domain.AtSpec{At: due}, Action: action, NextFireAt: &due,
 	})
 	require.NoError(t, err)

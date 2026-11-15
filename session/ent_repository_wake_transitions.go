@@ -174,7 +174,7 @@ func (r *EntRepository) MarkWakeSkipped(ctx context.Context, id uuid.UUID, reaso
 				return true, nil
 			}
 			if domain.WakeTriggerType(row.TriggerType).IsRecurring() || reason != domain.WakeReasonRateLimited {
-				return false, fmt.Errorf("%w: pending %s row cannot be skipped with reason %q", ErrWakeTransitionRejected, row.TriggerType, reason)
+				return false, fmt.Errorf("%w: pending %s row cannot be skipped with reason %q", domain.ErrWakeTransitionRejected, row.TriggerType, reason)
 			}
 			return true, nil
 		},
@@ -232,7 +232,7 @@ func (r *EntRepository) SkipWakeOccurrence(ctx context.Context, id uuid.UUID, ne
 		return false, fmt.Errorf("skip wake occurrence: read %s: %w", id, err)
 	}
 	if !domain.WakeTriggerType(row.TriggerType).IsRecurring() {
-		return false, fmt.Errorf("%w: %s row has no occurrences to skip", ErrWakeTransitionRejected, row.TriggerType)
+		return false, fmt.Errorf("%w: %s row has no occurrences to skip", domain.ErrWakeTransitionRejected, row.TriggerType)
 	}
 	n, err := r.Client.WakeTrigger.Update().
 		Where(waketrigger.ID(id), waketrigger.Status(string(domain.WakeStatusPending))).
@@ -260,7 +260,7 @@ func (r *EntRepository) RecordWakeDeliveryAttempt(ctx context.Context, id uuid.U
 	return nil
 }
 
-func (r *EntRepository) listWakeTriggers(ctx context.Context, q *ent.WakeTriggerQuery) ([]*WakeTriggerData, error) {
+func (r *EntRepository) listWakeTriggers(ctx context.Context, q *ent.WakeTriggerQuery) ([]*domain.WakeTriggerData, error) {
 	rows, err := q.All(ctx) //nolint:entfullscan every caller passes a query filtered by status or owner
 	if err != nil {
 		return nil, fmt.Errorf("list wake triggers: %w", err)
@@ -269,14 +269,14 @@ func (r *EntRepository) listWakeTriggers(ctx context.Context, q *ent.WakeTrigger
 }
 
 // ListPendingWakeTriggers returns every pending row, soonest next_fire_at first.
-func (r *EntRepository) ListPendingWakeTriggers(ctx context.Context) ([]*WakeTriggerData, error) {
+func (r *EntRepository) ListPendingWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error) {
 	return r.listWakeTriggers(ctx, r.Client.WakeTrigger.Query().
 		Where(waketrigger.Status(string(domain.WakeStatusPending))).
 		Order(ent.Asc(waketrigger.FieldNextFireAt), ent.Asc(waketrigger.FieldCreatedAt)))
 }
 
 // ListDueWakeTriggers returns pending time-based rows with next_fire_at <= now.
-func (r *EntRepository) ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*WakeTriggerData, error) {
+func (r *EntRepository) ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*domain.WakeTriggerData, error) {
 	return r.listWakeTriggers(ctx, r.Client.WakeTrigger.Query().
 		Where(waketrigger.Status(string(domain.WakeStatusPending)), waketrigger.NextFireAtLTE(now.UTC())).
 		Order(ent.Asc(waketrigger.FieldNextFireAt)))
@@ -300,14 +300,14 @@ func (r *EntRepository) NextWakeFireAt(ctx context.Context) (at time.Time, ok bo
 
 // ListStaleClaimedWakeTriggers returns claimed rows claimed before the cutoff
 // (startup reconcile re-queues them; ADR-006 rule 2).
-func (r *EntRepository) ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*WakeTriggerData, error) {
+func (r *EntRepository) ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*domain.WakeTriggerData, error) {
 	return r.listWakeTriggers(ctx, r.Client.WakeTrigger.Query().
 		Where(waketrigger.Status(string(domain.WakeStatusClaimed)), waketrigger.ClaimedAtLT(claimedBefore.UTC())).
 		Order(ent.Asc(waketrigger.FieldClaimedAt)))
 }
 
 // ListNeedsReviveWakeTriggers returns rows waiting on admission, oldest first.
-func (r *EntRepository) ListNeedsReviveWakeTriggers(ctx context.Context) ([]*WakeTriggerData, error) {
+func (r *EntRepository) ListNeedsReviveWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error) {
 	return r.listWakeTriggers(ctx, r.Client.WakeTrigger.Query().
 		Where(waketrigger.Status(string(domain.WakeStatusNeedsRevive))).
 		Order(ent.Asc(waketrigger.FieldCreatedAt)))
@@ -315,7 +315,7 @@ func (r *EntRepository) ListNeedsReviveWakeTriggers(ctx context.Context) ([]*Wak
 
 // ListWakeTriggersByOwner returns the owner's rows in any of statuses (all
 // statuses when none given), newest first.
-func (r *EntRepository) ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*WakeTriggerData, error) {
+func (r *EntRepository) ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error) {
 	q := r.Client.WakeTrigger.Query().Where(waketrigger.OwnerSessionUUID(owner))
 	if len(statuses) > 0 {
 		q = q.Where(waketrigger.StatusIn(wakeStatusStrings(statuses)...))

@@ -24,9 +24,9 @@ func mustWakeAction(t *testing.T, payload string) domain.WakeAction {
 	return a
 }
 
-func atInput(t *testing.T, owner string, at time.Time, payload string) CreateWakeTriggerInput {
+func atInput(t *testing.T, owner string, at time.Time, payload string) domain.CreateWakeTriggerInput {
 	t.Helper()
-	return CreateWakeTriggerInput{
+	return domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: owner,
 		Spec:             domain.AtSpec{At: at},
 		Action:           mustWakeAction(t, payload),
@@ -34,10 +34,10 @@ func atInput(t *testing.T, owner string, at time.Time, payload string) CreateWak
 	}
 }
 
-func cronInput(t *testing.T, owner string, maxFires int) CreateWakeTriggerInput {
+func cronInput(t *testing.T, owner string, maxFires int) domain.CreateWakeTriggerInput {
 	t.Helper()
 	next := wakeBase.Add(5 * time.Minute)
-	return CreateWakeTriggerInput{
+	return domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: owner,
 		Spec:             domain.CronSpec{Expr: "*/5 * * * *"},
 		Action:           mustWakeAction(t, "tick"),
@@ -46,7 +46,7 @@ func cronInput(t *testing.T, owner string, maxFires int) CreateWakeTriggerInput 
 	}
 }
 
-func mustCreateWake(t *testing.T, repo *EntRepository, in CreateWakeTriggerInput) (uuid.UUID, *WakeTriggerData) {
+func mustCreateWake(t *testing.T, repo *EntRepository, in domain.CreateWakeTriggerInput) (uuid.UUID, *domain.WakeTriggerData) {
 	t.Helper()
 	d, _, err := repo.CreateWakeTrigger(context.Background(), in)
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func mustCreateWake(t *testing.T, repo *EntRepository, in CreateWakeTriggerInput
 	return id, d
 }
 
-func wakeStatusOf(t *testing.T, repo *EntRepository, id uuid.UUID) *WakeTriggerData {
+func wakeStatusOf(t *testing.T, repo *EntRepository, id uuid.UUID) *domain.WakeTriggerData {
 	t.Helper()
 	d, err := repo.GetWakeTrigger(context.Background(), id)
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestCreateWakeTrigger_should_Reject_When_InputInvalid(t *testing.T) {
 	noSpec := atInput(t, "o", wakeBase, "x")
 	noSpec.Spec = nil
 	noOwner := atInput(t, "", wakeBase, "x")
-	for name, in := range map[string]CreateWakeTriggerInput{"no next_fire_at": noNext, "no spec": noSpec, "no owner": noOwner} {
+	for name, in := range map[string]domain.CreateWakeTriggerInput{"no next_fire_at": noNext, "no spec": noSpec, "no owner": noOwner} {
 		_, _, err := repo.CreateWakeTrigger(ctx, in)
 		assert.Error(t, err, name)
 	}
@@ -99,7 +99,7 @@ func TestCreateWakeTrigger_should_EnforceOwnerCap_When_DedupHitIsExempt(t *testi
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
 	const capLimit = 2
-	mk := func(i int) CreateWakeTriggerInput {
+	mk := func(i int) domain.CreateWakeTriggerInput {
 		in := atInput(t, "owner", wakeBase.Add(time.Duration(i)*time.Hour), "p")
 		in.PendingCap = capLimit
 		return in
@@ -109,7 +109,7 @@ func TestCreateWakeTrigger_should_EnforceOwnerCap_When_DedupHitIsExempt(t *testi
 		require.NoError(t, err)
 	}
 	_, _, err := repo.CreateWakeTrigger(ctx, mk(capLimit))
-	require.ErrorIs(t, err, ErrWakeCapExceeded)
+	require.ErrorIs(t, err, domain.ErrWakeCapExceeded)
 
 	// Re-creating an existing trigger at the cap resolves to it, not a rejection.
 	_, created, err := repo.CreateWakeTrigger(ctx, mk(0))
@@ -370,7 +370,7 @@ func TestMarkWakeSkipped_should_RejectPendingCron_When_RateLimited(t *testing.T)
 
 	cronID, d := mustCreateWake(t, repo, cronInput(t, "o", 5))
 	_, err = repo.MarkWakeSkipped(ctx, cronID, domain.WakeReasonRateLimited, wakeBase)
-	require.ErrorIs(t, err, ErrWakeTransitionRejected)
+	require.ErrorIs(t, err, domain.ErrWakeTransitionRejected)
 
 	later := d.NextFireAt.Add(5 * time.Minute)
 	_, _, err = repo.DeferWakeTrigger(ctx, cronID, d.NextFireAt.Add(time.Minute))
@@ -385,7 +385,7 @@ func TestMarkWakeSkipped_should_RejectPendingCron_When_RateLimited(t *testing.T)
 	assert.True(t, got.NextFireAt.Equal(later))
 
 	_, err = repo.SkipWakeOccurrence(ctx, atID, later)
-	require.ErrorIs(t, err, ErrWakeTransitionRejected)
+	require.ErrorIs(t, err, domain.ErrWakeTransitionRejected)
 }
 
 func TestDeferWakeTrigger_should_SurviveRestartAndResetOnClaim(t *testing.T) {

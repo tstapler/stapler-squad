@@ -34,6 +34,7 @@ go_library(
         "transition_callers.go",
         "uuid.go",
         "wake_trigger.go",
+        "wake_trigger_data.go",
         "workflow_engine_iface.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain",

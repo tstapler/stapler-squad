@@ -20,59 +20,6 @@ import (
 // current time as a parameter instead of reading the clock, so the dispatcher
 // (and tests) control time.
 
-// DefaultWakePendingPerOwnerCap is the fallback for CreateWakeTriggerInput.PendingCap
-// (the "Pending triggers per owner session" row of the plan's Wake limits).
-const DefaultWakePendingPerOwnerCap = 5
-
-var (
-	// ErrWakeCapExceeded: creating the row would push the owner past its live-trigger cap.
-	ErrWakeCapExceeded = errors.New("wake trigger cap exceeded")
-	// ErrWakeTransitionRejected: the requested transition is structurally
-	// forbidden for this row (for example skipping a pending cron row), as
-	// opposed to merely losing a race, which reports applied=false.
-	ErrWakeTransitionRejected = errors.New("wake trigger transition rejected")
-)
-
-// WakeTriggerData is the plain, ent-independent view of a WakeTrigger row.
-type WakeTriggerData struct {
-	ID                 string
-	DedupKey           domain.WakeDedupKey
-	OwnerSessionUUID   string
-	Type               domain.WakeTriggerType
-	Spec               domain.WakeSpec
-	Action             domain.WakeAction
-	Status             domain.WakeStatus
-	EndReason          domain.WakeReason
-	ClaimedAt          *time.Time
-	DeliveredAt        *time.Time
-	DeliveryAttempts   int
-	RateLimitDeferrals int
-	NextFireAt         *time.Time
-	FireCount          int
-	MaxFires           int
-	Generation         int
-	AllowRevive        bool
-	ExpiresAt          *time.Time
-	CreatedAt          time.Time
-	EndedAt            *time.Time
-}
-
-// CreateWakeTriggerInput carries the fields needed by CreateWakeTrigger.
-type CreateWakeTriggerInput struct {
-	OwnerSessionUUID string
-	Spec             domain.WakeSpec
-	Action           domain.WakeAction
-	// NextFireAt is required for time-based specs (at, cron).
-	NextFireAt  *time.Time
-	MaxFires    int // <= 0 means 1
-	Generation  int
-	AllowRevive bool
-	ExpiresAt   *time.Time
-	// PendingCap bounds the owner's live (pending, claimed, needs_revive)
-	// rows; <= 0 means DefaultWakePendingPerOwnerCap.
-	PendingCap int
-}
-
 // SetWakeChangeHook registers fn to run after every WakeTrigger row change.
 // Safe to call while the repository is in use: the wake dispatcher swaps it as
 // agent_wake_triggers flips. A nil fn clears it.
@@ -90,13 +37,13 @@ func (r *EntRepository) notifyWakeChanged() {
 	}
 }
 
-func wakeRowToData(row *ent.WakeTrigger) (*WakeTriggerData, error) {
+func wakeRowToData(row *ent.WakeTrigger) (*domain.WakeTriggerData, error) {
 	typ := domain.WakeTriggerType(row.TriggerType)
 	spec, err := domain.ParseWakeSpec(typ, row.SpecJSON)
 	if err != nil {
 		return nil, fmt.Errorf("wake trigger %s: %w", row.ID, err)
 	}
-	return &WakeTriggerData{
+	return &domain.WakeTriggerData{
 		ID:                 row.ID.String(),
 		DedupKey:           domain.WakeDedupKey(row.DedupKey),
 		OwnerSessionUUID:   row.OwnerSessionUUID,
@@ -120,8 +67,8 @@ func wakeRowToData(row *ent.WakeTrigger) (*WakeTriggerData, error) {
 	}, nil
 }
 
-func wakeRowsToData(rows []*ent.WakeTrigger) ([]*WakeTriggerData, error) {
-	out := make([]*WakeTriggerData, 0, len(rows))
+func wakeRowsToData(rows []*ent.WakeTrigger) ([]*domain.WakeTriggerData, error) {
+	out := make([]*domain.WakeTriggerData, 0, len(rows))
 	for _, row := range rows {
 		d, err := wakeRowToData(row)
 		if err != nil {
@@ -157,14 +104,14 @@ func utcPtr(t *time.Time) *time.Time {
 // re-creating an identical trigger at the cap is not rejected. The cap count
 // runs in the same transaction as the insert (SQLite's single writer connection
 // serializes it against concurrent creates).
-func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in CreateWakeTriggerInput) (data *WakeTriggerData, created bool, err error) {
+func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in domain.CreateWakeTriggerInput) (data *domain.WakeTriggerData, created bool, err error) {
 	key, specJSON, err := validateCreateWakeTriggerInput(in)
 	if err != nil {
 		return nil, false, err
 	}
 	capLimit := in.PendingCap
 	if capLimit <= 0 {
-		capLimit = DefaultWakePendingPerOwnerCap
+		capLimit = domain.DefaultWakePendingPerOwnerCap
 	}
 	maxFires := in.MaxFires
 	if maxFires <= 0 {
@@ -193,7 +140,7 @@ func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in CreateWakeTrig
 		return nil, false, fmt.Errorf("create wake trigger: cap count: %w", err)
 	}
 	if live >= capLimit {
-		return nil, false, fmt.Errorf("%w: owner=%s live=%d cap=%d", ErrWakeCapExceeded, in.OwnerSessionUUID, live, capLimit)
+		return nil, false, fmt.Errorf("%w: owner=%s live=%d cap=%d", domain.ErrWakeCapExceeded, in.OwnerSessionUUID, live, capLimit)
 	}
 
 	create := tx.WakeTrigger.Create().
@@ -220,7 +167,7 @@ func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in CreateWakeTrig
 	return d, true, err
 }
 
-func validateCreateWakeTriggerInput(in CreateWakeTriggerInput) (key domain.WakeDedupKey, specJSON string, err error) {
+func validateCreateWakeTriggerInput(in domain.CreateWakeTriggerInput) (key domain.WakeDedupKey, specJSON string, err error) {
 	if in.Spec == nil {
 		return "", "", errors.New("create wake trigger: spec is required")
 	}
@@ -240,7 +187,7 @@ func validateCreateWakeTriggerInput(in CreateWakeTriggerInput) (key domain.WakeD
 }
 
 // GetWakeTrigger reads one row; ent.IsNotFound reports a missing id.
-func (r *EntRepository) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*WakeTriggerData, error) {
+func (r *EntRepository) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error) {
 	row, err := r.Client.WakeTrigger.Get(ctx, id)
 	if ent.IsNotFound(err) {
 		return nil, fmt.Errorf("get wake trigger %s: %w", id, domain.ErrNotFound)
