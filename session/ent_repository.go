@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/webhookstore"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -41,6 +42,9 @@ import (
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
+	// Store methods (webhook management) are promoted; see initStores.
+	*webhookstore.Store
+
 	Client          *ent.Client
 	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	DbPath          string
@@ -252,6 +256,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	repo.Client = client
+	repo.initStores()
 	repo.driver = drv
 	repo.watchGuidanceWrites(client)
 
@@ -291,8 +296,15 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 	// Not hooked: the client is shared and may already be serving writes, and
 	// appending to its hook slice then would race them. Reads stay uncached.
 	repo := &EntRepository{Client: client}
+	repo.initStores()
 	repo.pendingGuidance.disabled = true
 	return repo
+}
+
+// initStores builds the embedded leaf stores over r.Client; every constructor that
+// sets Client must call it.
+func (r *EntRepository) initStores() {
+	r.Store = webhookstore.New(r.Client)
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)

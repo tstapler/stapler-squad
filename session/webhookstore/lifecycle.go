@@ -1,4 +1,4 @@
-package session
+package webhookstore
 
 import (
 	"context"
@@ -55,8 +55,8 @@ func (in WebhookLifecycleInput) operation() string {
 // always returns its stored result), then ownership by scope, then provenance, and only
 // then the version CAS, so a request that fails provenance learns nothing about the version.
 // Any error rolls back and nothing is written.
-func (r *EntRepository) ApplyWebhookLifecycle(ctx context.Context, in WebhookLifecycleInput) (*WebhookReconcileResult, error) {
-	tx, err := r.Client.Tx(ctx)
+func (s *Store) ApplyWebhookLifecycle(ctx context.Context, in WebhookLifecycleInput) (*WebhookReconcileResult, error) {
+	tx, err := s.client.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin webhook lifecycle transaction: %w", err)
 	}
