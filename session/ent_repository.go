@@ -38,16 +38,6 @@ import (
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
-// EntSchemaCreateMu serializes calls to (*ent.Client).Schema.Create across the
-// whole process, including from other packages that migrate their own
-// *ent.Client against this same generated ent package (e.g.
-// server/analytics.OpenAnalyticsDB). entgo.io/ent/dialect/sql/schema.(*Atlas)
-// has internal package-level state that data-races when multiple goroutines
-// run schema migration concurrently (e.g. `go test -parallel` spinning up
-// many independent repositories/clients at once) — each instance's SQLite
-// connection is isolated, but Atlas itself is not safe for concurrent use.
-var EntSchemaCreateMu sync.Mutex
-
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
@@ -252,9 +242,9 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// package-level state that races under `go test -parallel` when many
 	// NewEntRepository calls run schema creation concurrently.
 	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
-	EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	err := client.Schema.Create(context.Background())
-	EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 	stopSlowWatch()
 	if err != nil {
 		_ = client.Close() // best-effort cleanup; we're already returning the real startup error
