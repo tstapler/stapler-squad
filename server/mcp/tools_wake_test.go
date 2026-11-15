@@ -156,10 +156,10 @@ func TestScheduleWake_should_BuildEachTriggerSpecFromItsArguments(t *testing.T) 
 func TestListWakes_And_CancelWake_should_ScopeToTheVerifiedCaller(t *testing.T) {
 	t.Parallel()
 	r := newToolRig(t)
-	mine := &session.WakeTriggerData{ID: "w-mine", OwnerSessionUUID: "owner-a", Type: domain.WakeTriggerAt, Spec: domain.AtSpec{At: wakeToolsNow}, Status: domain.WakeStatusPending}
-	done := &session.WakeTriggerData{ID: "w-done", OwnerSessionUUID: "owner-a", Type: domain.WakeTriggerAt, Spec: domain.AtSpec{At: wakeToolsNow}, Status: domain.WakeStatusDelivered}
-	theirs := &session.WakeTriggerData{ID: "w-theirs", OwnerSessionUUID: "owner-b", Type: domain.WakeTriggerAt, Spec: domain.AtSpec{At: wakeToolsNow}, Status: domain.WakeStatusPending}
-	r.backend.live = []*session.WakeTriggerData{mine, done, theirs}
+	mine := &domain.WakeTriggerData{ID: "w-mine", OwnerSessionUUID: "owner-a", Type: domain.WakeTriggerAt, Spec: domain.AtSpec{At: wakeToolsNow}, Status: domain.WakeStatusPending}
+	done := &domain.WakeTriggerData{ID: "w-done", OwnerSessionUUID: "owner-a", Type: domain.WakeTriggerAt, Spec: domain.AtSpec{At: wakeToolsNow}, Status: domain.WakeStatusDelivered}
+	theirs := &domain.WakeTriggerData{ID: "w-theirs", OwnerSessionUUID: "owner-b", Type: domain.WakeTriggerAt, Spec: domain.AtSpec{At: wakeToolsNow}, Status: domain.WakeStatusPending}
+	r.backend.live = []*domain.WakeTriggerData{mine, done, theirs}
 
 	list := r.call(as("owner-a"), toolListWakes, map[string]any{})
 	require.True(t, list["success"].(bool))

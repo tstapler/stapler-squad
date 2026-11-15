@@ -36,7 +36,6 @@ go_library(
     deps = [
         "//log",
         "//pkg/events",
-        "//session",
         "//session/dialogpresence",
         "//session/domain",
         "//session/tymux",

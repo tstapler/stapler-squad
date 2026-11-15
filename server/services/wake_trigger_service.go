@@ -41,9 +41,9 @@ const (
 
 // WakeTriggerStore is the storage slice the operator surface reads and writes.
 type WakeTriggerStore interface {
-	ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*session.WakeTriggerData, error)
-	ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*session.WakeTriggerData, error)
-	GetWakeTrigger(ctx context.Context, id uuid.UUID) (*session.WakeTriggerData, error)
+	ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error)
+	ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error)
+	GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error)
 	CancelWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
 	ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*session.GuidanceRequestData, error)
 }
@@ -52,8 +52,8 @@ type WakeTriggerStore interface {
 // when the dispatcher starts; until then, or in a process that is not the
 // leader, cancels fall back to the store and reminders are unavailable.
 type WakeOperatorBackend interface {
-	Schedule(ctx context.Context, req wakes.ScheduleRequest) (*session.WakeTriggerData, bool, error)
-	CancelAny(ctx context.Context, id string) (*session.WakeTriggerData, bool, error)
+	Schedule(ctx context.Context, req wakes.ScheduleRequest) (*domain.WakeTriggerData, bool, error)
+	CancelAny(ctx context.Context, id string) (*domain.WakeTriggerData, bool, error)
 }
 
 // WakeTriggerDeps are the collaborators of WakeTriggerService.
@@ -158,7 +158,7 @@ func (s *WakeTriggerService) ownerFactsCache(ctx context.Context) func(string) w
 	}
 }
 
-func (s *WakeTriggerService) infoOf(r *session.WakeTriggerData, owner wakes.OwnerFacts) *sessionv1.WakeTriggerInfo {
+func (s *WakeTriggerService) infoOf(r *domain.WakeTriggerData, owner wakes.OwnerFacts) *sessionv1.WakeTriggerInfo {
 	condition, zone := wakes.Describe(r.Spec, s.title)
 	info := &sessionv1.WakeTriggerInfo{
 		Id: r.ID, OwnerSessionUuid: r.OwnerSessionUUID, OwnerExists: owner.Exists, OwnerArchived: owner.Archived,
@@ -211,7 +211,7 @@ func (s *WakeTriggerService) CancelWakeTrigger(
 // cancelAny goes through the dispatcher when it runs, so its timer and index
 // forget the row, and straight to the store otherwise (the kill switch is off
 // but Cancel must still work).
-func (s *WakeTriggerService) cancelAny(ctx context.Context, id string) (*session.WakeTriggerData, bool, error) {
+func (s *WakeTriggerService) cancelAny(ctx context.Context, id string) (*domain.WakeTriggerData, bool, error) {
 	if b := s.activeBackend(); b != nil {
 		return b.CancelAny(ctx, id)
 	}
@@ -242,7 +242,7 @@ func (s *WakeTriggerService) CreateOperatorReminder(
 	ctx context.Context, req *connect.Request[sessionv1.CreateOperatorReminderRequest],
 ) (*connect.Response[sessionv1.CreateOperatorReminderResponse], error) {
 	msg := req.Msg
-	reply := func(o sessionv1.ReminderOutcome, row *session.WakeTriggerData) *connect.Response[sessionv1.CreateOperatorReminderResponse] {
+	reply := func(o sessionv1.ReminderOutcome, row *domain.WakeTriggerData) *connect.Response[sessionv1.CreateOperatorReminderResponse] {
 		res := &sessionv1.CreateOperatorReminderResponse{Outcome: o}
 		if row != nil {
 			res.Trigger = s.infoOf(row, wakes.OwnerFacts{Exists: true})

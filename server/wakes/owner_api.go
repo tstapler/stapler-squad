@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Errors the owner-facing API returns; the MCP tools map them to typed results.
@@ -43,14 +43,14 @@ func (d *Dispatcher) NextGeneration(ctx context.Context, owner string) (int, err
 }
 
 // ListByOwner returns the owner's triggers, newest first.
-func (d *Dispatcher) ListByOwner(ctx context.Context, owner string) ([]*session.WakeTriggerData, error) {
+func (d *Dispatcher) ListByOwner(ctx context.Context, owner string) ([]*domain.WakeTriggerData, error) {
 	return d.cfg.Store.ListWakeTriggersByOwner(ctx, owner)
 }
 
 // Cancel cancels the owner's own live trigger id. A trigger of another owner is
 // ErrWakeNotOwner and is left untouched; one already ended reports
 // cancelled=false with its row.
-func (d *Dispatcher) Cancel(ctx context.Context, owner, id string) (row *session.WakeTriggerData, cancelled bool, err error) {
+func (d *Dispatcher) Cancel(ctx context.Context, owner, id string) (row *domain.WakeTriggerData, cancelled bool, err error) {
 	row, err = d.loadWake(ctx, id)
 	if err != nil {
 		return nil, false, err

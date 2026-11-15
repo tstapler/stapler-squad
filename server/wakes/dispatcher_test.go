@@ -89,7 +89,7 @@ func (r *dispatcherRig) eventually(cond func() bool) {
 	require.Eventually(r.t, cond, 5*time.Second, 5*time.Millisecond)
 }
 
-func backlogRow(t *testing.T, r *dispatcherRig, item, kind string, o rowOpts) *session.WakeTriggerData {
+func backlogRow(t *testing.T, r *dispatcherRig, item, kind string, o rowOpts) *domain.WakeTriggerData {
 	t.Helper()
 	o.spec = domain.BacklogEventSpec{ItemID: item, Kind: kind}
 	o.nextFire = nil

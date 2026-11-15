@@ -10,7 +10,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -91,7 +90,7 @@ type WakeInfo struct {
 	AllowRevive bool    `json:"allow_revive"`
 }
 
-func wakeInfoOf(r *session.WakeTriggerData) WakeInfo {
+func wakeInfoOf(r *domain.WakeTriggerData) WakeInfo {
 	return WakeInfo{
 		ID: r.ID, TriggerType: string(r.Type), Condition: r.Spec.Canonical(), Status: string(r.Status),
 		EndReason: string(r.EndReason), Message: r.Action.Payload, NextFireAt: rfc3339Ptr(r.NextFireAt),

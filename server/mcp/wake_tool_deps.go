@@ -14,9 +14,9 @@ import (
 // WakeBackend is the running wake dispatcher as the wake tools use it;
 // *wakes.Dispatcher satisfies it.
 type WakeBackend interface {
-	Schedule(ctx context.Context, req wakes.ScheduleRequest) (*session.WakeTriggerData, bool, error)
-	ListByOwner(ctx context.Context, owner string) ([]*session.WakeTriggerData, error)
-	Cancel(ctx context.Context, owner, id string) (*session.WakeTriggerData, bool, error)
+	Schedule(ctx context.Context, req wakes.ScheduleRequest) (*domain.WakeTriggerData, bool, error)
+	ListByOwner(ctx context.Context, owner string) ([]*domain.WakeTriggerData, error)
+	Cancel(ctx context.Context, owner, id string) (*domain.WakeTriggerData, bool, error)
 	NextGeneration(ctx context.Context, owner string) (int, error)
 	Limits() wakes.Limits
 }

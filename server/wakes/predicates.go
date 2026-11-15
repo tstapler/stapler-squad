@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -59,7 +58,7 @@ func (d *Dispatcher) registerBacklogSource() {
 }
 
 // conditionHolds evaluates the registered predicate for an event-type row.
-func (d *Dispatcher) conditionHolds(ctx context.Context, row *session.WakeTriggerData) (bool, error) {
+func (d *Dispatcher) conditionHolds(ctx context.Context, row *domain.WakeTriggerData) (bool, error) {
 	p, ok := d.predicates[row.Type]
 	if !ok {
 		return false, nil
@@ -106,23 +105,23 @@ func indexKeyFor(spec domain.WakeSpec) (indexKey, bool) {
 // triggerIndex maps (type, key) to the pending event-type rows waiting on it.
 type triggerIndex struct {
 	mu    sync.RWMutex
-	cells map[indexKey]map[string]*session.WakeTriggerData
+	cells map[indexKey]map[string]*domain.WakeTriggerData
 }
 
 func newTriggerIndex() *triggerIndex {
-	return &triggerIndex{cells: map[indexKey]map[string]*session.WakeTriggerData{}}
+	return &triggerIndex{cells: map[indexKey]map[string]*domain.WakeTriggerData{}}
 }
 
 // replace rebuilds the index from the pending rows.
-func (ix *triggerIndex) replace(rows []*session.WakeTriggerData) {
-	cells := map[indexKey]map[string]*session.WakeTriggerData{}
+func (ix *triggerIndex) replace(rows []*domain.WakeTriggerData) {
+	cells := map[indexKey]map[string]*domain.WakeTriggerData{}
 	for _, r := range rows {
 		k, ok := indexKeyFor(r.Spec)
 		if !ok {
 			continue
 		}
 		if cells[k] == nil {
-			cells[k] = map[string]*session.WakeTriggerData{}
+			cells[k] = map[string]*domain.WakeTriggerData{}
 		}
 		cells[k][r.ID] = r
 	}
@@ -131,18 +130,18 @@ func (ix *triggerIndex) replace(rows []*session.WakeTriggerData) {
 	ix.mu.Unlock()
 }
 
-func (ix *triggerIndex) lookup(t domain.WakeTriggerType, key string) []*session.WakeTriggerData {
+func (ix *triggerIndex) lookup(t domain.WakeTriggerType, key string) []*domain.WakeTriggerData {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	cell := ix.cells[indexKey{t, key}]
-	out := make([]*session.WakeTriggerData, 0, len(cell))
+	out := make([]*domain.WakeTriggerData, 0, len(cell))
 	for _, r := range cell {
 		out = append(out, r)
 	}
 	return out
 }
 
-func (ix *triggerIndex) remove(row *session.WakeTriggerData) {
+func (ix *triggerIndex) remove(row *domain.WakeTriggerData) {
 	k, ok := indexKeyFor(row.Spec)
 	if !ok {
 		return

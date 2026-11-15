@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // terminalRetention is how long ended rows stay for the Scheduled prompts list
@@ -98,7 +98,7 @@ const needsReviveAlertAge = time.Hour
 // observeNeedsReviveAge sets the oldest-row gauge and raises one failure-class
 // notification per row that has waited past the alert age. The age counts from
 // the claim, the last timestamp a needs_revive row carries.
-func (d *Dispatcher) observeNeedsReviveAge(rows []*session.WakeTriggerData) {
+func (d *Dispatcher) observeNeedsReviveAge(rows []*domain.WakeTriggerData) {
 	now := d.cfg.Clock.Now()
 	var oldest time.Duration
 	for _, row := range rows {

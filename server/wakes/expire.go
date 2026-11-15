@@ -7,12 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type overdueStore interface {
-	ListPendingWakeTriggers(ctx context.Context) ([]*session.WakeTriggerData, error)
+	ListPendingWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error)
 	MarkWakeMissed(ctx context.Context, id uuid.UUID, reason domain.WakeReason, now time.Time) (bool, error)
 }
 

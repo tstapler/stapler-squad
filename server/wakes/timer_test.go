@@ -20,15 +20,15 @@ var t0 = time.Date(2026, 10, 18, 10, 2, 0, 0, time.UTC)
 
 type claimRecorder struct {
 	mu   sync.Mutex
-	rows []*session.WakeTriggerData
-	ch   chan *session.WakeTriggerData
+	rows []*domain.WakeTriggerData
+	ch   chan *domain.WakeTriggerData
 }
 
 func newClaimRecorder() *claimRecorder {
-	return &claimRecorder{ch: make(chan *session.WakeTriggerData, 16)}
+	return &claimRecorder{ch: make(chan *domain.WakeTriggerData, 16)}
 }
 
-func (r *claimRecorder) onClaimed(_ context.Context, row *session.WakeTriggerData) {
+func (r *claimRecorder) onClaimed(_ context.Context, row *domain.WakeTriggerData) {
 	r.mu.Lock()
 	r.rows = append(r.rows, row)
 	r.mu.Unlock()
@@ -41,7 +41,7 @@ func (r *claimRecorder) count() int {
 	return len(r.rows)
 }
 
-func (r *claimRecorder) next(t *testing.T) *session.WakeTriggerData {
+func (r *claimRecorder) next(t *testing.T) *domain.WakeTriggerData {
 	t.Helper()
 	select {
 	case row := <-r.ch:
@@ -56,7 +56,7 @@ func createAt(t *testing.T, repo *session.EntRepository, owner string, at time.T
 	t.Helper()
 	action, err := domain.NewWakeAction(domain.WakeActionSteerText, "wake up "+at.String())
 	require.NoError(t, err)
-	d, _, err := repo.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	d, _, err := repo.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: owner, Spec: domain.AtSpec{At: at}, Action: action, NextFireAt: &at,
 	})
 	require.NoError(t, err)
@@ -118,16 +118,16 @@ func TestTimekeeper_should_MarkMissedNotClaim_When_RowExpiredBeforeFiring(t *tes
 	repo := session.NewTestEntRepository(t)
 	clock := NewFakeClock(t0)
 	rec := newClaimRecorder()
-	missed := make(chan *session.WakeTriggerData, 1)
+	missed := make(chan *domain.WakeTriggerData, 1)
 
 	at := t0.Add(time.Minute)
 	exp := t0.Add(30 * time.Second)
 	action, _ := domain.NewWakeAction(domain.WakeActionSteerText, "late")
-	d, _, err := repo.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	d, _, err := repo.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: "owner", Spec: domain.AtSpec{At: at}, Action: action, NextFireAt: &at, ExpiresAt: &exp,
 	})
 	require.NoError(t, err)
-	startTimekeeper(t, repo, clock, rec.onClaimed, WithMissedFunc(func(_ context.Context, row *session.WakeTriggerData) { missed <- row }))
+	startTimekeeper(t, repo, clock, rec.onClaimed, WithMissedFunc(func(_ context.Context, row *domain.WakeTriggerData) { missed <- row }))
 
 	clock.BlockUntilTimerAt(at)
 	clock.Advance(time.Minute)
@@ -148,7 +148,7 @@ func createCron(t *testing.T, repo *session.EntRepository, expr string, next tim
 	t.Helper()
 	action, err := domain.NewWakeAction(domain.WakeActionSteerText, "tick")
 	require.NoError(t, err)
-	d, _, err := repo.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	d, _, err := repo.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: "owner", Spec: domain.CronSpec{Expr: expr}, Action: action, NextFireAt: &next, MaxFires: 10,
 	})
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func createCron(t *testing.T, repo *session.EntRepository, expr string, next tim
 // deliverAndRearm stands in for the Story 4.3 delivery step: confirm the write
 // and re-arm the cron row at its next occurrence.
 func deliverAndRearm(t *testing.T, repo *session.EntRepository, sched CronSchedule, clock *FakeClock) ClaimedFunc {
-	return func(ctx context.Context, row *session.WakeTriggerData) {
+	return func(ctx context.Context, row *domain.WakeTriggerData) {
 		id := uuid.MustParse(row.ID)
 		next := sched.NextAfterFire(*row.NextFireAt, clock.Now())
 		applied, err := repo.MarkWakeDelivered(ctx, id, clock.Now(), next)
@@ -178,7 +178,7 @@ func TestTimekeeper_should_FireCronEveryFiveMinutes_When_Rearmed(t *testing.T) {
 
 	fired := make(chan time.Time, 4)
 	deliver := deliverAndRearm(t, repo, sched, clock)
-	startTimekeeper(t, repo, clock, func(ctx context.Context, row *session.WakeTriggerData) {
+	startTimekeeper(t, repo, clock, func(ctx context.Context, row *domain.WakeTriggerData) {
 		fired <- *row.NextFireAt
 		deliver(ctx, row)
 	})
@@ -205,7 +205,7 @@ func TestTimekeeper_should_NotRefireOccurrence_When_ClockJumpsBackAfterFire(t *t
 
 	fired := make(chan time.Time, 4)
 	deliver := deliverAndRearm(t, repo, sched, clock)
-	startTimekeeper(t, repo, clock, func(ctx context.Context, row *session.WakeTriggerData) {
+	startTimekeeper(t, repo, clock, func(ctx context.Context, row *domain.WakeTriggerData) {
 		fired <- *row.NextFireAt
 		clock.Set(first.Add(-time.Hour)) // the clock steps back before delivery is confirmed
 		deliver(ctx, row)
@@ -262,7 +262,7 @@ func TestTimekeeper_Stop_should_ReturnError_When_ContextExpiresBeforeLoopExits(t
 	clock := NewFakeClock(t0)
 	createAt(t, repo, "owner", t0)
 	entered := make(chan struct{}, 1)
-	tk := NewTimekeeper(repo, clock, func(context.Context, *session.WakeTriggerData) {
+	tk := NewTimekeeper(repo, clock, func(context.Context, *domain.WakeTriggerData) {
 		entered <- struct{}{}
 		<-block
 	})

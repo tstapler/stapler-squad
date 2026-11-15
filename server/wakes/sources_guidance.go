@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -69,7 +68,7 @@ func (d *Dispatcher) guidanceDetail(ctx context.Context, id string) string {
 
 // withGuidanceAnswer returns row with the answer's provenance appended when
 // row waits on a guidance request; every other row is returned unchanged.
-func (d *Dispatcher) withGuidanceAnswer(ctx context.Context, row *session.WakeTriggerData) *session.WakeTriggerData {
+func (d *Dispatcher) withGuidanceAnswer(ctx context.Context, row *domain.WakeTriggerData) *domain.WakeTriggerData {
 	spec, ok := row.Spec.(domain.GuidanceAnsweredSpec)
 	if !ok {
 		return row

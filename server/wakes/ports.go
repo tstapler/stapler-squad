@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -19,8 +18,8 @@ import (
 // *session.EntRepository and *session.Storage satisfy it.
 type Store interface {
 	timerStore
-	CreateWakeTrigger(ctx context.Context, in session.CreateWakeTriggerInput) (*session.WakeTriggerData, bool, error)
-	GetWakeTrigger(ctx context.Context, id uuid.UUID) (*session.WakeTriggerData, error)
+	CreateWakeTrigger(ctx context.Context, in domain.CreateWakeTriggerInput) (*domain.WakeTriggerData, bool, error)
+	GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error)
 	MarkWakeDelivered(ctx context.Context, id uuid.UUID, now, nextFire time.Time) (bool, error)
 	MarkWakeNeedsRevive(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
 	ReadmitWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
@@ -28,12 +27,12 @@ type Store interface {
 	DeferWakeTrigger(ctx context.Context, id uuid.UUID, nextFireAt time.Time) (int, bool, error)
 	SkipWakeOccurrence(ctx context.Context, id uuid.UUID, nextFireAt time.Time) (bool, error)
 	RecordWakeDeliveryAttempt(ctx context.Context, id uuid.UUID) error
-	ListPendingWakeTriggers(ctx context.Context) ([]*session.WakeTriggerData, error)
-	ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*session.WakeTriggerData, error)
-	ListNeedsReviveWakeTriggers(ctx context.Context) ([]*session.WakeTriggerData, error)
+	ListPendingWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error)
+	ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*domain.WakeTriggerData, error)
+	ListNeedsReviveWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error)
 	SweepTerminalWakeTriggers(ctx context.Context, now time.Time, retention time.Duration) (int, error)
 	CancelWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
-	ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*session.WakeTriggerData, error)
+	ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error)
 }
 
 // WriteOutcome is what a Steerer.WriteWake attempt did to the pane.
