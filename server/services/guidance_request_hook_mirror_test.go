@@ -79,7 +79,7 @@ func mirrorReq(t *testing.T, callID, question string, replyable bool) HookMirror
 	return HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: callID, Asked: askedFromBody(t, question, "Red", "Green"), Replyable: replyable}
 }
 
-func guidanceRowOf(t *testing.T, s *session.Storage, id string) *session.GuidanceRequestData {
+func guidanceRowOf(t *testing.T, s *session.Storage, id string) *domain.GuidanceRequestData {
 	t.Helper()
 	row, err := s.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
 	require.NoError(t, err)
@@ -151,7 +151,7 @@ type blockingMirrorStore struct {
 	err     error
 }
 
-func (b *blockingMirrorStore) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*session.GuidanceRequestData, error) {
+func (b *blockingMirrorStore) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error) {
 	if b.release != nil {
 		<-b.release
 	}
@@ -345,7 +345,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *te
 	default:
 	}
 
-	agent, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	agent, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: asker, QuestionText: "Ship it?", QuestionType: domain.QuestionTypeYesNo,
 	})
 	require.NoError(t, err)

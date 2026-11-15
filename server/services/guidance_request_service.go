@@ -52,14 +52,14 @@ type DeliveryProbes struct {
 func (s *GuidanceRequestService) SetDeliveryProbes(p DeliveryProbes) { s.probes.Store(&p) }
 
 // toProto is guidanceRequestToProto plus the derived delivery fields.
-func (s *GuidanceRequestService) toProto(d *session.GuidanceRequestData) *sessionv1.GuidanceRequest {
+func (s *GuidanceRequestService) toProto(d *domain.GuidanceRequestData) *sessionv1.GuidanceRequest {
 	out := guidanceRequestToProto(d)
 	out.CancelReason = d.CancelReason.String()
 	p := s.probes.Load()
 	if p == nil || d.Source != domain.QuestionSourceHook && d.Source != domain.QuestionSourceAgentMCP {
 		return out
 	}
-	if d.Status() != session.GuidanceRequestStatusCancelled {
+	if d.Status() != domain.GuidanceRequestStatusCancelled {
 		out.SessionArchived = p.archived(askerSessionOf(d))
 	}
 	switch d.DeliveryState {
@@ -75,7 +75,7 @@ func (s *GuidanceRequestService) toProto(d *session.GuidanceRequestData) *sessio
 
 // askerSessionOf is the session a row's dialog or question lives in: the asker
 // of a hook row, else the session a session-scope request is about.
-func askerSessionOf(d *session.GuidanceRequestData) string {
+func askerSessionOf(d *domain.GuidanceRequestData) string {
 	if d.AskerSessionUUID != "" {
 		return d.AskerSessionUUID
 	}
@@ -132,7 +132,7 @@ func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, t
 // running") true even when nothing is subscribed to the live EventBus at answer
 // time: NotificationHistoryStore.List/GetByID reads the persisted record back
 // later regardless of whether anything was listening when it was published.
-func (s *GuidanceRequestService) notifyAnswered(data *session.GuidanceRequestData) {
+func (s *GuidanceRequestService) notifyAnswered(data *domain.GuidanceRequestData) {
 	// The operator already acted on the pane card; a second toast would duplicate it (ADR-003 rule 3a).
 	// A peer answer reaches the asker through its guidance_answered wake instead.
 	if data.Source == domain.QuestionSourceHook || data.Source == domain.QuestionSourcePeer {
@@ -166,7 +166,7 @@ func (s *GuidanceRequestService) notifyAnswered(data *session.GuidanceRequestDat
 // (session/backlog_lifecycle_triage.go). Errors are logged, never returned —
 // this is a best-effort convenience on top of the durable answer record,
 // which is already retrievable via GetGuidanceRequest regardless.
-func (s *GuidanceRequestService) resumeTriageIfHalted(data *session.GuidanceRequestData) {
+func (s *GuidanceRequestService) resumeTriageIfHalted(data *domain.GuidanceRequestData) {
 	if s.triageRespawner == nil || data.Scope != domain.RequestScopeBacklogItem || data.ItemID == nil {
 		return
 	}
@@ -227,7 +227,7 @@ func connectErrorForItemLink(linkErr *session.ItemLinkError) error {
 }
 
 // encodeGuidanceOptions JSON-encodes a repeated-string options field into the
-// string column session.CreateGuidanceRequestInput.Options expects; "" for
+// string column domain.CreateGuidanceRequestInput.Options expects; "" for
 // no options (matches GuidanceRequestData.Options' "empty/absent for the
 // other two [question] types" convention).
 func encodeGuidanceOptions(opts []string) string {
@@ -256,7 +256,7 @@ func decodeGuidanceOptions(raw string) []string {
 
 // guidanceRequestToProto converts the repository's plain data view into the
 // wire message.
-func guidanceRequestToProto(d *session.GuidanceRequestData) *sessionv1.GuidanceRequest {
+func guidanceRequestToProto(d *domain.GuidanceRequestData) *sessionv1.GuidanceRequest {
 	out := &sessionv1.GuidanceRequest{
 		Id:           d.ID,
 		Scope:        string(d.Scope),
@@ -359,11 +359,11 @@ func (s *GuidanceRequestService) CreateGuidanceRequest(
 		return nil, err
 	}
 
-	// Cap is a caller-supplied parameter (session.CreateGuidanceRequestInput.Cap),
+	// Cap is a caller-supplied parameter (domain.CreateGuidanceRequestInput.Cap),
 	// not something CreateGuidanceRequest reads from config itself — see that
-	// field's doc comment. 0 falls back to session.DefaultGuidanceRequestPendingCap
+	// field's doc comment. 0 falls back to domain.DefaultGuidanceRequestPendingCap
 	// until Phase 4 wires config.GetGuidanceRequestPendingCap() through here.
-	data, err := s.storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	data, err := s.storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        scope,
 		ItemID:       itemID,
 		SessionUUID:  msg.GetSessionUuid(),
@@ -373,7 +373,7 @@ func (s *GuidanceRequestService) CreateGuidanceRequest(
 		Cap:          0,
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrPendingCapExceeded) {
+		if errors.Is(err, domain.ErrPendingCapExceeded) {
 			return nil, connect.NewError(connect.CodeResourceExhausted, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -448,7 +448,7 @@ func (s *GuidanceRequestService) ListGuidanceRequests(
 ) (*connect.Response[sessionv1.ListGuidanceRequestsResponse], error) {
 	scope := domain.RequestScope(req.Msg.GetScope())
 	var (
-		rows         []*session.GuidanceRequestData
+		rows         []*domain.GuidanceRequestData
 		pendingCount int
 		cap          int
 		err          error

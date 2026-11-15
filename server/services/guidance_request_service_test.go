@@ -13,7 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -235,7 +235,7 @@ func TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCa
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
-	for i := 0; i < session.DefaultGuidanceRequestPendingCap; i++ {
+	for i := 0; i < domain.DefaultGuidanceRequestPendingCap; i++ {
 		_, err := svc.CreateGuidanceRequest(ctx, connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
 			Scope:        "standalone",
 			QuestionText: "distinct question " + string(rune('A'+i)),

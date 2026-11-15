@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -77,7 +76,7 @@ func TestRequestOwnerAction_should_ReturnCapExceeded_AtFivthPendingRequest(t *te
 	r := newToolRig(t)
 	sid := uuid.New().String()
 	itemID := r.linkedItem(sid)
-	for i := 0; i < session.DefaultGuidanceRequestPendingCap; i++ {
+	for i := 0; i < domain.DefaultGuidanceRequestPendingCap; i++ {
 		args := ownerActionArgs(itemID)
 		args["question"] = "q" + string(rune('a'+i))
 		require.True(t, r.call(as(sid), toolRequestOwnerAction, args)["success"].(bool))

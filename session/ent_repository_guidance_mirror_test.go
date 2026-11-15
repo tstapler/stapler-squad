@@ -54,8 +54,8 @@ func peerRequest(t *testing.T, text string) domain.GuidanceRequest {
 	return req
 }
 
-func agentSessionInput(text string) CreateGuidanceRequestInput {
-	return CreateGuidanceRequestInput{
+func agentSessionInput(text string) domain.CreateGuidanceRequestInput {
+	return domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: mirrorAsker, QuestionText: text, QuestionType: domain.QuestionTypeYesNo,
 	}
 }
@@ -76,7 +76,7 @@ func TestGuidanceRequest_should_ReadLegacyRowWithDefaults_When_NewColumnsAreMigr
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
 	itemID := createTestBacklogItemForGuidance(t, repo)
-	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeBacklogItem, ItemID: &itemID, QuestionText: "Merge?", QuestionType: domain.QuestionTypeYesNo,
 	})
 	require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestCreateMirroredGuidanceRequest_should_ResolveToTheExistingRow_When_HookC
 	again, err := repo.CreateMirroredGuidanceRequest(ctx, req, 0)
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, again.ID, "a tool_use_id names one call; a resolved row is not recreated")
-	assert.Equal(t, GuidanceRequestStatusCancelled, again.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusCancelled, again.Status())
 }
 
 func TestCreateMirroredGuidanceRequest_should_CoalesceOnPayloadAmongOpenRows_When_HookCallIDIsMissing(t *testing.T) {
@@ -305,7 +305,7 @@ func TestGuidanceRequestPendingCap_should_CountPerSourceClass(t *testing.T) {
 
 				err := other(t, repo)(mirrorCapForTests) // one more of the other class (or this one's 5th)
 				if fullName == otherName {
-					assert.ErrorIs(t, err, ErrPendingCapExceeded, "a class still refuses its own 5th row")
+					assert.ErrorIs(t, err, domain.ErrPendingCapExceeded, "a class still refuses its own 5th row")
 				} else {
 					assert.NoError(t, err, "a full %s class does not block %s", fullName, otherName)
 				}
@@ -470,7 +470,7 @@ func TestListGuidanceByDelivery_should_FilterByStateAndOptionalRoute(t *testing.
 	hookSent := move("toolu_b", domain.DeliveryRouteHookReply, domain.DeliveryStatePending, domain.DeliveryStateSent)
 	move("toolu_c", domain.DeliveryRouteLiveKeystroke, domain.DeliveryStatePending)
 
-	ids := func(rows []*GuidanceRequestData) []string {
+	ids := func(rows []*domain.GuidanceRequestData) []string {
 		out := make([]string, 0, len(rows))
 		for _, r := range rows {
 			out = append(out, r.ID)

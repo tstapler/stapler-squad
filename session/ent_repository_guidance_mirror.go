@@ -25,16 +25,16 @@ import (
 // hook_call_id) with any status, because a tool_use_id names exactly one call
 // and a resolved row must not be recreated; without a call id it falls back to
 // the same payload (or text) among open rows only.
-func coalescePredicates(in CreateGuidanceRequestInput, scopeKey string) []predicate.GuidanceRequest {
+func coalescePredicates(in domain.CreateGuidanceRequestInput, scopeKey string) []predicate.GuidanceRequest {
 	open := []predicate.GuidanceRequest{guidancerequest.AnsweredAtIsNil(), guidancerequest.CancelledAtIsNil()}
-	if in.mirror == nil || in.mirror.Source == domain.QuestionSourceAgentMCP {
+	if in.Mirror == nil || in.Mirror.Source == domain.QuestionSourceAgentMCP {
 		return append([]predicate.GuidanceRequest{
 			guidancerequest.Scope(string(in.Scope)),
 			guidancerequest.ScopeKey(scopeKey),
 			guidancerequest.QuestionText(in.QuestionText),
 		}, open...)
 	}
-	m := in.mirror
+	m := in.Mirror
 	byAsker := []predicate.GuidanceRequest{
 		guidancerequest.Source(string(m.Source)),
 		guidancerequest.AskerSessionUUID(m.AskerSessionUUID),
@@ -119,7 +119,7 @@ func anyDeliveryState(states []domain.DeliveryState) predicate.GuidanceRequest {
 
 // ListOpenGuidanceRequestsByAsker returns the open rows whose asker is
 // askerSessionUUID, newest first, optionally limited to sources.
-func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*GuidanceRequestData, error) {
+func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*domain.GuidanceRequestData, error) {
 	q := r.Client.GuidanceRequest.Query().Where(
 		guidancerequest.AskerSessionUUID(askerSessionUUID),
 		guidancerequest.AnsweredAtIsNil(),
@@ -142,7 +142,7 @@ func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, ask
 // ListGuidanceByDelivery returns the rows in delivery state, newest first,
 // limited to route when route is set. Used to resume acknowledgement tracking
 // after a restart and to find pre-answered rows for a hook.
-func (r *EntRepository) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*GuidanceRequestData, error) {
+func (r *EntRepository) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error) {
 	q := r.Client.GuidanceRequest.Query().Where(guidancerequest.DeliveryState(string(state)))
 	if route != "" {
 		q = q.Where(guidancerequest.DeliveryRoute(string(route)))

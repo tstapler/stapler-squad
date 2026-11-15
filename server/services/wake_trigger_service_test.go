@@ -228,7 +228,7 @@ func TestWakeTriggerService_CancelWake_should_MapToActionOutcomes(t *testing.T) 
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, second.Outcome)
 }
 
-func peerRequest(t *testing.T, r *wakeRig, asker, answerer string) *session.GuidanceRequestData {
+func peerRequest(t *testing.T, r *wakeRig, asker, answerer string) *domain.GuidanceRequestData {
 	t.Helper()
 	req, err := domain.NewGuidanceRequest(domain.GuidanceRequestParams{
 		Scope: domain.RequestScopeSession, SessionUUID: asker, QuestionText: "Which approach?", QuestionType: domain.QuestionTypeShortAnswer,
@@ -288,7 +288,7 @@ func TestWakeTriggerService_CancelPeerHelp_should_ReportAlreadyAnsweredBySession
 
 func TestWakeTriggerService_CancelPeerHelp_should_RefuseANonPeerRequest(t *testing.T) {
 	r := newWakeRig(t, false, wakes.LimitSettings{})
-	row, err := r.storage.CreateGuidanceRequest(context.Background(), session.CreateGuidanceRequestInput{
+	row, err := r.storage.CreateGuidanceRequest(context.Background(), domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeStandalone, QuestionText: "ok?", QuestionType: domain.QuestionTypeShortAnswer,
 	})
 	require.NoError(t, err)

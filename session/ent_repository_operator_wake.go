@@ -30,7 +30,7 @@ func (r *EntRepository) ListWakeTriggersByStatus(ctx context.Context, statuses .
 
 // ListPeerGuidanceRequests returns peer-help rows that are open or were created
 // at or after since, newest first.
-func (r *EntRepository) ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*GuidanceRequestData, error) {
+func (r *EntRepository) ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*domain.GuidanceRequestData, error) {
 	rows, err := r.Client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Source(string(domain.QuestionSourcePeer)),
@@ -48,7 +48,7 @@ func (r *EntRepository) ListPeerGuidanceRequests(ctx context.Context, since time
 }
 
 // ListOpenPeerGuidanceRequests returns the open peer-help rows, oldest first.
-func (r *EntRepository) ListOpenPeerGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
+func (r *EntRepository) ListOpenPeerGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error) {
 	rows, err := r.Client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Source(string(domain.QuestionSourcePeer)),

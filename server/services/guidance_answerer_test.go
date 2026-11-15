@@ -15,7 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-func createPeerRequest(t *testing.T, storage *session.Storage, asker, answerer string) *session.GuidanceRequestData {
+func createPeerRequest(t *testing.T, storage *session.Storage, asker, answerer string) *domain.GuidanceRequestData {
 	t.Helper()
 	req, err := domain.NewGuidanceRequest(domain.GuidanceRequestParams{
 		Scope: domain.RequestScopeSession, SessionUUID: asker, QuestionText: "How do I run the linter?",
@@ -34,7 +34,7 @@ func TestAnswerAs_should_AuthorizeOnlyTheNamedSessionOrTheHuman(t *testing.T) {
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 	peer := createPeerRequest(t, storage, "asker-a", "peer-b")
-	human, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	human, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: "asker-a", QuestionText: "ok?", QuestionType: domain.QuestionTypeShortAnswer,
 	})
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *tes
 	require.NoError(t, err)
 	itemID := uuid.MustParse(item.ID)
 	ask := func(idx int) string {
-		row, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+		row, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 			Scope: domain.RequestScopeBacklogItem, ItemID: &itemID, QuestionType: domain.QuestionTypeMultipleChoice,
 			QuestionText: domain.OwnerActionQuestionPrefix + domain.FormatOwnerActionWaiver(idx) + "AC unattainable",
 			Options:      `["Waive criterion","Keep"]`,

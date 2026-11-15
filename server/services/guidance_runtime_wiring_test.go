@@ -11,7 +11,6 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -68,7 +67,7 @@ func TestListSavedGuidanceAnswers_should_ReturnOnlyAgentCreatedSavedRows(t *test
 		_, err = storage.SetGuidanceDelivery(ctx, uuid.MustParse(id), route, domain.DeliveryStateSavedForLater, 0)
 		require.NoError(t, err)
 	}
-	agent, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	agent, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: mirrorSession, QuestionText: "Which cache?",
 		QuestionType: domain.QuestionTypeMultipleChoice, Options: `["Redis","Memcached"]`,
 	})
@@ -97,14 +96,14 @@ func TestAnswerAs_should_SaveAnAgentAnswerForLater_WhenItsSessionIsStoppedOrArch
 	})
 	ctx := context.Background()
 	ask := func(text string) string {
-		row, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+		row, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 			Scope: domain.RequestScopeSession, SessionUUID: mirrorSession, QuestionText: text,
 			QuestionType: domain.QuestionTypeMultipleChoice, Options: `["Redis","Memcached"]`,
 		})
 		require.NoError(t, err)
 		return row.ID
 	}
-	answer := func(id string) *session.GuidanceRequestData {
+	answer := func(id string) *domain.GuidanceRequestData {
 		_, applied, err := svc.AnswerAs(ctx, id, "Redis", HumanAnswerer())
 		require.NoError(t, err)
 		require.True(t, applied)

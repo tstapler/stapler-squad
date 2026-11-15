@@ -87,7 +87,7 @@ func (h *peerHelpHandlers) requestOwnerAction(ctx context.Context, caller string
 		}
 	}
 	id, _ := uuid.Parse(itemID)
-	row, err := h.storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	row, err := h.storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &id,
 		QuestionText: questionText,
@@ -95,7 +95,7 @@ func (h *peerHelpHandlers) requestOwnerAction(ctx context.Context, caller string
 		Options:      mustJSONStrings(responses),
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrPendingCapExceeded) {
+		if errors.Is(err, domain.ErrPendingCapExceeded) {
 			return errResult(ErrPendingCapExceeded, err.Error(),
 				"Wait for an existing request on this item to be answered; you will be woken when it is."), nil
 		}

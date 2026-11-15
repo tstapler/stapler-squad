@@ -71,7 +71,7 @@ func TestPendingGuidanceCache_Should_ExpireAfterTTL(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1000, 0)
 	c := &pendingGuidanceCache{now: func() time.Time { return now }}
-	c.put(c.gen.Load(), []*GuidanceRequestData{{}})
+	c.put(c.gen.Load(), []*domain.GuidanceRequestData{{}})
 	_, ok := c.get()
 	require.True(t, ok)
 	now = now.Add(pendingGuidanceTTL)
@@ -85,13 +85,13 @@ func TestPendingGuidanceCache_Should_DropFillRacedByWrite(t *testing.T) {
 	c := &pendingGuidanceCache{}
 	readGen := c.gen.Load()
 	c.invalidate() // write lands while the reader's query is in flight
-	c.put(readGen, []*GuidanceRequestData{{}})
+	c.put(readGen, []*domain.GuidanceRequestData{{}})
 	_, ok := c.get()
 	assert.False(t, ok, "rows read before the write must not be cached")
 }
 
-func sessionGuidanceInput(question string) CreateGuidanceRequestInput {
-	return CreateGuidanceRequestInput{
+func sessionGuidanceInput(question string) domain.CreateGuidanceRequestInput {
+	return domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeSession,
 		SessionUUID:  "sess-" + question,
 		QuestionText: question,

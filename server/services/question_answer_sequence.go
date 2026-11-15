@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -52,7 +51,7 @@ func (r *AnswerRouter) sequenceQuestions(ctx context.Context, questionID string)
 		return nil, false
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
-	if err != nil || row.QuestionsJSON == "" || row.Status() != session.GuidanceRequestStatusPending {
+	if err != nil || row.QuestionsJSON == "" || row.Status() != domain.GuidanceRequestStatusPending {
 		return nil, false
 	}
 	return tabbedFromRow(row)

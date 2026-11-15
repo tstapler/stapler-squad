@@ -7,7 +7,6 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -25,7 +24,7 @@ type WakeBackend interface {
 // answer listener (and with it the asker's wake) runs exactly as for a human
 // answer; *services.GuidanceRequestService satisfies it.
 type HelpAnswerer interface {
-	AnswerAs(ctx context.Context, id, answer string, who services.Answerer) (*session.GuidanceRequestData, bool, error)
+	AnswerAs(ctx context.Context, id, answer string, who services.Answerer) (*domain.GuidanceRequestData, bool, error)
 }
 
 // WakeToolDeps are the late-bound collaborators of the five tools. The

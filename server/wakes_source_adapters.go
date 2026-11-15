@@ -70,8 +70,8 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 	}
 	return wakes.GuidanceFacts{
 		Exists:              true,
-		Answered:            data.Status() == session.GuidanceRequestStatusAnswered,
-		Cancelled:           data.Status() == session.GuidanceRequestStatusCancelled,
+		Answered:            data.Status() == domain.GuidanceRequestStatusAnswered,
+		Cancelled:           data.Status() == domain.GuidanceRequestStatusCancelled,
 		CancelReason:        string(data.CancelReason),
 		Answer:              data.Answer,
 		AskerSessionUUID:    askerOf(data),
@@ -82,7 +82,7 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 
 // askerOf is the session a request's question lives in: the hook-row asker,
 // else the session a session-scope request is about.
-func askerOf(d *session.GuidanceRequestData) string {
+func askerOf(d *domain.GuidanceRequestData) string {
 	if d.AskerSessionUUID != "" {
 		return d.AskerSessionUUID
 	}

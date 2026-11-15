@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -75,7 +74,7 @@ func TestWakeTools_should_RefuseForgedHeaderAndCrossSessionProof_WithZeroWrites(
 	assert.Empty(t, r.backend.scheduleCalls(), "no wake was created by any attack")
 	row, err := r.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(pending))
 	require.NoError(t, err)
-	assert.Equal(t, session.GuidanceRequestStatusPending, row.Status(), "the request addressed to B is unchanged")
+	assert.Equal(t, domain.GuidanceRequestStatusPending, row.Status(), "the request addressed to B is unchanged")
 	assert.Empty(t, r.answeredIDs())
 	assert.Empty(t, r.openPeerRows("B"), "request_help created no row as B")
 	for tool := range args {

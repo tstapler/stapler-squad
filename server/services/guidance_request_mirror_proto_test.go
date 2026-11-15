@@ -9,7 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -22,7 +21,7 @@ func TestGuidanceRequestToProto_should_RoundTripMirrorFields_When_MarshalledAndP
 	questionsJSON, err := payload.JSON()
 	require.NoError(t, err)
 	expires := time.Now().Add(domain.PeerHelpTTL).Truncate(time.Millisecond)
-	in := &session.GuidanceRequestData{
+	in := &domain.GuidanceRequestData{
 		ID: "11111111-1111-4111-8111-111111111111", Scope: domain.RequestScopeSession, SessionUUID: "asker",
 		QuestionText: "Which cache?", QuestionType: domain.QuestionTypeMultipleChoice, CreatedAt: time.Now(),
 		Source: domain.QuestionSourcePeer, AskerSessionUUID: "asker", AnswererKind: domain.AnswererKindSession,
@@ -53,7 +52,7 @@ func TestGuidanceRequestToProto_should_RoundTripMirrorFields_When_MarshalledAndP
 }
 
 func TestGuidanceRequestToProto_should_ReportLegacyDefaults_When_RowPredatesMirrorFields(t *testing.T) {
-	out := guidanceRequestToProto(&session.GuidanceRequestData{
+	out := guidanceRequestToProto(&domain.GuidanceRequestData{
 		ID: "id", Scope: domain.RequestScopeStandalone, QuestionText: "q", QuestionType: domain.QuestionTypeYesNo,
 		CreatedAt: time.Now(), Source: domain.QuestionSourceAgentMCP, AnswererKind: domain.AnswererKindHuman,
 	})
@@ -64,7 +63,7 @@ func TestGuidanceRequestToProto_should_ReportLegacyDefaults_When_RowPredatesMirr
 }
 
 func TestGuidanceRequestToProto_should_SendNoQuestions_When_QuestionsJSONIsCorrupt(t *testing.T) {
-	out := guidanceRequestToProto(&session.GuidanceRequestData{
+	out := guidanceRequestToProto(&domain.GuidanceRequestData{
 		ID: "id", Scope: domain.RequestScopeSession, QuestionText: "q", QuestionType: domain.QuestionTypeYesNo,
 		CreatedAt: time.Now(), QuestionsJSON: "{not json",
 	})
