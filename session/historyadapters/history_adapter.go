@@ -1,7 +1,6 @@
-package session
+package historyadapters
 
 import (
-	"github.com/tstapler/stapler-squad/session/historyadapters"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -9,11 +8,11 @@ import (
 // plus one entry here.
 func DefaultHistoryAdapters() *instance.HistoryAdapterRegistry {
 	r, err := instance.NewHistoryAdapterRegistry(
-		historyadapters.NewClaudeAdapter(),
-		historyadapters.NewAgyAdapter(),
-		historyadapters.NewOpencodeAdapter(),
-		historyadapters.NewGeminiAdapter(),
-		historyadapters.NewPiAdapter(),
+		NewClaudeAdapter(),
+		NewAgyAdapter(),
+		NewOpencodeAdapter(),
+		NewGeminiAdapter(),
+		NewPiAdapter(),
 	)
 	if err != nil {
 		panic(err) // unreachable while the list above is non-empty

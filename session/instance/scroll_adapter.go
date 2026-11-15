@@ -44,7 +44,7 @@ type ScrollAdapter interface {
 // resolveScrollAdapter returns the ScrollAdapter that claims to handle
 // program, or nil if none does. This is the single resolution point for
 // scroll-forwarding adapter coverage, mirroring resolveHistoryAdapter
-// (session/history_adapter.go) so adding or changing adapter coverage only
+// (session/historyadapters/history_adapter.go) so adding or changing adapter coverage only
 // needs one edit.
 func resolveScrollAdapter(program string) ScrollAdapter {
 	if claude := NewClaudeScrollAdapter(); claude.CanHandle(program) {

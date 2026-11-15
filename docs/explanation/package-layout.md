@@ -24,7 +24,7 @@ Still a direction (see `project_plans/package-split-ocp/`): `session` (about 81k
 | Use cases and orchestration | Service Layer | `server/services` handlers and the use-case logic in `session/backlog`, `session/prpoller`, `server/reviewqueue` |
 | The wire API | Remote Facade + DTO | ConnectRPC services in `proto/session/v1`; proto messages are the DTOs |
 | External systems (git, tmux, GitHub, push, shells) | Gateway / Adapter behind a port | `session/git/backend` (cli, gogit, native), `session/tmux`, `session/tymux`, `github`, `server/push` |
-| Points of variation | Plugin, Separated Interface, Registry | `ItemSourcePlugin` + `PluginRegistry` (tracker plugins), the process-backend registry (`session/backend_registry.go`), `DefaultStartupMigrations`, the ordered stuck-detector list (`session/backlog/stuck_detectors.go`), the history adapter list (`session/history_adapter.go`) |
+| Points of variation | Plugin, Separated Interface, Registry | `ItemSourcePlugin` + `PluginRegistry` (tracker plugins), the process-backend registry (`session/backend_registry.go`), the history-adapter registry (`session/historyadapters`, a new agent is one adapter file plus one line in `DefaultHistoryAdapters`), `DefaultStartupMigrations`, the ordered stuck-detector list (`session/backlog/stuck_detectors.go`), the history adapter list (`session/history_adapter.go`) |
 | Object graph assembly | Composition root | `server/dependencies.go` (`BuildDependencies`) is the one place that names concrete implementations |
 | Test seams | Gateway fakes | `NewTestEntRepository`, `session/internal/sessiontest`, `server/services/internal/svctest` |
 

@@ -163,30 +163,30 @@ var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this progr
 
 // HistoryPorter translates a session's history from oldProgram's format to newProgram's.
 // SwitchProgram calls it through historyPorterHook so Instance code does not name
-// history_transfer.go and the concrete adapters it drives, which stay above it. A
+// session/historyadapters and the concrete adapters it drives, which stay above it. A
 // marginal seam: one production implementation (PortSessionHistory), no fake yet.
 type HistoryPorter func(ctx context.Context, oldProgram, newProgram string, inst *Instance) error
 
-// historyPorterHook is assigned once, in history_transfer.go's init().
+// historyPorterHook is assigned once, in session/historyadapters/history_transfer.go's init().
 var HistoryPorterHook HistoryPorter
 
 func portSessionHistory(ctx context.Context, oldProgram, newProgram string, inst *Instance) error {
 	if HistoryPorterHook == nil {
-		panic("session: HistoryPorter not registered (history_transfer.go's init must set historyPorterHook)")
+		panic("session: HistoryPorter not registered (session/historyadapters must be linked; see session/history_wiring.go)")
 	}
 	return HistoryPorterHook(ctx, oldProgram, newProgram, inst)
 }
 
 // historyRegistryHook is the registry the Instance resolves history adapters through;
-// assigned once, in history_adapter.go's init(), because the concrete adapters stay
+// assigned once, in session/historyadapters/history_adapter.go's init(), because the concrete adapters stay
 // above the Instance file set.
 var HistoryRegistryHook *HistoryAdapterRegistry
 
 // HistoryRegistry returns the adapter registry this instance resolves programs through;
-// exported for history_transfer.go, which stays outside the Instance package.
+// exported for session/historyadapters, which sits outside the Instance package.
 func (i *Instance) HistoryRegistry() *HistoryAdapterRegistry {
 	if HistoryRegistryHook == nil {
-		panic("session: history adapter registry not registered (history_adapter.go's init must set historyRegistryHook)")
+		panic("session: history adapter registry not registered (session/historyadapters must be linked; see session/history_wiring.go)")
 	}
 	return HistoryRegistryHook
 }
