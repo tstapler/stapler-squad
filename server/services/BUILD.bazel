@@ -339,6 +339,7 @@ go_library(
         "//session/gitprovider",
         "//session/gitwiring",
         "//session/headless",
+        "//session/historyadapters",
         "//session/hostclaim",
         "//session/importer",
         "//session/instance",

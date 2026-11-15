@@ -1,7 +1,7 @@
 package instance
 
 // pi_status_source.go implements Epic 5.2: a PiStatusSource owns a dedicated
-// `pi --mode json` subprocess and maps its event stream (session/pi_adapter.go)
+// `pi --mode json` subprocess and maps its event stream (session/historyadapters/pi_adapter.go)
 // onto the same detection.DetectedStatus vocabulary Claude's PTY-scraping
 // detector produces, so pi sessions render in the session list the same way
 // Claude sessions do (see session/instance_status.go's GetStatus, which
@@ -59,7 +59,7 @@ type piCommandFactory func() *exec.Cmd
 //
 // Unlike claudectl.ClaudeController, PiStatusSource does not scrape PTY output --pi's
 // `--mode json` transcript is a structured, typed event feed (see
-// session/pi_adapter.go), so status inference here is a straightforward
+// session/historyadapters/pi_adapter.go), so status inference here is a straightforward
 // event-to-status mapping rather than regex-based PTY pattern matching.
 type PiStatusSource struct {
 	sessionTitle string
@@ -518,7 +518,7 @@ func (p *PiStatusSource) cancelRelaunchTimer() {
 
 // isPiUnrecognizedTypeError is a small errors.As wrapper kept local to this
 // file so readLoop doesn't need to import "errors" just for this one check,
-// and so the unexported piUnrecognizedTypeError type (session/pi_adapter.go)
+// and so the unexported piUnrecognizedTypeError type (session/historyadapters/pi_adapter.go)
 // stays unexported.
 func isPiUnrecognizedTypeError(err error, target **piUnrecognizedTypeError) bool {
 	//nolint:errorlint // simple unwrap of a single-level, package-local sentinel-ish error type

@@ -1,4 +1,4 @@
-package session
+package historyadapters
 
 import (
 	"errors"
@@ -19,7 +19,7 @@ import (
 // typed event with no "unrecognized type" error, and that the session
 // header's fields are read correctly.
 func TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript(t *testing.T) {
-	file, err := os.Open("detection/testdata/pi/basic_session.jsonl")
+	file, err := os.Open("../detection/testdata/pi/basic_session.jsonl")
 	require.NoError(t, err)
 	defer file.Close()
 

@@ -154,7 +154,7 @@ func (e *piUnrecognizedTypeError) Error() string {
 
 // PiEventReader reads a pi `--mode json` transcript line-by-line, decoding
 // each line into its concrete typed event. It mirrors ClaudeAdapter's
-// JSONL-reading shape (session/claude_adapter.go), but uses bufio.Scanner
+// JSONL-reading shape (session/historyadapters/claude_adapter.go), but uses bufio.Scanner
 // with a raised buffer instead of bufio.NewReader.ReadBytes, since pi's
 // large message_update lines can exceed the default 64KB scanner buffer.
 //

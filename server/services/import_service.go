@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/historyadapters"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/procinfo"
@@ -141,7 +142,7 @@ func (s *ImportService) PreviewImportExternalSession(
 		// sees correlation + program/path; turn_count/excerpt are simply
 		// omitted (zero value). Commit will attempt the same read again.
 		if historyPath, err := s.detector.ResolveFilePath(candidate.Path, result.UUID); err == nil {
-			if turns, err := session.ReadCanonicalTurnsFromFile(historyPath); err == nil {
+			if turns, err := historyadapters.ReadCanonicalTurnsFromFile(historyPath); err == nil {
 				// #nosec G115 -- turn counts are bounded by transcript size, never near int32 max.
 				resp.TurnCount = int32(len(turns))
 				resp.LastMessageExcerpt = lastMessageExcerpt(turns)

@@ -25,7 +25,7 @@ exhaustion). So WAL is already true in practice; what is missing is enforcement 
 | `sessions.db` | `session.NewEntRepository` (`session/ent_repository.go:178`, `ent_client_instrumented.go:48`); `dbobs` names `ent`, `ent-read` (`dbsplit`) | 1 / 4 (`STAPLER_SQUAD_DB_READ_CONNS`) | WAL, busy_timeout 5 s, FK, auto_vacuum=incremental, ent time compat; `synchronous=NORMAL` only if #1289 merges |
 | `analytics.db` | `analytics.OpenAnalyticsDBWithDriver` (`server/analytics/db.go:34`), `dbobs` name `analytics` | 1 / 0 | WAL, NORMAL, FK, busy_timeout 5 s, `wal_autocheckpoint=1000`, auto_vacuum=incremental; no ent time compat |
 | `internal/storage/sqlite.go` `NewSQLiteStore` | no caller (grep finds none outside its file) | n/a | dead code |
-| Foreign / ad hoc: `opencode_adapter.go`, `agy_adapter.go`, `capacity_monitor.go:770`, `database_service.go:236,251,362`, `workflow_engine_replay.go:125`, `scripts/soak` | `sql.Open("sqlite", ...)` via `internal/sqlitedsn` | short-lived | various; opencode/agy files belong to other tools and are opened read-only |
+| Foreign / ad hoc: `session/historyadapters/opencode_adapter.go`, `session/historyadapters/agy_adapter.go`, `capacity_monitor.go:770`, `database_service.go:236,251,362`, `workflow_engine_replay.go:125`, `scripts/soak` | `sql.Open("sqlite", ...)` via `internal/sqlitedsn` | short-lived | various; opencode/agy files belong to other tools and are opened read-only |
 
 Everything else (workflow ledger, claims, audit, tokens, backlog, context history) is in `sessions.db` through one ent client
 (`session/contexthistory/store.go` takes the state `*ent.Client`). Both ent-managed files run `Schema.Create` for the full

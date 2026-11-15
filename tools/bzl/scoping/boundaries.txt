@@ -32,3 +32,4 @@ session/domain/backlogdto !server
 server/services/insights !server/web
 server/services/debugseed !server/web
 session/instance !server
+session/historyadapters !server

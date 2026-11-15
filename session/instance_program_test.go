@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/historyadapters"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -202,14 +203,14 @@ func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T)
 
 // TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies that gemini (the standalone Gemini CLI)
 // is handled by GeminiAdapter (and thus included in the family gate and cross-switch resolution),
-// while remaining excluded from AgyAdapter.CanHandle (session/agy_adapter.go).
+// while remaining excluded from AgyAdapter.CanHandle (session/historyadapters/agy_adapter.go).
 func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
 	t.Parallel()
 	assert.True(t, instance.IsClaudeAntigravityFamily(DefaultHistoryAdapters(), "gemini"))
 	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "gemini"))
 	assert.True(t, instance.IsClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "gemini", "claude"))
-	assert.False(t, NewAgyAdapter().CanHandle("gemini"))
-	assert.True(t, NewGeminiAdapter().CanHandle("gemini"))
+	assert.False(t, historyadapters.NewAgyAdapter().CanHandle("gemini"))
+	assert.True(t, historyadapters.NewGeminiAdapter().CanHandle("gemini"))
 }
 
 // TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState verifies AC0: a
