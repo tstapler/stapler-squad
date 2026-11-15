@@ -22,7 +22,7 @@ import (
 // ConnectRPC surface for durable-guidance-request (see
 // project_plans/durable-guidance-request/implementation/plan.md Phase 2,
 // Story 2.1.2). Delegates every mutation/read to the Phase 1 repository
-// methods (session/ent_repository_guidance.go, forwarded through *Storage
+// methods (session/guidancestore/guidance.go, forwarded through *Storage
 // per session/storage_guidance.go), applying ownership/cap enforcement on
 // top. A concrete type with a single implementation, per the
 // interface-pollution-checklist convention this codebase's other

@@ -143,6 +143,22 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/guidancestore is a persistence leaf embedded by session.EntRepository: it never imports
+        # session, github or server; the one call back into backlog publishing is a constructor argument.
+        isolate_guidancestore:
+          list-mode: strict
+          files:
+            - "**/session/guidancestore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - go.opentelemetry.io/otel
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and EntFlowReader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.

@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -26,7 +26,7 @@ func TestObserveGuidanceAnswer_should_ReportMilliseconds_When_AnsweredSevenAndAH
 }
 
 func TestGuidanceRepository_should_ObserveLatencyAndDeliveryState_When_AnAnswerIsApplied(t *testing.T) {
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_metrics", "Which color?"), 0)
 	require.NoError(t, err)

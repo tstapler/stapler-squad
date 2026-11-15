@@ -487,7 +487,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*backlog
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 	result := BacklogItemToData(item)
-	r.attachPendingGuidance(ctx, &result)
+	r.AttachPendingGuidance(ctx, &result)
 	return &result, nil
 }
 
@@ -982,7 +982,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter backlogdto.
 	if len(parsedUUIDs) == 0 {
 		return result, nil
 	}
-	r.applyPendingGuidanceToData(ctx, result)
+	r.ApplyPendingGuidanceToData(ctx, result)
 
 	// Eager-load item sessions via a single batched query, matching
 	// ListBacklogItemSummaries's pattern, so WatchBacklogItems' fresh-connection
@@ -1090,7 +1090,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter bac
 	if len(parsedUUIDs) == 0 {
 		return summaries, nil
 	}
-	r.applyPendingGuidanceToSummaries(ctx, summaries)
+	r.ApplyPendingGuidanceToSummaries(ctx, summaries)
 
 	// Phase 2+3: load item sessions with review verdicts via edge loading.
 	sessions, err := r.Client.ItemSession.Query().
@@ -1675,7 +1675,7 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 // DeleteBacklogItem permanently removes an item and all its child records.
 func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error {
 	// The item_id FK nulls out via ON DELETE SET NULL, which bypasses ent hooks.
-	defer r.pendingGuidance.invalidate()
+	defer r.InvalidatePendingGuidance()
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
@@ -2175,7 +2175,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 func (r *EntRepository) publishItemChanged(ctx context.Context, item *backlogdto.BacklogItemData, change BacklogItemChange) {
 	r.attachItemSessionsForPublish(ctx, item)
 	r.attachStatusEventsForPublish(ctx, item)
-	r.attachPendingGuidance(ctx, item)
+	r.AttachPendingGuidance(ctx, item)
 	r.publishItemChangedSnapshot(item, change)
 }
 

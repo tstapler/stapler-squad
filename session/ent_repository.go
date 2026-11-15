@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/taggingrule"
 	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
+	"github.com/tstapler/stapler-squad/session/guidancestore"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
@@ -42,14 +43,14 @@ import (
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	// Store methods (webhook management) are promoted; see initStores.
+	// Store methods (webhook management) and Repo methods (guidance requests) are
+	// promoted; see initStores.
 	*webhookstore.Store
+	*guidancestore.Repo
 
-	Client          *ent.Client
-	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
-	DbPath          string
-	pendingGuidance pendingGuidanceCache
-	guidanceHooks   guidanceHooks // set by initStores
+	Client *ent.Client
+	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
+	DbPath string
 
 	// prVerifyCountersTrusted flips true once this process's PR startup
 	// maintenance has succeeded; until then stored verification counters on
@@ -259,7 +260,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	repo.Client = client
 	repo.initStores()
 	repo.driver = drv
-	repo.watchGuidanceWrites(client)
+	repo.WatchGuidanceWrites()
 
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
@@ -298,7 +299,6 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 	// appending to its hook slice then would race them. Reads stay uncached.
 	repo := &EntRepository{Client: client}
 	repo.initStores()
-	repo.pendingGuidance.disabled = true
 	return repo
 }
 
@@ -306,7 +306,10 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 // sets Client must call it.
 func (r *EntRepository) initStores() {
 	r.Store = webhookstore.New(r.Client)
-	r.guidanceHooks = r.newGuidanceHooks()
+	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
+		item := BacklogItemToData(row)
+		r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+	})
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)

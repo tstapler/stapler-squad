@@ -120,7 +120,7 @@ func TestAnswerGuidanceRequest_should_PublishDurableNotification_When_ScopeIsSes
 
 // TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered
 // is the RPC-level half of AC4 (the repository-level race is already covered
-// by session/ent_repository_guidance_test.go): answering an already-answered
+// by session/guidancestore/guidance_test.go): answering an already-answered
 // request returns applied=false with the CURRENT persisted answer rather than
 // overwriting it or erroring.
 func TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered(t *testing.T) {
@@ -228,7 +228,7 @@ func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_SessionScopeMi
 
 // TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCap
 // covers AC6 at the RPC layer (the repository-level race/boundary cases are
-// covered by session/ent_repository_guidance_test.go).
+// covered by session/guidancestore/guidance_test.go).
 func TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCap(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)

@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 func TestCancelGuidanceRequest_should_PersistReason(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_01", "Which cache?"), 0)
 	require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestCancelGuidanceRequest_should_PersistReason(t *testing.T) {
 
 func TestPurgeTerminalGuidanceQuestions_should_ClearOnlyTerminalRowsOlderThanCutoff(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	open, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_open", "Open?"), 0)
 	require.NoError(t, err)

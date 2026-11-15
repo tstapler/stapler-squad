@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 )
 
-// ent_repository_guidance_mirror.go holds the hook and peer halves of the
+// mirror.go holds the hook and peer halves of the
 // GuidanceRequest repository (ADR-003): coalescing keys, the extra columns on
 // create, guarded delivery transitions and queries by asker.
 
@@ -78,7 +78,7 @@ func setMirrorFields(c *ent.GuidanceRequestCreate, m domain.GuidanceRequestParam
 // state (domain.PredecessorsOf): one conditional UPDATE, so a racing writer
 // loses with applied=false instead of overwriting. A route/state pair that
 // cannot coexist is an error and writes nothing.
-func (r *EntRepository) SetDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (applied bool, err error) {
+func (r *Repo) SetDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (applied bool, err error) {
 	if !state.IsValid() || !route.IsValid() {
 		return false, fmt.Errorf("set delivery %s: %w: route %q state %q", id, domain.ErrInvalidDelivery, route, state)
 	}
@@ -88,7 +88,7 @@ func (r *EntRepository) SetDelivery(ctx context.Context, id uuid.UUID, route dom
 	if addAttempts < 0 {
 		return false, fmt.Errorf("set delivery %s: %w", id, errors.New("addAttempts must not be negative"))
 	}
-	n, err := r.Client.GuidanceRequest.Update().
+	n, err := r.client.GuidanceRequest.Update().
 		Where(guidancerequest.ID(id), anyDeliveryState(domain.PredecessorsOf(state))).
 		SetDeliveryRoute(string(route)).
 		SetDeliveryState(string(state)).
@@ -98,7 +98,7 @@ func (r *EntRepository) SetDelivery(ctx context.Context, id uuid.UUID, route dom
 		return false, fmt.Errorf("set delivery %s to %s: %w", id, state, err)
 	}
 	if n > 0 {
-		r.guidanceHooks.delivered(ctx, route, state)
+		countGuidanceDelivery(ctx, route, state)
 	}
 	return n > 0, nil
 }
@@ -119,8 +119,8 @@ func anyDeliveryState(states []domain.DeliveryState) predicate.GuidanceRequest {
 
 // ListOpenGuidanceRequestsByAsker returns the open rows whose asker is
 // askerSessionUUID, newest first, optionally limited to sources.
-func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*domain.GuidanceRequestData, error) {
-	q := r.Client.GuidanceRequest.Query().Where(
+func (r *Repo) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*domain.GuidanceRequestData, error) {
+	q := r.client.GuidanceRequest.Query().Where(
 		guidancerequest.AskerSessionUUID(askerSessionUUID),
 		guidancerequest.AnsweredAtIsNil(),
 		guidancerequest.CancelledAtIsNil(),
@@ -142,8 +142,8 @@ func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, ask
 // ListGuidanceByDelivery returns the rows in delivery state, newest first,
 // limited to route when route is set. Used to resume acknowledgement tracking
 // after a restart and to find pre-answered rows for a hook.
-func (r *EntRepository) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error) {
-	q := r.Client.GuidanceRequest.Query().Where(guidancerequest.DeliveryState(string(state)))
+func (r *Repo) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error) {
+	q := r.client.GuidanceRequest.Query().Where(guidancerequest.DeliveryState(string(state)))
 	if route != "" {
 		q = q.Where(guidancerequest.DeliveryRoute(string(route)))
 	}
