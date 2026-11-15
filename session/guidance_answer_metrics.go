@@ -115,3 +115,16 @@ func (r *EntRepository) recordGuidanceAnswered(ctx context.Context, id uuid.UUID
 	}
 	observeGuidanceAnswer(ctx, row)
 }
+
+// newGuidanceHooks wires the guidance store's callbacks to this repository's
+// metrics and item-change publisher.
+func (r *EntRepository) newGuidanceHooks() guidanceHooks {
+	return guidanceHooks{
+		answered:  r.recordGuidanceAnswered,
+		delivered: countGuidanceDelivery,
+		itemPendingChanged: func(ctx context.Context, row *ent.BacklogItem) {
+			item := BacklogItemToData(row)
+			r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+		},
+	}
+}

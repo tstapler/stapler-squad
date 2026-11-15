@@ -59,6 +59,7 @@ type EntRepository struct {
 	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	DbPath          string
 	pendingGuidance pendingGuidanceCache
+	guidanceHooks   guidanceHooks // set by initStores
 
 	// prVerifyCountersTrusted flips true once this process's PR startup
 	// maintenance has succeeded; until then stored verification counters on
@@ -315,6 +316,7 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 // sets Client must call it.
 func (r *EntRepository) initStores() {
 	r.Store = webhookstore.New(r.Client)
+	r.guidanceHooks = r.newGuidanceHooks()
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
