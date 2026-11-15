@@ -9,9 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/flow"
+	"github.com/tstapler/stapler-squad/session/flowstore"
 )
 
-var _ flow.EventSource = (*EntFlowReader)(nil)
+var _ flow.EventSource = (*flowstore.Reader)(nil)
 
 func TestStreamEvents_should_DeliverItemBatchesEqualToEvents_When_ChunkItemsTwo(t *testing.T) {
 	t.Parallel()
@@ -26,7 +27,7 @@ func TestStreamEvents_should_DeliverItemBatchesEqualToEvents_When_ChunkItemsTwo(
 		}
 		want[flow.ItemID(item.String())] = i + 1
 	}
-	r := NewEntFlowReader(c)
+	r := newFlowReader(c)
 	rng := flow.EventRange{From: base.Add(-time.Hour), To: base.Add(time.Hour), ChunkItems: 2}
 
 	var batches [][]flow.Event
@@ -58,7 +59,7 @@ func TestStreamEvents_should_StopAndReturnCallbackError_When_CallbackFails(t *te
 	}
 	boom := errors.New("boom")
 	calls := 0
-	err := NewEntFlowReader(c).StreamEvents(context.Background(),
+	err := newFlowReader(c).StreamEvents(context.Background(),
 		flow.EventRange{From: at.Add(-time.Hour), ChunkItems: 1},
 		func([]flow.Event) error { calls++; return boom })
 	require.ErrorIs(t, err, boom)
@@ -72,7 +73,7 @@ func TestStreamEvents_should_CancelStatementAndReleaseConnection_When_BatchExcee
 	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	item := seedFlowItem(t, c, "timeout")
 	seedFlowEvent(t, c, item, "idea", "ready", at, "")
-	r := NewEntFlowReader(c)
+	r := newFlowReader(c)
 
 	// A 1ns budget has expired before the driver runs the batch statement.
 	err := r.StreamEvents(context.Background(),
@@ -93,7 +94,7 @@ func TestStreamEvents_should_ReturnNothing_When_RangeHasNoEvents(t *testing.T) {
 	t.Parallel()
 	repo := newFlowTestRepo(t)
 	called := false
-	err := NewEntFlowReader(repo.GetEntClient()).StreamEvents(context.Background(),
+	err := newFlowReader(repo.GetEntClient()).StreamEvents(context.Background(),
 		flow.EventRange{From: time.Now().Add(-time.Hour)},
 		func([]flow.Event) error { called = true; return nil })
 	require.NoError(t, err)

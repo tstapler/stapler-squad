@@ -120,7 +120,7 @@ func TestEntFlowReader_should_ReadOnlySystemWrittenMarkers_When_AgentNoteCarries
 	assert.Equal(t, 1, o1)
 
 	// The aggregator reads through EntFlowReader.Markers: the forged notes must not appear there either.
-	reader := NewEntFlowReader(repo.GetEntClient())
+	reader := newFlowReader(repo.GetEntClient())
 	got, err := reader.Markers(ctx, clk.Now().Add(-time.Hour), clk.Now().Add(time.Hour))
 	require.NoError(t, err)
 	require.Len(t, got, 1, "only the system-written outcome marker")
@@ -140,7 +140,7 @@ func TestEntFlowReader_should_ReturnMarkersOldestFirstAndFirstTimes_When_BothKin
 	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixTrigger, PRFixTriggerCI, 7)
 	clk.Advance(time.Minute)
 	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSkippedActive, 7)
-	reader := NewEntFlowReader(repo.GetEntClient())
+	reader := newFlowReader(repo.GetEntClient())
 
 	got, err := reader.Markers(ctx, t0, t0.Add(time.Hour))
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestEntFlowReader_should_ReturnMarkersOldestFirstAndFirstTimes_When_BothKin
 	assert.Equal(t, t0, capture.FirstTrigger)
 	assert.Equal(t, t0.Add(time.Minute), capture.FirstOutcome)
 
-	empty, err := NewEntFlowReader(repo.GetEntClient()).Markers(ctx, t0.Add(time.Hour), t0.Add(2*time.Hour))
+	empty, err := newFlowReader(repo.GetEntClient()).Markers(ctx, t0.Add(time.Hour), t0.Add(2*time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
@@ -288,11 +288,20 @@ func TestRecordManualNudgeForSession_should_RecordOnlyForBacklogSessionsAndDedup
 	assert.Equal(t, item.ID, got[0].ItemID)
 	assert.Equal(t, ManualNudgeWrite, got[0].Value)
 
-	reader := NewEntFlowReader(repo.GetEntClient())
+	reader := newFlowReader(repo.GetEntClient())
 	capture, err := reader.MarkerCapture(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, t0, capture.FirstNudge)
 	since, err := reader.CaptureSince(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, t0, since)
+}
+
+// The flowstore reader reads marker kinds through the flow package; the writer records them through
+// FlowMarkerKind. They must stay the same strings.
+func TestFlowMarkerKinds_should_MatchFlowPackageKinds(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, string(flow.MarkerPRFixOutcome), string(FlowMarkerPRFixOutcome))
+	require.Equal(t, string(flow.MarkerPRFixTrigger), string(FlowMarkerPRFixTrigger))
+	require.Equal(t, string(flow.MarkerManualNudge), string(FlowMarkerManualNudge))
 }

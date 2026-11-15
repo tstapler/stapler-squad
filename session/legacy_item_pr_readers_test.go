@@ -28,6 +28,7 @@ type itemPRReader struct{ disposition, reason string }
 // No file reads the set yet, so each is scalar-ok today; a file moves to
 // itemPRsSeam when its reads go through itemPRs.
 var legacyItemPRReaders = map[string]itemPRReader{
+	"session/flowstore/markers.go":                               {itemScalarOK, "flow-marker rows carry their own PR number (analytics), not the item scalar"},
 	"session/ent_repository_flow_markers.go":                     {itemScalarOK, "flow-marker rows carry their own PR number (analytics), not the item scalar"},
 	"session/ent_repository_session_pr_guard.go":                 {itemScalarOK, "guard view flags an item scalar no link or tombstone represents, the same rule as the backfill"},
 	"server/mcp/tools_backlog_pr.go":                             {itemScalarOK, "pr_pending reassignment guard compares the one tracked PR number"},

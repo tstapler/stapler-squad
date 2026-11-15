@@ -35,3 +35,5 @@ session/instance !server
 session/historyadapters !server
 session/webhookstore !server
 session/webhookstore !github
+session/flowstore !server
+session/flowstore !github

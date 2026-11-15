@@ -1,4 +1,4 @@
-package session
+package flowstore
 
 import (
 	"context"
@@ -89,7 +89,7 @@ func parseFlowItemIDs(ids []flow.ItemID) []uuid.UUID {
 }
 
 // fetchEvents runs the prefilter query only (a superset of the exact range).
-func (r *EntFlowReader) fetchEvents(ctx context.Context, rng flow.EventRange) ([]flow.Event, error) {
+func (r *Reader) fetchEvents(ctx context.Context, rng flow.EventRange) ([]flow.Event, error) {
 	var rows []flowEventRow
 	err := selectFlowEvents(r.client.BacklogStatusEvent.Query().Where(prefilter(rng)...)).Scan(ctx, &rows)
 	if err != nil {
@@ -104,7 +104,7 @@ func (r *EntFlowReader) fetchEvents(ctx context.Context, rng flow.EventRange) ([
 
 // Events returns events inside rng, ordered by (At, Seq). The SQL prefilter is
 // a superset; the exact filter and ordering use parsed instants (ADR-004).
-func (r *EntFlowReader) Events(ctx context.Context, rng flow.EventRange) ([]flow.Event, error) {
+func (r *Reader) Events(ctx context.Context, rng flow.EventRange) ([]flow.Event, error) {
 	raw, err := r.fetchEvents(ctx, rng)
 	if err != nil {
 		return nil, flowReadErr("events", err)
@@ -122,7 +122,7 @@ func (r *EntFlowReader) Events(ctx context.Context, rng flow.EventRange) ([]flow
 // CountEvents returns an upper bound on len(Events(rng)): the prefilter count,
 // which can exceed the exact count by rows within the offset skew of a bound.
 // It decides chunk-or-refuse only, so the over-count is harmless.
-func (r *EntFlowReader) CountEvents(ctx context.Context, rng flow.EventRange) (int, error) {
+func (r *Reader) CountEvents(ctx context.Context, rng flow.EventRange) (int, error) {
 	n, err := r.client.BacklogStatusEvent.Query().Where(prefilter(rng)...).Count(ctx)
 	return n, flowReadErr("count_events", err)
 }
@@ -134,7 +134,7 @@ func (r *EntFlowReader) CountEvents(ctx context.Context, rng flow.EventRange) (i
 // matching rows, then picks the latest by parsed instant in Go. Exact for
 // ranges starting after 2026-08-18 (all rows +00:00); best-effort inside the
 // older mixed-offset span, where the text MAX can pick a non-latest row.
-func (r *EntFlowReader) LastEventsBefore(ctx context.Context, before time.Time, ids []flow.ItemID) ([]flow.Event, error) {
+func (r *Reader) LastEventsBefore(ctx context.Context, before time.Time, ids []flow.ItemID) ([]flow.Event, error) {
 	uids := parseFlowItemIDs(ids)
 	if len(uids) == 0 {
 		return nil, nil
@@ -161,7 +161,7 @@ func (r *EntFlowReader) LastEventsBefore(ctx context.Context, before time.Time, 
 	return out, nil
 }
 
-func (r *EntFlowReader) latestRowsBefore(ctx context.Context, before time.Time, uids []uuid.UUID) ([]flowEventRow, error) {
+func (r *Reader) latestRowsBefore(ctx context.Context, before time.Time, uids []uuid.UUID) ([]flowEventRow, error) {
 	var maxes []struct {
 		ItemID uuid.UUID `json:"item_id"`
 		Max    string    `json:"max"`

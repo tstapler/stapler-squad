@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/flow"
+	"github.com/tstapler/stapler-squad/session/flowstore"
 )
 
 // Live-size checks. Set SSQ_FLOW_PERF_DB to a `sqlite3 .backup` copy of a
@@ -52,11 +53,11 @@ func openPerfRepo(t *testing.T) *EntRepository {
 	return repo
 }
 
-func perfAggregator(r *EntFlowReader) *flow.Aggregator {
+func perfAggregator(r *flowstore.Reader) *flow.Aggregator {
 	return flow.NewAggregator(flow.Sources{Events: r, Verdicts: r, Stuck: r, Items: r}, flow.SystemClock{})
 }
 
-func timedSummary(t *testing.T, r *EntFlowReader, spec flow.WindowSpec) (time.Duration, *flow.FlowSummary) {
+func timedSummary(t *testing.T, r *flowstore.Reader, spec flow.WindowSpec) (time.Duration, *flow.FlowSummary) {
 	t.Helper()
 	start := time.Now()
 	s, err := perfAggregator(r).Summary(context.Background(), flow.FlowQuery{Window: spec})
@@ -66,7 +67,7 @@ func timedSummary(t *testing.T, r *EntFlowReader, spec flow.WindowSpec) (time.Du
 
 func TestFlowSummary_should_ReportColdAndWarmTimings_When_BackupCopyOfLiveDb(t *testing.T) {
 	repo := openPerfRepo(t)
-	r := NewEntFlowReader(repo.GetEntClient())
+	r := newFlowReader(repo.GetEntClient())
 	for _, tc := range []struct {
 		name string
 		spec flow.WindowSpec
@@ -136,7 +137,7 @@ func TestFlowAllTime_should_KeepConcurrentWritesUnder100ms_When_BackupCopyOfLive
 	repo := openPerfRepo(t)
 	c := repo.GetEntClient()
 	item := c.BacklogItem.Query().FirstX(context.Background()).ID
-	r := NewEntFlowReader(c)
+	r := newFlowReader(c)
 
 	var withReader, withoutReader []time.Duration
 	var readerMs []time.Duration
