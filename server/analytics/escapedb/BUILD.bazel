@@ -20,7 +20,6 @@ go_library(
     deps = [
         "//log",
         "//pkg/analytics",
-        "//session",
         "//session/dbobs",
         "//session/dbpool",
         "//telemetry",

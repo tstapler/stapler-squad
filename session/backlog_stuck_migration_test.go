@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -115,12 +117,12 @@ func Test_migration_should_be_reversible(t *testing.T) {
 	// Serialized via EntSchemaCreateMu — see its doc comment: Atlas has
 	// package-level state that races under t.Parallel() across independent
 	// clients.
-	EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	require.NoError(t, client.Schema.Create(ctx))
 
 	// Second Schema.Create call must be idempotent — no error, no duplicate index.
 	require.NoError(t, client.Schema.Create(ctx))
-	EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 
 	// Sibling tables remain intact and queryable — the additive table did not
 	// disturb them.

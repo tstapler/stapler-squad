@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "entdbtest",
+    srcs = ["entdbtest.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/internal/entdbtest",
+    visibility = ["//session:__subpackages__"],
+    deps = [
+        "//internal/sqlitedsn",
+        "//session/dbpool",
+        "//tools/bzl/ent",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":entdbtest",
+    visibility = ["//session:__subpackages__"],
+)
+
+go_test(
+    name = "entdbtest_test",
+    srcs = ["entdbtest_test.go"],
+    embed = [":entdbtest"],
+    deps = [
+        "//tools/bzl/ent:tag",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)

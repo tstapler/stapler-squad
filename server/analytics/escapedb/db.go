@@ -12,7 +12,6 @@ import (
 
 	"entgo.io/ent/dialect/sql/schema"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/migrate"
@@ -34,9 +33,9 @@ func Open(ctx context.Context, configDir string) (*ent.Client, *dbpool.Database,
 	client := ent.NewClient(ent.Driver(h.Driver()))
 
 	// Serialized like every ent schema create: the Atlas migrator has package-level state.
-	session.EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	err = migrate.Create(ctx, migrate.NewSchema(h.Driver()), []*schema.Table{migrate.EscapeEventsTable})
-	session.EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 	if err == nil {
 		err = EnsureRollupSchema(ctx, h.Driver())
 	}
