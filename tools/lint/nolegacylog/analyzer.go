@@ -66,6 +66,7 @@ var legacyAccessorNames = map[string]bool{
 // migration.
 var protectedFiles = map[string]bool{
 	"backlog_service_triage.go":         true,
+	"backlog_service_headless_run.go":   true,
 	"backlog_service_trigger_triage.go": true,
 	"backlog_lifecycle.go":              true,
 	"backlog_lifecycle_triage.go":       true,

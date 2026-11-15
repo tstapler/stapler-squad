@@ -154,7 +154,7 @@ var bypassInventory = []bypassSite{
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.spawnSessionAfterGates", 1, "GatedTransition as spawn_session_after_gates (Unconditional)"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.respawnTriage", 1, "GatedTransition as respawn_triage"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.skipTriageForNewItem", 1, "GatedTransition as maybe_trigger_triage"),
-	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
+	gated("server/services/backlogsvc/backlog_service_headless_run.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
 	gated("server/services/backlogsvc/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
 	gated("server/services/backlogsvc/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
