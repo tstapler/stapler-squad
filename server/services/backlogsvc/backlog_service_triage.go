@@ -3736,7 +3736,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		// as before. Sessions older than maxTriageSessionAge are treated as orphaned
 		// regardless, to prevent a genuinely hung or leaked call from blocking
 		// re-trigger indefinitely.
-		isHeadless := strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix)
+		isHeadless := services.IsHeadlessRole(is.SessionUUID, services.HeadlessRoleTriage)
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
 		var live bool
 		if isHeadless {

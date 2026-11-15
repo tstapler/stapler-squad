@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -218,8 +219,6 @@ func FromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason { //n
 	}
 }
 
-const headlessTriageUUIDPrefix = "headless-triage-"
-
 // findSupersededSessions returns every tmux-backed (work or review role)
 // ItemSession in sessions that is NOT the current round for its role — i.e.
 // a strictly newer ItemSession of the same role exists for this item. This is
@@ -305,16 +304,43 @@ const ReasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
 // changes-requested-only steer never suppresses a thread nudge.
 const ReasonNameChangesRequested = "CHANGES_REQUESTED"
 
-// headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
-// headless triage path. The orphan guard uses this prefix to identify sessions that have no
-// live tmux process and can be safely tombstoned on re-trigger.
-// headlessReReviewUUIDPrefix is the equivalent prefix for headless re-review sessions.
+// Synthetic ItemSession UUID prefixes of the headless (no tmux pane) roles.
+// Callers must not treat such a UUID as a tmux session.
 const (
-	headlessReReviewUUIDPrefix = "headless-re-review-"
-
-	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
-	// forms for callers outside this package that must not treat a synthetic
-	// headless ItemSession UUID as a tmux session.
-	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
-	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
+	HeadlessTriageUUIDPrefix   = "headless-triage-"
+	HeadlessReReviewUUIDPrefix = "headless-re-review-"
 )
+
+// HeadlessRole names a role whose ItemSessions carry a synthetic UUID prefix.
+type HeadlessRole string
+
+const (
+	HeadlessRoleTriage   HeadlessRole = "triage"
+	HeadlessRoleReReview HeadlessRole = "re-review"
+)
+
+// headlessRolePrefixes is the one role <-> UUID-prefix table; a new headless
+// role is one row. No prefix may be a prefix of another.
+var headlessRolePrefixes = []struct {
+	role   HeadlessRole
+	prefix string
+}{
+	{HeadlessRoleTriage, HeadlessTriageUUIDPrefix},
+	{HeadlessRoleReReview, HeadlessReReviewUUIDPrefix},
+}
+
+// HeadlessRoleOf returns the headless role that minted sessionUUID, if any.
+func HeadlessRoleOf(sessionUUID string) (HeadlessRole, bool) {
+	for _, row := range headlessRolePrefixes {
+		if strings.HasPrefix(sessionUUID, row.prefix) {
+			return row.role, true
+		}
+	}
+	return "", false
+}
+
+// IsHeadlessRole reports whether sessionUUID was minted for role.
+func IsHeadlessRole(sessionUUID string, role HeadlessRole) bool {
+	got, ok := HeadlessRoleOf(sessionUUID)
+	return ok && got == role
+}
