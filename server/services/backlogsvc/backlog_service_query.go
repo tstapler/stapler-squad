@@ -80,7 +80,7 @@ func (s *BacklogService) GetBacklogItem(
 			is := &isSessions[i]
 			if is.Role == string(instance.SessionRoleTriage) &&
 				is.EndedAt == nil &&
-				strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix) &&
+				services.IsHeadlessRole(is.SessionUUID, services.HeadlessRoleTriage) &&
 				time.Since(is.CreatedAt) > maxTriageSessionAge {
 				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now) //nolint:silenttransition ended-at bookkeeping on a read-side stale-triage sweep; the next sweep retries
 				is.EndedAt = &now

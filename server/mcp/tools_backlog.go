@@ -2720,15 +2720,21 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 // has no liveness signal; and any other role (e.g. Jules, which runs remotely)
 // is treated as live. With no liveCheck/backlogSvc wired it fails closed.
 func (h *backlogHandlers) linkedSessionLive(itemID string, is backlogdto.ItemSessionSummary) bool {
-	switch {
-	case strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix):
-		return h.backlogSvc == nil || h.backlogSvc.IsTriageLive(itemID)
-	case strings.HasPrefix(is.SessionUUID, services.HeadlessReReviewUUIDPrefix):
-		return true
+	if role, headless := services.HeadlessRoleOf(is.SessionUUID); headless {
+		return h.headlessLive(role, itemID)
 	}
 	switch is.Role {
 	case instance.SessionRoleWork, instance.SessionRoleReview, instance.SessionRoleDiagnose, instance.SessionRoleTriage:
 		return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
+	}
+	return true
+}
+
+// headlessLive is the per-role liveness policy for headless sessions. Roles
+// without an in-flight record (re-review) count as live.
+func (h *backlogHandlers) headlessLive(role services.HeadlessRole, itemID string) bool {
+	if role == services.HeadlessRoleTriage {
+		return h.backlogSvc == nil || h.backlogSvc.IsTriageLive(itemID)
 	}
 	return true
 }
