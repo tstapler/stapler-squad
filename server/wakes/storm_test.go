@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -20,14 +19,14 @@ type stormRig struct {
 	*dispatcherRig
 	adm     *slotAdmission
 	targets map[string]*spyTarget
-	rows    map[string]*session.WakeTriggerData
+	rows    map[string]*domain.WakeTriggerData
 }
 
 func newStormRig(t *testing.T, slots int, stopped, live int) *stormRig {
 	t.Helper()
 	adm := &slotAdmission{cap: slots}
 	r := newDispatcherRig(t, func(c *Config) { c.Admission = adm })
-	s := &stormRig{dispatcherRig: r, adm: adm, targets: map[string]*spyTarget{}, rows: map[string]*session.WakeTriggerData{}}
+	s := &stormRig{dispatcherRig: r, adm: adm, targets: map[string]*spyTarget{}, rows: map[string]*domain.WakeTriggerData{}}
 	for i := range stopped {
 		name := fmt.Sprintf("stopped-%02d", i)
 		s.targets[name] = stoppedOwner(r.owners, adm, name)

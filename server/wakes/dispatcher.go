@@ -12,7 +12,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -134,14 +133,14 @@ func NewDispatcher(cfg Config) *Dispatcher {
 		RetryInterval: cfg.RetryInterval,
 		BusyHold:      limits.BusyHold,
 		OnEnded:       d.ended,
-		OnNeedsRevive: func(ctx context.Context, row *session.WakeTriggerData) {
+		OnNeedsRevive: func(ctx context.Context, row *domain.WakeTriggerData) {
 			d.spawnRevive(ctx, row)
 		},
 	})
 	d.timer = NewTimekeeper(cfg.Store, cfg.Clock, d.onClaimed,
 		WithMissedFunc(d.timerMissed),
-		WithHoldFunc(func(row *session.WakeTriggerData) bool { return d.typeOff(row.Type) }),
-		WithAdmitFunc(func(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool {
+		WithHoldFunc(func(row *domain.WakeTriggerData) bool { return d.typeOff(row.Type) }),
+		WithAdmitFunc(func(ctx context.Context, row *domain.WakeTriggerData, now time.Time) bool {
 			return d.allowClaim(ctx, row, now)
 		}),
 	)
@@ -187,7 +186,7 @@ func (d *Dispatcher) typeOff(t domain.WakeTriggerType) bool {
 	return d.cfg.TypeEnabled != nil && !d.cfg.TypeEnabled(t)
 }
 
-func (d *Dispatcher) allowClaim(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool {
+func (d *Dispatcher) allowClaim(ctx context.Context, row *domain.WakeTriggerData, now time.Time) bool {
 	return d.admit == nil || d.admit(ctx, row, now)
 }
 
@@ -244,7 +243,7 @@ func (d *Dispatcher) spawn(fn func()) {
 
 // spawnRevive runs processNeedsRevive for row unless one is already in flight
 // for it, so a slow revive does not collect a goroutine per reconcile tick.
-func (d *Dispatcher) spawnRevive(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) spawnRevive(ctx context.Context, row *domain.WakeTriggerData) {
 	d.mu.Lock()
 	if _, busy := d.reviveRunning[row.ID]; busy {
 		d.mu.Unlock()
@@ -411,7 +410,7 @@ func (d *Dispatcher) fireCell(ctx context.Context, ref EventMatch, detail string
 	}
 }
 
-func (d *Dispatcher) cellRowMatches(ctx context.Context, row *session.WakeTriggerData, ref EventMatch) bool {
+func (d *Dispatcher) cellRowMatches(ctx context.Context, row *domain.WakeTriggerData, ref EventMatch) bool {
 	if !ref.Check {
 		return slices.Contains(ref.Kinds, specKind(row.Spec))
 	}
@@ -425,7 +424,7 @@ func (d *Dispatcher) cellRowMatches(ctx context.Context, row *session.WakeTrigge
 // withEventDetail appends a one-line description of the firing event to the
 // in-memory row's payload; the stored payload is untouched, so a re-queue after
 // a restart delivers the plain text.
-func withEventDetail(row *session.WakeTriggerData, detail string) {
+func withEventDetail(row *domain.WakeTriggerData, detail string) {
 	if detail != "" {
 		row.Action.Payload += "\n[event] " + detail
 	}
@@ -433,7 +432,7 @@ func withEventDetail(row *session.WakeTriggerData, detail string) {
 
 // fire claims a pending event-type row and hands it on. Several events for one
 // trigger inside the debounce window collapse into the first.
-func (d *Dispatcher) fire(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) fire(ctx context.Context, row *domain.WakeTriggerData) {
 	id, err := uuid.Parse(row.ID)
 	if err != nil {
 		log.Error("wake dispatcher: unparseable trigger id", "id", row.ID, errKey, err)
@@ -482,7 +481,7 @@ func (d *Dispatcher) debounced(id string, now time.Time) bool {
 }
 
 // expire ends a pending row that passed expires_at before it could fire.
-func (d *Dispatcher) expire(ctx context.Context, id uuid.UUID, row *session.WakeTriggerData, now time.Time) {
+func (d *Dispatcher) expire(ctx context.Context, id uuid.UUID, row *domain.WakeTriggerData, now time.Time) {
 	applied, err := d.cfg.Store.MarkWakeMissed(ctx, id, domain.WakeReasonExpired, now)
 	if err != nil {
 		log.Warn("wake dispatcher: mark missed failed", "trigger_id", row.ID, errKey, err)
@@ -495,13 +494,13 @@ func (d *Dispatcher) expire(ctx context.Context, id uuid.UUID, row *session.Wake
 }
 
 // timerMissed is told of a row that expired before it could be claimed.
-func (d *Dispatcher) timerMissed(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) timerMissed(ctx context.Context, row *domain.WakeTriggerData) {
 	d.cfg.Metrics.Inc(MetricTrigger, string(row.Type), string(domain.WakeStatusMissed))
 	d.ended(ctx, row, domain.WakeStatusMissed, domain.WakeReasonExpired)
 }
 
 // onClaimed routes a freshly claimed (or re-queued) row by action kind.
-func (d *Dispatcher) onClaimed(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) onClaimed(ctx context.Context, row *domain.WakeTriggerData) {
 	d.cfg.Metrics.Inc(MetricTrigger, string(row.Type), string(domain.WakeStatusClaimed))
 	d.index.remove(row)
 	d.dispatchClaimed(ctx, row)
@@ -509,7 +508,7 @@ func (d *Dispatcher) onClaimed(ctx context.Context, row *session.WakeTriggerData
 
 // dispatchClaimed hands a claimed row to its action: reminders are raised at
 // once, steer_text rows go to SteerDelivery.
-func (d *Dispatcher) dispatchClaimed(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) dispatchClaimed(ctx context.Context, row *domain.WakeTriggerData) {
 	if row.Action.Kind == domain.WakeActionNotifyOperator {
 		d.deliverReminder(ctx, row)
 		return
@@ -519,7 +518,7 @@ func (d *Dispatcher) dispatchClaimed(ctx context.Context, row *session.WakeTrigg
 
 // deliverReminder raises the INFO notification of a notify_operator wake. It
 // is exempt from every owner-state guard: nothing is written to the owner.
-func (d *Dispatcher) deliverReminder(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) deliverReminder(ctx context.Context, row *domain.WakeTriggerData) {
 	if d.cfg.Notifier == nil {
 		log.Warn("wake dispatcher: no notifier wired; reminder stays claimed", "trigger_id", row.ID)
 		return
@@ -546,7 +545,7 @@ func (d *Dispatcher) deliverReminder(ctx context.Context, row *session.WakeTrigg
 
 // ended is the one place a missed or skipped row reaches the operator: a
 // failure-class notification, or a digest entry while a reconcile run is open.
-func (d *Dispatcher) ended(_ context.Context, row *session.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason) {
+func (d *Dispatcher) ended(_ context.Context, row *domain.WakeTriggerData, state domain.WakeStatus, reason domain.WakeReason) {
 	if row.Status == domain.WakeStatusClaimed {
 		d.limiter.release(row.ID) // a claim that never delivered gives its hourly slot back
 	}
@@ -564,7 +563,7 @@ func (d *Dispatcher) ended(_ context.Context, row *session.WakeTriggerData, stat
 
 // processNeedsRevive tries to bring a needs_revive row's stopped owner back
 // and, once it is live, re-admits the row into delivery.
-func (d *Dispatcher) processNeedsRevive(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) processNeedsRevive(ctx context.Context, row *domain.WakeTriggerData) {
 	id, err := uuid.Parse(row.ID)
 	if err != nil {
 		return
@@ -591,7 +590,7 @@ func (d *Dispatcher) processNeedsRevive(ctx context.Context, row *session.WakeTr
 	}
 }
 
-func (d *Dispatcher) readmit(ctx context.Context, id uuid.UUID, row *session.WakeTriggerData) {
+func (d *Dispatcher) readmit(ctx context.Context, id uuid.UUID, row *domain.WakeTriggerData) {
 	now := d.cfg.Clock.Now()
 	applied, err := d.cfg.Store.ReadmitWakeTrigger(ctx, id, now)
 	if err != nil {
@@ -606,7 +605,7 @@ func (d *Dispatcher) readmit(ctx context.Context, id uuid.UUID, row *session.Wak
 }
 
 // skipGone ends a needs_revive row whose owner stopped qualifying meanwhile.
-func (d *Dispatcher) skipGone(ctx context.Context, id uuid.UUID, row *session.WakeTriggerData) {
+func (d *Dispatcher) skipGone(ctx context.Context, id uuid.UUID, row *domain.WakeTriggerData) {
 	facts, err := d.cfg.Owners.Owner(ctx, row.OwnerSessionUUID)
 	if err != nil {
 		return
@@ -626,7 +625,7 @@ func (d *Dispatcher) skipGone(ctx context.Context, id uuid.UUID, row *session.Wa
 
 // timerClaim claims row through the same path the timer uses; the entry point
 // tests use to drive one due row without a running loop.
-func (d *Dispatcher) timerClaim(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) timerClaim(ctx context.Context, row *domain.WakeTriggerData) {
 	now := d.cfg.Clock.Now()
 	if !d.allowClaim(ctx, row, now) {
 		return

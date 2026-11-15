@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -46,7 +47,7 @@ func TestWakeTools_should_RefuseForgedHeaderAndCrossSessionProof_WithZeroWrites(
 	r.owners.facts["A"], r.owners.facts["B"] = liveOwner(), liveOwner()
 	// A request addressed to B, created before the attacks, to prove it stays unchanged.
 	pending := createPeerRow(t, r, "A", "B")
-	wake := &session.WakeTriggerData{ID: uuid.NewString(), OwnerSessionUUID: "B"}
+	wake := &domain.WakeTriggerData{ID: uuid.NewString(), OwnerSessionUUID: "B"}
 	r.backend.live = append(r.backend.live, wake)
 
 	args := map[string]map[string]any{

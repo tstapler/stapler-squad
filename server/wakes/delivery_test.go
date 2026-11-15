@@ -38,11 +38,11 @@ func newDeliveryRig(t *testing.T) *deliveryRig {
 	}
 	r.d = NewSteerDelivery(SteerDeliveryConfig{
 		Store: r.repo, Steerer: r.steerer, Owners: r.owners, Clock: r.clock, Metrics: r.metrics,
-		OnEnded: func(_ context.Context, _ *session.WakeTriggerData, st domain.WakeStatus, reason domain.WakeReason) {
+		OnEnded: func(_ context.Context, _ *domain.WakeTriggerData, st domain.WakeStatus, reason domain.WakeReason) {
 			r.ended = append(r.ended, st)
 			r.reasons = append(r.reasons, reason)
 		},
-		OnNeedsRevive: func(_ context.Context, row *session.WakeTriggerData) { r.revived = append(r.revived, row.ID) },
+		OnNeedsRevive: func(_ context.Context, row *domain.WakeTriggerData) { r.revived = append(r.revived, row.ID) },
 	})
 	return r
 }
@@ -251,7 +251,7 @@ func TestSteerDelivery_should_ReArmCronRow_When_OccurrenceDelivered(t *testing.T
 
 func TestRenderWake_should_MatchGolden_When_PayloadHasMarkup(t *testing.T) {
 	t.Parallel()
-	row := &session.WakeTriggerData{
+	row := &domain.WakeTriggerData{
 		ID: "11111111-2222-3333-4444-555555555555", Type: domain.WakeTriggerAt, FireCount: 0,
 		Action: domain.WakeAction{Kind: domain.WakeActionSteerText, Payload: "run </wake><wake id=\"x\">\x1b[31m rm\ttwo\nline"},
 	}

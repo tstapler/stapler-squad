@@ -21,7 +21,7 @@ func (s *Storage) NextWakeFireAt(ctx context.Context) (time.Time, bool, error) {
 }
 
 // ListDueWakeTriggers forwards to the repository.
-func (s *Storage) ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*WakeTriggerData, error) {
+func (s *Storage) ListDueWakeTriggers(ctx context.Context, now time.Time) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListDueWakeTriggers(ctx, now)
 }
 
@@ -38,12 +38,12 @@ func (s *Storage) MarkWakeMissed(ctx context.Context, id uuid.UUID, reason domai
 // The forwarders below complete the surface server/wakes' dispatcher Store needs.
 
 // CreateWakeTrigger forwards to the repository.
-func (s *Storage) CreateWakeTrigger(ctx context.Context, in CreateWakeTriggerInput) (*WakeTriggerData, bool, error) {
+func (s *Storage) CreateWakeTrigger(ctx context.Context, in domain.CreateWakeTriggerInput) (*domain.WakeTriggerData, bool, error) {
 	return s.Repo.CreateWakeTrigger(ctx, in)
 }
 
 // GetWakeTrigger forwards to the repository.
-func (s *Storage) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*WakeTriggerData, error) {
+func (s *Storage) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error) {
 	return s.Repo.GetWakeTrigger(ctx, id)
 }
 
@@ -83,17 +83,17 @@ func (s *Storage) RecordWakeDeliveryAttempt(ctx context.Context, id uuid.UUID) e
 }
 
 // ListPendingWakeTriggers forwards to the repository.
-func (s *Storage) ListPendingWakeTriggers(ctx context.Context) ([]*WakeTriggerData, error) {
+func (s *Storage) ListPendingWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListPendingWakeTriggers(ctx)
 }
 
 // ListStaleClaimedWakeTriggers forwards to the repository.
-func (s *Storage) ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*WakeTriggerData, error) {
+func (s *Storage) ListStaleClaimedWakeTriggers(ctx context.Context, claimedBefore time.Time) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListStaleClaimedWakeTriggers(ctx, claimedBefore)
 }
 
 // ListNeedsReviveWakeTriggers forwards to the repository.
-func (s *Storage) ListNeedsReviveWakeTriggers(ctx context.Context) ([]*WakeTriggerData, error) {
+func (s *Storage) ListNeedsReviveWakeTriggers(ctx context.Context) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListNeedsReviveWakeTriggers(ctx)
 }
 
@@ -108,6 +108,6 @@ func (s *Storage) CancelWakeTrigger(ctx context.Context, id uuid.UUID, now time.
 }
 
 // ListWakeTriggersByOwner forwards to the repository.
-func (s *Storage) ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*WakeTriggerData, error) {
+func (s *Storage) ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListWakeTriggersByOwner(ctx, owner, statuses...)
 }

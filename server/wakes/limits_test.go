@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -220,9 +219,9 @@ func TestSchedule_should_NotWaitOnReviveLock_When_RevivalIsBlocked(t *testing.T)
 	close(release)
 }
 
-func dueAtRows(t *testing.T, r *dispatcherRig, owner string, n int) []*session.WakeTriggerData {
+func dueAtRows(t *testing.T, r *dispatcherRig, owner string, n int) []*domain.WakeTriggerData {
 	t.Helper()
-	rows := make([]*session.WakeTriggerData, n)
+	rows := make([]*domain.WakeTriggerData, n)
 	for i := range n {
 		rows[i] = newRow(t, r.repo, rowOpts{owner: owner, payload: fmt.Sprintf("due %d", i)})
 	}
@@ -266,7 +265,7 @@ func TestRateGate_should_DeferSeventhWake_When_OwnerLimitIsSix(t *testing.T) {
 func TestRateGate_should_DeferAcrossOwners_When_GlobalLimitReached(t *testing.T) {
 	t.Parallel()
 	r := newDispatcherRig(t, func(c *Config) { c.Limits = LimitSettings{FiresGlobalHour: 3} })
-	rows := make([]*session.WakeTriggerData, 0, 4)
+	rows := make([]*domain.WakeTriggerData, 0, 4)
 	for i := range 4 {
 		owner := fmt.Sprintf("owner-g%d", i)
 		r.steerer.setReady(owner, true)
@@ -360,7 +359,7 @@ func TestMetrics_should_ObserveFireLag_When_ATimeTriggerIsClaimedLate(t *testing
 func TestReconcile_should_DeliverAtMostTheOwnerLimitAndDigestTheRest_When_ThirtyOverdueRowsAreReEnabled(t *testing.T) {
 	t.Parallel()
 	r := newDispatcherRig(t)
-	rows := make([]*session.WakeTriggerData, 30)
+	rows := make([]*domain.WakeTriggerData, 30)
 	for i := range rows {
 		due := t0.Add(-time.Duration(60-i) * time.Minute)
 		rows[i] = newRow(t, r.repo, rowOpts{owner: "owner-1", payload: fmt.Sprintf("overdue %d", i), spec: domain.AtSpec{At: due}, nextFire: &due})

@@ -19,7 +19,7 @@ import (
 // ListWakeTriggersByStatus returns the rows of every owner in any of statuses,
 // newest first. The operator list needs all owners, which ListWakeTriggersByOwner
 // cannot give.
-func (r *EntRepository) ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*WakeTriggerData, error) {
+func (r *EntRepository) ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error) {
 	if len(statuses) == 0 {
 		return nil, nil
 	}

@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -191,7 +190,7 @@ func TestSchedule_should_RefuseSessionState_When_TargetIsInAnotherWorkspace(t *t
 	require.NoError(t, r.scheduleAs("owner-1", domain.SessionStateSpec{SessionUUID: "owner-1", State: "idle"}), "itself")
 }
 
-func (s *sourceRig) schedule(spec domain.WakeSpec, payload string) *session.WakeTriggerData {
+func (s *sourceRig) schedule(spec domain.WakeSpec, payload string) *domain.WakeTriggerData {
 	s.t.Helper()
 	action, err := domain.NewWakeAction(domain.WakeActionSteerText, payload)
 	require.NoError(s.t, err)

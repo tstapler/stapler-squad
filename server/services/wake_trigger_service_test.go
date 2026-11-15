@@ -74,12 +74,12 @@ func newWakeRig(t *testing.T, withDispatcher bool, limits wakes.LimitSettings) *
 	return r
 }
 
-func (r *wakeRig) atWake(t *testing.T, owner string, at time.Time, kind domain.WakeActionKind) *session.WakeTriggerData {
+func (r *wakeRig) atWake(t *testing.T, owner string, at time.Time, kind domain.WakeActionKind) *domain.WakeTriggerData {
 	t.Helper()
 	action, err := domain.NewWakeAction(kind, "check back on "+owner)
 	require.NoError(t, err)
 	expires := at.Add(time.Hour)
-	row, _, err := r.storage.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	row, _, err := r.storage.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: owner, Spec: domain.AtSpec{At: at}, Action: action, NextFireAt: &at, ExpiresAt: &expires,
 	})
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestWakeTriggerService_ListWakeTriggers_should_ListOwnerPlainLanguageCondit
 	r.atWake(t, "owner-a", wakeNow.Add(25*time.Minute), domain.WakeActionSteerText)
 	ciAction, err := domain.NewWakeAction(domain.WakeActionSteerText, "ci")
 	require.NoError(t, err)
-	_, _, err = r.storage.CreateWakeTrigger(context.Background(), session.CreateWakeTriggerInput{
+	_, _, err = r.storage.CreateWakeTrigger(context.Background(), domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: "owner-b", Spec: domain.CIEventSpec{Repo: "o/r", Number: 901, Kind: "success"}, Action: ciAction,
 	})
 	require.NoError(t, err)

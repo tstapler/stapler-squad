@@ -36,7 +36,6 @@ go_library(
     deps = [
         "//log",
         "//pkg/events",
-        "//session",
         "//session/dialogpresence",
         "//session/domain",
         "//session/tymux",
@@ -105,8 +104,9 @@ forbidden_deps_test(
     forbidden = [
         "//server/services",
         "//server/mcp",
+        "//session",
     ],
-    required = ["//session"],
+    required = ["//session/domain"],
     target = ":wakes",
     why = "the ports exist so server/services can depend on server/wakes; the reverse import must never appear (replaces deps_test.go)",
 )
