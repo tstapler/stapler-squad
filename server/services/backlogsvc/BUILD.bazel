@@ -15,6 +15,7 @@ go_library(
         "backlog_service_engine_status.go",
         "backlog_service_events.go",
         "backlog_service_gates.go",
+        "backlog_service_headless_run.go",
         "backlog_service_intent.go",
         "backlog_service_jules.go",
         "backlog_service_lifecycle.go",
