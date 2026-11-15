@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -133,7 +132,7 @@ func TestSequence_should_abortWithStaleAndNoFurtherWrites_When_dialogMatchFailsA
 	row := e.row(qid)
 	assert.Equal(t, domain.DeliveryStateAbortedPartial, row.DeliveryState)
 	assert.Nil(t, row.AnsweredAt, "the row stays unanswered, so it stays in Needs you")
-	assert.Equal(t, session.GuidanceRequestStatusPending, row.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusPending, row.Status())
 	assert.Empty(t, e.acks.all(), "nothing to acknowledge for an aborted answer")
 	lines := replyLines(e.auditLines())
 	require.Len(t, lines, 2)

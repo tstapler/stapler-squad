@@ -31,8 +31,8 @@ func createTestBacklogItemForGuidance(t *testing.T, repo *EntRepository) uuid.UU
 // is the pure, no-DB happy path for the derived-status accessor.
 func TestGuidanceRequestData_Status_should_ReturnPending_When_AnsweredAtAndCancelledAtAreNil(t *testing.T) {
 	t.Parallel()
-	data := GuidanceRequestData{}
-	assert.Equal(t, GuidanceRequestStatusPending, data.Status())
+	data := domain.GuidanceRequestData{}
+	assert.Equal(t, domain.GuidanceRequestStatusPending, data.Status())
 }
 
 // TestGuidanceRequestData_Status_should_ReturnCancelled_When_CancelledAtSetEvenIfAnsweredAtAlsoSet
@@ -41,8 +41,8 @@ func TestGuidanceRequestData_Status_should_ReturnPending_When_AnsweredAtAndCance
 func TestGuidanceRequestData_Status_should_ReturnCancelled_When_CancelledAtSetEvenIfAnsweredAtAlsoSet(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	data := GuidanceRequestData{AnsweredAt: &now, CancelledAt: &now}
-	assert.Equal(t, GuidanceRequestStatusCancelled, data.Status())
+	data := domain.GuidanceRequestData{AnsweredAt: &now, CancelledAt: &now}
+	assert.Equal(t, domain.GuidanceRequestStatusCancelled, data.Status())
 }
 
 // TestGuidanceRequestData_Status_should_ReturnAnswered_When_OnlyAnsweredAtSet
@@ -50,8 +50,8 @@ func TestGuidanceRequestData_Status_should_ReturnCancelled_When_CancelledAtSetEv
 func TestGuidanceRequestData_Status_should_ReturnAnswered_When_OnlyAnsweredAtSet(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	data := GuidanceRequestData{AnsweredAt: &now}
-	assert.Equal(t, GuidanceRequestStatusAnswered, data.Status())
+	data := domain.GuidanceRequestData{AnsweredAt: &now}
+	assert.Equal(t, domain.GuidanceRequestStatusAnswered, data.Status())
 }
 
 // TestCreateGuidanceRequest_should_SurviveRepositoryReopen_When_ReadBackAfterRestart
@@ -69,7 +69,7 @@ func TestCreateGuidanceRequest_should_SurviveRepositoryReopen_When_ReadBackAfter
 	require.NoError(t, err)
 
 	itemID := createTestBacklogItemForGuidance(t, repo)
-	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &itemID,
 		QuestionText: "Should triage merge PR #780 into this item's branch?",
@@ -93,14 +93,14 @@ func TestCreateGuidanceRequest_should_SurviveRepositoryReopen_When_ReadBackAfter
 	assert.Equal(t, "Should triage merge PR #780 into this item's branch?", fetched.QuestionText)
 	assert.Equal(t, domain.QuestionTypeYesNo, fetched.QuestionType)
 	assert.Nil(t, fetched.AnsweredAt)
-	assert.Equal(t, GuidanceRequestStatusPending, fetched.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusPending, fetched.Status())
 }
 
 // backlogItemGuidanceInput builds a CreateGuidanceRequestInput for a
 // backlog-item-scoped question, factored out to keep the cap/dedup test
 // bodies below under the house function-length gate.
-func backlogItemGuidanceInput(itemID uuid.UUID, questionText string, cap int) CreateGuidanceRequestInput {
-	return CreateGuidanceRequestInput{
+func backlogItemGuidanceInput(itemID uuid.UUID, questionText string, cap int) domain.CreateGuidanceRequestInput {
+	return domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &itemID,
 		QuestionText: questionText,
@@ -121,7 +121,7 @@ func classifyGuidanceRequestErr(err error, successes, capErrors, otherErrors *in
 	switch {
 	case err == nil:
 		*successes++
-	case errors.Is(err, ErrPendingCapExceeded):
+	case errors.Is(err, domain.ErrPendingCapExceeded):
 		*capErrors++
 	default:
 		*otherErrors++
@@ -225,7 +225,7 @@ func TestCreateGuidanceRequest_should_ResolveToExistingRow_When_IdenticalOpenQue
 	itemID := createTestBacklogItemForGuidance(t, repo)
 	const cap = 4
 
-	var first *GuidanceRequestData
+	var first *domain.GuidanceRequestData
 	for i := 0; i < cap; i++ {
 		row, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionTextForGoroutine(i), cap))
 		require.NoError(t, err)
@@ -263,7 +263,7 @@ func TestCreateGuidanceRequest_should_RejectWithCapExceeded_When_NewDistinctQues
 
 	_, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, "a genuinely new, never-before-asked question", cap))
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPendingCapExceeded)
+	assert.ErrorIs(t, err, domain.ErrPendingCapExceeded)
 
 	rows, count, _, err := repo.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, itemID.String(), cap)
 	require.NoError(t, err)
@@ -279,7 +279,7 @@ func TestAnswerGuidanceRequest_should_PersistExactlyOneAnswer_When_TwoGoroutines
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
 
-	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeSession,
 		SessionUUID:  "7c1e-session",
 		QuestionText: "Use approach A or B?",
@@ -311,7 +311,7 @@ func TestAnswerGuidanceRequest_should_PersistExactlyOneAnswer_When_TwoGoroutines
 
 	fetched, err := repo.GetGuidanceRequest(ctx, id)
 	require.NoError(t, err)
-	assert.Equal(t, GuidanceRequestStatusAnswered, fetched.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusAnswered, fetched.Status())
 	assert.Contains(t, []string{"yes", "no"}, fetched.Answer)
 }
 
@@ -325,7 +325,7 @@ func TestGuidanceRequest_should_SurviveHardDeleteOfOwningBacklogItem_When_NoCasc
 	ctx := context.Background()
 	itemID := createTestBacklogItemForGuidance(t, repo)
 
-	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &itemID,
 		QuestionText: "Merge PR #780 first?",
@@ -339,7 +339,7 @@ func TestGuidanceRequest_should_SurviveHardDeleteOfOwningBacklogItem_When_NoCasc
 
 	fetched, err := repo.GetGuidanceRequest(ctx, id)
 	require.NoError(t, err, "GuidanceRequest row must survive its owning BacklogItem's hard delete")
-	assert.Equal(t, GuidanceRequestStatusPending, fetched.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusPending, fetched.Status())
 }
 
 // TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAskedAfterAnswered
@@ -367,13 +367,13 @@ func TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAsk
 	second, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
 	require.NoError(t, err)
 	assert.NotEqual(t, first.ID, second.ID, "re-asking an identical question after the first was answered must create a NEW row, not resolve to the stale answered one")
-	assert.Equal(t, GuidanceRequestStatusPending, second.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusPending, second.Status())
 
 	// The stale answered row must still be intact and readable, unaffected by
 	// the new row's creation.
 	refetchedFirst, err := repo.GetGuidanceRequest(ctx, firstID)
 	require.NoError(t, err)
-	assert.Equal(t, GuidanceRequestStatusAnswered, refetchedFirst.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusAnswered, refetchedFirst.Status())
 	assert.Equal(t, "yes", refetchedFirst.Answer)
 }
 
@@ -399,7 +399,7 @@ func TestCreateGuidanceRequest_should_CreateFreshRow_When_IdenticalQuestionReAsk
 	second, err := repo.CreateGuidanceRequest(ctx, backlogItemGuidanceInput(itemID, questionText, 4))
 	require.NoError(t, err)
 	assert.NotEqual(t, first.ID, second.ID, "re-asking an identical question after the first was cancelled must create a NEW row")
-	assert.Equal(t, GuidanceRequestStatusPending, second.Status())
+	assert.Equal(t, domain.GuidanceRequestStatusPending, second.Status())
 }
 
 // TestCreateGuidanceRequest_should_CoalesceToExistingRow_When_TwoConcurrentIdenticalOpenQuestions
@@ -464,7 +464,7 @@ func TestListGuidanceRequestsForScope_should_IncludePendingRow_When_ManyNewerAns
 	for _, r := range rows {
 		if r.ID == pending.ID {
 			found = true
-			assert.Equal(t, GuidanceRequestStatusPending, r.Status())
+			assert.Equal(t, domain.GuidanceRequestStatusPending, r.Status())
 		}
 	}
 	assert.True(t, found, "the old still-pending row must still be present in the result despite many newer answered rows")
@@ -486,7 +486,7 @@ func TestListGuidanceRequestsForScope_should_UseCapParam_When_ProvidedNonZero(t 
 
 	_, _, defaultedCap, err := repo.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, itemID.String(), 0)
 	require.NoError(t, err)
-	assert.Equal(t, DefaultGuidanceRequestPendingCap, defaultedCap, "zero must fall back to DefaultGuidanceRequestPendingCap")
+	assert.Equal(t, domain.DefaultGuidanceRequestPendingCap, defaultedCap, "zero must fall back to DefaultGuidanceRequestPendingCap")
 }
 
 func TestGetBacklogItem_HasPendingGuidanceRequests_TracksOpenRequest(t *testing.T) {
@@ -499,7 +499,7 @@ func TestGetBacklogItem_HasPendingGuidanceRequests_TracksOpenRequest(t *testing.
 	require.NoError(t, err)
 	assert.False(t, before.HasPendingGuidanceRequests)
 
-	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &itemID,
 		QuestionText: "Which approach?",
@@ -545,7 +545,7 @@ func TestGuidanceLifecycle_RepublishesItemWithFlag_OnCreateAndCancel(t *testing.
 	pub := &flagRecordingPublisher{}
 	repo.SetItemChangePublisher(pub)
 
-	created, err := repo.CreateGuidanceRequest(ctx, CreateGuidanceRequestInput{
+	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeBacklogItem, ItemID: &itemID, QuestionText: "Q?", QuestionType: domain.QuestionTypeYesNo,
 	})
 	require.NoError(t, err)

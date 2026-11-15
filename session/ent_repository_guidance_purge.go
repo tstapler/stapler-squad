@@ -8,10 +8,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/guidancerequest"
 )
 
-// GuidanceQuestionsRetention is how long a terminal (answered or cancelled) row
-// keeps its questions_json: option text can quote user content (pre-mortem #18).
-const GuidanceQuestionsRetention = 30 * 24 * time.Hour
-
 // PurgeTerminalGuidanceQuestions blanks questions_json on rows that were
 // answered or cancelled before cutoff and returns how many it cleared.
 // question_text stays, so history still reads.

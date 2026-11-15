@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -30,102 +29,10 @@ type guidanceHooks struct {
 	itemPendingChanged func(ctx context.Context, item *ent.BacklogItem)
 }
 
-// DefaultGuidanceRequestPendingCap is the fallback per-(scope, scope_key)
-// pending cap used when a caller doesn't supply one (CreateGuidanceRequestInput.Cap
-// == 0). Phase 4 of the durable-guidance-request plan wires a real,
-// operator-configurable value (config.GetGuidanceRequestPendingCap) through as
-// the Cap field on every call site; until then, this constant is what backs
-// it. Cap is a caller-supplied parameter rather than something this method
-// reads from config directly, so that wiring lands as a call-site change, not
-// a change to CreateGuidanceRequest's own logic.
-const DefaultGuidanceRequestPendingCap = 4
-
-// ErrPendingCapExceeded is returned by CreateGuidanceRequest when creating a
-// new GuidanceRequest would push a scope's open (pending) row count past its
-// cap. Never returned for a call that resolves to a pre-existing open row via
-// dedup — see CreateGuidanceRequest's doc comment.
-var ErrPendingCapExceeded = errors.New("guidance request pending cap exceeded")
-
-// GuidanceRequestStatus is the derived (never stored) lifecycle state of a
-// GuidanceRequest row — see GuidanceRequestData.Status.
-type GuidanceRequestStatus string
-
-const (
-	GuidanceRequestStatusPending   GuidanceRequestStatus = "pending"
-	GuidanceRequestStatusAnswered  GuidanceRequestStatus = "answered"
-	GuidanceRequestStatusCancelled GuidanceRequestStatus = "cancelled"
-)
-
-// GuidanceRequestData is the plain, ent-independent view of a GuidanceRequest
-// row returned by this file's repository methods — mirrors OpenStuckStateData's
-// role of exposing entity data outside the ent package.
-type GuidanceRequestData struct {
-	ID           string
-	Scope        domain.RequestScope
-	ItemID       *uuid.UUID
-	SessionUUID  string
-	QuestionText string
-	QuestionType domain.QuestionType
-	Options      string
-	Answer       string
-	CreatedAt    time.Time
-	NotifiedAt   *time.Time
-	AnsweredAt   *time.Time
-	CancelledAt  *time.Time
-
-	// Live-question and peer-help columns (ADR-003); legacy rows carry the defaults.
-	Source              domain.QuestionSource
-	AskerSessionUUID    string
-	AnswererKind        domain.AnswererKind
-	AnswererSessionUUID string
-	MultiSelect         bool
-	QuestionsJSON       string
-	DeliveryRoute       domain.DeliveryRoute
-	DeliveryState       domain.DeliveryState
-	DeliveryAttempts    int
-	HookCallID          domain.HookCallID
-	ExpiresAt           *time.Time
-	CancelReason        domain.CancelReason
-}
-
-// Status derives the row's lifecycle state from its timestamps. Cancelled is
-// terminal and dominates even if AnsweredAt is also set (matching the Domain
-// Glossary's "cancelled, terminal" rule) — an answer recorded moments before a
-// self-heal sweep cancels the row (e.g. its owning item was hard-deleted in
-// between) should not read back as "answered".
-func (d GuidanceRequestData) Status() GuidanceRequestStatus {
-	switch {
-	case d.CancelledAt != nil:
-		return GuidanceRequestStatusCancelled
-	case d.AnsweredAt != nil:
-		return GuidanceRequestStatusAnswered
-	default:
-		return GuidanceRequestStatusPending
-	}
-}
-
-// CreateGuidanceRequestInput carries the fields needed by CreateGuidanceRequest.
-type CreateGuidanceRequestInput struct {
-	Scope        domain.RequestScope
-	ItemID       *uuid.UUID // required for Scope == RequestScopeBacklogItem
-	SessionUUID  string     // required for Scope == RequestScopeSession
-	QuestionText string
-	QuestionType domain.QuestionType
-	Options      string // JSON-encoded []string; only meaningful for QuestionTypeMultipleChoice
-	// Cap is the caller-supplied per-(scope, scope_key) pending-request limit.
-	// Zero means "use DefaultGuidanceRequestPendingCap" — see that constant's
-	// doc comment for why this is a parameter rather than a config read here.
-	Cap int
-
-	// mirror is set only by CreateMirroredGuidanceRequest, from a request that
-	// passed domain.NewGuidanceRequest; nil means a legacy agent_mcp create.
-	mirror *domain.GuidanceRequestParams
-}
-
-// source is the pending-cap class and coalescing-key selector of this create.
-func (in CreateGuidanceRequestInput) source() domain.QuestionSource {
-	if in.mirror != nil {
-		return in.mirror.Source
+// guidanceInputSource is the pending-cap class and coalescing-key selector of this create.
+func guidanceInputSource(in domain.CreateGuidanceRequestInput) domain.QuestionSource {
+	if in.Mirror != nil {
+		return in.Mirror.Source
 	}
 	return domain.QuestionSourceAgentMCP
 }
@@ -133,7 +40,7 @@ func (in CreateGuidanceRequestInput) source() domain.QuestionSource {
 // scopeKey derives the always-non-null dedup/cap key described on the
 // GuidanceRequest ent schema's scope_key field: item_id's string form for
 // backlog-item scope, the session UUID for session scope, "" for standalone.
-func (in CreateGuidanceRequestInput) scopeKey() string {
+func guidanceInputScopeKey(in domain.CreateGuidanceRequestInput) string {
 	switch in.Scope {
 	case domain.RequestScopeBacklogItem:
 		if in.ItemID != nil {
@@ -149,8 +56,8 @@ func (in CreateGuidanceRequestInput) scopeKey() string {
 
 // guidanceRequestToData converts a generated ent row into the plain
 // GuidanceRequestData view.
-func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
-	return &GuidanceRequestData{
+func guidanceRequestToData(row *ent.GuidanceRequest) *domain.GuidanceRequestData {
+	return &domain.GuidanceRequestData{
 		ID:           row.ID.String(),
 		Scope:        domain.RequestScope(row.Scope),
 		ItemID:       row.ItemID,
@@ -217,7 +124,7 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *GuidanceRequestData {
 //     skipped entirely and that existing row is returned — this is what makes
 //     re-asking an identical question at cap succeed instead of being
 //     cap-rejected.
-func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in CreateGuidanceRequestInput) (*GuidanceRequestData, error) {
+func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
 	return r.createGuidanceRequest(ctx, in)
 }
 
@@ -226,11 +133,11 @@ func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in CreateGuid
 // coalesces on (asker_session_uuid, hook_call_id) and bypasses the legacy
 // (scope, scope_key, question_text) coalesce; every source is capped per
 // (scope, scope_key, source). capLimit <= 0 means the default cap.
-func (r *EntRepository) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*GuidanceRequestData, error) {
+func (r *EntRepository) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error) {
 	p := req.Params()
-	in := CreateGuidanceRequestInput{
+	in := domain.CreateGuidanceRequestInput{
 		Scope: p.Scope, SessionUUID: p.SessionUUID, QuestionText: p.QuestionText,
-		QuestionType: p.QuestionType, Options: p.Options, Cap: capLimit, mirror: &p,
+		QuestionType: p.QuestionType, Options: p.Options, Cap: capLimit, Mirror: &p,
 	}
 	if p.ItemID != "" {
 		itemID, err := uuid.Parse(p.ItemID)
@@ -242,7 +149,7 @@ func (r *EntRepository) CreateMirroredGuidanceRequest(ctx context.Context, req d
 	return r.createGuidanceRequest(ctx, in)
 }
 
-func (r *EntRepository) createGuidanceRequest(ctx context.Context, in CreateGuidanceRequestInput) (*GuidanceRequestData, error) {
+func (r *EntRepository) createGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
 	capLimit, scopeKey, err := validateCreateGuidanceRequestInput(in)
 	if err != nil {
 		return nil, err
@@ -264,7 +171,7 @@ func (r *EntRepository) createGuidanceRequest(ctx context.Context, in CreateGuid
 		// A genuinely new row was just created (not a dedup hit) — the cap
 		// check only ever applies to this case. See the doc comment above for
 		// why dedup must be resolved BEFORE this check runs.
-		if err := enforceGuidanceRequestPendingCap(ctx, tx, in.Scope, scopeKey, in.source(), capLimit); err != nil {
+		if err := enforceGuidanceRequestPendingCap(ctx, tx, in.Scope, scopeKey, guidanceInputSource(in), capLimit); err != nil {
 			return nil, fmt.Errorf("create guidance request: %w", err)
 		}
 	}
@@ -284,7 +191,7 @@ func (r *EntRepository) createGuidanceRequest(ctx context.Context, in CreateGuid
 // validateCreateGuidanceRequestInput fails fast (before any DB round trip) on
 // a malformed scope/question type, and resolves the cap limit and dedup
 // scope_key CreateGuidanceRequest needs for the rest of its work.
-func validateCreateGuidanceRequestInput(in CreateGuidanceRequestInput) (capLimit int, scopeKey string, err error) {
+func validateCreateGuidanceRequestInput(in domain.CreateGuidanceRequestInput) (capLimit int, scopeKey string, err error) {
 	if !in.Scope.IsValid() {
 		return 0, "", fmt.Errorf("invalid guidance request scope %q", in.Scope)
 	}
@@ -293,9 +200,9 @@ func validateCreateGuidanceRequestInput(in CreateGuidanceRequestInput) (capLimit
 	}
 	capLimit = in.Cap
 	if capLimit <= 0 {
-		capLimit = DefaultGuidanceRequestPendingCap
+		capLimit = domain.DefaultGuidanceRequestPendingCap
 	}
-	return capLimit, in.scopeKey(), nil
+	return capLimit, guidanceInputScopeKey(in), nil
 }
 
 // upsertGuidanceRequest performs the dedup-first create: it looks for an
@@ -309,7 +216,7 @@ func validateCreateGuidanceRequestInput(in CreateGuidanceRequestInput) (capLimit
 // instead of resolving forever to that stale resolved row. Comparing the
 // returned ID against candidateID is how the caller distinguishes "created
 // new" from "resolved to existing".
-func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceRequestInput, scopeKey string, candidateID uuid.UUID) (uuid.UUID, error) {
+func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in domain.CreateGuidanceRequestInput, scopeKey string, candidateID uuid.UUID) (uuid.UUID, error) {
 	existing, err := tx.GuidanceRequest.Query().Where(coalescePredicates(in, scopeKey)...).First(ctx)
 	switch {
 	case err == nil:
@@ -329,8 +236,8 @@ func upsertGuidanceRequest(ctx context.Context, tx *ent.Tx, in CreateGuidanceReq
 	if in.ItemID != nil {
 		create = create.SetItemID(*in.ItemID)
 	}
-	if in.mirror != nil {
-		if create, err = setMirrorFields(create, *in.mirror); err != nil {
+	if in.Mirror != nil {
+		if create, err = setMirrorFields(create, *in.Mirror); err != nil {
 			return uuid.Nil, err
 		}
 	}
@@ -366,7 +273,7 @@ func enforceGuidanceRequestPendingCap(ctx context.Context, tx *ent.Tx, scope dom
 			"guidance request pending cap exceeded: scope=%s scope_key=%s source=%s current_count=%d cap=%d",
 			scope, scopeKey, source, count, capLimit,
 		)
-		return fmt.Errorf("%w: scope=%s source=%s current count=%d cap=%d", ErrPendingCapExceeded, scope, source, count, capLimit)
+		return fmt.Errorf("%w: scope=%s source=%s current count=%d cap=%d", domain.ErrPendingCapExceeded, scope, source, count, capLimit)
 	}
 	return nil
 }
@@ -438,7 +345,7 @@ func (r *EntRepository) CancelGuidanceRequest(ctx context.Context, id uuid.UUID,
 }
 
 // GetGuidanceRequest reads a single GuidanceRequest row by id.
-func (r *EntRepository) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*GuidanceRequestData, error) {
+func (r *EntRepository) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error) {
 	row, err := r.Client.GuidanceRequest.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -451,8 +358,8 @@ func (r *EntRepository) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*
 
 // guidanceRequestsToData converts a slice of generated ent rows into their
 // plain GuidanceRequestData view, shared by every List* method below.
-func guidanceRequestsToData(rows []*ent.GuidanceRequest) []*GuidanceRequestData {
-	result := make([]*GuidanceRequestData, 0, len(rows))
+func guidanceRequestsToData(rows []*ent.GuidanceRequest) []*domain.GuidanceRequestData {
+	result := make([]*domain.GuidanceRequestData, 0, len(rows))
 	for _, row := range rows {
 		result = append(result, guidanceRequestToData(row))
 	}
@@ -493,14 +400,14 @@ func (r *EntRepository) queryAnsweredGuidanceRequests(ctx context.Context, scope
 // alongside the current pending count and the cap passed in — bundled
 // together so an RPC handler can populate a ListGuidanceRequestsResponse's
 // pending_count/cap fields directly from this one call.
-func (r *EntRepository) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+func (r *EntRepository) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
 	rows, err := r.queryOpenGuidanceRequests(ctx, scope, scopeKey)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("list pending guidance requests scope=%s scope_key=%s: %w", scope, scopeKey, err)
 	}
 	result := guidanceRequestsToData(rows)
 	if cap <= 0 {
-		cap = DefaultGuidanceRequestPendingCap
+		cap = domain.DefaultGuidanceRequestPendingCap
 	}
 	return result, len(result), cap, nil
 }
@@ -529,9 +436,9 @@ const listGuidanceRequestsForScopeLimit = 50
 // over all non-cancelled rows could silently drop a pending row from the page
 // once enough newer rows were answered, directly undermining AC3/AC4's
 // "pending questions must be visible."
-func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
+func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
 	if cap <= 0 {
-		cap = DefaultGuidanceRequestPendingCap
+		cap = domain.DefaultGuidanceRequestPendingCap
 	}
 
 	pendingRows, err := r.queryOpenGuidanceRequests(ctx, scope, scopeKey)
@@ -554,7 +461,7 @@ func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope 
 
 // ListAllPendingGuidanceRequests returns every open GuidanceRequest row across
 // every scope — backs the nav badge (Epic 7).
-func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
+func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error) {
 	if cached, ok := r.pendingGuidance.get(); ok {
 		return cached, nil
 	}

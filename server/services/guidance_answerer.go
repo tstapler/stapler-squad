@@ -35,7 +35,7 @@ func SessionAnswerer(sessionUUID string) Answerer {
 // authorize says whether who may answer data. A session may answer only a peer
 // request that names it; it can never answer one addressed to the human or to
 // another session (ADR-007 rule 3).
-func (who Answerer) authorize(data *session.GuidanceRequestData) error {
+func (who Answerer) authorize(data *domain.GuidanceRequestData) error {
 	switch who.kind {
 	case domain.AnswererKindHuman:
 		return nil
@@ -52,7 +52,7 @@ func (who Answerer) authorize(data *session.GuidanceRequestData) error {
 // is false when the request was already answered or cancelled; the returned
 // data then reflects the current persisted state. On an applied answer it
 // notifies, resumes triage and calls the answer listener, as for a human answer.
-func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string, who Answerer) (data *session.GuidanceRequestData, applied bool, err error) {
+func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string, who Answerer) (data *domain.GuidanceRequestData, applied bool, err error) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid guidance request id: %w", err)
@@ -87,7 +87,7 @@ func (s *GuidanceRequestService) AnswerAs(ctx context.Context, id, answer string
 // route): the agent reads it with get_guidance_request once the operator resumes the
 // session. Nothing is delivered or revived here (ADR-005 rung 3). Hook and peer rows
 // die with their session and are never saved.
-func (s *GuidanceRequestService) saveForLaterIfSessionEnded(ctx context.Context, data *session.GuidanceRequestData) {
+func (s *GuidanceRequestService) saveForLaterIfSessionEnded(ctx context.Context, data *domain.GuidanceRequestData) {
 	p := s.probes.Load()
 	if p == nil || data.Source != domain.QuestionSourceAgentMCP || data.Scope != domain.RequestScopeSession {
 		return
@@ -111,7 +111,7 @@ func (s *GuidanceRequestService) saveForLaterIfSessionEnded(ctx context.Context,
 
 // recordAnswer persists the answer. The operator answering a peer request
 // stands in for the peer, and the row records that so the asker is told.
-func (s *GuidanceRequestService) recordAnswer(ctx context.Context, id uuid.UUID, answer string, who Answerer, data *session.GuidanceRequestData) (bool, error) {
+func (s *GuidanceRequestService) recordAnswer(ctx context.Context, id uuid.UUID, answer string, who Answerer, data *domain.GuidanceRequestData) (bool, error) {
 	if who.kind == domain.AnswererKindHuman && data.Source == domain.QuestionSourcePeer && data.AnswererSessionUUID != "" {
 		return s.storage.AnswerGuidanceRequestOnBehalf(ctx, id, answer)
 	}
@@ -124,7 +124,7 @@ func (s *GuidanceRequestService) recordAnswer(ctx context.Context, id uuid.UUID,
 // (Answerer.authorize), and the waiver is audited with the request id as its reason.
 // Best-effort: a refused waiver (criterion already done, item archived) is logged and noted
 // on the item rather than failing the already-durable answer.
-func (s *GuidanceRequestService) applyOwnerActionWaiver(ctx context.Context, data *session.GuidanceRequestData) {
+func (s *GuidanceRequestService) applyOwnerActionWaiver(ctx context.Context, data *domain.GuidanceRequestData) {
 	idx, ok := domain.ParseOwnerActionWaiver(data.QuestionText)
 	if !ok || data.Answer != domain.OwnerActionWaiveResponse || data.ItemID == nil {
 		return

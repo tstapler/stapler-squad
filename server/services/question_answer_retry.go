@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -26,7 +25,7 @@ func (r *AnswerRouter) reopenForRetry(ctx context.Context, key QuestionKey) (res
 		return ActionResult{}, false
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
-	if err != nil || row.Status() != session.GuidanceRequestStatusAnswered {
+	if err != nil || row.Status() != domain.GuidanceRequestStatusAnswered {
 		return ActionResult{}, false
 	}
 	switch row.DeliveryState {

@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -17,7 +16,7 @@ func askArgs(peer string) map[string]any {
 	return map[string]any{"peer": peer, "question": "How do I run the linter?"}
 }
 
-func (r *toolRig) openPeerRows(asker string) []*session.GuidanceRequestData {
+func (r *toolRig) openPeerRows(asker string) []*domain.GuidanceRequestData {
 	r.t.Helper()
 	rows, err := r.storage.ListOpenGuidanceRequestsByAsker(context.Background(), asker, domain.QuestionSourcePeer)
 	require.NoError(r.t, err)
@@ -185,7 +184,7 @@ func TestAnswerHelp_should_AcceptOnlyTheNamedAnswerer(t *testing.T) {
 	assert.Equal(t, CodeForbidden, resultCode(byAsker), "the asker cannot answer its own request")
 	row, err := r.storage.GetGuidanceRequest(context.Background(), rowID)
 	require.NoError(t, err)
-	assert.Equal(t, session.GuidanceRequestStatusPending, row.Status(), "the request is unchanged")
+	assert.Equal(t, domain.GuidanceRequestStatusPending, row.Status(), "the request is unchanged")
 	assert.Empty(t, r.answeredIDs())
 
 	ok := r.call(as("B"), toolAnswerHelp, map[string]any{"request_id": id, "answer": "use approach 2"})

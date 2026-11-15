@@ -62,7 +62,7 @@ func (e *hookReplyEnv) openRow(t *testing.T, sessionUUID, question string, multi
 	return row.ID
 }
 
-func (e *hookReplyEnv) row(t *testing.T, id string) *session.GuidanceRequestData {
+func (e *hookReplyEnv) row(t *testing.T, id string) *domain.GuidanceRequestData {
 	t.Helper()
 	row, err := e.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
 	require.NoError(t, err)

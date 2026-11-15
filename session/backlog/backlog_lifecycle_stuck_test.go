@@ -1485,7 +1485,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_OpenGuidanceRequestExi
 	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond staleness, would normally be flagged
 	itemID, err := uuid.Parse(item.ID)
 	require.NoError(t, err)
-	_, err = storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	_, err = storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &itemID,
 		QuestionText: "Should this include the mobile client changes?",

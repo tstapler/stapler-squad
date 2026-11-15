@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -28,7 +29,7 @@ type pendingGuidanceCache struct {
 	disabled bool
 
 	mu    sync.Mutex
-	rows  []*GuidanceRequestData
+	rows  []*domain.GuidanceRequestData
 	gotAt time.Time
 	atGen uint64
 	full  bool
@@ -43,7 +44,7 @@ func (c *pendingGuidanceCache) clock() time.Time {
 
 func (c *pendingGuidanceCache) invalidate() { c.gen.Add(1) }
 
-func (c *pendingGuidanceCache) get() ([]*GuidanceRequestData, bool) {
+func (c *pendingGuidanceCache) get() ([]*domain.GuidanceRequestData, bool) {
 	if c.disabled {
 		return nil, false
 	}
@@ -55,7 +56,7 @@ func (c *pendingGuidanceCache) get() ([]*GuidanceRequestData, bool) {
 	return copyGuidanceRows(c.rows), true
 }
 
-func (c *pendingGuidanceCache) put(readGen uint64, rows []*GuidanceRequestData) {
+func (c *pendingGuidanceCache) put(readGen uint64, rows []*domain.GuidanceRequestData) {
 	if c.disabled {
 		return
 	}
@@ -69,8 +70,8 @@ func (c *pendingGuidanceCache) put(readGen uint64, rows []*GuidanceRequestData) 
 
 // copyGuidanceRows gives each caller its own structs so one caller editing a
 // row cannot change what the next caller sees.
-func copyGuidanceRows(rows []*GuidanceRequestData) []*GuidanceRequestData {
-	out := make([]*GuidanceRequestData, len(rows))
+func copyGuidanceRows(rows []*domain.GuidanceRequestData) []*domain.GuidanceRequestData {
+	out := make([]*domain.GuidanceRequestData, len(rows))
 	for i, r := range rows {
 		cp := *r
 		if r.ItemID != nil {

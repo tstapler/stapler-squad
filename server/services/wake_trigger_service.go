@@ -14,7 +14,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -45,7 +44,7 @@ type WakeTriggerStore interface {
 	ListWakeTriggersByOwner(ctx context.Context, owner string, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error)
 	GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error)
 	CancelWakeTrigger(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
-	ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*session.GuidanceRequestData, error)
+	ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*domain.GuidanceRequestData, error)
 }
 
 // WakeOperatorBackend is the running dispatcher (*wakes.Dispatcher). It is set
@@ -327,15 +326,15 @@ func (s *WakeTriggerService) CancelPeerHelp(ctx context.Context, requestID strin
 	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, s.alreadyEnded(data)), nil
 }
 
-func (s *WakeTriggerService) alreadyEnded(d *session.GuidanceRequestData) string {
-	if d.Status() == session.GuidanceRequestStatusAnswered {
+func (s *WakeTriggerService) alreadyEnded(d *domain.GuidanceRequestData) string {
+	if d.Status() == domain.GuidanceRequestStatusAnswered {
 		return fmt.Sprintf("Already answered by %s: %s", s.answeredBy(d), d.Answer)
 	}
 	return "Already cancelled"
 }
 
 // answeredBy names who answered: the operator, or the peer session.
-func (s *WakeTriggerService) answeredBy(d *session.GuidanceRequestData) string {
+func (s *WakeTriggerService) answeredBy(d *domain.GuidanceRequestData) string {
 	if d.AnswererKind == domain.AnswererKindSession {
 		return s.title(d.AnswererSessionUUID)
 	}

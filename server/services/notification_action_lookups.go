@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -30,7 +29,7 @@ func (l approvalStoreLookup) PendingApprovalIDs() map[string]bool {
 
 // guidanceLister is the one storage read the guidance lookup needs.
 type guidanceLister interface {
-	ListAllPendingGuidanceRequests(ctx context.Context) ([]*session.GuidanceRequestData, error)
+	ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error)
 }
 
 type guidanceStorageLookup struct{ storage guidanceLister }

@@ -93,7 +93,7 @@ func (e *samplerEnv) colorRow(callID string) string {
 	return id
 }
 
-func (e *samplerEnv) row(id string) *session.GuidanceRequestData {
+func (e *samplerEnv) row(id string) *domain.GuidanceRequestData {
 	e.t.Helper()
 	row, err := e.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
 	require.NoError(e.t, err)
@@ -187,10 +187,10 @@ func TestDialogGoneSampler_should_StopSamplingAfterTenMinutes_AndLeaveTheRowAnsw
 
 func TestDialogGoneSampler_should_SampleAtMostTwentyRowsPerPass(t *testing.T) {
 	t.Parallel()
-	rows := make([]*session.GuidanceRequestData, 25)
+	rows := make([]*domain.GuidanceRequestData, 25)
 	now := time.Unix(1_800_000_000, 0)
 	for i := range rows {
-		rows[i] = &session.GuidanceRequestData{
+		rows[i] = &domain.GuidanceRequestData{
 			ID: fmt.Sprintf("row-%02d", i), Source: domain.QuestionSourceHook, AskerSessionUUID: mirrorSession, CreatedAt: now,
 		}
 	}
@@ -203,9 +203,9 @@ func TestDialogGoneSampler_should_SampleAtMostTwentyRowsPerPass(t *testing.T) {
 	assert.Equal(t, 25, pane.count(), "the five left over are sampled next, longest-unsampled first")
 }
 
-type listStore []*session.GuidanceRequestData
+type listStore []*domain.GuidanceRequestData
 
-func (l listStore) ListAllPendingGuidanceRequests(context.Context) ([]*session.GuidanceRequestData, error) {
+func (l listStore) ListAllPendingGuidanceRequests(context.Context) ([]*domain.GuidanceRequestData, error) {
 	return l, nil
 }
 

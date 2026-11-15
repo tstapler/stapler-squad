@@ -13,7 +13,6 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -105,7 +104,7 @@ func (e *routerEnv) hookRow(inst *instance.Instance, d panereply.QuestionDialog)
 // agentRow stores an agent-created session-scope question.
 func (e *routerEnv) agentRow(inst *instance.Instance) string {
 	e.t.Helper()
-	row, err := e.fix.storage.CreateGuidanceRequest(context.Background(), session.CreateGuidanceRequestInput{
+	row, err := e.fix.storage.CreateGuidanceRequest(context.Background(), domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: inst.UUID, QuestionText: "Which cache?",
 		QuestionType: domain.QuestionTypeMultipleChoice, Options: `["Redis","Memcached"]`,
 	})
@@ -113,7 +112,7 @@ func (e *routerEnv) agentRow(inst *instance.Instance) string {
 	return row.ID
 }
 
-func (e *routerEnv) row(id string) *session.GuidanceRequestData {
+func (e *routerEnv) row(id string) *domain.GuidanceRequestData {
 	e.t.Helper()
 	row, err := e.fix.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
 	require.NoError(e.t, err)

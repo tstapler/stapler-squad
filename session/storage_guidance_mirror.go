@@ -10,7 +10,7 @@ import (
 )
 
 // CreateMirroredGuidanceRequest forwards to EntRepository.CreateMirroredGuidanceRequest.
-func (s *Storage) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*GuidanceRequestData, error) {
+func (s *Storage) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error) {
 	return s.Repo.CreateMirroredGuidanceRequest(ctx, req, capLimit)
 }
 
@@ -20,7 +20,7 @@ func (s *Storage) SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route d
 }
 
 // ListOpenGuidanceRequestsByAsker forwards to EntRepository.ListOpenGuidanceRequestsByAsker.
-func (s *Storage) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*GuidanceRequestData, error) {
+func (s *Storage) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*domain.GuidanceRequestData, error) {
 	return s.Repo.ListOpenGuidanceRequestsByAsker(ctx, askerSessionUUID, sources...)
 }
 
@@ -30,6 +30,6 @@ func (s *Storage) PurgeTerminalGuidanceQuestions(ctx context.Context, cutoff tim
 }
 
 // ListGuidanceByDelivery forwards to EntRepository.ListGuidanceByDelivery.
-func (s *Storage) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*GuidanceRequestData, error) {
+func (s *Storage) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error) {
 	return s.Repo.ListGuidanceByDelivery(ctx, route, state)
 }
