@@ -22,10 +22,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // ---------------------------------------------------------------------------
@@ -410,7 +410,7 @@ func (s *BacklogService) recordPRFixOutcome(ctx context.Context, itemID, outcome
 	if s == nil || s.storage == nil {
 		return
 	}
-	s.storage.RecordFlowMarkerForItemPR(ctx, itemID, session.FlowMarkerPRFixOutcome, outcome)
+	s.storage.RecordFlowMarkerForItemPR(ctx, itemID, markerstore.FlowMarkerPRFixOutcome, outcome)
 }
 
 // degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for
@@ -418,7 +418,7 @@ func (s *BacklogService) recordPRFixOutcome(ctx context.Context, itemID, outcome
 // of delivering a steer. "Blocked by active session" is never simultaneously
 // a failed-steer condition, so resolve any stale SteerFailed row first.
 func (s *BacklogService) degradeToRespawnBlocked(ctx context.Context, itemID, itemTitle string, currentStatus domain.BacklogStatus, activeSessionUUID string) {
-	s.recordPRFixOutcome(ctx, itemID, session.PRFixOutcomeSkippedActive)
+	s.recordPRFixOutcome(ctx, itemID, markerstore.PRFixOutcomeSkippedActive)
 	s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
 	s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
 }
@@ -472,7 +472,7 @@ func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID,
 	reasonPhrase := humanReadableReasonSet(reason)
 	if deliverErr == nil {
 		log.InfoLog().Printf("[AutoReopenForPRFix] steered active session %s for item %s", activeSessionUUID, itemID)
-		s.recordPRFixOutcome(ctx, itemID, session.PRFixOutcomeSteered)
+		s.recordPRFixOutcome(ctx, itemID, markerstore.PRFixOutcomeSteered)
 		s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
 		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
 		if s.eventBus == nil {

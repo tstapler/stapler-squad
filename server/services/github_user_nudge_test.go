@@ -16,9 +16,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // ---- fakes ----
@@ -845,7 +845,7 @@ func TestNudgeSessionForPR_should_RecordManualNudge_When_SteerDelivered(t *testi
 	_, err := f.call("fix-ci")
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"uuid-fix-ci|" + session.ManualNudgeWrite}, rec.calls)
+	assert.Equal(t, []string{"uuid-fix-ci|" + markerstore.ManualNudgeWrite}, rec.calls)
 }
 
 func TestNudgeSessionForPR_should_NotRecordManualNudge_When_SteerNotDelivered(t *testing.T) {

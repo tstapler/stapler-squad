@@ -1,4 +1,4 @@
-package session
+package markerstore
 
 import (
 	"os"
@@ -13,7 +13,7 @@ import (
 // them; fail if the MCP package ever references the writer.
 func TestFlowMarkerWriter_should_NotBeReachableFromMCP_When_ServerMcpScanned(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join("..", "server", "mcp")
+	dir := filepath.Join("..", "..", "server", "mcp")
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	scanned := 0

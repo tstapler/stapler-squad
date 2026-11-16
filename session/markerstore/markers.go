@@ -1,4 +1,4 @@
-package session
+package markerstore
 
 import (
 	"context"
@@ -12,28 +12,13 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
 
-// markerLimiterFor lazily builds the repo's shared marker limiter.
-func (r *EntRepository) markerLimiterFor() *MarkerLimiter {
-	r.markerLimiterOnce.Do(func() {
-		r.markerLimiter = NewMarkerLimiter(r.markerClock)
-	})
-	return r.markerLimiter
-}
-
-func (r *EntRepository) markerNow() time.Time {
-	if r.markerClock != nil {
-		return r.markerClock().UTC()
-	}
-	return time.Now().UTC()
-}
-
 // RecordFlowMarker appends a server-decided marker. Best-effort: the limiter
 // runs first (deduped decisions cost zero DB calls) and failures are logged,
 // never returned, so a marker can never block or change PR-fix behavior.
-// Never call it inside a transaction on this repo: the writer is capped at one
+// Never call it inside a transaction on this store: the writer is capped at one
 // connection (SetMaxOpenConns(1)) and it would self-deadlock. It publishes no
 // item-changed events and is deliberately not exposed through any MCP/RPC handler.
-func (r *EntRepository) RecordFlowMarker(ctx context.Context, itemID string, kind FlowMarkerKind, value string, prNumber int) {
+func (r *Markers) RecordFlowMarker(ctx context.Context, itemID string, kind FlowMarkerKind, value string, prNumber int) {
 	if kind == "" || value == "" {
 		return
 	}
@@ -51,7 +36,7 @@ func (r *EntRepository) RecordFlowMarker(ctx context.Context, itemID string, kin
 // item, not per PR: a new PR on the same item inside the 30m interval records
 // the same value only once (intended; it bounds writes on thrashing items).
 // A failed PR read drops the marker and forgets the limiter entry so it retries.
-func (r *EntRepository) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind FlowMarkerKind, value string) {
+func (r *Markers) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind FlowMarkerKind, value string) {
 	if kind == "" || value == "" {
 		return
 	}
@@ -61,14 +46,14 @@ func (r *EntRepository) RecordFlowMarkerForItemPR(ctx context.Context, itemID st
 		return
 	}
 	r.insertFlowMarker(ctx, id, kind, value, 0, fmt.Sprintf("%s|%s|item", kind, id), func() (int, error) {
-		return r.Client.BacklogItem.Query().Where(backlogitem.ID(id)).Select(backlogitem.FieldPrNumber).Int(ctx)
+		return r.client.BacklogItem.Query().Where(backlogitem.ID(id)).Select(backlogitem.FieldPrNumber).Int(ctx)
 	})
 }
 
 // insertFlowMarker runs the limiter, optionally resolves the PR number, then
 // inserts; a failed read or insert forgets the limiter entry so the marker can retry.
-func (r *EntRepository) insertFlowMarker(ctx context.Context, id uuid.UUID, kind FlowMarkerKind, value string, prNumber int, limiterKey string, resolvePR func() (int, error)) {
-	limiter := r.markerLimiterFor()
+func (r *Markers) insertFlowMarker(ctx context.Context, id uuid.UUID, kind FlowMarkerKind, value string, prNumber int, limiterKey string, resolvePR func() (int, error)) {
+	limiter := r.Limiter()
 	if !limiter.Allow(limiterKey, value) {
 		return
 	}
@@ -81,12 +66,12 @@ func (r *EntRepository) insertFlowMarker(ctx context.Context, id uuid.UUID, kind
 		}
 		prNumber = pr
 	}
-	if _, err := r.Client.BacklogFlowMarker.Create().
+	if _, err := r.client.BacklogFlowMarker.Create().
 		SetItemID(id).
 		SetKind(string(kind)).
 		SetValue(value).
 		SetPrNumber(prNumber).
-		SetCreatedAt(r.markerNow()).
+		SetCreatedAt(r.now()).
 		Save(ctx); err != nil {
 		limiter.Forget(limiterKey, value)
 		log.ErrorLog().Printf("[RecordFlowMarker] failed item=%s kind=%s value=%s: %v", id, kind, value, err)
@@ -94,8 +79,8 @@ func (r *EntRepository) insertFlowMarker(ctx context.Context, id uuid.UUID, kind
 }
 
 // ListFlowMarkers returns markers of kind with since <= created_at < until, oldest first.
-func (r *EntRepository) ListFlowMarkers(ctx context.Context, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
-	rows, err := r.Client.BacklogFlowMarker.Query().
+func (r *Markers) ListFlowMarkers(ctx context.Context, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
+	rows, err := r.client.BacklogFlowMarker.Query().
 		Where(backlogflowmarker.Kind(string(kind)),
 			backlogflowmarker.CreatedAtGTE(since.UTC()),
 			backlogflowmarker.CreatedAtLT(until.UTC())).
@@ -108,12 +93,12 @@ func (r *EntRepository) ListFlowMarkers(ctx context.Context, kind FlowMarkerKind
 }
 
 // ListFlowMarkersForItem is ListFlowMarkers scoped to one item.
-func (r *EntRepository) ListFlowMarkersForItem(ctx context.Context, itemID string, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
+func (r *Markers) ListFlowMarkersForItem(ctx context.Context, itemID string, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
 	id, err := uuid.Parse(itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	rows, err := r.Client.BacklogFlowMarker.Query().
+	rows, err := r.client.BacklogFlowMarker.Query().
 		Where(backlogflowmarker.ItemID(id),
 			backlogflowmarker.Kind(string(kind)),
 			backlogflowmarker.CreatedAtGTE(since.UTC()),
@@ -136,7 +121,3 @@ func toFlowMarkerData(rows []*ent.BacklogFlowMarker) []FlowMarkerData {
 	}
 	return out
 }
-
-// SetMarkerClock overrides the clock behind flow-marker timestamps and rate limiting; call it
-// before the first marker is recorded (tests).
-func (r *EntRepository) SetMarkerClock(now func() time.Time) { r.markerClock = now }

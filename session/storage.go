@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -55,7 +56,7 @@ type Storage struct {
 	Repo *EntRepository
 
 	// nudgeGate dedupes manual-nudge recording per session before any DB read.
-	nudgeGate     *MarkerLimiter
+	nudgeGate     *markerstore.MarkerLimiter
 	nudgeGateOnce sync.Once
 
 	// saved lets saveInstancesToRepo skip instances unchanged since their last save.
@@ -1804,7 +1805,7 @@ func (s *Storage) AppendActivityNote(ctx context.Context, itemID, authorSessionU
 
 // RecordFlowMarker records a server-decided flow marker, best-effort (see
 // EntRepository.RecordFlowMarker). A nil Storage or repo is a no-op.
-func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind FlowMarkerKind, value string, prNumber int) {
+func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind markerstore.FlowMarkerKind, value string, prNumber int) {
 	if s == nil || s.Repo == nil {
 		return
 	}
@@ -1815,14 +1816,14 @@ func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind Flow
 // backlog item linked to sessionUUID. Non-backlog sessions and lookup errors are
 // silent no-ops. Callers must be human-driven handlers, never agent-reachable
 // ones. The name deliberately omits "FlowMarker" (see
-// flow_marker_no_mcp_exposure_test.go): no MCP handler may call this.
+// markerstore/no_mcp_exposure_test.go): no MCP handler may call this.
 func (s *Storage) RecordManualNudgeForSession(ctx context.Context, sessionUUID, value string) {
 	if s == nil || s.Repo == nil || sessionUUID == "" {
 		return
 	}
 	// The gate runs before the item lookup so a hot input path (WriteToSession)
 	// pays one map read per 30m window, and non-backlog sessions are remembered too.
-	s.nudgeGateOnce.Do(func() { s.nudgeGate = NewMarkerLimiter(nil) })
+	s.nudgeGateOnce.Do(func() { s.nudgeGate = markerstore.NewMarkerLimiter(nil) })
 	if !s.nudgeGate.Allow(sessionUUID, value) {
 		return
 	}
@@ -1833,7 +1834,7 @@ func (s *Storage) RecordManualNudgeForSession(ctx context.Context, sessionUUID, 
 	if err != nil || is.BacklogItemID == "" {
 		return
 	}
-	s.Repo.RecordFlowMarker(ctx, is.BacklogItemID, FlowMarkerManualNudge, value, 0)
+	s.Repo.RecordFlowMarker(ctx, is.BacklogItemID, markerstore.FlowMarkerManualNudge, value, 0)
 }
 
 // RecordManualNudgeForItem records a user-originated intervention on itemID.
@@ -1841,12 +1842,12 @@ func (s *Storage) RecordManualNudgeForItem(ctx context.Context, itemID, value st
 	if s == nil || s.Repo == nil {
 		return
 	}
-	s.Repo.RecordFlowMarker(ctx, itemID, FlowMarkerManualNudge, value, 0)
+	s.Repo.RecordFlowMarker(ctx, itemID, markerstore.FlowMarkerManualNudge, value, 0)
 }
 
 // RecordFlowMarkerForItemPR passes through to EntRepository.RecordFlowMarkerForItemPR
 // (limiter first, then a pr_number-only read). A nil Storage or repo is a no-op.
-func (s *Storage) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind FlowMarkerKind, value string) {
+func (s *Storage) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind markerstore.FlowMarkerKind, value string) {
 	if s == nil || s.Repo == nil {
 		return
 	}
@@ -1854,7 +1855,7 @@ func (s *Storage) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, 
 }
 
 // ListFlowMarkersForItem passes through to EntRepository.ListFlowMarkersForItem.
-func (s *Storage) ListFlowMarkersForItem(ctx context.Context, itemID string, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
+func (s *Storage) ListFlowMarkersForItem(ctx context.Context, itemID string, kind markerstore.FlowMarkerKind, since, until time.Time) ([]markerstore.FlowMarkerData, error) {
 	return s.Repo.ListFlowMarkersForItem(ctx, itemID, kind, since, until)
 }
 

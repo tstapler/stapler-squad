@@ -12,8 +12,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 const (
@@ -411,7 +411,7 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 	if no, detail, ok := nudgeFromSteer(outcome); ok {
 		if outcome == SteerDelivered {
 			if s.nudge.nudges != nil {
-				s.nudge.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), session.ManualNudgeWrite)
+				s.nudge.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), markerstore.ManualNudgeWrite)
 			}
 			if t := s.nudgeTracker(); t != nil {
 				t.RecordNudge(key, nudgeReasonKinds(reasons), s.nudgeClock().Now())
