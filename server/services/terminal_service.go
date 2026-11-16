@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // TerminalService handles GetTerminalSnapshot and WriteToSession RPCs.
@@ -167,7 +168,7 @@ func (ts *TerminalService) WriteToSession(
 	}
 
 	if ts.nudges != nil {
-		ts.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), session.ManualNudgeWrite)
+		ts.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), markerstore.ManualNudgeWrite)
 	}
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
 }

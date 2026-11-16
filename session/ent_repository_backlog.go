@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // SetItemChangePublisher wires an ItemChangePublisher into this repository so
@@ -2441,6 +2442,14 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 	return true, nil
 }
 
+// stuckTransition reports what a markStuckTx call changed, without a
+// read-then-write: Reopened is the reopen UPDATE's rows-affected > 0,
+// EpisodeOpened is whether a new open episode row was inserted.
+type stuckTransition struct {
+	Reopened      bool
+	EpisodeOpened bool
+}
+
 // markStuckTx is MarkStuck's in-transaction write: the resolve-in-place upsert,
 // the conditional reopen UPDATE, and the open of an append-only stuck episode
 // (ADR-003) sharing the same now, so opened_at equals first_detected_at.
@@ -2486,7 +2495,7 @@ func markStuckTx(ctx context.Context, tx *ent.Tx, parsedID uuid.UUID, reason dom
 
 	return stuckTransition{
 		Reopened:      reopened > 0,
-		EpisodeOpened: openStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now),
+		EpisodeOpened: markerstore.OpenStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now),
 	}, nil
 }
 
@@ -2533,7 +2542,7 @@ func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason 
 		return false, fmt.Errorf("resolve stuck %s/%s: %w", itemID, reason, err)
 	}
 	if n > 0 {
-		closeStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now)
+		markerstore.CloseStuckEpisodeNonFatal(ctx, tx, parsedID, string(reason), now)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("resolve stuck: commit: %w", err)

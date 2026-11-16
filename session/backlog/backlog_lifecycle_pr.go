@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // PRFixSpawner can reopen a pr_pending item for rework when CI checks fail or
@@ -1539,11 +1540,11 @@ func recordPRFixTrigger(ctx context.Context, er *session.EntRepository, itemID s
 	if er == nil {
 		return
 	}
-	if trigger == session.PRFixTriggerUnknown {
-		session.NotePRFixTriggerUnknown()
+	if trigger == markerstore.PRFixTriggerUnknown {
+		markerstore.NotePRFixTriggerUnknown()
 		log.DebugLog().Printf("[BacklogLifecycle] pr_fix_trigger unknown item=%s pr=%d", itemID, prNumber)
 	}
-	er.RecordFlowMarker(ctx, itemID, session.FlowMarkerPRFixTrigger, trigger, prNumber)
+	er.RecordFlowMarker(ctx, itemID, markerstore.FlowMarkerPRFixTrigger, trigger, prNumber)
 }
 
 // remediatePRFixWithBackoffGate wraps fixSpawner.AutoReopenForPRFix with the
@@ -1890,7 +1891,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, session.PRFixTriggerClosed)
+		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, markerstore.PRFixTriggerClosed)
 		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
@@ -2039,7 +2040,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 
 	conflictOnly := prStatus.HasConflicts && !prStatus.CIFailing && !prStatus.HasBlockingReviews && !hasNewFeedback
 	recordPRFixTrigger(ctx, er, item.ID.String(), item.PrNumber,
-		session.ClassifyPRFixTrigger(prStatus.CIFailing, prStatus.HasConflicts, prStatus.HasBlockingReviews, hasNewFeedback))
+		markerstore.ClassifyPRFixTrigger(prStatus.CIFailing, prStatus.HasConflicts, prStatus.HasBlockingReviews, hasNewFeedback))
 	attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, conflictOnly)
 	if fixErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] ReconcilePRPending AutoReopenForPRFix item=%s: %v", item.ID, fixErr)

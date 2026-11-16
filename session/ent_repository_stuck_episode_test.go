@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckepisode"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // episodeExec runs DDL/DML straight on the repo's writer connection.
@@ -332,10 +333,10 @@ func TestMarkStuck_should_CommitStateAndLogWarning_When_EpisodeTableMissing(t *t
 
 func TestMarkStuck_should_TreatErrNoRowsAndConstraintErrorAsAlreadyOpen_When_EpisodeExists(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isEpisodeAlreadyOpen(sql.ErrNoRows))
-	assert.True(t, isEpisodeAlreadyOpen(fmt.Errorf("wrapped: %w", sql.ErrNoRows)))
-	assert.True(t, isEpisodeAlreadyOpen(&ent.ConstraintError{}))
-	assert.False(t, isEpisodeAlreadyOpen(errors.New("no such table: backlog_stuck_episodes")))
+	assert.True(t, markerstore.IsEpisodeAlreadyOpen(sql.ErrNoRows))
+	assert.True(t, markerstore.IsEpisodeAlreadyOpen(fmt.Errorf("wrapped: %w", sql.ErrNoRows)))
+	assert.True(t, markerstore.IsEpisodeAlreadyOpen(&ent.ConstraintError{}))
+	assert.False(t, markerstore.IsEpisodeAlreadyOpen(errors.New("no such table: backlog_stuck_episodes")))
 
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
@@ -346,7 +347,7 @@ func TestMarkStuck_should_TreatErrNoRowsAndConstraintErrorAsAlreadyOpen_When_Epi
 		tx, err := repo.Client.Tx(ctx)
 		require.NoError(t, err)
 		defer tx.Rollback() //nolint:errcheck
-		opened, err := openStuckEpisodeTx(ctx, tx, item, string(episodeReason), time.Now())
+		opened, err := markerstore.OpenStuckEpisodeTx(ctx, tx, item, string(episodeReason), time.Now())
 		if err == nil {
 			require.NoError(t, tx.Commit())
 		}
@@ -371,9 +372,9 @@ func TestResolveStuck_should_OpenNoTransaction_When_NothingToResolve(t *testing.
 	ctx := context.Background()
 	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 	drv := &flowMarkerCountingDriver{Driver: repo.driver}
-	repo.Client = ent.NewClient(ent.Driver(drv))
+	counting := NewEntRepositoryFromClient(ent.NewClient(ent.Driver(drv)))
 
-	resolved, err := repo.ResolveStuck(ctx, itemID, episodeReason)
+	resolved, err := counting.ResolveStuck(ctx, itemID, episodeReason)
 	require.NoError(t, err)
 	assert.False(t, resolved)
 	txs, queries := drv.snapshot()

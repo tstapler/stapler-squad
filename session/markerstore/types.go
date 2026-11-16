@@ -1,4 +1,4 @@
-package session
+package markerstore
 
 import (
 	"sync/atomic"

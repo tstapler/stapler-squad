@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/guidancestore"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/wakestore"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
@@ -44,11 +44,12 @@ import (
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers) methods are
+	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers) and Markers (flow markers) methods are
 	// promoted; see initStores.
 	*webhookstore.Store
 	*guidancestore.Repo
 	*wakestore.Triggers
+	*markerstore.Markers
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -63,12 +64,6 @@ type EntRepository struct {
 	// the link upsert, to inject a failure before the mirror update.
 	afterPRLinkHook func() error
 	migrationMode   bool // When true, enables dual-write mode for migration
-
-	// markerLimiter is built lazily (markerLimiterOnce) from markerClock, an
-	// injectable test clock (nil => time.Now); see RecordFlowMarker.
-	markerLimiter     *MarkerLimiter
-	markerLimiterOnce sync.Once
-	markerClock       func() time.Time
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
@@ -305,6 +300,7 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 func (r *EntRepository) initStores() {
 	r.Store = webhookstore.New(r.Client)
 	r.Triggers = wakestore.New(r.Client)
+	r.Markers = markerstore.New(r.Client)
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
 		item := BacklogItemToData(row)
 		r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
