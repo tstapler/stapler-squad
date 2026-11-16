@@ -358,35 +358,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          case "$E2E_SHARD_TOTAL" in ''|*[!0-9]*|0) echo "::error::E2E_SHARD_TOTAL must be a positive integer, got '$E2E_SHARD_TOTAL'" >&2; exit 1;; esac
-          mode=all; total="$E2E_SHARD_TOTAL"; specs=''; changed_specs=''; skip_baseline=''
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            # Fail open: if the selector cannot run, run everything rather than guess.
-            if sel=$(set -e
-              gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-              # pulls/{n}/files returns at most 3000 files; a list that long may be truncated, so treat it as a failed selection.
-              [ "$(wc -l < "$RUNNER_TEMP/changed.txt")" -lt 3000 ]
-              git ls-files 'tests/e2e/*.spec.ts' 'tests/e2e/**/*.spec.ts' | sed 's#^tests/e2e/##' | grep -v '^node_modules/' > "$RUNNER_TEMP/specs.txt"
-              bun tests/e2e/scripts/select-specs.ts --specs "$RUNNER_TEMP/specs.txt" --changed-file "$RUNNER_TEMP/changed.txt" --summary > "$RUNNER_TEMP/summary.md"
-              bun tests/e2e/scripts/select-specs.ts --specs "$RUNNER_TEMP/specs.txt" --changed-file "$RUNNER_TEMP/changed.txt" \
-                --timings tests/e2e/shard-timings.json --max-shards "$E2E_SHARD_TOTAL"); then
-              cat "$RUNNER_TEMP/summary.md" | tee -a "$GITHUB_STEP_SUMMARY"
-              # Spec files this PR touches are never baseline-skipped (tests/e2e/scripts/baseline-skip.ts).
-              changed_specs=$(sed -n 's#^tests/e2e/\(.*\.spec\.ts\)$#\1#p' "$RUNNER_TEMP/changed.txt")
-              # Baseline-fail skipping needs a complete changed-file list; it is on only when selection succeeded (fail open otherwise).
-              skip_baseline=1
-              mode=$(jq -r .mode <<<"$sel"); total=$(jq -r .shards <<<"$sel"); specs=$(jq -r '.specs[]' <<<"$sel")
-            else
-              echo "::warning::e2e spec selection failed (or the PR has 3000+ files); running the full suite with baseline-fail tests included"
-            fi
-          fi
-          # mode none skips every consumer; a one-element matrix keeps GitHub from rejecting an empty one.
-          { echo "mode=$mode"; echo "total=$total"
-            echo "matrix=$(jq -nc --argjson n "$total" 'if $n < 1 then [1] else [range(1; $n + 1)] end')"
-            echo "specs<<E2E_SPECS_EOF"; printf '%s\n' "$specs" | grep -E '^[A-Za-z0-9._/-]+$' || true; echo "E2E_SPECS_EOF"
-            echo "skip-baseline=$skip_baseline"
-            echo "changed-specs<<E2E_CHANGED_EOF"; printf '%s\n' "$changed_specs" | grep -E '^[A-Za-z0-9._/-]+$' || true; echo "E2E_CHANGED_EOF"; } >> "$GITHUB_OUTPUT"
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+        run: bash tests/e2e/scripts/plan-e2e-shards.sh
 
   # ─────────────────────────────────────────────────────────────────────────────
   # e2e-bun: the one e2e run. The full suite (every spec under tests/e2e/, every Chromium project)

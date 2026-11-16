@@ -48,7 +48,8 @@ if [ "${E2E_SKIP_BASELINE_FAIL:-}" = 1 ]; then
   printf '%s' "$all_json" > "$list_err"; n_all=$(bun scripts/baseline-skip.ts count "$list_err" || true)
   printf '%s' "$list_json" > "$list_err"; n_kept=$(bun scripts/baseline-skip.ts count "$list_err" || true)
   removed_args=()
-  case "$n_all$n_kept" in ''|*[!0-9]*) echo "run-ci-shard: could not count removed tests; reporting the count as unavailable" >&2 ;; *) removed_args=(--removed $(( n_all - n_kept ))) ;; esac
+  case "$n_all$n_kept" in ''|*[!0-9]*) ;; *) [ "$n_kept" -le "$n_all" ] && removed_args=(--removed $(( n_all - n_kept ))) ;; esac
+  [ "${#removed_args[@]}" -eq 0 ] && echo "run-ci-shard: could not count removed tests; reporting the count as unavailable" >&2
   skip_summary=$(bun scripts/baseline-skip.ts summary ${removed_args[@]+"${removed_args[@]}"}) || fail_plan "baseline-skip summary failed"
   printf '%s\n' "$skip_summary"
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$skip_summary" >> "$GITHUB_STEP_SUMMARY"
