@@ -127,7 +127,7 @@ func (s *Storage) runPRMaintenancePassWithRetries(ctx context.Context, cfg prMai
 }
 
 func (s *Storage) runPRMaintenancePass(ctx context.Context, cfg prMaintenanceConfig) error {
-	if _, err := s.Repo.runPRBackfill(ctx, cfg.hook); err != nil {
+	if _, err := newPRBackfiller(s.Repo).runPRBackfill(ctx, cfg.hook); err != nil {
 		return err
 	}
 	if _, err := s.Repo.ResetVerifyCounters(ctx); err != nil {
@@ -153,4 +153,8 @@ func (s *Storage) retryPRMaintenance(ctx context.Context, cfg prMaintenanceConfi
 			return
 		}
 	}
+}
+
+func newPRBackfiller(r *EntRepository) *prBackfiller {
+	return &prBackfiller{client: r.Client, driver: r.driver, links: r}
 }

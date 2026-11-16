@@ -55,7 +55,7 @@ func (c *recordingPRClient) callsFor(n int) int {
 
 // seedStateRow writes the state row and one owner link for ref the way a backfill
 // or an earlier attach leaves them.
-func seedStateRow(t *testing.T, repo *session.EntRepository, owner session.PROwner, ref domain.PRRef, initial domain.PRInitial) {
+func seedStateRow(t *testing.T, repo *session.EntRepository, owner domain.PROwner, ref domain.PRRef, initial domain.PRInitial) {
 	t.Helper()
 	_, err := repo.UpsertSessionPR(context.Background(), owner, ref,
 		domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBackfill, Initial: initial})
@@ -92,7 +92,7 @@ func TestPoller_MergedAThenOpenB_PollsAndActsOnB(t *testing.T) {
 	inst := newTwoPRInstance(t)
 	inst.Status = domain.Active
 	p.SetInstances([]*instance.Instance{inst})
-	owner := session.SessionPROwner(inst.UUID)
+	owner := domain.SessionPROwner(inst.UUID)
 	seedStateRow(t, storage.Repo, owner, mustPRRef(t, "", "acme", "app", 11), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 	seedStateRow(t, storage.Repo, owner, mustPRRef(t, "", "acme", "app", 12), domain.PRInitial{State: domain.PRStateOpen})
 
@@ -163,7 +163,7 @@ func rowOf(t *testing.T, st *session.Storage, n int) domain.PRView {
 func TestPoller_ShouldNotRepollMerged_WhenThreeTicks(t *testing.T) {
 	client := &recordingPRClient{}
 	p, storage := newRowPoller(t, client)
-	owner := session.SessionPROwner("u1")
+	owner := domain.SessionPROwner("u1")
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 11), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 	before := instance.PRPollCount(domain.PRStateOpen)
@@ -187,7 +187,7 @@ func TestPoller_ShouldFetchOnceAndRefreshBothSessions_WhenTwoSessionsShareOpenPR
 		inst.UUID, inst.Title = id, id
 		inst.Status = domain.Active
 		require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
-		seedStateRow(t, storage.Repo, session.SessionPROwner(id), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
+		seedStateRow(t, storage.Repo, domain.SessionPROwner(id), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 		insts = append(insts, inst)
 	}
 	p.SetInstances(insts)
@@ -205,7 +205,7 @@ func TestPoller_ShouldPollItemOnlyState_WhenNoSessionLink(t *testing.T) {
 	t.Parallel()
 	client := &recordingPRClient{info: map[int]*github.PRInfo{40: {Number: 40, State: "open", ApprovedCount: 1}}}
 	p, storage := newRowPoller(t, client)
-	seedStateRow(t, storage.Repo, session.ItemPROwner("item-1"), prRefN(t, 40), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, domain.ItemPROwner("item-1"), prRefN(t, 40), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -237,7 +237,7 @@ func TestPoller_ShouldBoundColdStart_WhenOneHundredTwentyUnknownStates(t *testin
 		if i >= 60 {
 			initial = domain.PRInitial{State: domain.PRStateUnknown, Terminal: true} // unverified terminal
 		}
-		_, err := storage.Repo.UpsertSessionPR(context.Background(), session.SessionPROwner(fmt.Sprintf("u%d", i)), prRefN(t, 100+i),
+		_, err := storage.Repo.UpsertSessionPR(context.Background(), domain.SessionPROwner(fmt.Sprintf("u%d", i)), prRefN(t, 100+i),
 			domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBackfill, Initial: initial, AttachedAt: base.Add(time.Duration(i%60) * time.Minute)})
 		require.NoError(t, err)
 	}
@@ -283,7 +283,7 @@ func TestPoller_ShouldMarkUnknownOnce_WhenFiveCountedFailuresOverThirtyMinutes(t
 			p, storage := newRowPoller(t, client)
 			now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 			p.clock = func() time.Time { return now }
-			seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
+			seedStateRow(t, storage.Repo, domain.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 			unknowns := 0
 			p.SetOnPRUnknown(func(domain.PRView) { unknowns++ })
 
@@ -319,8 +319,8 @@ func TestPoller_ShouldRefreshSupersededRoundPRs_WhenOwnerSessionOldRound(t *test
 	t.Parallel()
 	client := &recordingPRClient{}
 	p, storage := newRowPoller(t, client)
-	seedStateRow(t, storage.Repo, session.SessionPROwner("old-round"), prRefN(t, 20), domain.PRInitial{State: domain.PRStateOpen})
-	seedStateRow(t, storage.Repo, session.SessionPROwner("current-round"), prRefN(t, 21), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, domain.SessionPROwner("old-round"), prRefN(t, 20), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, domain.SessionPROwner("current-round"), prRefN(t, 21), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -345,7 +345,7 @@ func TestPoller_ShouldUseHostAwareToken_WhenItemOnlyStateOnGHE(t *testing.T) {
 	client := &hostRecordingClient{}
 	p, storage := newRowPoller(t, client)
 	ghe := mustPRRef(t, "ghe.acme.io", "acme", "app", 40)
-	seedStateRow(t, storage.Repo, session.ItemPROwner("item-1"), ghe, domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, domain.ItemPROwner("item-1"), ghe, domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -472,9 +472,9 @@ func TestPoller_ShouldHonorTombstone_WhenDiscoveryFindsDetachedPR(t *testing.T) 
 	t.Parallel()
 	p, storage, inst, client := discoverySession(t, PRInitialRef{11, domain.PRInitial{State: domain.PRStateMerged, Terminal: true}})
 	ref := prRefN(t, 12)
-	_, err := storage.Repo.UpsertSessionPR(context.Background(), session.SessionPROwner(inst.UUID), ref, domain.PRLink{Source: domain.AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(context.Background(), domain.SessionPROwner(inst.UUID), ref, domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
-	_, err = storage.Repo.DeleteSessionPR(context.Background(), session.SessionPROwner(inst.UUID), ref)
+	_, err = storage.Repo.DeleteSessionPR(context.Background(), domain.SessionPROwner(inst.UUID), ref)
 	require.NoError(t, err)
 	client.found = &github.PRInfo{Number: 12, State: "open"} // GitHub spells it however it likes
 
@@ -490,13 +490,13 @@ func TestInvalidateAndRefresh_ShouldRefreshOnlyTheNamedRow_WhenSessionTracksTwoP
 	inst := newTwoPRInstance(t)
 	inst.Status = domain.Active
 	p.SetInstances([]*instance.Instance{inst})
-	owner := session.SessionPROwner(inst.UUID)
+	owner := domain.SessionPROwner(inst.UUID)
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 11), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 	upper, err := domain.NewPRRef("", "Acme", "App", 12)
 	require.NoError(t, err)
 
-	require.True(t, p.InvalidateAndRefresh(context.Background(), upper, session.PRSourceWebhook))
+	require.True(t, p.InvalidateAndRefresh(context.Background(), upper, domain.PRSourceWebhook))
 	p.dispatchWG.Wait()
 
 	assert.Equal(t, 1, client.callsFor(12))

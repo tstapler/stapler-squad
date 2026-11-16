@@ -22,9 +22,9 @@ func TestPersistPRAttach_ShouldClearStoredLegacyNumber_WhenTombstonedAttachLeave
 	inst.GitHubPRNumber, inst.GitHubPRURL = 7, "https://github.com/acme/app/pull/7"
 
 	ref := fixturetest.MustPRRef(t, "", "acme", "app", 13)
-	_, err := storage.Repo.UpsertSessionPR(ctx, SessionPROwner(inst.UUID), ref, domain.PRLink{Source: domain.AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(ctx, domain.SessionPROwner(inst.UUID), ref, domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
-	_, err = storage.Repo.DeleteSessionPR(ctx, SessionPROwner(inst.UUID), ref)
+	_, err = storage.Repo.DeleteSessionPR(ctx, domain.SessionPROwner(inst.UUID), ref)
 	require.NoError(t, err)
 
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))

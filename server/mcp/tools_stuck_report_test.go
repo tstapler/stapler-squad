@@ -225,17 +225,17 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 		require.NoError(t, rerr)
 		return r
 	}
-	link := func(owner session.PROwner, n int, st domain.PRState, at time.Time) {
+	link := func(owner domain.PROwner, n int, st domain.PRState, at time.Time) {
 		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), domain.PRLink{
 			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, AttachedAt: at,
 			Initial: domain.PRInitial{State: st, Terminal: st.Terminal()},
 		})
 		require.NoError(t, lerr)
 	}
-	link(session.ItemPROwner(item.ID), 21, domain.PRStateMerged, time.Time{})
+	link(domain.ItemPROwner(item.ID), 21, domain.PRStateMerged, time.Time{})
 	old := time.Now().Add(-2 * time.Hour)
-	link(session.ItemPROwner(item.ID), 23, domain.PRStateUnknown, old)
-	link(session.SessionPROwner(sessUUID), 23, domain.PRStateUnknown, old)
+	link(domain.ItemPROwner(item.ID), 23, domain.PRStateUnknown, old)
+	link(domain.SessionPROwner(sessUUID), 23, domain.PRStateUnknown, old)
 
 	run := func(on bool) string {
 		h := &backlogHandlers{storage: storage, backlogReaderOverride: func() bool { return on }}

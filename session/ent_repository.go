@@ -1077,7 +1077,7 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 
 	// PR links and detach tombstones are keyed by the session uuid, not an FK.
 	if sess.UUID != "" {
-		if err := deleteOwnerPRRows(ctx, tx, SessionPROwner(sess.UUID)); err != nil {
+		if err := deleteOwnerPRRows(ctx, tx, domain.SessionPROwner(sess.UUID)); err != nil {
 			return err
 		}
 	}

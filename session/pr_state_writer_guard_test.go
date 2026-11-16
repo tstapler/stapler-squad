@@ -56,7 +56,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	stateRowIs(t, storage.Repo, ref, domain.PRStateUnknown, true, "seeded")
 	// The poll core arrives in a later wave: apply its observation directly.
-	res, err := storage.Repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, domain.PRStateOpen, prRepoT0))
+	res, err := storage.Repo.UpdatePullRequestState(ctx, ref, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0))
 	require.NoError(t, err)
 	require.True(t, res.Applied, "the poll must be applied for the rest of the test to mean anything")
 	stateRowIs(t, storage.Repo, ref, domain.PRStateOpen, false, "polled")

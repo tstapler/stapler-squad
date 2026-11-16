@@ -56,7 +56,7 @@ func (f *itemPRFixture) session(role string) string {
 	return id
 }
 
-func (f *itemPRFixture) link(owner session.PROwner, n int, state domain.PRState) {
+func (f *itemPRFixture) link(owner domain.PROwner, n int, state domain.PRState) {
 	f.t.Helper()
 	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), domain.PRLink{
 		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: state, Terminal: state.Terminal()},
@@ -65,7 +65,7 @@ func (f *itemPRFixture) link(owner session.PROwner, n int, state domain.PRState)
 	require.False(f.t, res.Tombstoned)
 }
 
-func (f *itemPRFixture) detach(owner session.PROwner, n int) {
+func (f *itemPRFixture) detach(owner domain.PROwner, n int) {
 	f.t.Helper()
 	_, err := f.repo.DeleteSessionPR(context.Background(), owner, testRef(n))
 	require.NoError(f.t, err)
@@ -92,7 +92,7 @@ func TestReconcilePRPending_ShouldSyncMirrorAtEndOfPass_OnlyWhenBacklogReaderOn(
 		t.Run(map[bool]string{false: "off", true: "on"}[on], func(t *testing.T) {
 			t.Parallel()
 			f := newItemPRFixture(t, 21)
-			f.link(session.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
+			f.link(domain.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 			listener := NewBacklogLifecycleListener(f.storage)
 			listener.backlogReaderOverride = func() bool { return on }
 			overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: false, status: &git.PRStatus{}})

@@ -17,7 +17,7 @@ import (
 
 type fakeGateSource struct {
 	views    map[string][]domain.PRView
-	guards   map[string]ItemGuardView
+	guards   map[string]domain.ItemGuardView
 	data     map[string]*domain.InstanceData
 	viewsErr error
 	guardErr error
@@ -28,11 +28,11 @@ func (f *fakeGateSource) ListSessionPRViewsByUUIDs(context.Context, []string) (m
 	return f.views, f.viewsErr
 }
 
-func (f *fakeGateSource) ListItemGuardViewsByItemIDs(_ context.Context, ids []string) (map[string]ItemGuardView, error) {
+func (f *fakeGateSource) ListItemGuardViewsByItemIDs(_ context.Context, ids []string) (map[string]domain.ItemGuardView, error) {
 	if f.guardErr != nil {
 		return nil, f.guardErr
 	}
-	out := map[string]ItemGuardView{}
+	out := map[string]domain.ItemGuardView{}
 	for _, id := range ids {
 		out[id] = f.guards[id] // missing item => zero view, present
 	}
@@ -71,9 +71,9 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 		{"no PRs at all", &fakeGateSource{}, ""},
 		{"session link open", &fakeGateSource{views: map[string][]domain.PRView{"s1": {merged, open}}}, "session s1"},
 		{"session link unknown", &fakeGateSource{views: map[string][]domain.PRView{"s1": {unknown}}}, "session s1"},
-		{"item-direct open, no session link", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []domain.PRView{open}}}}, "item i1"},
-		{"item-direct unknown", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []domain.PRView{unknown}}}}, "item i1"},
-		{"item pr_number no link represents", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {LegacyUnrepresented: true}}}, "item i1"},
+		{"item-direct open, no session link", &fakeGateSource{guards: map[string]domain.ItemGuardView{"i1": {Direct: []domain.PRView{open}}}}, "item i1"},
+		{"item-direct unknown", &fakeGateSource{guards: map[string]domain.ItemGuardView{"i1": {Direct: []domain.PRView{unknown}}}}, "item i1"},
+		{"item pr_number no link represents", &fakeGateSource{guards: map[string]domain.ItemGuardView{"i1": {LegacyUnrepresented: true}}}, "item i1"},
 		{"session legacy number, no link, flag not true", &fakeGateSource{data: map[string]*domain.InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5}}}, "session s1"},
 		{"session legacy number, no link, flag true", &fakeGateSource{data: map[string]*domain.InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5, GitHubPRStatusTerminal: true}}}, ""},
 		{"views lookup error", &fakeGateSource{viewsErr: errors.New("db")}, "unreadable"},

@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -22,7 +21,7 @@ type fakeSweepPRSource struct {
 	real     sweepPRSource
 	views    func(map[string][]domain.PRView) (map[string][]domain.PRView, error)
 	itemIDs  func(map[string][]string) (map[string][]string, error)
-	guards   func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error)
+	guards   func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error)
 	viewCall int
 }
 
@@ -43,7 +42,7 @@ func (f *fakeSweepPRSource) ListItemIDsBySessionUUIDs(ctx context.Context, uuids
 	return f.itemIDs(got)
 }
 
-func (f *fakeSweepPRSource) ListItemGuardViewsByItemIDs(ctx context.Context, ids []string) (map[string]session.ItemGuardView, error) {
+func (f *fakeSweepPRSource) ListItemGuardViewsByItemIDs(ctx context.Context, ids []string) (map[string]domain.ItemGuardView, error) {
 	got, err := f.real.ListItemGuardViewsByItemIDs(ctx, ids)
 	if err != nil || f.guards == nil {
 		return got, err
@@ -160,8 +159,8 @@ func TestRetentionSweeper_ShouldFailClosed_WhenItemDirectPROpen(t *testing.T) {
 	}
 	merged := domain.PRView{State: domain.PRStateMerged, StoredTerminal: true}
 	open := domain.PRView{State: domain.PRStateOpen}
-	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
-		return map[string]session.ItemGuardView{
+	fake.guards = func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error) {
+		return map[string]domain.ItemGuardView{
 			"item-x": {Direct: []domain.PRView{merged}},
 			"item-y": {Direct: []domain.PRView{open}},
 		}, nil
@@ -169,8 +168,8 @@ func TestRetentionSweeper_ShouldFailClosed_WhenItemDirectPROpen(t *testing.T) {
 	sweeper.sweep(context.Background())
 	assert.True(t, hasStoredTitle(t, fix, "worker"), "every item of the session is checked, an open item-direct PR holds it")
 
-	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
-		return map[string]session.ItemGuardView{
+	fake.guards = func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error) {
+		return map[string]domain.ItemGuardView{
 			"item-x": {Direct: []domain.PRView{merged}},
 			"item-y": {Direct: []domain.PRView{merged}},
 		}, nil
@@ -191,12 +190,12 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLinkOrItemLookupErrors(t *testing
 		},
 		"guards": func(f *fakeSweepPRSource) {
 			f.itemIDs = func(map[string][]string) (map[string][]string, error) { return map[string][]string{"u-e": {"i"}}, nil }
-			f.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) { return nil, boom }
+			f.guards = func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error) { return nil, boom }
 		},
 		"missing guard": func(f *fakeSweepPRSource) {
 			f.itemIDs = func(map[string][]string) (map[string][]string, error) { return map[string][]string{"u-e": {"i"}}, nil }
-			f.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
-				return map[string]session.ItemGuardView{}, nil
+			f.guards = func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error) {
+				return map[string]domain.ItemGuardView{}, nil
 			}
 		},
 	}
@@ -234,8 +233,8 @@ func TestRetentionSweeper_ShouldFailClosed_WhenRepresentationMismatch(t *testing
 		m["u-b"] = []string{"item-bad"}
 		return m, nil
 	}
-	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
-		return map[string]session.ItemGuardView{"item-bad": {LegacyUnrepresented: true}}, nil
+	fake.guards = func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error) {
+		return map[string]domain.ItemGuardView{"item-bad": {LegacyUnrepresented: true}}, nil
 	}
 	sweeper.sweep(context.Background())
 
@@ -292,9 +291,9 @@ func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelea
 		return map[string][]string{"u-held": {"item-h"}}, nil
 	}
 	attached := base.Add(-30 * time.Minute)
-	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
+	fake.guards = func(map[string]domain.ItemGuardView) (map[string]domain.ItemGuardView, error) {
 		open := domain.PRView{State: domain.PRStateOpen, AttachedAt: attached}
-		return map[string]session.ItemGuardView{"item-h": {Direct: []domain.PRView{open}}}, nil
+		return map[string]domain.ItemGuardView{"item-h": {Direct: []domain.PRView{open}}}, nil
 	}
 	globalBefore := ItemPRHoldOverMaxCount()
 

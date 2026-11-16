@@ -52,7 +52,7 @@ func attachItemSession(t *testing.T, repo *EntRepository, itemID, sessionUUID st
 
 func runBackfill(t *testing.T, repo *EntRepository) PRBackfillReport {
 	t.Helper()
-	rep, err := repo.runPRBackfill(context.Background(), nil)
+	rep, err := newPRBackfiller(repo).runPRBackfill(context.Background(), nil)
 	require.NoError(t, err)
 	return rep
 }
@@ -163,11 +163,11 @@ func TestBackfill_ShouldNotResurrectOrDuplicate_WhenDetachedOrAlreadyLinked(t *t
 	ctx := context.Background()
 	ref11 := fixturetest.MustPRRef(t, "", "acme", "app", 11)
 	addLegacySession(t, repo, legacySession{title: "detached", uuid: "u-detached", owner: "acme", repo: "app", number: 11})
-	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("u-detached"), fixturetest.MustPRRef(t, "", "Acme", "App", 11))
+	_, err := repo.DeleteSessionPR(ctx, domain.SessionPROwner("u-detached"), fixturetest.MustPRRef(t, "", "Acme", "App", 11))
 	require.NoError(t, err)
 
 	addLegacySession(t, repo, legacySession{title: "linked", uuid: "u-linked", owner: "acme", repo: "app", number: 12})
-	upsertLink(t, repo, SessionPROwner("u-linked"), fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u-linked"), fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceManual)
 
 	rep := runBackfill(t, repo)
 	assert.Equal(t, 1, rep.SkippedTombstoned)
@@ -189,7 +189,7 @@ func TestBackfill_ShouldImportAsFollowup_WhenSessionAlreadyHasAPrimary(t *testin
 	ctx := context.Background()
 	// Rollback case: the session has links (#11 primary) and the old binary wrote #12 to the legacy columns.
 	addLegacySession(t, repo, legacySession{title: "rolled-back", uuid: "u1", owner: "acme", repo: "app", number: 12})
-	upsertLink(t, repo, SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
 
 	rep := runBackfill(t, repo)
 
@@ -265,7 +265,7 @@ func TestBackfill_ShouldCountPoisonedRowsAndStillImportHealthyOnes(t *testing.T)
 	addLegacySession(t, repo, legacySession{title: "blank-owner", uuid: "u-bad", owner: "acme", repo: "   ", number: 2})
 	addLegacySession(t, repo, legacySession{title: "over-cap", uuid: "u-cap", owner: "acme", repo: "app", number: 900})
 	for n := 100; n < 100+domain.MaxSessionPRLinks; n++ {
-		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u-cap"), fixturetest.MustPRRef(t, "", "acme", "app", n), domain.PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourceManual})
+		_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u-cap"), fixturetest.MustPRRef(t, "", "acme", "app", n), domain.PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourceManual})
 		require.NoError(t, err)
 	}
 	addLegacyItem(t, repo, "no-url", "done", 5, "")
@@ -293,7 +293,7 @@ func TestBackfill_ShouldNotRecreateSessionDerivedOrDetachedItemPR(t *testing.T) 
 	// #30 reachable only through the item's latest work session: no item-direct link, ever.
 	viaSession := addLegacyItem(t, repo, "via-session", "pr_pending", 30, url)
 	attachItemSession(t, repo, viaSession, "uuid-work")
-	upsertLink(t, repo, SessionPROwner("uuid-work"), ref, domain.AttachSourceBranchDiscovery)
+	upsertLink(t, repo, domain.SessionPROwner("uuid-work"), ref, domain.AttachSourceBranchDiscovery)
 	runBackfill(t, repo)
 	runBackfill(t, repo)
 	links, err := repo.ListByItem(ctx, viaSession)
@@ -301,7 +301,7 @@ func TestBackfill_ShouldNotRecreateSessionDerivedOrDetachedItemPR(t *testing.T) 
 	assert.Empty(t, links)
 
 	// After the session link is detached, the legacy scalar still must not re-create it.
-	_, err = repo.DeleteSessionPR(ctx, SessionPROwner("uuid-work"), ref)
+	_, err = repo.DeleteSessionPR(ctx, domain.SessionPROwner("uuid-work"), ref)
 	require.NoError(t, err)
 	runBackfill(t, repo)
 	links, err = repo.ListByItem(ctx, viaSession)
@@ -328,7 +328,7 @@ func TestBackfill_ShouldResolveOneStateRow_WhenSessionAndItemSpellPRDifferentlyC
 
 	// A tombstone written for Acme/App#12 blocks the import for a second item.
 	other := addLegacyItem(t, repo, "other", "pr_pending", 12, "https://github.com/acme/app/pull/12")
-	_, err := repo.DeleteSessionPR(context.Background(), ItemPROwner(other), fixturetest.MustPRRef(t, "", "Acme", "App", 12))
+	_, err := repo.DeleteSessionPR(context.Background(), domain.ItemPROwner(other), fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	rep := runBackfill(t, repo)
 	assert.Equal(t, 0, rep.CreatedItemLinks)
@@ -364,9 +364,9 @@ func TestBackfill_ShouldReadOnlyCandidateRows_WhenFewSessionsHaveAPR(t *testing.
 	flush()
 
 	var cands []prBackfillCandidate
-	stmts := countStatements(t, repo, func() {
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		cands, err = repo.collectSessionPRCandidates(ctx, &PRBackfillReport{})
+		cands, err = newPRBackfiller(counted).collectSessionPRCandidates(ctx, &PRBackfillReport{})
 		require.NoError(t, err)
 	})
 	assert.Len(t, cands, 40)
@@ -407,9 +407,9 @@ func TestBackfill_ShouldStayBounded_WhenManyItemsAreAlreadyRepresented(t *testin
 	}
 
 	var rep PRBackfillReport
-	stmts := countStatements(t, repo, func() {
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		rep, err = repo.runPRBackfill(ctx, nil)
+		rep, err = newPRBackfiller(counted).runPRBackfill(ctx, nil)
 		require.NoError(t, err)
 	})
 	assert.Zero(t, rep.CreatedItemLinks+rep.CreatedSessionLinks, "everything is already represented")
@@ -474,7 +474,7 @@ func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T)
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	addLegacySession(t, repo, legacySession{title: "has-links", uuid: "u1", owner: "acme", repo: "app", number: 12})
-	upsertLink(t, repo, SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
 	unverified := fixturetest.MustPRRef(t, "", "acme", "app", 40)
 	seedState(t, repo, unverified, domain.PRStateUnknown, true)
 
@@ -551,7 +551,7 @@ func TestMaintenance_ShouldResetVerifyCountersOnlyAfterImport(t *testing.T) {
 	ref := fixturetest.MustPRRef(t, "", "acme", "app", 40)
 	seedState(t, repo, ref, domain.PRStateUnknown, true)
 	for i := 0; i < 3; i++ {
-		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), PRObservationCountedFailure, "network"))
+		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), domain.PRObservationCountedFailure, "network"))
 		require.NoError(t, err)
 	}
 
@@ -567,7 +567,7 @@ func TestNewEntRepository_ShouldNotRunPRMaintenance(t *testing.T) {
 	ref := fixturetest.MustPRRef(t, "", "acme", "app", 40)
 	seedState(t, repo, ref, domain.PRStateUnknown, true)
 	for i := 0; i < 3; i++ {
-		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), PRObservationCountedFailure, "network"))
+		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), domain.PRObservationCountedFailure, "network"))
 		require.NoError(t, err)
 	}
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
@@ -640,7 +640,7 @@ func TestRollbackRedeploy_ShouldNotImportTombstonedValue_AndOverwriteItWithThePr
 	defer cleanup()
 	prLoadFixture(t, storage, "detached", "u-dt", "acme", "app", 0)
 	linkPR(t, storage, "u-dt", 11, domain.PRRolePrimary, time.Now())
-	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-dt"), fixturetest.MustPRRef(t, "", "acme", "app", 12))
+	_, err := storage.Repo.DeleteSessionPR(context.Background(), domain.SessionPROwner("u-dt"), fixturetest.MustPRRef(t, "", "acme", "app", 12))
 	require.NoError(t, err)
 	oldBinaryWritesLegacyNumber(t, storage, "detached", 12)
 	t.Cleanup(storage.StopPRMaintenance)

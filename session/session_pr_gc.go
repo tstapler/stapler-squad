@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -26,7 +27,7 @@ const orphanGCGrace = 24 * time.Hour
 
 // deleteOwnerPRRows removes one owner's links and tombstones; used when the
 // owner (a session or a backlog item) is deleted. State rows are left to the GC.
-func deleteOwnerPRRows(ctx context.Context, tx *ent.Tx, owner PROwner) error {
+func deleteOwnerPRRows(ctx context.Context, tx *ent.Tx, owner domain.PROwner) error {
 	if _, err := tx.SessionPR.Delete().Where(linkOwnerPredicates(owner)...).Exec(ctx); err != nil {
 		return fmt.Errorf("delete pr links: %w", err)
 	}
@@ -55,7 +56,7 @@ type SessionPRGCResult struct {
 // single owner (session or backlog item) no longer exists and that are older
 // than orphanGCGrace, then state rows with no remaining link and the same age.
 // It writes no state column, so it is not a second state writer (invariant I1).
-func (r *EntRepository) RunSessionPRLinkGC(ctx context.Context, now time.Time) (SessionPRGCResult, error) {
+func RunSessionPRLinkGC(ctx context.Context, client *ent.Client, now time.Time) (SessionPRGCResult, error) {
 	cutoff := now.Add(-orphanGCGrace)
 	var res SessionPRGCResult
 	step := func(label string, fn func() (int, error)) error {
@@ -76,19 +77,19 @@ func (r *EntRepository) RunSessionPRLinkGC(ctx context.Context, now time.Time) (
 		fn    func() (int, error)
 	}{
 		{"links", func() (int, error) {
-			return r.Client.SessionPR.Delete().Where(sessionpr.SessionUUIDNEQ(""), sessionpr.AttachedAtLT(cutoff), sessionGone).Exec(ctx)
+			return client.SessionPR.Delete().Where(sessionpr.SessionUUIDNEQ(""), sessionpr.AttachedAtLT(cutoff), sessionGone).Exec(ctx)
 		}},
 		{"links", func() (int, error) {
-			return r.Client.SessionPR.Delete().Where(sessionpr.BacklogItemIDNEQ(""), sessionpr.AttachedAtLT(cutoff), itemGone).Exec(ctx)
+			return client.SessionPR.Delete().Where(sessionpr.BacklogItemIDNEQ(""), sessionpr.AttachedAtLT(cutoff), itemGone).Exec(ctx)
 		}},
 		{"tombstones", func() (int, error) {
-			return r.Client.SessionPRTombstone.Delete().Where(sessionprtombstone.SessionUUIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombSessionGone).Exec(ctx)
+			return client.SessionPRTombstone.Delete().Where(sessionprtombstone.SessionUUIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombSessionGone).Exec(ctx)
 		}},
 		{"tombstones", func() (int, error) {
-			return r.Client.SessionPRTombstone.Delete().Where(sessionprtombstone.BacklogItemIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombItemGone).Exec(ctx)
+			return client.SessionPRTombstone.Delete().Where(sessionprtombstone.BacklogItemIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombItemGone).Exec(ctx)
 		}},
 		{"states", func() (int, error) {
-			return r.Client.PullRequestState.Delete().Where(pullrequeststate.Not(pullrequeststate.HasLinks()), pullrequeststate.CreatedAtLT(cutoff)).Exec(ctx)
+			return client.PullRequestState.Delete().Where(pullrequeststate.Not(pullrequeststate.HasLinks()), pullrequeststate.CreatedAtLT(cutoff)).Exec(ctx)
 		}},
 	}
 	for _, s := range steps {
@@ -114,7 +115,7 @@ func (g *SessionPRGCResult) countFor(label string, n int) {
 // its context is cancelled. It is a no-op while session_multi_pr is off (read
 // live, so flipping the flag takes effect without a restart).
 type SessionPRLinkGC struct {
-	repo     *EntRepository
+	client   *ent.Client
 	interval time.Duration
 	now      func() time.Time
 	enabled  func() bool
@@ -123,12 +124,12 @@ type SessionPRLinkGC struct {
 }
 
 // NewSessionPRLinkGC builds the nightly collector; interval <= 0 means 24h.
-func NewSessionPRLinkGC(repo *EntRepository, interval time.Duration) *SessionPRLinkGC {
+func NewSessionPRLinkGC(client *ent.Client, interval time.Duration) *SessionPRLinkGC {
 	if interval <= 0 {
 		interval = 24 * time.Hour
 	}
 	return &SessionPRLinkGC{
-		repo: repo, interval: interval, now: time.Now,
+		client: client, interval: interval, now: time.Now,
 		enabled: func() bool { return config.SessionMultiPR(config.SessionMultiPRScopePoller) },
 	}
 }
@@ -139,7 +140,7 @@ func (s *Storage) NewSessionPRLinkGC(interval time.Duration) *SessionPRLinkGC {
 	if s == nil || s.Repo == nil {
 		return nil
 	}
-	return NewSessionPRLinkGC(s.Repo, interval)
+	return NewSessionPRLinkGC(s.Repo.Client, interval)
 }
 
 // Start runs the collector in the background until ctx ends. A second call is a no-op.
@@ -177,7 +178,7 @@ func (g *SessionPRLinkGC) runOnce(ctx context.Context) {
 	if ctx.Err() != nil || !g.enabled() {
 		return
 	}
-	res, err := g.repo.RunSessionPRLinkGC(ctx, g.now())
+	res, err := RunSessionPRLinkGC(ctx, g.client, g.now())
 	if err != nil {
 		log.Warn("session pr link gc failed", "error", err)
 		return

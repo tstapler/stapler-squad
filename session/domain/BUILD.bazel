@@ -29,6 +29,7 @@ go_library(
         "instance_values.go",
         "pr_link.go",
         "pr_set.go",
+        "pr_values.go",
         "process_manager_backend.go",
         "review_state.go",
         "session_type.go",

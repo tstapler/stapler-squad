@@ -32,7 +32,7 @@ func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing
 		t.Run("fetch "+string(st), func(t *testing.T) {
 			t.Parallel()
 			repo, ref := seed(t, i+1)
-			res, err := repo.UpdatePullRequestState(context.Background(), ref, fetchObs(PRSourceReconcilerRefresh, st, later))
+			res, err := repo.UpdatePullRequestState(context.Background(), ref, fetchObs(domain.PRSourceReconcilerRefresh, st, later))
 			require.NoError(t, err)
 			assert.True(t, res.Applied)
 			row := reload(t, repo, ref)
@@ -46,8 +46,8 @@ func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing
 	t.Run("counted failure keeps the row unverified and increments", func(t *testing.T) {
 		t.Parallel()
 		repo, ref := seed(t, 10)
-		obs := failObs(later, PRObservationCountedFailure, "network")
-		obs.Source = PRSourceReconcilerRefresh
+		obs := failObs(later, domain.PRObservationCountedFailure, "network")
+		obs.Source = domain.PRSourceReconcilerRefresh
 		res, err := repo.UpdatePullRequestState(context.Background(), ref, obs)
 		require.NoError(t, err)
 		assert.True(t, res.Applied)
