@@ -818,10 +818,11 @@ func InitializeForTests(fileLevel LogLevel, consoleLevel LogLevel) {
 	fmt.Fprintf(os.Stderr, "\n")
 }
 
-// warmLogFileMill starts lumberjack's process-global mill goroutine (it has no
-// stop hook and otherwise starts lazily on the first write) so it is already in
-// every goleak.IgnoreCurrent baseline instead of "leaking" from whichever test
-// logs first. A zero-byte write opens the file and starts the mill.
+// warmLogFileMill starts the current file logger's mill goroutine (per-Logger:
+// startMill is a sync.Once on each *lumberjack.Logger; it has no stop hook and
+// otherwise starts lazily on first write) so it is already in every
+// goleak.IgnoreCurrent baseline. A zero-byte write opens the file and starts it.
+// A file logger re-initialised later needs warming again.
 func warmLogFileMill() {
 	if lj, ok := globalLogFile.(*lumberjack.Logger); ok {
 		_, _ = lj.Write(nil)
