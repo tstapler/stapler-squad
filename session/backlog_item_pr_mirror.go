@@ -5,9 +5,11 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // RecomputeItemPRMirror makes backlog_item.pr_number/pr_url follow ActivePR of the
@@ -40,7 +42,7 @@ func (r *EntRepository) recomputeItemPRMirror(ctx context.Context, item *ent.Bac
 	}
 	url := active.URL
 	if url == "" {
-		url = synthesizePRURL(active.Ref)
+		url = sessionpr.SynthesizePRURL(active.Ref)
 	}
 	n, err := r.Client.BacklogItem.Update().
 		Where(backlogitem.ID(item.ID), backlogitem.PrNumber(item.PrNumber)).

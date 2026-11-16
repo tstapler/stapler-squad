@@ -1,4 +1,4 @@
-package session
+package sessionpr
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/pullrequeststate"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
 	"github.com/tstapler/stapler-squad/session/ent/sessionprtombstone"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -31,7 +31,7 @@ import (
 const (
 	// prStateIDChunk bounds `id IN (...)` state reads. State ids are integers and
 	// one link query can reference many distinct PRs, so this is larger than
-	// itemSessionBatchChunk to keep the documented statement budget (links then
+	// ItemSessionBatchChunk to keep the documented statement budget (links then
 	// states) for a few hundred sessions; still far under SQLite's variable limit.
 	prStateIDChunk = 5000
 	// prDropWarnAfter consecutive dropped observations on one row log a warning.
@@ -63,14 +63,14 @@ func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref d
 }
 
 func clientStateID(ctx context.Context, c *ent.PullRequestStateClient, ref domain.PRRef) (int, error) {
-	id, err := c.Query().Where(refPredicate(ref)).OnlyID(ctx)
+	id, err := c.Query().Where(RefPredicate(ref)).OnlyID(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("look up pull request state %s: %w", ref, err)
 	}
 	return id, nil
 }
 
-func refPredicate(ref domain.PRRef) predicate.PullRequestState {
+func RefPredicate(ref domain.PRRef) predicate.PullRequestState {
 	return pullrequeststate.And(
 		pullrequeststate.Host(ref.Host()), pullrequeststate.Owner(ref.Owner()),
 		pullrequeststate.Repo(ref.Repo()), pullrequeststate.Number(ref.Number()),
@@ -79,11 +79,11 @@ func refPredicate(ref domain.PRRef) predicate.PullRequestState {
 
 // EnsureState inserts the state row for ref if absent and returns its id. It
 // never modifies an existing row.
-func (r *EntRepository) EnsureState(ctx context.Context, ref domain.PRRef, initial domain.PRInitial) (int, error) {
+func (r *PRStore) EnsureState(ctx context.Context, ref domain.PRRef, initial domain.PRInitial) (int, error) {
 	if ref.IsZero() {
 		return 0, instance.ErrZeroPRRef
 	}
-	return clientEnsureState(ctx, r.Client.PullRequestState, ref, initial)
+	return clientEnsureState(ctx, r.client.PullRequestState, ref, initial)
 }
 
 func tombstonePredicate(owner domain.PROwner, ref domain.PRRef) []predicate.SessionPRTombstone {
@@ -94,36 +94,36 @@ func tombstonePredicate(owner domain.PROwner, ref domain.PRRef) []predicate.Sess
 	}
 }
 
-func linkOwnerPredicates(owner domain.PROwner) []predicate.SessionPR {
-	return []predicate.SessionPR{sessionpr.SessionUUID(owner.SessionUUID), sessionpr.BacklogItemID(owner.BacklogItemID)}
+func LinkOwnerPredicates(owner domain.PROwner) []predicate.SessionPR {
+	return []predicate.SessionPR{entsessionpr.SessionUUID(owner.SessionUUID), entsessionpr.BacklogItemID(owner.BacklogItemID)}
 }
 
 // IsTombstoned reports whether owner detached ref earlier.
-func (r *EntRepository) IsTombstoned(ctx context.Context, owner domain.PROwner, ref domain.PRRef) (bool, error) {
+func (r *PRStore) IsTombstoned(ctx context.Context, owner domain.PROwner, ref domain.PRRef) (bool, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return false, err
 	}
-	return r.Client.SessionPRTombstone.Query().Where(tombstonePredicate(owner, ref)...).Exist(ctx)
+	return r.client.SessionPRTombstone.Query().Where(tombstonePredicate(owner, ref)...).Exist(ctx)
 }
 
 // UpsertSessionPR ensures the state row and the owner's link in one transaction.
 // A tombstoned (owner, ref) writes nothing and reports Tombstoned; a user attach
 // calls ClearTombstone first. An existing link is left untouched (attached_at,
 // role and pin survive a repeat call).
-func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner domain.PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
+func (r *PRStore) UpsertSessionPR(ctx context.Context, owner domain.PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return domain.PRLinkResult{}, err
 	}
 	var res domain.PRLinkResult
-	err := withPRTx(ctx, r.Client, "upsert session pr", func(tx *ent.Tx) error {
+	err := WithPRTx(ctx, r.client, "upsert session pr", func(tx *ent.Tx) error {
 		var err error
-		res, err = upsertSessionPRTx(ctx, tx, owner, ref, link)
+		res, err = UpsertSessionPRTx(ctx, tx, owner, ref, link)
 		return err
 	})
 	return res, err
 }
 
-func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner domain.PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
+func UpsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner domain.PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	tombstoned, err := tx.SessionPRTombstone.Query().Where(tombstonePredicate(owner, ref)...).Exist(ctx)
 	if err != nil {
 		return domain.PRLinkResult{}, fmt.Errorf("check tombstone: %w", err)
@@ -136,7 +136,7 @@ func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner domain.PROwner, re
 		return domain.PRLinkResult{}, err
 	}
 	existing, err := tx.SessionPR.Query().
-		Where(append(linkOwnerPredicates(owner), sessionpr.PullRequestStateID(stateID))...).Only(ctx)
+		Where(append(LinkOwnerPredicates(owner), entsessionpr.PullRequestStateID(stateID))...).Only(ctx)
 	switch {
 	case err == nil:
 		return domain.PRLinkResult{StateID: stateID, Role: domain.PRRole(existing.Role)}, nil
@@ -165,7 +165,7 @@ func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner domain.PROwner, w
 	if want == "" {
 		want = domain.PRRolePrimary
 	}
-	count, err := tx.SessionPR.Query().Where(linkOwnerPredicates(owner)...).Count(ctx)
+	count, err := tx.SessionPR.Query().Where(LinkOwnerPredicates(owner)...).Count(ctx)
 	if err != nil {
 		return "", fmt.Errorf("count owner links: %w", err)
 	}
@@ -179,7 +179,7 @@ func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner domain.PROwner, w
 		return want, nil
 	}
 	hasPrimary, err := tx.SessionPR.Query().
-		Where(sessionpr.SessionUUID(owner.SessionUUID), sessionpr.Role(string(domain.PRRolePrimary))).Exist(ctx)
+		Where(entsessionpr.SessionUUID(owner.SessionUUID), entsessionpr.Role(string(domain.PRRolePrimary))).Exist(ctx)
 	if err != nil {
 		return "", fmt.Errorf("check primary link: %w", err)
 	}
@@ -189,8 +189,8 @@ func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner domain.PROwner, w
 	return domain.PRRolePrimary, nil
 }
 
-// withPRTx runs fn in a transaction, rolling back on error.
-func withPRTx(ctx context.Context, client *ent.Client, op string, fn func(*ent.Tx) error) error {
+// WithPRTx runs fn in a transaction, rolling back on error.
+func WithPRTx(ctx context.Context, client *ent.Client, op string, fn func(*ent.Tx) error) error {
 	tx, err := client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("%s: begin transaction: %w", op, err)
@@ -210,7 +210,7 @@ func withPRTx(ctx context.Context, client *ent.Client, op string, fn func(*ent.T
 // for an empty uuid and ErrSessionNotPersisted when the session row does not exist
 // yet (the first full save then writes the set). A tombstoned PR writes nothing
 // and reports Tombstoned. Failure at any step rolls everything back.
-func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror instance.PRMirror) (domain.PRLinkResult, error) {
+func (r *PRStore) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror instance.PRMirror) (domain.PRLinkResult, error) {
 	if sessionUUID == "" {
 		return domain.PRLinkResult{}, domain.ErrNoSessionUUID
 	}
@@ -218,18 +218,18 @@ func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string,
 		return domain.PRLinkResult{}, instance.ErrZeroPRRef
 	}
 	var res domain.PRLinkResult
-	err := withPRTx(ctx, r.Client, "attach session pr", func(tx *ent.Tx) error {
+	err := WithPRTx(ctx, r.client, "attach session pr", func(tx *ent.Tx) error {
 		rowID, err := tx.Session.Query().Where(entsession.UUID(sessionUUID)).OnlyID(ctx)
 		if ent.IsNotFound(err) {
 			return domain.ErrSessionNotPersisted
 		} else if err != nil {
 			return fmt.Errorf("look up session: %w", err)
 		}
-		if res, err = upsertSessionPRTx(ctx, tx, domain.SessionPROwner(sessionUUID), ref, link); err != nil || res.Tombstoned {
+		if res, err = UpsertSessionPRTx(ctx, tx, domain.SessionPROwner(sessionUUID), ref, link); err != nil || res.Tombstoned {
 			return err
 		}
-		if r.afterPRLinkHook != nil {
-			if err := r.afterPRLinkHook(); err != nil {
+		if hook := r.AfterLinkHook(); hook != nil {
+			if err := hook(); err != nil {
 				return err
 			}
 		}
@@ -241,11 +241,11 @@ func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string,
 // PersistPRMirror writes the legacy scalar PR columns of the session with this
 // uuid, including clearing them (number 0, empty URL, terminal false), which the
 // full-save set-only path cannot. It returns ErrSessionNotPersisted when no row matches.
-func (r *EntRepository) PersistPRMirror(ctx context.Context, sessionUUID string, mirror instance.PRMirror) error {
+func (r *PRStore) PersistPRMirror(ctx context.Context, sessionUUID string, mirror instance.PRMirror) error {
 	if sessionUUID == "" {
 		return domain.ErrNoSessionUUID
 	}
-	return withPRTx(ctx, r.Client, "persist pr mirror", func(tx *ent.Tx) error {
+	return WithPRTx(ctx, r.client, "persist pr mirror", func(tx *ent.Tx) error {
 		rowID, err := tx.Session.Query().Where(entsession.UUID(sessionUUID)).OnlyID(ctx)
 		if ent.IsNotFound(err) {
 			return domain.ErrSessionNotPersisted
@@ -265,17 +265,17 @@ func setMirrorTx(ctx context.Context, tx *ent.Tx, rowID int, m instance.PRMirror
 	return nil
 }
 
-// upsertSessionPRSetTx idempotently writes the links (and, insert-if-absent, their
+// UpsertSessionPRSetTx idempotently writes the links (and, insert-if-absent, their
 // state rows) carried by a full save. It never updates a state column (invariant I1),
 // so a stale snapshot cannot overwrite a fresher poll, and a tombstoned PR is skipped.
-func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data domain.InstanceData) error {
+func UpsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data domain.InstanceData) error {
 	if data.UUID == "" {
 		return nil
 	}
 	owner := domain.SessionPROwner(data.UUID)
 	for _, v := range data.PRs {
 		link := domain.PRLink{Role: v.Role, Source: v.AttachSource, Initial: instance.PrInitialOf(v), AttachedAt: v.AttachedAt}
-		if _, err := upsertSessionPRTx(ctx, tx, owner, v.Ref, link); err != nil {
+		if _, err := UpsertSessionPRTx(ctx, tx, owner, v.Ref, link); err != nil {
 			if isDeterministicPRImportError(err) {
 				// A bad link must not roll back the rest of the session save.
 				log.Warn("save pr link skipped", "pr", v.Ref.String(), "err", err)
@@ -289,28 +289,28 @@ func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data domain.InstanceD
 
 // ClearTombstone removes one owner's tombstone for ref: the repository half of a
 // user attach. It is a no-op when none exists.
-func (r *EntRepository) ClearTombstone(ctx context.Context, owner domain.PROwner, ref domain.PRRef) error {
+func (r *PRStore) ClearTombstone(ctx context.Context, owner domain.PROwner, ref domain.PRRef) error {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return err
 	}
-	_, err := r.Client.SessionPRTombstone.Delete().Where(tombstonePredicate(owner, ref)...).Exec(ctx)
+	_, err := r.client.SessionPRTombstone.Delete().Where(tombstonePredicate(owner, ref)...).Exec(ctx)
 	return err
 }
 
 // DeleteSessionPR detaches ref from owner: it deletes exactly that owner's link
 // and writes that owner's tombstone in one transaction. It reports whether a link
 // existed; the tombstone is written either way so a later automatic attach is blocked.
-func (r *EntRepository) DeleteSessionPR(ctx context.Context, owner domain.PROwner, ref domain.PRRef) (bool, error) {
+func (r *PRStore) DeleteSessionPR(ctx context.Context, owner domain.PROwner, ref domain.PRRef) (bool, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return false, err
 	}
 	deleted := false
-	err := withPRTx(ctx, r.Client, "delete session pr", func(tx *ent.Tx) error {
-		stateID, err := tx.PullRequestState.Query().Where(refPredicate(ref)).OnlyID(ctx)
+	err := WithPRTx(ctx, r.client, "delete session pr", func(tx *ent.Tx) error {
+		stateID, err := tx.PullRequestState.Query().Where(RefPredicate(ref)).OnlyID(ctx)
 		switch {
 		case err == nil:
 			n, derr := tx.SessionPR.Delete().
-				Where(append(linkOwnerPredicates(owner), sessionpr.PullRequestStateID(stateID))...).Exec(ctx)
+				Where(append(LinkOwnerPredicates(owner), entsessionpr.PullRequestStateID(stateID))...).Exec(ctx)
 			if derr != nil {
 				return fmt.Errorf("delete link: %w", derr)
 			}
@@ -334,26 +334,26 @@ func (r *EntRepository) DeleteSessionPR(ctx context.Context, owner domain.PROwne
 
 // SetPinned pins or unpins ref on a session in one transaction; pinning clears
 // every other pin of that session. Only sessions can pin.
-func (r *EntRepository) SetPinned(ctx context.Context, owner domain.PROwner, ref domain.PRRef, pinned bool) error {
+func (r *PRStore) SetPinned(ctx context.Context, owner domain.PROwner, ref domain.PRRef, pinned bool) error {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return err
 	}
 	if !owner.IsSession() {
 		return domain.ErrInvalidPROwner
 	}
-	return withPRTx(ctx, r.Client, "set pinned", func(tx *ent.Tx) error {
-		stateID, err := tx.PullRequestState.Query().Where(refPredicate(ref)).OnlyID(ctx)
+	return WithPRTx(ctx, r.client, "set pinned", func(tx *ent.Tx) error {
+		stateID, err := tx.PullRequestState.Query().Where(RefPredicate(ref)).OnlyID(ctx)
 		if err != nil {
 			return fmt.Errorf("look up state %s: %w", ref, err)
 		}
 		linkID, err := tx.SessionPR.Query().
-			Where(sessionpr.SessionUUID(owner.SessionUUID), sessionpr.PullRequestStateID(stateID)).OnlyID(ctx)
+			Where(entsessionpr.SessionUUID(owner.SessionUUID), entsessionpr.PullRequestStateID(stateID)).OnlyID(ctx)
 		if err != nil {
 			return fmt.Errorf("look up link: %w", err)
 		}
 		if pinned {
 			if _, err := tx.SessionPR.Update().
-				Where(sessionpr.SessionUUID(owner.SessionUUID), sessionpr.IDNEQ(linkID), sessionpr.Pinned(true)).
+				Where(entsessionpr.SessionUUID(owner.SessionUUID), entsessionpr.IDNEQ(linkID), entsessionpr.Pinned(true)).
 				SetPinned(false).Save(ctx); err != nil {
 				return fmt.Errorf("clear other pins: %w", err)
 			}
@@ -379,11 +379,11 @@ func chunkSlice[T any](xs []T, size int) [][]T {
 // ListBySessionUUIDs returns each session's links joined to their states.
 // Statements: one per 500 uuids for links, plus one per prStateIDChunk distinct
 // states. Sessions without links are absent from the map.
-func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
+func (r *PRStore) ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
 	out := make(map[string][]domain.PRView, len(uuids))
 	var links []*ent.SessionPR
-	for _, chunk := range chunkSlice(uuids, itemSessionBatchChunk) {
-		got, err := r.Client.SessionPR.Query().Where(sessionpr.SessionUUIDIn(chunk...)).All(ctx)
+	for _, chunk := range chunkSlice(uuids, ItemSessionBatchChunk) {
+		got, err := r.client.SessionPR.Query().Where(entsessionpr.SessionUUIDIn(chunk...)).All(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list session prs: %w", err)
 		}
@@ -402,21 +402,21 @@ func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) 
 // SessionUUIDsByPR returns the sorted UUIDs of the sessions linked to ref
 // (item-direct links excluded). Two statements: the state row, then its links.
 // Rows are not checked against live sessions; the caller filters orphans.
-func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error) {
+func (r *PRStore) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error) {
 	if ref.IsZero() {
 		return nil, instance.ErrZeroPRRef
 	}
-	stateID, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).OnlyID(ctx)
+	stateID, err := r.client.PullRequestState.Query().Where(RefPredicate(ref)).OnlyID(ctx)
 	if ent.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("look up pull request state %s: %w", ref, err)
 	}
-	uuids, err := r.Client.SessionPR.Query().
-		Where(sessionpr.PullRequestStateID(stateID), sessionpr.SessionUUIDNEQ("")).
-		Order(ent.Asc(sessionpr.FieldSessionUUID)).
-		Select(sessionpr.FieldSessionUUID).Strings(ctx)
+	uuids, err := r.client.SessionPR.Query().
+		Where(entsessionpr.PullRequestStateID(stateID), entsessionpr.SessionUUIDNEQ("")).
+		Order(ent.Asc(entsessionpr.FieldSessionUUID)).
+		Select(entsessionpr.FieldSessionUUID).Strings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions linked to %s: %w", ref, err)
 	}
@@ -424,18 +424,18 @@ func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) 
 }
 
 // ListByItem returns the item-direct links of one backlog item joined to states.
-func (r *EntRepository) ListByItem(ctx context.Context, itemID string) ([]domain.PRView, error) {
+func (r *PRStore) ListByItem(ctx context.Context, itemID string) ([]domain.PRView, error) {
 	if itemID == "" {
 		return nil, domain.ErrInvalidPROwner
 	}
-	links, err := r.Client.SessionPR.Query().Where(sessionpr.BacklogItemID(itemID)).All(ctx)
+	links, err := r.client.SessionPR.Query().Where(entsessionpr.BacklogItemID(itemID)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list item prs: %w", err)
 	}
 	return r.joinLinkStates(ctx, links)
 }
 
-func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.SessionPR) ([]domain.PRView, error) {
+func (r *PRStore) joinLinkStates(ctx context.Context, links []*ent.SessionPR) ([]domain.PRView, error) {
 	if len(links) == 0 {
 		return nil, nil
 	}
@@ -449,7 +449,7 @@ func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.Session
 	}
 	states := make(map[int]*ent.PullRequestState, len(ids))
 	for _, chunk := range chunkSlice(ids, prStateIDChunk) {
-		got, err := r.Client.PullRequestState.Query().Where(pullrequeststate.IDIn(chunk...)).All(ctx)
+		got, err := r.client.PullRequestState.Query().Where(pullrequeststate.IDIn(chunk...)).All(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load pull request states: %w", err)
 		}
@@ -477,8 +477,8 @@ func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.Session
 // not exhausted. Non-terminal states come first, then unverified terminal ones,
 // each newest link (attached_at) first. Returned views carry state columns only;
 // AttachedAt is the newest link's, and owner fields are empty.
-func (r *EntRepository) ListPollableStates(ctx context.Context) ([]domain.PRView, error) {
-	states, err := r.Client.PullRequestState.Query().
+func (r *PRStore) ListPollableStates(ctx context.Context) ([]domain.PRView, error) {
+	states, err := r.client.PullRequestState.Query().
 		Where(pullrequeststate.HasLinks(), pullrequeststate.Or(
 			pullrequeststate.Terminal(false),
 			pullrequeststate.And(pullrequeststate.State(string(domain.PRStateUnknown)), pullrequeststate.Terminal(true)),
@@ -514,11 +514,11 @@ func (r *EntRepository) ListPollableStates(ctx context.Context) ([]domain.PRView
 }
 
 // GetPullRequestState returns one PR's state columns (no owner fields).
-func (r *EntRepository) GetPullRequestState(ctx context.Context, ref domain.PRRef) (domain.PRView, error) {
+func (r *PRStore) GetPullRequestState(ctx context.Context, ref domain.PRRef) (domain.PRView, error) {
 	if ref.IsZero() {
 		return domain.PRView{}, instance.ErrZeroPRRef
 	}
-	st, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
+	st, err := r.client.PullRequestState.Query().Where(RefPredicate(ref)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return domain.PRView{}, fmt.Errorf("%w: pull request state %s", domain.ErrNotFound, ref)
@@ -529,7 +529,7 @@ func (r *EntRepository) GetPullRequestState(ctx context.Context, ref domain.PRRe
 }
 
 // linkStateToView converts a state row (and optionally one of its links) to a PRView.
-func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.SessionPR) (domain.PRView, error) {
+func (r *PRStore) linkStateToView(st *ent.PullRequestState, link *ent.SessionPR) (domain.PRView, error) {
 	ref, err := domain.NewPRRef(st.Host, st.Owner, st.Repo, st.Number)
 	if err != nil {
 		return domain.PRView{}, fmt.Errorf("stored pull request state %d: %w", st.ID, err)
@@ -547,7 +547,7 @@ func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.Sess
 		PollFailCount: st.PollFailCount, FirstFailAt: derefTime(st.FirstFailAt), PollError: st.PollError,
 		RateLimitResetAt: derefTime(st.RateLimitResetAt),
 	}
-	if v.UnverifiedTerminal() && !r.prVerifyCountersTrusted.Load() {
+	if v.UnverifiedTerminal() && !r.verifyCountersTrusted.Load() {
 		// Counters left by an earlier process are not trusted until this process's
 		// maintenance pass has succeeded, so such a row reads as not exhausted.
 		v.PollFailCount, v.FirstFailAt = 0, time.Time{}
@@ -573,13 +573,13 @@ func derefTime(t *time.Time) time.Time {
 
 // MarkPRMaintenanceSucceeded records that this process's startup maintenance
 // pass succeeded, so stored verification counters are trusted from now on.
-func (r *EntRepository) MarkPRMaintenanceSucceeded() { r.prVerifyCountersTrusted.Store(true) }
+func (r *PRStore) MarkPRMaintenanceSucceeded() { r.verifyCountersTrusted.Store(true) }
 
 // ListSessionTombstonesByUUIDs returns each session's tombstoned PRs (chunked by 500).
-func (r *EntRepository) ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRRef, error) {
+func (r *PRStore) ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRRef, error) {
 	out := make(map[string][]domain.PRRef)
-	for _, chunk := range chunkSlice(uuids, itemSessionBatchChunk) {
-		rows, err := r.Client.SessionPRTombstone.Query().Where(sessionprtombstone.SessionUUIDIn(chunk...)).All(ctx)
+	for _, chunk := range chunkSlice(uuids, ItemSessionBatchChunk) {
+		rows, err := r.client.SessionPRTombstone.Query().Where(sessionprtombstone.SessionUUIDIn(chunk...)).All(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list session tombstones: %w", err)
 		}
@@ -591,10 +591,10 @@ func (r *EntRepository) ListSessionTombstonesByUUIDs(ctx context.Context, uuids 
 }
 
 // ListItemTombstones returns each item's tombstoned PRs (chunked by 500).
-func (r *EntRepository) ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]domain.PRRef, error) {
+func (r *PRStore) ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]domain.PRRef, error) {
 	out := make(map[string][]domain.PRRef)
-	for _, chunk := range chunkSlice(itemIDs, itemSessionBatchChunk) {
-		rows, err := r.Client.SessionPRTombstone.Query().Where(sessionprtombstone.BacklogItemIDIn(chunk...)).All(ctx)
+	for _, chunk := range chunkSlice(itemIDs, ItemSessionBatchChunk) {
+		rows, err := r.client.SessionPRTombstone.Query().Where(sessionprtombstone.BacklogItemIDIn(chunk...)).All(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list item tombstones: %w", err)
 		}
@@ -653,10 +653,10 @@ func (t *prDropTracker) applied(stateID int) {
 }
 
 // PRObservationDropCounts returns the dropped-observation counters.
-func (r *EntRepository) PRObservationDropCounts() domain.PRObservationDrops {
-	r.prDrops.mu.Lock()
-	defer r.prDrops.mu.Unlock()
-	return r.prDrops.counts
+func (r *PRStore) PRObservationDropCounts() domain.PRObservationDrops {
+	r.drops.mu.Lock()
+	defer r.drops.mu.Unlock()
+	return r.drops.counts
 }
 
 // UpdatePullRequestState applies one observation to the state row of ref. It is
@@ -669,7 +669,7 @@ func (r *EntRepository) PRObservationDropCounts() domain.PRObservationDrops {
 //	merged -> anything                     rejected
 //	unknown (either terminal bit) -> real  any source
 //	open -> unknown                        only via the 5-counted-failure rule
-func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs domain.PRObservation) (domain.PRObservationResult, error) {
+func (r *PRStore) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs domain.PRObservation) (domain.PRObservationResult, error) {
 	if ref.IsZero() {
 		return domain.PRObservationResult{}, instance.ErrZeroPRRef
 	}
@@ -680,7 +680,7 @@ func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref domain.P
 		obs.Now = time.Now()
 	}
 	for attempt := 0; attempt < prObservationCASRetries; attempt++ {
-		row, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
+		row, err := r.client.PullRequestState.Query().Where(RefPredicate(ref)).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
 				return domain.PRObservationResult{}, fmt.Errorf("%w: pull request state %s", domain.ErrNotFound, ref)
@@ -689,7 +689,7 @@ func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref domain.P
 		}
 		plan, reason := planObservation(row, obs)
 		if reason != "" {
-			r.prDrops.record(row.ID, ref, reason)
+			r.drops.record(row.ID, ref, reason)
 			return domain.PRObservationResult{Dropped: reason}, nil
 		}
 		won, err := r.applyObservationPlan(ctx, row, plan)
@@ -697,7 +697,7 @@ func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref domain.P
 			return domain.PRObservationResult{}, err
 		}
 		if won {
-			r.prDrops.applied(row.ID)
+			r.drops.applied(row.ID)
 			return domain.PRObservationResult{Applied: true}, nil
 		}
 	}
@@ -809,9 +809,9 @@ func planCountedFailure(p observationPlan, row *ent.PullRequestState, cur domain
 
 // applyObservationPlan writes the plan with a compare-and-set on the columns it
 // was computed from; it reports false when another writer changed the row first.
-func (r *EntRepository) applyObservationPlan(ctx context.Context, row *ent.PullRequestState, p observationPlan) (bool, error) {
+func (r *PRStore) applyObservationPlan(ctx context.Context, row *ent.PullRequestState, p observationPlan) (bool, error) {
 	obs := p.obs
-	upd := r.Client.PullRequestState.Update().Where(
+	upd := r.client.PullRequestState.Update().Where(
 		pullrequeststate.ID(row.ID), pullrequeststate.State(p.oldState), pullrequeststate.Terminal(p.oldTerminal),
 		lastPolledMatches(p.oldPolled),
 	)
@@ -884,8 +884,8 @@ func lastPolledMatches(old *time.Time) predicate.PullRequestState {
 // ResetVerifyCounters zeroes poll_fail_count, first_fail_at and poll_error on
 // unverified-terminal rows only (state=unknown, terminal=true) and returns how
 // many it touched. Called only by the service-startup maintenance pass.
-func (r *EntRepository) ResetVerifyCounters(ctx context.Context) (int, error) {
-	n, err := r.Client.PullRequestState.Update().
+func (r *PRStore) ResetVerifyCounters(ctx context.Context) (int, error) {
+	n, err := r.client.PullRequestState.Update().
 		Where(pullrequeststate.State(string(domain.PRStateUnknown)), pullrequeststate.Terminal(true)).
 		SetPollFailCount(0).ClearFirstFailAt().SetPollError("").Save(ctx)
 	if err != nil {
@@ -896,14 +896,14 @@ func (r *EntRepository) ResetVerifyCounters(ctx context.Context) (int, error) {
 
 // ListPRMirrors returns the stored legacy PR columns of every session that has a
 // uuid, keyed by uuid: one narrow query for the mirror reconciler.
-func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]instance.PRMirror, error) {
+func (r *PRStore) ListPRMirrors(ctx context.Context) (map[string]instance.PRMirror, error) {
 	var rows []struct {
 		UUID     string `json:"uuid"`
 		URL      string `json:"github_pr_url"`
 		Number   int    `json:"github_pr_number"`
 		Terminal bool   `json:"github_pr_status_terminal"`
 	}
-	err := r.Client.Session.Query().Where(entsession.UUIDNEQ("")).
+	err := r.client.Session.Query().Where(entsession.UUIDNEQ("")).
 		Select(entsession.FieldUUID, entsession.FieldGithubPrURL, entsession.FieldGithubPrNumber, entsession.FieldGithubPrStatusTerminal).
 		Scan(ctx, &rows)
 	if err != nil {
@@ -918,10 +918,10 @@ func (r *EntRepository) ListPRMirrors(ctx context.Context) (map[string]instance.
 
 // ListLinkOwnersByStateIDs returns the distinct session uuids and item ids that
 // link any of the given PullRequestState rows (one query per chunk of ids).
-func (r *EntRepository) ListLinkOwnersByStateIDs(ctx context.Context, stateIDs []int) (sessionUUIDs, itemIDs []string, err error) {
+func (r *PRStore) ListLinkOwnersByStateIDs(ctx context.Context, stateIDs []int) (sessionUUIDs, itemIDs []string, err error) {
 	seenS, seenI := map[string]struct{}{}, map[string]struct{}{}
 	for _, chunk := range chunkSlice(stateIDs, prStateIDChunk) {
-		links, qerr := r.Client.SessionPR.Query().Where(sessionpr.PullRequestStateIDIn(chunk...)).All(ctx)
+		links, qerr := r.client.SessionPR.Query().Where(entsessionpr.PullRequestStateIDIn(chunk...)).All(ctx)
 		if qerr != nil {
 			return nil, nil, fmt.Errorf("list link owners by state: %w", qerr)
 		}

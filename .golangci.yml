@@ -202,6 +202,31 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent/backlogflowmarker
             - github.com/tstapler/stapler-squad/session/ent/backlogitem
             - github.com/tstapler/stapler-squad/session/ent/backlogstuckepisode
+        # session/sessionpr persists PullRequestState, session PR links and tombstones and is embedded by
+        # session.EntRepository: it never imports session or server.
+        isolate_sessionpr:
+          list-mode: strict
+          files:
+            - "**/session/sessionpr/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/config
+            - github.com/tstapler/stapler-squad/github
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/itemsession
+            - github.com/tstapler/stapler-squad/session/ent/predicate
+            - github.com/tstapler/stapler-squad/session/ent/pullrequeststate
+            - github.com/tstapler/stapler-squad/session/ent/session
+            - github.com/tstapler/stapler-squad/session/ent/sessionpr
+            - github.com/tstapler/stapler-squad/session/ent/sessionprtombstone
+            - github.com/tstapler/stapler-squad/session/instance
         # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
         # imports session, github or server.
         isolate_stagecfg:

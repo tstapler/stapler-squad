@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
@@ -336,11 +337,11 @@ func legacyPRUnrepresented(d domain.InstanceData, tombstones []domain.PRRef, unk
 	if unknown {
 		return true
 	}
-	ref, err := sessionLegacyRef(d.GitHubOwner, d.GitHubRepo, d.GitHubHost, d.Path, d.GitHubPRNumber)
+	ref, err := sessionpr.SessionLegacyRef(d.GitHubOwner, d.GitHubRepo, d.GitHubHost, d.Path, d.GitHubPRNumber)
 	if err != nil {
 		return true
 	}
-	if containsRef(tombstones, ref) {
+	if sessionpr.ContainsRef(tombstones, ref) {
 		return false
 	}
 	for _, v := range d.PRs {
@@ -1225,7 +1226,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 	}
 	var replaced *domain.PRRef
 	if isReassignment {
-		if old, perr := ParseItemPRRef(observed.PrURL, observed.PrNumber); perr == nil {
+		if old, perr := sessionpr.ParseItemPRRef(observed.PrURL, observed.PrNumber); perr == nil {
 			replaced = &old
 		}
 	}
@@ -1266,7 +1267,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 
 // SetItemPRFieldsWithLink writes pr_url/pr_number and the item-direct link atomically.
 func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source domain.AttachSource) error {
-	return setItemPRFieldsWithLink(ctx, s.Repo.Client, s.Repo.afterPRLinkHook, itemID, prURL, prNumber, source)
+	return setItemPRFieldsWithLink(ctx, s.Repo.Client, s.Repo.AfterLinkHook(), itemID, prURL, prNumber, source)
 }
 
 // attachAdditivePR records pr as a follow-up PR of an item already in pr_pending: it
@@ -1275,7 +1276,7 @@ func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL str
 // or reassignment guard applies. If the mirror recompute fails, the next
 // ReconcilePRPending pass repairs it.
 func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.BacklogItemData, pr backlogdto.PRAssociation) error {
-	ref, err := ParseItemPRRef(pr.URL, pr.Number)
+	ref, err := sessionpr.ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		return fmt.Errorf("additive PR: %w", err)
 	}
@@ -1459,7 +1460,7 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 	if err != nil {
 		return false, err
 	}
-	ref, err := ParseItemPRRef(prURL, n)
+	ref, err := sessionpr.ParseItemPRRef(prURL, n)
 	if err != nil {
 		return false, err
 	}

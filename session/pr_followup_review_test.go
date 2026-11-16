@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -23,7 +25,7 @@ func TestUpsertSessionPRSetTx_ShouldKeepGoodLinks_WhenOneLinkIsDeterministically
 	}}
 	tx, err := repo.Client.Tx(ctx)
 	require.NoError(t, err)
-	require.NoError(t, upsertSessionPRSetTx(ctx, tx, data))
+	require.NoError(t, sessionpr.UpsertSessionPRSetTx(ctx, tx, data))
 	require.NoError(t, tx.Commit())
 	assert.Equal(t, 2, countLinks(t, repo))
 }

@@ -11,7 +11,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
-	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // itemPRLinkWrite is the item-direct link an item PR writer records in the same
@@ -29,7 +30,7 @@ type itemPRLinkWrite struct {
 // newItemPRLinkWrite builds the write for a PR association, or nil when its URL and
 // number do not form a ref (the gate then fails closed on the unrepresented number).
 func newItemPRLinkWrite(pr backlogdto.PRAssociation, replaced *domain.PRRef) *itemPRLinkWrite {
-	ref, err := ParseItemPRRef(pr.URL, pr.Number)
+	ref, err := sessionpr.ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		log.WarningLog().Printf("[Storage] item PR link not written: %v", err)
 		return nil
@@ -53,7 +54,7 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 			return err
 		}
 	}
-	res, err := upsertSessionPRTx(ctx, tx, owner, w.Ref, domain.PRLink{
+	res, err := sessionpr.UpsertSessionPRTx(ctx, tx, owner, w.Ref, domain.PRLink{
 		Role: domain.PRRolePrimary, Source: w.Source, Initial: domain.PRInitial{State: domain.PRStateOpen, URL: w.URL},
 	})
 	if err != nil {
@@ -70,7 +71,7 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 
 // deleteItemLinkTx removes the owner's link to ref (no tombstone) inside tx.
 func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner domain.PROwner, ref domain.PRRef) error {
-	ids, err := tx.PullRequestState.Query().Where(refPredicate(ref)).IDs(ctx)
+	ids, err := tx.PullRequestState.Query().Where(sessionpr.RefPredicate(ref)).IDs(ctx)
 	if err != nil {
 		return fmt.Errorf("look up replaced PR state: %w", err)
 	}
@@ -78,7 +79,7 @@ func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner domain.PROwner, ref
 		return nil
 	}
 	if _, err := tx.SessionPR.Delete().
-		Where(append(linkOwnerPredicates(owner), sessionpr.PullRequestStateIDIn(ids...))...).Exec(ctx); err != nil {
+		Where(append(sessionpr.LinkOwnerPredicates(owner), entsessionpr.PullRequestStateIDIn(ids...))...).Exec(ctx); err != nil {
 		return fmt.Errorf("delete replaced item-direct link: %w", err)
 	}
 	return nil
@@ -94,7 +95,7 @@ func setItemPRFieldsWithLink(ctx context.Context, client *ent.Client, afterLink 
 		return fmt.Errorf("set item PR fields: invalid item id %q: %w", itemID, err)
 	}
 	link := newItemPRLinkWrite(backlogdto.PRAssociation{URL: prURL, Number: prNumber, Source: source}, nil)
-	return withPRTx(ctx, client, "set item pr fields", func(tx *ent.Tx) error {
+	return sessionpr.WithPRTx(ctx, client, "set item pr fields", func(tx *ent.Tx) error {
 		if n, uerr := tx.BacklogItem.Update().Where(backlogitem.ID(id)).SetPrURL(prURL).SetPrNumber(prNumber).Save(ctx); uerr != nil {
 			return fmt.Errorf("update item: %w", uerr)
 		} else if n == 0 {

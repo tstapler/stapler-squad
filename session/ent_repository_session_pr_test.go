@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"entgo.io/ent/dialect"
 	"github.com/stretchr/testify/assert"
@@ -115,7 +116,10 @@ func countStatementsMatching(t *testing.T, repo *EntRepository, match func(strin
 	drv := countingDriver{Driver: repo.driver, n: &n, match: match}
 	counted := NewEntRepositoryFromClient(ent.NewClient(ent.Driver(drv)))
 	counted.driver = drv
-	counted.prVerifyCountersTrusted.Store(repo.prVerifyCountersTrusted.Load())
+	counted.SetDriver(drv)
+	if repo.VerifyCountersTrusted() {
+		counted.MarkPRMaintenanceSucceeded()
+	}
 	fn(counted)
 	return n.Load()
 }
@@ -382,7 +386,7 @@ func seedState(t *testing.T, repo *EntRepository, ref domain.PRRef, state domain
 
 func reload(t *testing.T, repo *EntRepository, ref domain.PRRef) *ent.PullRequestState {
 	t.Helper()
-	row, err := repo.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(context.Background())
+	row, err := repo.Client.PullRequestState.Query().Where(sessionpr.RefPredicate(ref)).Only(context.Background())
 	require.NoError(t, err)
 	return row
 }
@@ -390,7 +394,7 @@ func reload(t *testing.T, repo *EntRepository, ref domain.PRRef) *ent.PullReques
 // setPolled stamps last_polled_at directly so a test can start from a known clock.
 func setPolled(t *testing.T, repo *EntRepository, ref domain.PRRef, at time.Time) {
 	t.Helper()
-	require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).SetLastPolledAt(at).Exec(context.Background()))
+	require.NoError(t, repo.Client.PullRequestState.Update().Where(sessionpr.RefPredicate(ref)).SetLastPolledAt(at).Exec(context.Background()))
 }
 
 func TestUpdatePullRequestState_ShouldFollowTransitionTable(t *testing.T) {
@@ -738,7 +742,7 @@ func TestAttachSessionPR_ShouldKeepOneStateAndLink_WhenRefCasingDiffers(t *testi
 func TestAttachSessionPR_ShouldBeAllOrNothing_WhenFailureBeforeMirrorUpdate(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
-	storage.Repo.afterPRLinkHook = func() error { return errors.New("injected failure before mirror update") }
+	storage.Repo.SetAfterLinkHook(func() error { return errors.New("injected failure before mirror update") })
 
 	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, fixturetest.MustPRRef(t, "", "acme", "app", 12),
 		domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}}, instance.PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12"})
@@ -812,13 +816,13 @@ func TestAttachPR_ShouldRetryOnNextSave_WhenPersistFails(t *testing.T) {
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 	failOnce := true
-	storage.Repo.afterPRLinkHook = func() error {
+	storage.Repo.SetAfterLinkHook(func() error {
 		if failOnce {
 			failOnce = false
 			return errors.New("transient")
 		}
 		return nil
-	}
+	})
 	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	require.True(t, inst.PRPersistPending())
 	require.Equal(t, 0, countLinks(t, storage.Repo))
@@ -836,9 +840,9 @@ func TestAttachPR_ShouldAllowLinkOnlyChange_WhenMirrorUnchanged(t *testing.T) {
 	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	// A second link that does not change the mirror still defeats the unchanged-row skip.
-	storage.Repo.afterPRLinkHook = func() error { return errors.New("down") }
+	storage.Repo.SetAfterLinkHook(func() error { return errors.New("down") })
 	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 13), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateMerged, Terminal: true, HeadBranch: "x"}))
-	storage.Repo.afterPRLinkHook = nil
+	storage.Repo.SetAfterLinkHook(nil)
 	require.Equal(t, 1, countLinks(t, storage.Repo))
 	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	assert.Equal(t, 2, countLinks(t, storage.Repo))

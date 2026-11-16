@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // liveWorkState is the listener's live-work wiring and per-item hold bookkeeping.
@@ -185,7 +186,7 @@ func (l *BacklogLifecycleListener) itemVerdictAfterMerge(ctx context.Context, er
 	refresher := l.liveWork.refresher
 	l.liveWork.mu.Unlock()
 	if refresher != nil {
-		if ref, err := session.ParseItemPRRef(prURL, prNumber); err == nil {
+		if ref, err := sessionpr.ParseItemPRRef(prURL, prNumber); err == nil {
 			rctx, cancel := context.WithTimeout(ctx, prRefreshWait)
 			if rerr := refresher.Refresh(rctx, ref, domain.PRSourceReconcilerRefresh); rerr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] item=%s refresh of merged PR %s: %v (verdict from existing rows)", itemID, ref, rerr)
