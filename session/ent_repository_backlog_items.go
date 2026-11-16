@@ -12,6 +12,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -22,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // ErrTransitionNotAllowed re-exports the domain sentinel next to the other
@@ -298,7 +300,7 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 }
 
 // itemSessionBatchChunk keeps IN (...) lists well under SQLite's bound-variable limit.
-const itemSessionBatchChunk = 500
+const itemSessionBatchChunk = sessionpr.ItemSessionBatchChunk
 
 // ListItemSessionsForItems is the batched form of ListItemSessions for
 // UUID-shaped item IDs: three statements total (sessions, verdicts, owning

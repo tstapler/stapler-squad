@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -69,11 +71,11 @@ func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHas
 	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
-	unlinked := addLegacyItem(t, repo, "unlinked", "pr_pending", 5, synthesizePRURL(ref))
+	unlinked := addLegacyItem(t, repo, "unlinked", "pr_pending", 5, sessionpr.SynthesizePRURL(ref))
 	badRef := addLegacyItem(t, repo, "bad-ref", "pr_pending", 5, "")
-	linked := addLegacyItem(t, repo, "linked", "pr_pending", 5, synthesizePRURL(ref))
+	linked := addLegacyItem(t, repo, "linked", "pr_pending", 5, sessionpr.SynthesizePRURL(ref))
 	upsertLink(t, repo, domain.ItemPROwner(linked), ref, domain.AttachSourceBackfill)
-	tombstoned := addLegacyItem(t, repo, "tombstoned", "pr_pending", 5, synthesizePRURL(ref))
+	tombstoned := addLegacyItem(t, repo, "tombstoned", "pr_pending", 5, sessionpr.SynthesizePRURL(ref))
 	upsertLink(t, repo, domain.ItemPROwner(tombstoned), ref, domain.AttachSourceBackfill)
 	_, err := repo.DeleteSessionPR(ctx, domain.ItemPROwner(tombstoned), ref)
 	require.NoError(t, err)

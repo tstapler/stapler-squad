@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -23,7 +25,7 @@ func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing
 		ref := fixturetest.MustPRRef(t, "", "acme", "app", n)
 		seedState(t, repo, ref, domain.PRStateUnknown, true)
 		setPolled(t, repo, ref, prRepoT0)
-		require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).
+		require.NoError(t, repo.Client.PullRequestState.Update().Where(sessionpr.RefPredicate(ref)).
 			SetPollFailCount(4).SetFirstFailAt(prRepoT0.Add(-time.Hour)).SetPollError("network").Exec(context.Background()))
 		return repo, ref
 	}

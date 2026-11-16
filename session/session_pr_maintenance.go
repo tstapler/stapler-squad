@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // prMaintenanceRetryInterval is how often a failed startup pass is retried.
@@ -20,7 +21,7 @@ type prMaintenanceConfig struct {
 	sleep    func(ctx context.Context, d time.Duration) error
 	newTick  func(d time.Duration) (<-chan time.Time, func())
 	interval time.Duration
-	hook     prBackfillHook
+	hook     sessionpr.BackfillHook
 }
 
 func defaultPRMaintenanceConfig() prMaintenanceConfig {
@@ -127,7 +128,7 @@ func (s *Storage) runPRMaintenancePassWithRetries(ctx context.Context, cfg prMai
 }
 
 func (s *Storage) runPRMaintenancePass(ctx context.Context, cfg prMaintenanceConfig) error {
-	if _, err := newPRBackfiller(s.Repo).runPRBackfill(ctx, cfg.hook); err != nil {
+	if _, err := s.Repo.RunBackfill(ctx, cfg.hook); err != nil {
 		return err
 	}
 	if _, err := s.Repo.ResetVerifyCounters(ctx); err != nil {
@@ -155,6 +156,11 @@ func (s *Storage) retryPRMaintenance(ctx context.Context, cfg prMaintenanceConfi
 	}
 }
 
-func newPRBackfiller(r *EntRepository) *prBackfiller {
-	return &prBackfiller{client: r.Client, driver: r.driver, links: r}
+// NewSessionPRLinkGC returns the collector over this storage's repository, or
+// nil when the storage has none.
+func (s *Storage) NewSessionPRLinkGC(interval time.Duration) *sessionpr.SessionPRLinkGC {
+	if s == nil || s.Repo == nil {
+		return nil
+	}
+	return sessionpr.NewSessionPRLinkGC(s.Repo.Client, interval)
 }

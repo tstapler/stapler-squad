@@ -1325,14 +1325,14 @@ pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an
 	fi
 	@echo "✅ pr-field-guard: no direct PR field writes"
 
-# Invariant I1: only the repository file writes PullRequestState (session_pr_gc.go deletes only).
+# Invariant I1: only the repository file writes PullRequestState (session/sessionpr/session_pr_gc.go deletes only).
 # Grep-based like pr-field-guard; a typed analyzer is the follow-up T2.2.6.
-pr-state-write-guard: ## session-multi-pr-tracking guard: fail on a direct ent write to PullRequestState outside ent_repository_session_pr.go and session_pr_gc.go
+pr-state-write-guard: ## session-multi-pr-tracking guard: fail on a direct ent write to PullRequestState outside session/sessionpr/ent_repository_session_pr.go and session/sessionpr/session_pr_gc.go
 	@echo "pr-state-write-guard: scanning for direct PullRequestState writes..."
-	@if git ls-files '*.go' ':!:*_test.go' ':!:session/ent/*' ':!:gen/*' ':!:session/ent_repository_session_pr.go' ':!:session/session_pr_gc.go' \
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/ent/*' ':!:gen/*' ':!:session/sessionpr/ent_repository_session_pr.go' ':!:session/sessionpr/session_pr_gc.go' \
 	    | xargs -r grep -EnH 'PullRequestState\.(Create|CreateBulk|Update|UpdateOne|UpdateOneID|Delete|DeleteOne|DeleteOneID)\b|PullRequestState(Create|CreateBulk|Update|UpdateOne|Delete|DeleteOne|Client)\b' \
 	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
-	    echo "❌ pr-state-write-guard: direct PullRequestState write — only the PR status poller writes state (invariant I1); go through EntRepository.UpdatePullRequestState"; \
+	    echo "❌ pr-state-write-guard: direct PullRequestState write — only the PR status poller writes state (invariant I1); go through PRStore.UpdatePullRequestState (session/sessionpr)"; \
 	    exit 1; \
 	fi
 	@echo "✅ pr-state-write-guard: no direct PullRequestState writes"

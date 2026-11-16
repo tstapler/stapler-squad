@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"encoding/json"
@@ -35,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/guidancestore"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/wakestore"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
@@ -44,26 +44,19 @@ import (
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers) and Markers (flow markers) methods are
+	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers), Markers (flow markers) and PRStore (pull requests) methods are
 	// promoted; see initStores.
 	*webhookstore.Store
 	*guidancestore.Repo
 	*wakestore.Triggers
 	*markerstore.Markers
+	*sessionpr.PRStore
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
 	DbPath string
 
-	// prVerifyCountersTrusted flips true once this process's PR startup
-	// maintenance has succeeded; until then stored verification counters on
-	// unverified-terminal rows read as zero (see linkStateToView).
-	prVerifyCountersTrusted atomic.Bool
-	prDrops                 prDropTracker
-	// afterPRLinkHook (tests only) runs inside AttachSessionPR's transaction after
-	// the link upsert, to inject a failure before the mirror update.
-	afterPRLinkHook func() error
-	migrationMode   bool // When true, enables dual-write mode for migration
+	migrationMode bool // When true, enables dual-write mode for migration
 
 	// seedURI, when set (tests only, via withSeedURI), names a fully migrated
 	// shared-cache in-memory database that NewEntRepository copies into its own
@@ -251,8 +244,8 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	repo.Client = client
-	repo.initStores()
 	repo.driver = drv
+	repo.initStores()
 	repo.WatchGuidanceWrites()
 
 	// One-time-per-database correction for rows that predate the enabled field
@@ -301,6 +294,8 @@ func (r *EntRepository) initStores() {
 	r.Store = webhookstore.New(r.Client)
 	r.Triggers = wakestore.New(r.Client)
 	r.Markers = markerstore.New(r.Client)
+	r.PRStore = sessionpr.New(r.Client)
+	r.SetDriver(r.driver)
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
 		item := BacklogItemToData(row)
 		r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
@@ -378,7 +373,7 @@ func (r *EntRepository) Create(ctx context.Context, data domain.InstanceData) er
 		return err
 	}
 
-	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+	if err := sessionpr.UpsertSessionPRSetTx(ctx, tx, data); err != nil {
 		return err
 	}
 
@@ -655,7 +650,7 @@ func (r *EntRepository) updateSkipping(ctx context.Context, data domain.Instance
 		}
 	}
 
-	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+	if err := sessionpr.UpsertSessionPRSetTx(ctx, tx, data); err != nil {
 		return err
 	}
 
@@ -1077,7 +1072,7 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 
 	// PR links and detach tombstones are keyed by the session uuid, not an FK.
 	if sess.UUID != "" {
-		if err := deleteOwnerPRRows(ctx, tx, domain.SessionPROwner(sess.UUID)); err != nil {
+		if err := sessionpr.DeleteOwnerPRRows(ctx, tx, domain.SessionPROwner(sess.UUID)); err != nil {
 			return err
 		}
 	}

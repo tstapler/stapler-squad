@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"entgo.io/ent/dialect"
 	"errors"
 	"fmt"
+
+	"entgo.io/ent/dialect"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -40,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/prpoller"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
@@ -48,7 +51,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/telemetry"
 
-	"github.com/google/uuid"
 	"net"
 	"net/http"
 	"os"
@@ -57,6 +59,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	"connectrpc.com/connect"
 	"connectrpc.com/otelconnect"
@@ -75,7 +79,7 @@ type Server struct {
 	wsUnaryBridge              atomic.Pointer[wsconn.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
 	terminalMuxBridge          atomic.Pointer[wsconn.TerminalMuxBridge] // serves /actuator/terminal-mux
 	unfinishedScanner          *unfinished.Scanner                      // serves /actuator/unfinished-scanner; nil without deps
-	prLinkGC                   *session.SessionPRLinkGC                 // orphan session-PR link collector; nil without storage
+	prLinkGC                   *sessionpr.SessionPRLinkGC               // orphan session-PR link collector; nil without storage
 	tlsConfig                  *tls.Config                              // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler          // nil when auth is disabled
 	requiresAuth               bool                                     // explicit: a real validator is wired

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
 )
 
 type legacySession struct {
@@ -50,9 +51,9 @@ func attachItemSession(t *testing.T, repo *EntRepository, itemID, sessionUUID st
 	require.NoError(t, err)
 }
 
-func runBackfill(t *testing.T, repo *EntRepository) PRBackfillReport {
+func runBackfill(t *testing.T, repo *EntRepository) sessionpr.PRBackfillReport {
 	t.Helper()
-	rep, err := newPRBackfiller(repo).runPRBackfill(context.Background(), nil)
+	rep, err := repo.RunBackfill(context.Background(), nil)
 	require.NoError(t, err)
 	return rep
 }
@@ -118,16 +119,6 @@ func TestBackfill_ShouldMergeFailClosed_WhenSessionAndItemShareAPR(t *testing.T)
 	}
 }
 
-func TestMergeBackfillSeeds_ShouldBeIndependentOfOrder(t *testing.T) {
-	t.Parallel()
-	ref := fixturetest.MustPRRef(t, "", "acme", "app", 21)
-	term := prBackfillCandidate{ref: ref, terminal: true}
-	open := prBackfillCandidate{ref: ref, terminal: false}
-	assert.False(t, mergeBackfillSeeds([]prBackfillCandidate{term}, []prBackfillCandidate{open})[ref])
-	assert.False(t, mergeBackfillSeeds([]prBackfillCandidate{open}, []prBackfillCandidate{term})[ref])
-	assert.True(t, mergeBackfillSeeds([]prBackfillCandidate{term}, []prBackfillCandidate{term})[ref])
-}
-
 func TestBackfill_ShouldNotTopUpState_WhenRowAlreadyExists(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
@@ -178,7 +169,7 @@ func TestBackfill_ShouldNotResurrectOrDuplicate_WhenDetachedOrAlreadyLinked(t *t
 	assert.Empty(t, detached["u-detached"])
 	_ = ref11
 
-	primaries, err := repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID("u-linked"), sessionpr.Role("primary")).Count(ctx)
+	primaries, err := repo.Client.SessionPR.Query().Where(entsessionpr.SessionUUID("u-linked"), entsessionpr.Role("primary")).Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, primaries)
 }
@@ -229,17 +220,17 @@ func TestBackfill_ShouldSeedItemsFromStatusWithoutGuessing(t *testing.T) {
 func TestParseItemPRRef_ShouldRejectNonHTTPScheme(t *testing.T) {
 	t.Parallel()
 	for _, u := range []string{"javascript://github.com/o/r/pull/5", "ftp://github.com/o/r/pull/5", "//github.com/o/r/pull/5"} {
-		_, err := ParseItemPRRef(u, 5)
-		assert.ErrorIs(t, err, ErrItemBadPRRef, u)
+		_, err := sessionpr.ParseItemPRRef(u, 5)
+		assert.ErrorIs(t, err, sessionpr.ErrItemBadPRRef, u)
 	}
 }
 
 func TestParseItemPRRef_ShouldUseURLHostAndRequireMatchingNumber(t *testing.T) {
 	t.Parallel()
-	ref, err := ParseItemPRRef("https://ghe.acme.io/acme/app/pull/7", 7)
+	ref, err := sessionpr.ParseItemPRRef("https://ghe.acme.io/acme/app/pull/7", 7)
 	require.NoError(t, err)
 	assert.Equal(t, "ghe.acme.io/acme/app#7", ref.String())
-	ref, err = ParseItemPRRef("https://github.com/Acme/App/pull/12", 12)
+	ref, err = sessionpr.ParseItemPRRef("https://github.com/Acme/App/pull/12", 12)
 	require.NoError(t, err)
 	assert.Equal(t, fixturetest.MustPRRef(t, "", "acme", "app", 12), ref)
 
@@ -252,8 +243,8 @@ func TestParseItemPRRef_ShouldUseURLHostAndRequireMatchingNumber(t *testing.T) {
 		"not a pull path": {"https://github.com/acme/app/issues/5", 5},
 		"no host":         {"acme/app/pull/5", 5},
 	} {
-		_, err := ParseItemPRRef(tc.url, tc.n)
-		assert.ErrorIs(t, err, ErrItemBadPRRef, name)
+		_, err := sessionpr.ParseItemPRRef(tc.url, tc.n)
+		assert.ErrorIs(t, err, sessionpr.ErrItemBadPRRef, name)
 	}
 }
 
@@ -363,10 +354,10 @@ func TestBackfill_ShouldReadOnlyCandidateRows_WhenFewSessionsHaveAPR(t *testing.
 	}
 	flush()
 
-	var cands []prBackfillCandidate
+	var cands []sessionpr.BackfillCandidate
 	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		cands, err = newPRBackfiller(counted).collectSessionPRCandidates(ctx, &PRBackfillReport{})
+		cands, err = counted.CollectSessionPRCandidates(ctx, &sessionpr.PRBackfillReport{})
 		require.NoError(t, err)
 	})
 	assert.Len(t, cands, 40)
@@ -406,10 +397,10 @@ func TestBackfill_ShouldStayBounded_WhenManyItemsAreAlreadyRepresented(t *testin
 		require.NoError(t, repo.Client.SessionPR.CreateBulk(links...).Exec(ctx))
 	}
 
-	var rep PRBackfillReport
+	var rep sessionpr.PRBackfillReport
 	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		rep, err = newPRBackfiller(counted).runPRBackfill(ctx, nil)
+		rep, err = counted.RunBackfill(ctx, nil)
 		require.NoError(t, err)
 	})
 	assert.Zero(t, rep.CreatedItemLinks+rep.CreatedSessionLinks, "everything is already represented")
@@ -421,7 +412,7 @@ func TestBackfill_ShouldCapWritesPerBoot_AndDeferTheRest(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	const total = maxBackfillWritesPerBoot + 500
+	const total = sessionpr.MaxBackfillWritesPerBoot + 500
 	for start := 0; start < total; start += 500 {
 		items := make([]*ent.BacklogItemCreate, 0, 500)
 		for i := start; i < min(start+500, total); i++ {
@@ -432,7 +423,7 @@ func TestBackfill_ShouldCapWritesPerBoot_AndDeferTheRest(t *testing.T) {
 	}
 
 	first := runBackfill(t, repo)
-	assert.Equal(t, maxBackfillWritesPerBoot, first.CreatedItemLinks)
+	assert.Equal(t, sessionpr.MaxBackfillWritesPerBoot, first.CreatedItemLinks)
 	assert.Equal(t, 500, first.Deferred)
 
 	second := runBackfill(t, repo)
@@ -447,7 +438,7 @@ type prMaintenanceClock struct {
 	tick   chan time.Time
 }
 
-func (f *prMaintenanceClock) config(hook prBackfillHook) prMaintenanceConfig {
+func (f *prMaintenanceClock) config(hook sessionpr.BackfillHook) prMaintenanceConfig {
 	f.tick = make(chan time.Time)
 	return prMaintenanceConfig{
 		sleep: func(_ context.Context, d time.Duration) error {
@@ -492,14 +483,14 @@ func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T)
 	assert.Equal(t, []time.Duration{time.Second, 4 * time.Second, 16 * time.Second}, clock.sleeps, "three retries with backoff")
 	assert.Equal(t, int64(1), storage.PRMaintenanceFailures())
 	assert.Equal(t, 1, countLinks(t, repo), "no link from the failing candidate persisted")
-	assert.False(t, repo.prVerifyCountersTrusted.Load(), "counters stay untrusted until a pass succeeds")
+	assert.False(t, repo.VerifyCountersTrusted(), "counters stay untrusted until a pass succeeds")
 
 	clock.tick <- time.Now()        // the 5-minute ticker's next pass
 	storage.prMaintenance.wg.Wait() // the ticker stops itself after its first success
 	storage.StopPRMaintenance()
 
 	assert.Equal(t, 2, countLinks(t, repo), "the retry imported #12")
-	assert.True(t, repo.prVerifyCountersTrusted.Load())
+	assert.True(t, repo.VerifyCountersTrusted())
 }
 
 func TestMaintenance_ShouldStartNoTicker_WhenFirstPassSucceeds(t *testing.T) {

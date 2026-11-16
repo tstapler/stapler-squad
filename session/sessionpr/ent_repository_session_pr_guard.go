@@ -1,4 +1,4 @@
-package session
+package sessionpr
 
 import (
 	"context"
@@ -11,16 +11,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
-	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
 )
 
 // ListItemGuardViews returns one ItemGuardView per requested item id. Statements
 // per chunk of 500 ids: links, states, tombstones (skipped when no id has a
 // direct link) and the item rows; the legacy coverage reads run only for items
 // with pr_number > 0.
-func (r *EntRepository) ListItemGuardViews(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error) {
+func (r *PRStore) ListItemGuardViews(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error) {
 	out := make(map[string]domain.ItemGuardView, len(itemIDs))
-	for _, chunk := range chunkSlice(itemIDs, itemSessionBatchChunk) {
+	for _, chunk := range chunkSlice(itemIDs, ItemSessionBatchChunk) {
 		if err := r.fillItemGuardChunk(ctx, chunk, out); err != nil {
 			return nil, err
 		}
@@ -28,7 +28,7 @@ func (r *EntRepository) ListItemGuardViews(ctx context.Context, itemIDs []string
 	return out, nil
 }
 
-func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, out map[string]domain.ItemGuardView) error {
+func (r *PRStore) fillItemGuardChunk(ctx context.Context, ids []string, out map[string]domain.ItemGuardView) error {
 	direct, err := r.directItemViews(ctx, ids)
 	if err != nil {
 		return err
@@ -43,9 +43,9 @@ func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, ou
 	return nil
 }
 
-func (r *EntRepository) directItemViews(ctx context.Context, ids []string) (map[string][]domain.PRView, error) {
+func (r *PRStore) directItemViews(ctx context.Context, ids []string) (map[string][]domain.PRView, error) {
 	byItem := make(map[string][]domain.PRView)
-	linkRows, err := r.Client.SessionPR.Query().Where(sessionpr.BacklogItemIDIn(ids...)).All(ctx)
+	linkRows, err := r.client.SessionPR.Query().Where(entsessionpr.BacklogItemIDIn(ids...)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list item guard links: %w", err)
 	}
@@ -61,14 +61,14 @@ func (r *EntRepository) directItemViews(ctx context.Context, ids []string) (map[
 		return nil, err
 	}
 	for _, v := range views {
-		if !containsRef(tombs[v.BacklogItemID], v.Ref) {
+		if !ContainsRef(tombs[v.BacklogItemID], v.Ref) {
 			byItem[v.BacklogItemID] = append(byItem[v.BacklogItemID], v)
 		}
 	}
 	return byItem, nil
 }
 
-func (r *EntRepository) legacyUnrepresentedItems(ctx context.Context, ids []string) (map[string]bool, error) {
+func (r *PRStore) legacyUnrepresentedItems(ctx context.Context, ids []string) (map[string]bool, error) {
 	uuids := make([]uuid.UUID, 0, len(ids))
 	for _, id := range ids {
 		if u, err := uuid.Parse(id); err == nil {
@@ -79,7 +79,7 @@ func (r *EntRepository) legacyUnrepresentedItems(ctx context.Context, ids []stri
 	if len(uuids) == 0 {
 		return out, nil
 	}
-	items, err := r.Client.BacklogItem.Query().
+	items, err := r.client.BacklogItem.Query().
 		Where(backlogitem.IDIn(uuids...), backlogitem.PrNumberGT(0)).
 		Select(backlogitem.FieldID, backlogitem.FieldPrURL, backlogitem.FieldPrNumber).
 		All(ctx)
@@ -94,7 +94,7 @@ func (r *EntRepository) legacyUnrepresentedItems(ctx context.Context, ids []stri
 	for i, it := range items {
 		itemIDs[i], itemUUIDs[i] = it.ID.String(), it.ID
 	}
-	cov, err := newPRBackfiller(r).itemCoverage(ctx, itemIDs, itemUUIDs)
+	cov, err := r.itemCoverage(ctx, itemIDs, itemUUIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -109,11 +109,11 @@ func (r *EntRepository) legacyUnrepresentedItems(ctx context.Context, ids []stri
 // ListItemIDsBySessionUUIDs returns every distinct item id of each session in
 // one item_session query per chunk of 500. Unlike
 // ListItemSessionsBySessionUUIDs it does not keep only the newest row per uuid.
-func (r *EntRepository) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
+func (r *PRStore) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
 	out := make(map[string][]string)
 	seen := make(map[[2]string]struct{})
-	for _, chunk := range chunkSlice(uuids, itemSessionBatchChunk) {
-		rows, err := r.Client.ItemSession.Query().
+	for _, chunk := range chunkSlice(uuids, ItemSessionBatchChunk) {
+		rows, err := r.client.ItemSession.Query().
 			Where(itemsession.SessionUUIDIn(chunk...)).
 			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
 			All(ctx)
