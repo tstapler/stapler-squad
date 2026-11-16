@@ -1,4 +1,5 @@
-import { failRows, grepInvertFor, summaryFor, BaselineRow } from "../scripts/baseline-skip";
+import * as fs from "fs";
+import { countListed, failRows, grepInvertFor, summaryFor, BaselineRow } from "../scripts/baseline-skip";
 
 const rows: BaselineRow[] = [
   { spec: "a.spec.ts", project: "chromium", title: "Suite > does (x) [y]", class: "fail" },
@@ -33,5 +34,35 @@ describe("baseline-skip", () => {
     const s = summaryFor(rows);
     expect(s).toContain("skipped on this PR run: 2");
     expect(s).toContain("- a.spec.ts: 2");
+  });
+
+  test("BS5: a spec file in the keep set is not skipped (PR repairs a baseline-fail test)", () => {
+    const keep = new Set(["a.spec.ts"]);
+    expect(failRows(rows, keep)).toEqual([]);
+    expect(hit(grepInvertFor(rows, keep), " chromium a.spec.ts plain.title")).toBe(false);
+  });
+
+  test("BS6: a real title containing ' > ' still matches", () => {
+    const r: BaselineRow[] = [{ spec: "u.spec.ts", project: "chromium", title: "unfinished-work > page loads", class: "fail" }];
+    expect(hit(grepInvertFor(r), " chromium u.spec.ts unfinished-work > page loads")).toBe(true);
+    expect(hit(grepInvertFor(r), " chromium u.spec.ts unfinished-work page loads")).toBe(true);
+  });
+
+  test("BS7: summary warns when the baseline is stale and reports kept specs", () => {
+    const meta = { capturedAt: "2026-10-29T00:00:00Z" };
+    const s = summaryFor(rows, { meta, now: new Date("2026-11-16T00:00:00Z"), keep: new Set(["a.spec.ts"]), removed: 0 });
+    expect(s).toContain("18 days ago");
+    expect(s).toContain("WARNING");
+    expect(s).toContain("Not skipped because this PR changes their spec file: 2 rows");
+    expect(summaryFor(rows, { meta, now: new Date("2026-11-01T00:00:00Z") })).not.toContain("WARNING");
+  });
+
+  test("BS9: the regex for the committed baseline stays well under the 128 KB argv limit", () => {
+    const real = JSON.parse(fs.readFileSync(`${__dirname}/next-e2e-baseline.json`, "utf8")).specs as BaselineRow[];
+    expect(Buffer.byteLength(grepInvertFor(real))).toBeLessThan(90_000);
+  });
+
+  test("BS8: countListed counts tests across nested suites", () => {
+    expect(countListed({ suites: [{ specs: [{ tests: [{}, {}] }], suites: [{ specs: [{ tests: [{}] }] }] }] })).toBe(3);
   });
 });

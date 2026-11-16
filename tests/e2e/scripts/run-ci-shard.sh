@@ -14,6 +14,7 @@
 # planned across the shards, and the stress pass runs only the selected terminal-stress specs, on shard 1. Unset = full suite.
 # PR runs set E2E_SKIP_BASELINE_FAIL=1: tests the baseline records as class "fail" are excluded via --grep-invert
 # (scripts/baseline-skip.ts) from the plan and both passes; the skipped set is printed and appended to the step summary.
+# Spec files in E2E_KEEP_SPECS (the PR's own changed specs) are never skipped.
 # main, nightly and workflow_dispatch leave it unset and run everything.
 #   usage: run-ci-shard.sh <shard> <total>
 set -u
@@ -25,9 +26,6 @@ if [ "${E2E_SKIP_BASELINE_FAIL:-}" = 1 ]; then
   command -v bun >/dev/null 2>&1 || { echo "::error::run-ci-shard: bun is not on PATH" >&2; exit 2; }
   skip_re=$(bun scripts/baseline-skip.ts grep-invert) || { echo "::error::run-ci-shard: baseline-skip failed" >&2; exit 2; }
   skip_args=("--grep-invert=$skip_re")
-  skip_summary=$(bun scripts/baseline-skip.ts summary)
-  printf '%s\n' "$skip_summary"
-  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$skip_summary" >> "$GITHUB_STEP_SUMMARY"
 fi
 start=$SECONDS
 budget_s=${E2E_SHARD_BUDGET_S:-2280}          # 38 min: inside the workflow's 40 min `timeout`
@@ -43,6 +41,16 @@ command -v bun >/dev/null 2>&1 || fail_plan "bun is not on PATH"
 list_err=$(mktemp)
 list_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${projects[@]}" ${skip_args[@]+"${skip_args[@]}"} 2>"$list_err") \
   || { cat "$list_err" >&2; fail_plan "playwright --list failed"; }
+if [ "${E2E_SKIP_BASELINE_FAIL:-}" = 1 ]; then
+  # Count what the regex really removes (parallel-pass list, stress specs excluded), not the baseline row count.
+  all_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${projects[@]}" 2>"$list_err") \
+    || { cat "$list_err" >&2; fail_plan "playwright --list (unfiltered) failed"; }
+  printf '%s' "$all_json" > "$list_err"; n_all=$(bun scripts/baseline-skip.ts count "$list_err")
+  printf '%s' "$list_json" > "$list_err"; n_kept=$(bun scripts/baseline-skip.ts count "$list_err")
+  skip_summary=$(bun scripts/baseline-skip.ts summary --removed $(( n_all - n_kept ))) || fail_plan "baseline-skip summary failed"
+  printf '%s\n' "$skip_summary"
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$skip_summary" >> "$GITHUB_STEP_SUMMARY"
+fi
 files=$(printf '%s' "$list_json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const r=JSON.parse(d);const s=new Set();const w=x=>{(x.specs||[]).forEach(p=>s.add(p.file));(x.suites||[]).forEach(w)};(r.suites||[]).forEach(w);console.log([...s].join("\n"))})') \
   || fail_plan "could not read the spec list from playwright --list"
 [ -n "$files" ] || fail_plan "playwright --list returned no spec files"

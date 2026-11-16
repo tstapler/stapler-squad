@@ -163,6 +163,11 @@ Then, in order of value: O5 (workers=4 A/B), O10/O11, O8 (needs D1), O7 (only if
 | D3 | DOM-reading specs run only in `chromium-dom` on PRs; nightly keeps both projects | Separate later PR (PR 3 above), not part of PR 1. |
 | D5 | The goal is total runner-minutes, not wall-clock, when they disagree | Section 7 targets stand; wall-clock stays a guard only. |
 
+PR 1 follow-ups (2026-11-16, from review of #1677):
+- Re-record `tests/e2e/baseline/next-e2e-baseline.json` from a recent full main run. Its `capturedAt` is 2026-10-29 and 44 of the 58 skipped spec files have commits since; the skip summary now prints the baseline age and warns past 14 days. Not done in PR 1: the baseline is a three-run, per-attempt record from the Next build, and one main artifact does not reproduce that shape.
+- A spec file changed by the PR is never skipped (`E2E_KEEP_SPECS` from `e2e-env`'s `changed-specs`), so a PR that repairs a baseline-fail test sees it run.
+- `shard-timings.json` was measured on run 43825413838, which included the failing tests. PR runs skip them, so real loads are lighter and the balance is approximate; refresh after the baseline is re-recorded.
+
 ## 7. Measurable target
 
 | Metric | Today (VERIFIED) | After PR 1 | After PR 1 to 3 | How measured |
