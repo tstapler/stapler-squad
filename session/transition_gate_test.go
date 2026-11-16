@@ -678,10 +678,10 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	approved := h.newStuckInProgressItem(t)
 	gated := h.newStuckInProgressItem(t)
 
-	ids, ok := h.cfg.CachedGateIDs(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
-	require.True(t, ok)
-	require.Len(t, ids, 1)
-	_, err := RecordGateApproval(ctx, stagecfg.NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), ids[0], "operator", true)
+	//nolint:entfullscan test assertion over a test-scoped in-memory DB; the seeded config has no other gate rows.
+	gate, err := h.repo.Client.TransitionGate.Query().Only(ctx)
+	require.NoError(t, err)
+	_, err = RecordGateApproval(ctx, stagecfg.NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), gate.ID, "operator", true)
 	require.NoError(t, err)
 
 	moved, err := h.storage.GatedReconcileStuck(ctx)

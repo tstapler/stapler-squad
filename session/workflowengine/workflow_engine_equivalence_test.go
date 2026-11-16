@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 import (
 	"context"
@@ -9,7 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/internal/entdbtest"
 )
 
 // gateFixture is one guard scenario: an item input plus the transition it
@@ -48,9 +49,9 @@ type engineDiff struct {
 }
 
 func allStatusPairs() [][2]domain.BacklogStatus {
-	pairs := make([][2]domain.BacklogStatus, 0, len(workflowengine.BuiltInStageOrder)*len(workflowengine.BuiltInStageOrder))
-	for _, from := range workflowengine.BuiltInStageOrder {
-		for _, to := range workflowengine.BuiltInStageOrder {
+	pairs := make([][2]domain.BacklogStatus, 0, len(BuiltInStageOrder)*len(BuiltInStageOrder))
+	for _, from := range BuiltInStageOrder {
+		for _, to := range BuiltInStageOrder {
 			pairs = append(pairs, [2]domain.BacklogStatus{from, to})
 		}
 	}
@@ -84,7 +85,7 @@ func diffEngines(t *testing.T, reference, underTest domain.WorkflowEngine, corpu
 			d.Edges = append(d.Edges, fmt.Sprintf("CanTransition(%s,%s): reference=%t underTest=%t", from, to, r, u))
 		}
 	}
-	for _, from := range workflowengine.BuiltInStageOrder {
+	for _, from := range BuiltInStageOrder {
 		if r, u := reference.AllowedTransitions(from, nil), underTest.AllowedTransitions(from, nil); fmt.Sprint(r) != fmt.Sprint(u) {
 			d.Edges = append(d.Edges, fmt.Sprintf("AllowedTransitions(%s): reference=%v underTest=%v", from, r, u))
 		}
@@ -105,10 +106,10 @@ func diffEngines(t *testing.T, reference, underTest domain.WorkflowEngine, corpu
 
 func TestEquivalenceHarness_PassesAndCorpusCoversEverySentinel_WhenBothSidesAreDefault(t *testing.T) {
 	t.Parallel()
-	def := workflowengine.NewDefaultWorkflowEngine()
+	def := NewDefaultWorkflowEngine()
 	corpus := gateFixtureCorpus()
 
-	require.Equal(t, engineDiff{}, diffEngines(t, def, workflowengine.NewDefaultWorkflowEngine(), corpus))
+	require.Equal(t, engineDiff{}, diffEngines(t, def, NewDefaultWorkflowEngine(), corpus))
 
 	for _, f := range corpus {
 		got := def.ValidateGates(f.input, f.to, nil)
@@ -124,7 +125,7 @@ func TestConfiguredWorkflowEngine_MatchesDefaultOn81Pairs_WhenSeeded(t *testing.
 	t.Parallel()
 	configured, _ := newSeededConfiguredWorkflowEngine(t)
 
-	diff := diffEngines(t, workflowengine.NewDefaultWorkflowEngine(), configured, nil)
+	diff := diffEngines(t, NewDefaultWorkflowEngine(), configured, nil)
 
 	require.Empty(t, diff.Edges)
 	require.Len(t, allStatusPairs(), 81)
@@ -136,7 +137,7 @@ func TestConfiguredWorkflowEngine_MatchesDefaultOn81Pairs_WhenSeeded(t *testing.
 func TestRawConfiguredGateGap_ReportedAsInformation_NotFailure(t *testing.T) {
 	t.Parallel()
 	configured, _ := newSeededConfiguredWorkflowEngine(t)
-	def := workflowengine.NewDefaultWorkflowEngine()
+	def := NewDefaultWorkflowEngine()
 	idea := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 
 	require.ErrorIs(t, def.ValidateGates(idea, domain.BacklogStatusReady, nil), domain.ErrACRequired)
@@ -155,17 +156,17 @@ func TestRawConfiguredGateGap_ReportedAsInformation_NotFailure(t *testing.T) {
 // seededEdgeDiff returns "missing"/"extra" lines naming each edge by which
 // side lacks it, comparing the live backlog_stages/stage_transitions rows to
 // domain.ValidTransitions().
-func seededEdgeDiff(ctx context.Context, t *testing.T, repo *EntRepository) []string {
+func seededEdgeDiff(ctx context.Context, t *testing.T, entClient *ent.Client) []string {
 	t.Helper()
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
-	stages, err := repo.Client.BacklogStage.Query().All(ctx)
+	stages, err := entClient.BacklogStage.Query().All(ctx)
 	require.NoError(t, err)
 	slugByID := make(map[string]string, len(stages))
 	for _, s := range stages {
 		slugByID[s.ID.String()] = s.Slug
 	}
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
-	rows, err := repo.Client.StageTransition.Query().All(ctx)
+	rows, err := entClient.StageTransition.Query().All(ctx)
 	require.NoError(t, err)
 	got := map[string]bool{}
 	for _, r := range rows {
@@ -194,31 +195,31 @@ func seededEdgeDiff(ctx context.Context, t *testing.T, repo *EntRepository) []st
 
 func TestSeededStageConfig_ByteEquivalentToValidTransitions_WhenSeedApplied(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	entClient := entdbtest.NewClient(t)
 	ctx := context.Background()
-	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, entClient))
 
-	require.Empty(t, seededEdgeDiff(ctx, t, repo))
+	require.Empty(t, seededEdgeDiff(ctx, t, entClient))
 	// Ordering-insensitive hash equality: the fingerprint of the live rows is
 	// the fingerprint of domain.ValidTransitions() and the seed tables.
-	live, err := workflowengine.StageConfigFingerprint(ctx, repo.Client)
+	live, err := StageConfigFingerprint(ctx, entClient)
 	require.NoError(t, err)
-	require.Equal(t, workflowengine.SeedFingerprint(), live)
+	require.Equal(t, SeedFingerprint(), live)
 }
 
 func TestSeededStageConfig_DetectsDrift_WhenOneEdgeRemoved(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	entClient := entdbtest.NewClient(t)
 	ctx := context.Background()
-	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, entClient))
 
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
-	rows, err := repo.Client.StageTransition.Query().All(ctx)
+	rows, err := entClient.StageTransition.Query().All(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, rows)
-	require.NoError(t, repo.Client.StageTransition.DeleteOneID(rows[0].ID).Exec(ctx))
+	require.NoError(t, entClient.StageTransition.DeleteOneID(rows[0].ID).Exec(ctx))
 
-	diffs := seededEdgeDiff(ctx, t, repo)
+	diffs := seededEdgeDiff(ctx, t, entClient)
 	require.Len(t, diffs, 1)
 	require.Contains(t, diffs[0], "missing ")
 	require.Contains(t, diffs[0], "->", "the diff must name the removed edge")

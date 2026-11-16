@@ -1,8 +1,9 @@
 package workflowengine
 
 import (
-	"github.com/tstapler/stapler-squad/session/domain"
 	"sort"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // FallbackReason says why the enforce composition could not use the

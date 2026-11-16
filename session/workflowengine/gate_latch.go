@@ -106,7 +106,7 @@ func (e *ConfiguredWorkflowEngine) lookupTimeout() time.Duration {
 	if e.gateLookupTimeout > 0 {
 		return e.gateLookupTimeout
 	}
-	return DefaultGateLookupTimeout
+	return defaultGateLookupTimeout
 }
 
 // ClearLatches undoes RecordLatchesAfterCommit for the from->to edge; a no-op
@@ -122,7 +122,7 @@ func (s *SwitchableWorkflowEngine) ClearLatches(itemID string, from, to domain.B
 func (e *ConfiguredWorkflowEngine) recordLatch(itemID, gateID uuid.UUID) error {
 	timeout := e.gateLookupTimeout
 	if timeout <= 0 {
-		timeout = DefaultGateLookupTimeout
+		timeout = defaultGateLookupTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
