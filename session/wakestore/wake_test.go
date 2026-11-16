@@ -1,8 +1,7 @@
-package session
+package wakestore
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/entdbtest"
 )
 
 var wakeBase = time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
@@ -46,7 +46,7 @@ func cronInput(t *testing.T, owner string, maxFires int) domain.CreateWakeTrigge
 	}
 }
 
-func mustCreateWake(t *testing.T, repo *EntRepository, in domain.CreateWakeTriggerInput) (uuid.UUID, *domain.WakeTriggerData) {
+func mustCreateWake(t *testing.T, repo *Triggers, in domain.CreateWakeTriggerInput) (uuid.UUID, *domain.WakeTriggerData) {
 	t.Helper()
 	d, _, err := repo.CreateWakeTrigger(context.Background(), in)
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func mustCreateWake(t *testing.T, repo *EntRepository, in domain.CreateWakeTrigg
 	return id, d
 }
 
-func wakeStatusOf(t *testing.T, repo *EntRepository, id uuid.UUID) *domain.WakeTriggerData {
+func wakeStatusOf(t *testing.T, repo *Triggers, id uuid.UUID) *domain.WakeTriggerData {
 	t.Helper()
 	d, err := repo.GetWakeTrigger(context.Background(), id)
 	require.NoError(t, err)
@@ -64,7 +64,7 @@ func wakeStatusOf(t *testing.T, repo *EntRepository, id uuid.UUID) *domain.WakeT
 
 func TestCreateWakeTrigger_should_ReturnFirstRow_When_SameTriggerCreatedTwice(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	in := atInput(t, "7c1e", wakeBase, "check PR")
 	first, created1, err := repo.CreateWakeTrigger(context.Background(), in)
 	require.NoError(t, err)
@@ -81,7 +81,7 @@ func TestCreateWakeTrigger_should_ReturnFirstRow_When_SameTriggerCreatedTwice(t 
 
 func TestCreateWakeTrigger_should_Reject_When_InputInvalid(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	noNext := atInput(t, "o", wakeBase, "x")
 	noNext.NextFireAt = nil
@@ -96,7 +96,7 @@ func TestCreateWakeTrigger_should_Reject_When_InputInvalid(t *testing.T) {
 
 func TestCreateWakeTrigger_should_EnforceOwnerCap_When_DedupHitIsExempt(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	const capLimit = 2
 	mk := func(i int) domain.CreateWakeTriggerInput {
@@ -119,7 +119,7 @@ func TestCreateWakeTrigger_should_EnforceOwnerCap_When_DedupHitIsExempt(t *testi
 
 func TestClaimWakeTrigger_should_AllowExactlyOneWinner_When_EightGoroutinesRace(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	id, _ := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "x"))
 
 	const racers = 8
@@ -150,7 +150,7 @@ func TestClaimWakeTrigger_should_AllowExactlyOneWinner_When_EightGoroutinesRace(
 
 func TestClaimWakeTrigger_should_Refuse_When_RowExpired(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	in := atInput(t, "o", wakeBase, "x")
 	exp := wakeBase.Add(-time.Minute)
 	in.ExpiresAt = &exp
@@ -172,7 +172,7 @@ func TestClaimWakeTrigger_should_Refuse_When_RowExpired(t *testing.T) {
 
 func TestMarkWakeDelivered_should_BeIdempotent_When_CalledTwice(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	id, _ := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "x"))
 
@@ -198,7 +198,7 @@ func TestMarkWakeDelivered_should_BeIdempotent_When_CalledTwice(t *testing.T) {
 
 func TestWakeTriggerRepository_should_FollowNeedsReviveAndCancelRules(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 
 	id, _ := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "a"))
@@ -242,7 +242,7 @@ func TestWakeTriggerRepository_should_FollowNeedsReviveAndCancelRules(t *testing
 }
 
 // wakePathTo drives a fresh one-shot row into the wanted status.
-func wakePathTo(t *testing.T, repo *EntRepository, owner string, status domain.WakeStatus) uuid.UUID {
+func wakePathTo(t *testing.T, repo *Triggers, owner string, status domain.WakeStatus) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	id, _ := mustCreateWake(t, repo, atInput(t, owner, wakeBase, string(status)))
@@ -272,7 +272,7 @@ func wakePathTo(t *testing.T, repo *EntRepository, owner string, status domain.W
 
 func TestWakeTriggerRepository_Transitions_should_MatchDomainTable_When_EveryFromToPairTried(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	// One method per reachable target (claimed has two entry points).
 	moves := map[domain.WakeStatus][]func(id uuid.UUID) (bool, error){
@@ -315,7 +315,7 @@ func TestWakeTriggerRepository_Transitions_should_MatchDomainTable_When_EveryFro
 
 func TestMarkWakeDelivered_should_RearmCronRow_When_FiresRemain(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	id, d := mustCreateWake(t, repo, cronInput(t, "o", 3))
 	next := *d.NextFireAt
@@ -345,7 +345,7 @@ func TestMarkWakeDelivered_should_RearmCronRow_When_FiresRemain(t *testing.T) {
 
 func TestMarkWakeDelivered_should_Finish_When_CronNextFireIsPastExpiry(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	in := cronInput(t, "o", 10)
 	exp := wakeBase.Add(7 * time.Minute)
@@ -360,7 +360,7 @@ func TestMarkWakeDelivered_should_Finish_When_CronNextFireIsPastExpiry(t *testin
 
 func TestMarkWakeSkipped_should_RejectPendingCron_When_RateLimited(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 
 	atID, _ := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "x"))
@@ -388,66 +388,9 @@ func TestMarkWakeSkipped_should_RejectPendingCron_When_RateLimited(t *testing.T)
 	require.ErrorIs(t, err, domain.ErrWakeTransitionRejected)
 }
 
-func TestDeferWakeTrigger_should_SurviveRestartAndResetOnClaim(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "wake-restart.db")
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err)
-
-	id, _ := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "x"))
-	for want := 1; want <= 2; want++ {
-		n, applied, err := repo.DeferWakeTrigger(ctx, id, wakeBase.Add(time.Duration(want)*time.Minute))
-		require.NoError(t, err)
-		require.True(t, applied)
-		require.Equal(t, want, n)
-	}
-	require.NoError(t, repo.Close())
-
-	reopened, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = reopened.Close() })
-	assert.Equal(t, 2, wakeStatusOf(t, reopened, id).RateLimitDeferrals)
-
-	n, _, err := reopened.DeferWakeTrigger(ctx, id, wakeBase.Add(time.Hour))
-	require.NoError(t, err)
-	assert.Equal(t, 3, n)
-	applied, err := reopened.MarkWakeSkipped(ctx, id, domain.WakeReasonRateLimited, wakeBase)
-	require.NoError(t, err)
-	assert.True(t, applied)
-
-	// A deferred-then-claimed row starts again at zero.
-	id2, _ := mustCreateWake(t, reopened, atInput(t, "o", wakeBase.Add(time.Hour), "y"))
-	_, _, err = reopened.DeferWakeTrigger(ctx, id2, wakeBase.Add(time.Minute))
-	require.NoError(t, err)
-	_, err = reopened.ClaimWakeTrigger(ctx, id2, wakeBase)
-	require.NoError(t, err)
-	assert.Equal(t, 0, wakeStatusOf(t, reopened, id2).RateLimitDeferrals)
-}
-
-func TestWakeTrigger_should_SurviveRestart_When_PendingRowReadBackFromDisk(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "wake-survive.db")
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	_, created := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "keep me"))
-	require.NoError(t, repo.Close())
-
-	reopened, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = reopened.Close() })
-	pending, err := reopened.ListPendingWakeTriggers(ctx)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, created.ID, pending[0].ID)
-	assert.Equal(t, "keep me", pending[0].Action.Payload)
-	assert.Equal(t, domain.AtSpec{At: wakeBase}, pending[0].Spec)
-}
-
 func TestWakeTrigger_should_FreeDedupKey_When_RowBecomesTerminal(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	in := atInput(t, "o", wakeBase, "again")
 	id, first := mustCreateWake(t, repo, in)
@@ -470,7 +413,7 @@ func TestWakeTrigger_should_FreeDedupKey_When_RowBecomesTerminal(t *testing.T) {
 
 func TestSweepTerminalWakeTriggers_should_DeleteOnlyRowsOlderThanRetention(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 	const retention = 30 * 24 * time.Hour
 	now := wakeBase.Add(40 * 24 * time.Hour)
@@ -494,7 +437,7 @@ func TestSweepTerminalWakeTriggers_should_DeleteOnlyRowsOlderThanRetention(t *te
 
 func TestWakeTriggerQueries_should_ReturnTimerAndReconcileViews(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	ctx := context.Background()
 
 	_, ok, err := repo.NextWakeFireAt(ctx)
@@ -534,7 +477,7 @@ func TestWakeTriggerQueries_should_ReturnTimerAndReconcileViews(t *testing.T) {
 
 func TestWakeChangeHook_should_Fire_When_RowsChange(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestTriggers(t)
 	var calls atomic.Int32
 	repo.SetWakeChangeHook(func() { calls.Add(1) })
 	id, _ := mustCreateWake(t, repo, atInput(t, "o", wakeBase, "x"))
@@ -545,4 +488,9 @@ func TestWakeChangeHook_should_Fire_When_RowsChange(t *testing.T) {
 	_, err = repo.CancelWakeTrigger(context.Background(), id, wakeBase) // no-op
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), calls.Load())
+}
+
+func newTestTriggers(t testing.TB) *Triggers {
+	t.Helper()
+	return New(entdbtest.NewClient(t))
 }

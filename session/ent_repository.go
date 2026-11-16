@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/guidancestore"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/wakestore"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
@@ -43,10 +44,11 @@ import (
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	// Store methods (webhook management) and Repo methods (guidance requests) are
+	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers) methods are
 	// promoted; see initStores.
 	*webhookstore.Store
 	*guidancestore.Repo
+	*wakestore.Triggers
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -76,10 +78,6 @@ type EntRepository struct {
 
 	// migrations overrides DefaultStartupMigrations (nil = use the default); set via WithMigrations.
 	migrations []Migration
-
-	// wakeChanged is called after any WakeTrigger row change so the wake timer
-	// can re-arm (SetWakeChangeHook).
-	wakeChanged atomic.Pointer[func()]
 
 	// itemChangePublisher is nil-safe — every hooked backlog mutation method
 	// nil-checks before calling it (publish is best-effort and never blocks
@@ -306,6 +304,7 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 // sets Client must call it.
 func (r *EntRepository) initStores() {
 	r.Store = webhookstore.New(r.Client)
+	r.Triggers = wakestore.New(r.Client)
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
 		item := BacklogItemToData(row)
 		r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})

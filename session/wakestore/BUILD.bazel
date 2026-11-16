@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "wakestore",
+    srcs = [
+        "operator.go",
+        "store.go",
+        "transitions.go",
+        "wake.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/wakestore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:waketrigger",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":wakestore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "wakestore_test",
+    srcs = ["wake_test.go"],
+    embed = [":wakestore"],
+    deps = [
+        "//session/domain",
+        "//session/internal/entdbtest",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

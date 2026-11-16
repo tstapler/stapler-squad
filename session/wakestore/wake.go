@@ -1,4 +1,4 @@
-package session
+package wakestore
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 // SetWakeChangeHook registers fn to run after every WakeTrigger row change.
 // Safe to call while the repository is in use: the wake dispatcher swaps it as
 // agent_wake_triggers flips. A nil fn clears it.
-func (r *EntRepository) SetWakeChangeHook(fn func()) {
+func (r *Triggers) SetWakeChangeHook(fn func()) {
 	if fn == nil {
 		r.wakeChanged.Store(nil)
 		return
@@ -31,7 +31,7 @@ func (r *EntRepository) SetWakeChangeHook(fn func()) {
 	r.wakeChanged.Store(&fn)
 }
 
-func (r *EntRepository) notifyWakeChanged() {
+func (r *Triggers) notifyWakeChanged() {
 	if fn := r.wakeChanged.Load(); fn != nil {
 		(*fn)()
 	}
@@ -104,7 +104,7 @@ func utcPtr(t *time.Time) *time.Time {
 // re-creating an identical trigger at the cap is not rejected. The cap count
 // runs in the same transaction as the insert (SQLite's single writer connection
 // serializes it against concurrent creates).
-func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in domain.CreateWakeTriggerInput) (data *domain.WakeTriggerData, created bool, err error) {
+func (r *Triggers) CreateWakeTrigger(ctx context.Context, in domain.CreateWakeTriggerInput) (data *domain.WakeTriggerData, created bool, err error) {
 	key, specJSON, err := validateCreateWakeTriggerInput(in)
 	if err != nil {
 		return nil, false, err
@@ -118,7 +118,7 @@ func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in domain.CreateW
 		maxFires = 1
 	}
 
-	tx, err := r.Client.Tx(ctx)
+	tx, err := r.client.Tx(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("create wake trigger: begin transaction: %w", err)
 	}
@@ -187,8 +187,8 @@ func validateCreateWakeTriggerInput(in domain.CreateWakeTriggerInput) (key domai
 }
 
 // GetWakeTrigger reads one row; ent.IsNotFound reports a missing id.
-func (r *EntRepository) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error) {
-	row, err := r.Client.WakeTrigger.Get(ctx, id)
+func (r *Triggers) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*domain.WakeTriggerData, error) {
+	row, err := r.client.WakeTrigger.Get(ctx, id)
 	if ent.IsNotFound(err) {
 		return nil, fmt.Errorf("get wake trigger %s: %w", id, domain.ErrNotFound)
 	}
