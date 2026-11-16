@@ -24,12 +24,17 @@ runs:
         done
         echo "::error::apt-get could not install the tmux build dependencies after 4 attempts"
         exit 1
+    - name: Resolve runner image for tmux cache key
+      id: tmux-image
+      shell: bash
+      # The binary links the runner's libtinfo/libevent; one built on another image fails to load.
+      run: echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
     - name: Cache pinned tmux binary
       uses: actions/cache@v4
       id: tmux-cache
       with:
         path: bin/tmux
-        key: tmux-3.8-${{ runner.os }}-v1
+        key: tmux-3.8-${{ runner.os }}-${{ steps.tmux-image.outputs.os }}-v2
     - name: Build pinned tmux 3.8
       if: steps.tmux-cache.outputs.cache-hit != 'true'
       shell: bash
