@@ -240,8 +240,8 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data backlogdto.I
 	if item, lookupErr := r.GetBacklogItem(ctx, data.ItemID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] CreateItemSession: failed to resolve backlog item %s for publish: %v", data.ItemID, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:           ChangeSessionAttached,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:           backlogdto.ChangeSessionAttached,
 			SessionID:      data.SessionUUID,
 			ClaimantHostID: data.ClaimantHostID,
 		})
@@ -478,8 +478,8 @@ func (r *EntRepository) UpdateItemSessionStarted(ctx context.Context, id string,
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionStarted: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
 	}
@@ -505,8 +505,8 @@ func (r *EntRepository) UpdateItemSessionSessionUUID(ctx context.Context, id str
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionSessionUUID: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:      ChangeSessionAttached,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:      backlogdto.ChangeSessionAttached,
 			SessionID: sessionUUID,
 		})
 	}
@@ -706,8 +706,8 @@ func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id str
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionGitActivity: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
 	}
@@ -736,8 +736,8 @@ func (r *EntRepository) UpdateItemSessionFileTouch(ctx context.Context, id strin
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionFileTouch: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
 	}
@@ -766,8 +766,8 @@ func (r *EntRepository) UpdateItemSessionTriageResult(ctx context.Context, id st
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionTriageResult: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:          ChangeTriageProgressUpdated,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeTriageProgressUpdated,
 			UpdatedFields: []string{"triageResultSummary"},
 		})
 	}
@@ -796,8 +796,8 @@ func (r *EntRepository) UpdateItemSessionVerificationNotes(ctx context.Context, 
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionVerificationNotes: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
 	}
@@ -881,8 +881,8 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedSessionID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] SaveReviewVerdict: failed to resolve owning backlog item for item session %s: %v", itemSessionID, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:    ChangeVerdictRecorded,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:    backlogdto.ChangeVerdictRecorded,
 			Verdict: &verdict,
 		})
 	}
@@ -964,8 +964,8 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 	if item, lookupErr := r.GetBacklogItem(ctx, isData.ItemID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] CreateItemSessionWithVerdict: failed to resolve backlog item %s for publish: %v", isData.ItemID, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:    ChangeVerdictRecorded,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:    backlogdto.ChangeVerdictRecorded,
 			Verdict: &verdict,
 		})
 	}
@@ -1154,8 +1154,8 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 		// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
 		result := BacklogItemToData(updated)
-		r.publishItemChanged(ctx, &result, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"prNumber"},
 		})
 	}
@@ -1468,8 +1468,8 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 
 	// Best-effort publish so live viewers see AC progress without a full refresh.
 	result := BacklogItemToData(updated)
-	r.publishItemChanged(ctx, &result, BacklogItemChange{
-		Kind:          ChangeItemUpdated,
+	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		Kind:          backlogdto.ChangeItemUpdated,
 		UpdatedFields: []string{"acceptanceCriteria"},
 	})
 

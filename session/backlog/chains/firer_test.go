@@ -541,7 +541,7 @@ func TestWireChainFirer_should_RegisterTheFirerOnTheStorageRepository_And_FireOn
 	cf := WireChainFirer(storage, fx.workflows, fx.fireEvents, firer, enabledCfg())
 	require.NotNil(t, cf)
 	assert.Same(t, fx.repo, storage.Repository())
-	assert.Same(t, cf, fx.repo.ChainFirer, "WireChainFirer must register the ChainFirer as the repository's dispatcher")
+	assert.Same(t, cf, fx.repo.ChainDispatcher(), "WireChainFirer must register the ChainFirer as the repository's dispatcher")
 
 	wf := fx.createWorkflow(t, "wire-chain-next")
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "wired chain item", Status: string(domain.BacklogStatusReview)})

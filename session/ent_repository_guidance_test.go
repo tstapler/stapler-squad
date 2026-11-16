@@ -146,7 +146,7 @@ type flagRecordingPublisher struct {
 	flags []bool
 }
 
-func (p *flagRecordingPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, _ BacklogItemChange) {
+func (p *flagRecordingPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, _ backlogdto.BacklogItemChange) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.flags = append(p.flags, item.HasPendingGuidanceRequests)

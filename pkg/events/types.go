@@ -96,7 +96,7 @@ type BacklogItemEventPayload struct {
 	// SessionID identifies the session for BacklogChangeSessionAttached.
 	SessionID string
 	// ClaimantHostID is the attaching process's own stable host identifier for
-	// BacklogChangeSessionAttached, mirrored from session.BacklogItemChange —
+	// BacklogChangeSessionAttached, mirrored from backlogdto.BacklogItemChange —
 	// never derived from the session being attached.
 	ClaimantHostID string
 	// ArchivedAt is the archival timestamp for BacklogChangeItemArchived.
@@ -108,7 +108,7 @@ type BacklogItemEventPayload struct {
 	// the adapter so the verdict reaches subscribers as first-class payload
 	// data rather than something derived by joining item_sessions.
 	Verdict *backlogdto.ReviewVerdictData
-	// ActivityNote mirrors session.BacklogItemChange.ActivityNote one-to-one;
+	// ActivityNote mirrors backlogdto.BacklogItemChange.ActivityNote one-to-one;
 	// populated only when Kind == BacklogChangeActivityNoteAdded.
 	ActivityNote *backlogdto.ActivityNoteData
 	// IsSnapshot is true when this event was generated as part of an

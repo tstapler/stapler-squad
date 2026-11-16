@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
@@ -67,29 +68,9 @@ type EntRepository struct {
 	// migrations overrides DefaultStartupMigrations (nil = use the default); set via WithMigrations.
 	migrations []Migration
 
-	// itemChangePublisher is nil-safe — every hooked backlog mutation method
-	// nil-checks before calling it (publish is best-effort and never blocks
-	// or fails the underlying mutation). Wired via SetItemChangePublisher,
-	// typically by Storage.SetItemChangePublisher's forwarding call in
-	// server/dependencies.go.
-	itemChangePublisher ItemChangePublisher
-
-	// callbackDispatcher is nil-safe — dispatchCallback nil-checks before calling
-	// it (dispatch is best-effort and never blocks or fails the underlying
-	// mutation). Wired via SetCallbackDispatcher, typically by
-	// Storage.SetCallbackDispatcher's forwarding call in server/dependencies.go.
-	// Used by TransitionBacklogItemStatus (on_session_complete, webhook-triggers
-	// Phase 5) and by BacklogLifecycleListener.reconcileStaleWorkSessions
-	// (on_session_stale), which is handed this *EntRepository directly.
-	callbackDispatcher CallbackDispatcher
-
-	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
-	// (dispatch is best-effort and never blocks or fails the underlying
-	// mutation). Wired via SetChainFirer, typically by WireChainFirer's
-	// forwarding call in server/dependencies.go. Used by
-	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
-	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
-	ChainFirer ChainDispatcher
+	// backlogHooks holds the late-bound, nil-safe publisher/callback/chain ports
+	// the backlog mutations call after commit (see BacklogHooks).
+	backlogHooks BacklogHooks
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -298,7 +279,7 @@ func (r *EntRepository) initStores() {
 	r.SetDriver(r.driver)
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
 		item := BacklogItemToData(row)
-		r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+		r.publishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
 	})
 }
 

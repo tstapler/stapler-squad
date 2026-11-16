@@ -5,12 +5,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BacklogItemEventPublisher adapts an *events.EventBus to
-// session.ItemChangePublisher. The session package cannot import pkg/events
+// backlogdto.ItemChangePublisher. The session package cannot import pkg/events
 // directly (pkg/events imports session, so the reverse import would be a
 // cycle), so this adapter lives here instead and is wired in via
 // Storage.SetItemChangePublisher (session/storage.go), mirroring
@@ -19,18 +18,18 @@ type BacklogItemEventPublisher struct {
 	Bus *events.EventBus
 }
 
-// PublishItemChanged implements session.ItemChangePublisher. The entire body
+// PublishItemChanged implements backlogdto.ItemChangePublisher. The entire body
 // is wrapped in its own recover() so a panic anywhere inside it (payload
 // construction, an unmapped BacklogChangeKind, bus.Publish itself) can never
 // propagate into the repository method that called it — the same
 // "best-effort side channel must not take down the caller" idiom this
 // codebase already uses at runStuckDetector (session/backlog_lifecycle.go)
 // and around PTY forwarding (server/services/session_service.go). Because the
-// recover happens inside the adapter itself, session.ItemChangePublisher.
+// recover happens inside the adapter itself, backlogdto.ItemChangePublisher.
 // PublishItemChanged deliberately keeps its no-error-return signature: there
 // is never an error for a repository caller to log or swallow, because a
 // panic can never reach it in the first place.
-func (p *BacklogItemEventPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change session.BacklogItemChange) {
+func (p *BacklogItemEventPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.WarningLog().Printf("[BacklogItemEventPublisher] PublishItemChanged panicked (recovered): %v", r)
@@ -57,29 +56,29 @@ func (p *BacklogItemEventPublisher) PublishItemChanged(item *backlogdto.BacklogI
 	p.Bus.Publish(events.NewBacklogItemChangedEvent(payload))
 }
 
-// mapBacklogChangeKind converts session.BacklogChangeKind (the session
-// package's cycle-avoiding mirror, session/backlog_item_change.go) to
+// mapBacklogChangeKind converts backlogdto.BacklogChangeKind (the session
+// cycle-avoiding mirror, session/domain/backlogdto/backlog_hooks.go) to
 // events.BacklogChangeKind (the pkg/events wire type). Kept as an explicit
 // switch rather than a raw string conversion so an unmapped kind panics
 // (caught by PublishItemChanged's recover(), logged, and never delivered)
 // instead of silently publishing an unrecognized value to subscribers.
-func mapBacklogChangeKind(kind session.BacklogChangeKind) events.BacklogChangeKind {
+func mapBacklogChangeKind(kind backlogdto.BacklogChangeKind) events.BacklogChangeKind {
 	switch kind {
-	case session.ChangeStatusTransition:
+	case backlogdto.ChangeStatusTransition:
 		return events.BacklogChangeStatusTransition
-	case session.ChangeVerdictRecorded:
+	case backlogdto.ChangeVerdictRecorded:
 		return events.BacklogChangeVerdictRecorded
-	case session.ChangeSessionAttached:
+	case backlogdto.ChangeSessionAttached:
 		return events.BacklogChangeSessionAttached
-	case session.ChangeItemUpdated:
+	case backlogdto.ChangeItemUpdated:
 		return events.BacklogChangeItemUpdated
-	case session.ChangeItemArchived:
+	case backlogdto.ChangeItemArchived:
 		return events.BacklogChangeItemArchived
-	case session.ChangeItemRemoved:
+	case backlogdto.ChangeItemRemoved:
 		return events.BacklogChangeItemRemoved
-	case session.ChangeTriageProgressUpdated:
+	case backlogdto.ChangeTriageProgressUpdated:
 		return events.BacklogChangeTriageProgressUpdated
-	case session.ChangeActivityNoteAdded:
+	case backlogdto.ChangeActivityNoteAdded:
 		return events.BacklogChangeActivityNoteAdded
 	default:
 		panic(fmt.Sprintf("BacklogItemEventPublisher: unmapped BacklogChangeKind %q", kind))
