@@ -57,7 +57,7 @@ func (p *BacklogItemEventPublisher) PublishItemChanged(item *backlogdto.BacklogI
 }
 
 // mapBacklogChangeKind converts backlogdto.BacklogChangeKind (the session
-// package's cycle-avoiding mirror, session/backlog_item_change.go) to
+// cycle-avoiding mirror, session/domain/backlogdto/backlog_hooks.go) to
 // events.BacklogChangeKind (the pkg/events wire type). Kept as an explicit
 // switch rather than a raw string conversion so an unmapped kind panics
 // (caught by PublishItemChanged's recover(), logged, and never delivered)
