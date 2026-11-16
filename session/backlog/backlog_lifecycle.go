@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // QueueDequeuer claims and spawns as many queued (and, by default, "ready" —
@@ -303,9 +304,9 @@ func (l *BacklogLifecycleListener) SetWorkflowEngine(engine domain.WorkflowEngin
 // configuredWorkflowEngine returns the wired engine as a *ConfiguredWorkflowEngine.
 // Any other non-nil engine (notably the SwitchableWorkflowEngine selector)
 // silently disables gate-context resolution, so that is logged once.
-func (l *BacklogLifecycleListener) configuredWorkflowEngine() (*session.ConfiguredWorkflowEngine, bool) {
+func (l *BacklogLifecycleListener) configuredWorkflowEngine() (*workflowengine.ConfiguredWorkflowEngine, bool) {
 	eng := l.getWorkflowEngine()
-	cwe, ok := eng.(*session.ConfiguredWorkflowEngine)
+	cwe, ok := eng.(*workflowengine.ConfiguredWorkflowEngine)
 	if !ok && eng != nil {
 		l.wrongEngineWarn.Do(func() {
 			log.Warn("backlog lifecycle listener: workflow engine is not a *ConfiguredWorkflowEngine; automated-review and custom-check gate contexts will not resolve",

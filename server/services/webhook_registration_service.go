@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Webhook-management contract identity. Bumping CapabilityRevision is a compatible
@@ -395,7 +396,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (webhookstore.We
 	invalid := func(msg string) (webhookstore.WebhookWorkflowSpec, error) {
 		return webhookstore.WebhookWorkflowSpec{}, apiErr(http.StatusBadRequest, "INVALID_REQUEST", msg)
 	}
-	if err := session.ValidateWorkflowSlug(b.Slug); err != nil {
+	if err := workflowengine.ValidateWorkflowSlug(b.Slug); err != nil {
 		return invalid("webhook.slug: " + err.Error())
 	}
 	if b.Name == "" || len(b.Name) > maxWebhookNameBytes {

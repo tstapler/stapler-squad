@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Story 1.5.7a: under Enforce an operator gate on done->archived holds the item
@@ -21,7 +22,7 @@ import (
 func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSatisfied(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusDone, domain.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := newDoneTestItem(t, h.storage, h.repo, maxDoneAge+1)
 
@@ -50,7 +51,7 @@ func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSati
 func TestArchiveStaleDoneItems_Shadow_ArchivesDespiteOperatorGate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, session.ModeShadow)
+	h := newGateHarness(t, workflowengine.ModeShadow)
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusDone, domain.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := newDoneTestItem(t, h.storage, h.repo, maxDoneAge+1)
 

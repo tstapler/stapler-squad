@@ -185,6 +185,7 @@ go_test(
         "//session/stagecfg",
         "//session/streamhub",
         "//session/tmux",
+        "//session/workflowengine",
         "//testutil/wait",
         "@com_connectrpc_connect//:connect",
         "@com_github_go_git_go_git_v5//:go-git",

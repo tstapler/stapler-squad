@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFails confirms
@@ -67,7 +67,7 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	engine := disabledEdgeWorkflowEngine{
-		WorkflowEngine: session.NewDefaultWorkflowEngine(),
+		WorkflowEngine: workflowengine.NewDefaultWorkflowEngine(),
 		deniedFrom:     domain.BacklogStatusReady,
 		deniedTo:       domain.BacklogStatusInProgress,
 	}

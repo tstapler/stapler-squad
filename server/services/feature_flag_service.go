@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // piSupportFlagName mirrors config.FeaturePiSupport so the flag registry (feature_flag_specs.go)
@@ -159,8 +160,8 @@ const workflowEngineModeTTL = time.Second
 // WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
 // flags with their registered defaults (never the plain GetFeatureFlag, which
 // returns false for an unset flag and would silently turn shadow off).
-func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
-	return session.ModeFromFlags(
+func WorkflowEngineModeFromConfig(cfg *config.Config) workflowengine.EngineMode {
+	return workflowengine.ModeFromFlags(
 		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
 		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
 	)
@@ -168,21 +169,21 @@ func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
 
 // NewWorkflowEngineModeSource is the production mode reader: live config,
 // cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock) *session.CachedModeSource {
-	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock) *workflowengine.CachedModeSource {
+	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
 }
 
 // NewWorkflowEngineClassModeSource is the production per-class mode reader:
 // each class resolves its own enforce flag and the shared shadow flag from live
 // config, cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineClassModeSource(load func() *config.Config, clock hostclaim.Clock) *session.FlagClassModeSource {
-	return session.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
+func NewWorkflowEngineClassModeSource(load func() *config.Config, clock hostclaim.Clock) *workflowengine.FlagClassModeSource {
+	return workflowengine.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
 }
 
 // WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the
 // shadow flag's status line, counted from the ledger's repro ring (the last 200
 // divergences), so a busy day can read as a floor rather than an exact count.
-func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now func() time.Time) func() string {
+func WorkflowEngineShadowStatusDetail(snapshot func() workflowengine.ShadowLedger, now func() time.Time) func() string {
 	return func() string {
 		cutoff := now().Add(-24 * time.Hour)
 		n := 0

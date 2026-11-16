@@ -1,9 +1,9 @@
-package session_test
+package workflowengine_test
 
 import (
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func TestValidateWorkflowSlug(t *testing.T) {
@@ -35,7 +35,7 @@ func TestValidateWorkflowSlug(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := session.ValidateWorkflowSlug(tt.slug)
+			err := workflowengine.ValidateWorkflowSlug(tt.slug)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateWorkflowSlug(%q) error = %v, wantErr %v", tt.slug, err, tt.wantErr)
 			}

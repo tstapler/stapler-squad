@@ -19,13 +19,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // systemGateHarness is the storage's gate, backed by a Configured engine whose
 // stage config a test can edit.
 type systemGateHarness struct {
 	repo   stagecfg.StageCRUDRepository
-	engine *session.ConfiguredWorkflowEngine
+	engine *workflowengine.ConfiguredWorkflowEngine
 }
 
 // wireEnforcedGate injects a gate that enforces every caller class on storage,
@@ -34,11 +35,11 @@ func wireEnforcedGate(t *testing.T, svc *BacklogService) *systemGateHarness {
 	t.Helper()
 	ctx := context.Background()
 	client := svc.storage.GetEntClient()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
 	repo := stagecfg.NewEntStageConfigRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(repo, stagecfg.NewEntGateSatisfactionRepository(client), nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(repo, stagecfg.NewEntGateSatisfactionRepository(client), nil)
 	require.NoError(t, err)
-	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), engine, enforceEveryClass{})
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), engine, enforceEveryClass{})
 	require.NoError(t, svc.storage.SetTransitionGate(sel, svc.TransitionDeniedReporter()))
 	return &systemGateHarness{repo: repo, engine: engine}
 }
@@ -190,12 +191,12 @@ func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressT
 	})
 	require.NoError(t, err)
 	h.blockWithGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
-	before := session.EngineBypassCount(backlogdto.CallerRollback)
+	before := workflowengine.EngineBypassCount(backlogdto.CallerRollback)
 
 	svc.rollbackFailedReopen(context.Background(), item, inProgress, errors.New("spawn failed"))
 
 	assert.Equal(t, "review", itemStatus(t, svc, item.ID), "a rollback is never engine-denied")
-	assert.Equal(t, before+1, session.EngineBypassCount(backlogdto.CallerRollback))
+	assert.Equal(t, before+1, workflowengine.EngineBypassCount(backlogdto.CallerRollback))
 }
 
 func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcurrentMover(t *testing.T) {
@@ -221,7 +222,7 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	wireEnforcedGate(t, svc)
 	handler := services.NewBacklogDebugMutateHandler(svc.storage)
 	item := systemItemAt(t, svc, domain.BacklogStatusIdea)
-	before := session.EngineBypassCount(backlogdto.CallerDebug)
+	before := workflowengine.EngineBypassCount(backlogdto.CallerDebug)
 
 	post := func(fn http.HandlerFunc, body string) int {
 		rec := httptest.NewRecorder()
@@ -232,6 +233,6 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	assert.Equal(t, "done", itemStatus(t, svc, item.ID))
 	assert.Equal(t, http.StatusNoContent, post(handler.HandleArchive, `{"itemId":"`+item.ID+`"}`))
 	assert.Equal(t, "archived", itemStatus(t, svc, item.ID))
-	assert.Equal(t, before+2, session.EngineBypassCount(backlogdto.CallerDebug))
+	assert.Equal(t, before+2, workflowengine.EngineBypassCount(backlogdto.CallerDebug))
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID))
 }

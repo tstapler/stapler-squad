@@ -3,9 +3,9 @@ package chains
 import (
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"sort"
 	"strings"
 )
@@ -56,7 +56,7 @@ var (
 // ValidateDisableSystemRequiredEdge rejects removing a system-required edge,
 // including every X->archived edge. Callers apply it to disables and deletes.
 func ValidateDisableSystemRequiredEdge(from, to string) error {
-	if !session.IsSystemRequired(domain.BacklogStatus(from), domain.BacklogStatus(to)) {
+	if !workflowengine.IsSystemRequired(domain.BacklogStatus(from), domain.BacklogStatus(to)) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s->%s. Automation relies on this transition; edit its gates instead of disabling it",
@@ -65,7 +65,7 @@ func ValidateDisableSystemRequiredEdge(from, to string) error {
 
 // BuiltInStatuses returns a copy of the built-in stage statuses in pipeline order.
 func BuiltInStatuses() []domain.BacklogStatus {
-	return append([]domain.BacklogStatus(nil), session.BuiltInStageOrder...)
+	return append([]domain.BacklogStatus(nil), workflowengine.BuiltInStageOrder...)
 }
 
 // StrandedStatuses returns, sorted, every status that has live items but no
@@ -83,7 +83,7 @@ func StrandedStatuses(candidateEdges []stagecfg.TransitionDefinition, liveCountB
 		if n == 0 || status == string(domain.BacklogStatusArchived) || hasOut[status] {
 			continue
 		}
-		if len(session.SystemRequiredTargets(domain.BacklogStatus(status))) > 0 {
+		if len(workflowengine.SystemRequiredTargets(domain.BacklogStatus(status))) > 0 {
 			continue
 		}
 		stranded = append(stranded, status)

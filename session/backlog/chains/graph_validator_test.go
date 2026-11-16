@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestGraphValidator_should_AcceptValidGraph_When_EveryStageIsReachableAndEveryNonTerminalHasAnOutgoingEdge
@@ -219,7 +219,7 @@ func TestGraphValidator_should_TreatUnknownStageAsZeroLiveItems_When_MapHasNoEnt
 
 func TestValidateDisableSystemRequiredEdge_should_RejectSystemEdgesAndAllowOthers(t *testing.T) {
 	t.Parallel()
-	for _, e := range session.SystemRequiredEdges() {
+	for _, e := range workflowengine.SystemRequiredEdges() {
 		err := ValidateDisableSystemRequiredEdge(string(e.From), string(e.To))
 		require.ErrorIsf(t, err, ErrDisableSystemRequiredEdge, "%s->%s", e.From, e.To)
 	}

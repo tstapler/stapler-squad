@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 import (
 	"context"
@@ -56,16 +56,16 @@ type ConfiguredWorkflowEngine struct {
 	loadErr atomic.Pointer[error]
 
 	// gateLookupTimeout bounds each stateful-gate DB read; zero means
-	// defaultGateLookupTimeout. A test seam, never set in production.
+	// DefaultGateLookupTimeout. A test seam, never set in production.
 	gateLookupTimeout time.Duration
 	// gateLookupTimeouts counts stateful-gate reads cut off by the deadline.
 	gateLookupTimeouts atomic.Int64
 }
 
-// defaultGateLookupTimeout bounds the GateSatisfactionRepository reads made
+// DefaultGateLookupTimeout bounds the GateSatisfactionRepository reads made
 // while evaluating stateful gates. WorkflowEngine carries no context, so the
 // deadline lives here; a timeout leaves the gate unsatisfied (fail closed).
-const defaultGateLookupTimeout = 2 * time.Second
+const DefaultGateLookupTimeout = 2 * time.Second
 
 var _ domain.WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
 
@@ -133,7 +133,7 @@ func (e *ConfiguredWorkflowEngine) GateLookupTimeouts() int64 {
 func (e *ConfiguredWorkflowEngine) lookupGateRecord(itemID, gateID uuid.UUID) (*stagecfg.GateSatisfactionData, error) {
 	timeout := e.gateLookupTimeout
 	if timeout <= 0 {
-		timeout = defaultGateLookupTimeout
+		timeout = DefaultGateLookupTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

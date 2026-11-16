@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	logpkg "github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Handing the selector (anything but *ConfiguredWorkflowEngine) to the
@@ -18,7 +18,7 @@ func TestBacklogLifecycleListener_NonConfiguredEngine_LogsGateContextDegrade(t *
 	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
 
-	selector := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, nil)
+	selector := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, nil)
 	l := &BacklogLifecycleListener{}
 	l.SetWorkflowEngine(selector)
 

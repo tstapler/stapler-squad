@@ -363,6 +363,7 @@ go_library(
         "//session/vc",
         "//session/vcs",
         "//session/webhookstore",
+        "//session/workflowengine",
         "//telemetry",
         "//tools/bzl/ent",
         "//tools/bzl/ent:errorevent",
@@ -811,6 +812,7 @@ go_test(
         "//session/sshremote:approval_relay.go",
         "//session/testdata:all",
         "//session/tokens:testdata",
+        "//session/workflowengine:go_sources",
     ],
     embed = [":services"],
     deps = [
@@ -878,6 +880,7 @@ go_test(
         "//session/tymux",
         "//session/unfinished",
         "//session/vc",
+        "//session/workflowengine",
         "//testutil",
         "//testutil/gitfake",
         "//testutil/socket",

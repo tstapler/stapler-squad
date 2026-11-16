@@ -26,11 +26,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // stageTransitionToProto converts a session.TransitionData to its proto
@@ -58,7 +58,7 @@ func transitionGateToProto(g *stagecfg.GateData) *sessionv1.TransitionGate {
 		TransitionId: g.TransitionID.String(),
 		Kind:         g.Kind,
 		Config:       configMapToProto(g.Config),
-		Stateful:     session.EffectiveGateStateful(domain.GateKind(g.Kind), g.Stateful),
+		Stateful:     workflowengine.EffectiveGateStateful(domain.GateKind(g.Kind), g.Stateful),
 		OrderIndex:   int32(g.OrderIndex),
 		Enabled:      g.Enabled,
 		CreatedAt:    timestamppb.New(g.CreatedAt),
@@ -514,7 +514,7 @@ func (s *BacklogService) CreateTransitionGate(
 		TransitionID: transitionID,
 		Kind:         req.Msg.Kind,
 		Config:       configMapFromProto(req.Msg.Config),
-		Stateful:     session.EffectiveGateStateful(domain.GateKind(req.Msg.Kind), req.Msg.Stateful),
+		Stateful:     workflowengine.EffectiveGateStateful(domain.GateKind(req.Msg.Kind), req.Msg.Stateful),
 		OrderIndex:   int(req.Msg.OrderIndex),
 		Enabled:      req.Msg.Enabled,
 	})
@@ -583,7 +583,7 @@ func (s *BacklogService) UpdateTransitionGate(
 // resolveUpdateStateful rejects an explicit stateful=false on a recorded kind
 // and stores true when a recorded kind arrives with stateful unset.
 func resolveUpdateStateful(kind string, requested *bool) (*bool, error) {
-	if !session.IsRecordedGateKind(domain.GateKind(kind)) {
+	if !workflowengine.IsRecordedGateKind(domain.GateKind(kind)) {
 		return requested, nil
 	}
 	if requested != nil && !*requested {

@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // bypassPrimitives are the six status writers (ADR-007 D1); a call is matched
@@ -504,11 +504,11 @@ func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *te
 
 func TestRecordEngineBypass_IncrementsCounter(t *testing.T) {
 	const c = domain.TransitionCaller("inventory_test_caller")
-	before := session.EngineBypassCount(c)
-	session.RecordEngineBypass(c)
-	session.RecordEngineBypass(c)
-	assert.Equal(t, before+2, session.EngineBypassCount(c))
-	assert.Equal(t, before+2, session.EngineBypassSnapshot()[string(c)])
+	before := workflowengine.EngineBypassCount(c)
+	workflowengine.RecordEngineBypass(c)
+	workflowengine.RecordEngineBypass(c)
+	assert.Equal(t, before+2, workflowengine.EngineBypassCount(c))
+	assert.Equal(t, before+2, workflowengine.EngineBypassSnapshot()[string(c)])
 }
 
 // --- creation (ADR-007 D1, exempt class "create") -----------------------------

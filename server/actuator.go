@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // registerActuatorRoutes wires a small actuator-style surface (inspired by
@@ -293,7 +294,7 @@ func handleActuatorMetrics(w http.ResponseWriter, _ *http.Request) {
 			"total_failures":     fp.TotalFailures,
 			"total_zombies":      fp.TotalZombies,
 		},
-		"workflow_engine_bypass_total": session.EngineBypassSnapshot(),
+		"workflow_engine_bypass_total": workflowengine.EngineBypassSnapshot(),
 		"db":                           dbobs.Snapshot(),
 		"db_maintenance":               dbmaint.Snapshot(),
 		"runtime": map[string]any{

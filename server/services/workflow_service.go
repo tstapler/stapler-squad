@@ -22,6 +22,7 @@ import (
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // WorkflowSchedulerInterface is the interface WorkflowService uses to interact with the scheduler.
@@ -223,7 +224,7 @@ func (s *WorkflowService) CreateWorkflow(
 	}
 
 	// Validate slug.
-	if err := session.ValidateWorkflowSlug(req.Msg.Slug); err != nil {
+	if err := workflowengine.ValidateWorkflowSlug(req.Msg.Slug); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	// Validate required fields per ADR-9.
