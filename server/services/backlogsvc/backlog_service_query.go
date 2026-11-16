@@ -15,7 +15,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
@@ -80,7 +79,7 @@ func (s *BacklogService) GetBacklogItem(
 			is := &isSessions[i]
 			if is.Role == string(instance.SessionRoleTriage) &&
 				is.EndedAt == nil &&
-				services.IsHeadlessRole(is.SessionUUID, services.HeadlessRoleTriage) &&
+				domain.IsHeadlessRole(is.SessionUUID, domain.HeadlessRoleTriage) &&
 				time.Since(is.CreatedAt) > maxTriageSessionAge {
 				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now) //nolint:silenttransition ended-at bookkeeping on a read-side stale-triage sweep; the next sweep retries
 				is.EndedAt = &now

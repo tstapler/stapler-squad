@@ -18,21 +18,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// julesSessionUUIDPrefix marks every jules_work ItemSession's session_uuid —
-// both the pre-CreateSession reservation form (session.JulesPendingUUIDPrefix,
-// already declared package-locally in storage_backlog.go by Epic 2.1 — NOT
-// redeclared here, since a second `const session.JulesPendingUUIDPrefix = ...` in
-// this same package would be a duplicate-declaration compile error) and the
-// confirmed "jules-sessions/{id}" form once CreateSession succeeds.
-// julesSessionUUIDPrefix itself mirrors the constant Epic 2.2's
-// server/services/jules_dispatch_service.go declares (duplicated rather than
-// imported: server/services imports session, so the reverse import would
-// cycle) — same precedent as headlessTriageUUIDPrefix/
-// headlessTriageSessionUUIDPrefix (session/backlog_lifecycle_triage.go:43-50,
-// server/services/backlog_service_triage.go:423). Keep byte-identical with
-// that copy; a future value change must update both.
-const julesSessionUUIDPrefix = "jules-"
-
 // julesPendingReservationMaxAge bounds how long a jules-pending- reservation
 // row may sit unconfirmed before the poller treats the dispatch as abandoned
 // (Story 2.3.3).
@@ -70,7 +55,7 @@ type julesStatusClient interface {
 // julesUsageRecorder is the narrow slice of *services.JulesUsageCounter
 // JulesSessionPoller needs (Task 4.1.1a) — declared locally, not imported,
 // since session cannot import server/services (import-direction constraint,
-// see julesSessionUUIDPrefix's doc comment above). *services.JulesUsageCounter
+// see domain.JulesSessionUUIDPrefix's doc comment above). *services.JulesUsageCounter
 // satisfies this structurally; server/dependencies.go passes it in via
 // SetUsageCounter after constructing both.
 type julesUsageRecorder interface {
@@ -316,7 +301,7 @@ func (p *JulesSessionPoller) processEntry(ctx context.Context, entry backlogdto.
 
 	// Abandoned-reservation sweep: a row still carrying the pre-CreateSession
 	// placeholder UUID has no real Jules session to poll at all.
-	if strings.HasPrefix(entry.SessionUUID, session.JulesPendingUUIDPrefix) {
+	if strings.HasPrefix(entry.SessionUUID, domain.JulesPendingUUIDPrefix) {
 		if p.now().Sub(row.CreatedAt) > julesPendingReservationMaxAge {
 			p.failJulesSession(ctx, entry, row.ID, "dispatch_incomplete",
 				"Jules dispatch did not complete — check jules.google.com in case a session was created but not recorded here, then retry dispatch if needed.")
@@ -666,6 +651,6 @@ func julesStateNoteLabel(state julesapi.JulesSessionState) string {
 // julesSessionNameFromUUID converts a stored session_uuid ("jules-sessions/xyz")
 // into the wire-format julesapi.JulesSessionName GetSession expects ("sessions/xyz").
 func julesSessionNameFromUUID(sessionUUID string) (julesapi.JulesSessionName, error) {
-	raw := strings.TrimPrefix(sessionUUID, julesSessionUUIDPrefix)
+	raw := strings.TrimPrefix(sessionUUID, domain.JulesSessionUUIDPrefix)
 	return julesapi.ParseJulesSessionName(raw)
 }

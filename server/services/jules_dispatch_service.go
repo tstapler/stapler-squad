@@ -26,23 +26,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// julesSessionUUIDPrefix is prepended to a jules.JulesSessionName to form
-// ItemSession.session_uuid once CreateSession confirms a real session.
-// julesPendingUUIDPrefix is the reservation UUID written *before* the
-// CreateSession POST (ADR-004's idempotency reservation), replaced with the
-// real name after.
-//
-// Declared independently here and in session/jules_session_poller.go
-// (Task 2.3.1a) — session/ cannot import server/services (import-direction
-// constraint), mirroring headlessTriageUUIDPrefix's existing duplication
-// (server/services/backlog_service_triage.go:423 /
-// session/backlog_lifecycle_triage.go:43-50). Keep both copies byte-identical
-// if either ever changes.
-const (
-	JulesSessionUUIDPrefix = "jules-"
-	julesPendingUUIDPrefix = "jules-pending-"
-)
-
 // ErrJulesDispatchInFlight indicates this item already has an open (or
 // racing) Jules dispatch — either a persisted jules_work ItemSession with no
 // end time (Task 2.2.1b step 2) or a concurrent call already holding the
@@ -323,7 +306,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 
 	log.Info("jules dispatch requested", "item_id", item.ID, "repo", ref.String(), "branch", string(req.Branch), "source_name", string(sourceName))
 
-	reservationUUID := julesPendingUUIDPrefix + uuid.New().String()
+	reservationUUID := domain.JulesPendingUUIDPrefix + uuid.New().String()
 	reservation, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: reservationUUID,
@@ -350,7 +333,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 		return "", fmt.Errorf("jules: creating session: %w", createErr)
 	}
 
-	sessionUUID := JulesSessionUUIDPrefix + string(julesSession.Name)
+	sessionUUID := domain.JulesSessionUUIDPrefix + string(julesSession.Name)
 	if err := s.storage.UpdateItemSessionSessionUUID(ctx, reservation.ID, sessionUUID); err != nil {
 		return "", fmt.Errorf("jules: recording session name: %w", err)
 	}
