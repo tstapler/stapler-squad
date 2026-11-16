@@ -811,6 +811,7 @@ go_test(
         "//session/sshremote:approval_relay.go",
         "//session/testdata:all",
         "//session/tokens:testdata",
+        "//session/workflowengine:go_sources",
     ],
     embed = [":services"],
     deps = [

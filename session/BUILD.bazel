@@ -588,6 +588,7 @@ go_test(
         "//session/prpoller:pr_status_poller.go",
         "//session/testdata:all",
         "//session/tokens:testdata",
+        "//session/workflowengine:go_sources",
         "//telemetry:go_sources",
     ],
     embed = [":session"],
