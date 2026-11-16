@@ -9,7 +9,7 @@ import (
 )
 
 // This file forwards *EntRepository's GuidanceRequest methods
-// (session/ent_repository_guidance.go) through *Storage, mirroring
+// (session/guidancestore/guidance.go) through *Storage, mirroring
 // GetBacklogItem's forwarding shape — server/mcp and server/services hold a
 // *Storage, not a *EntRepository directly, per this codebase's existing
 // convention (see e.g. BacklogService/GitHubService's constructors).

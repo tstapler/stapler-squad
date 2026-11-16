@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -13,9 +13,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func countGuidanceQueries(repo *EntRepository) *atomic.Int64 {
+func countGuidanceQueries(repo *Repo) *atomic.Int64 {
 	var n atomic.Int64
-	repo.Client.GuidanceRequest.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
+	repo.client.GuidanceRequest.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
 		return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) {
 			n.Add(1)
 			return next.Query(ctx, q)
@@ -26,7 +26,7 @@ func countGuidanceQueries(repo *EntRepository) *atomic.Int64 {
 
 func TestListAllPendingGuidanceRequests_Should_ServeRepeatReadsFromCache(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	_, err := repo.CreateGuidanceRequest(ctx, sessionGuidanceInput("q1"))
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestListAllPendingGuidanceRequests_Should_ServeRepeatReadsFromCache(t *test
 
 func TestListAllPendingGuidanceRequests_Should_SeeEveryWrite(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	created, err := repo.CreateGuidanceRequest(ctx, sessionGuidanceInput("q1"))
 	require.NoError(t, err)
@@ -99,15 +99,16 @@ func sessionGuidanceInput(question string) domain.CreateGuidanceRequestInput {
 	}
 }
 
-func TestListAllPendingGuidanceRequests_Should_NotCache_When_RepoBuiltOverSharedClient(t *testing.T) {
+// A Repo nobody called WatchGuidanceWrites on has no hook feeding the cache
+// generation, so it must always read through.
+func TestListAllPendingGuidanceRequests_Should_NotCache_When_WritesAreNotWatched(t *testing.T) {
 	t.Parallel()
-	owner := NewTestEntRepository(t)
-	repo := NewEntRepositoryFromClient(owner.GetEntClient())
+	repo := New(newTestRepo(t).client, nil)
 	ctx := context.Background()
 	queries := countGuidanceQueries(repo)
 	for range 2 {
 		_, err := repo.ListAllPendingGuidanceRequests(ctx)
 		require.NoError(t, err)
 	}
-	assert.Equal(t, int64(2), queries.Load(), "no hook feeds this repo's generation, so it must always read through")
+	assert.Equal(t, int64(2), queries.Load())
 }

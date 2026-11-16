@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -92,15 +92,21 @@ func copyGuidanceRows(rows []*domain.GuidanceRequestData) []*domain.GuidanceRequ
 	return out
 }
 
-// watchGuidanceWrites invalidates the pending-request cache after every
-// GuidanceRequest mutation made through client, committed or not (a spurious
-// invalidation only costs one re-read).
-func (r *EntRepository) watchGuidanceWrites(client *ent.Client) {
-	client.GuidanceRequest.Use(func(next ent.Mutator) ent.Mutator {
+// WatchGuidanceWrites invalidates the pending-request cache after every
+// GuidanceRequest mutation made through the store's client, committed or not
+// (a spurious invalidation only costs one re-read), and turns the cache on.
+// Call it once, before the client serves traffic; without it reads stay uncached.
+func (r *Repo) WatchGuidanceWrites() {
+	r.cache.disabled = false
+	r.client.GuidanceRequest.Use(func(next ent.Mutator) ent.Mutator {
 		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
 			v, err := next.Mutate(ctx, m)
-			r.pendingGuidance.invalidate()
+			r.cache.invalidate()
 			return v, err
 		})
 	})
 }
+
+// InvalidatePendingGuidance drops the cached pending list. Needed after changes
+// ent hooks cannot see, such as the ON DELETE SET NULL a backlog-item delete causes.
+func (r *Repo) InvalidatePendingGuidance() { r.cache.invalidate() }

@@ -450,9 +450,5 @@ func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(
 				assert.False(t, v.Field(i).IsNil(), "%s: embedded %s is nil", name, v.Type().Field(i).Name)
 			}
 		}
-		h := repo.guidanceHooks
-		assert.NotNil(t, h.answered, "%s: guidance answered hook", name)
-		assert.NotNil(t, h.delivered, "%s: guidance delivered hook", name)
-		assert.NotNil(t, h.itemPendingChanged, "%s: guidance itemPendingChanged hook", name)
 	}
 }

@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -102,8 +102,8 @@ func countGuidanceDelivery(ctx context.Context, route domain.DeliveryRoute, stat
 
 // recordGuidanceAnswered observes the latency of a just-applied answer. It is
 // best effort: an unreadable row only skips the observation.
-func (r *EntRepository) recordGuidanceAnswered(ctx context.Context, id uuid.UUID) {
-	row, err := r.Client.GuidanceRequest.Query().Where(guidancerequest.ID(id)).Only(ctx)
+func (r *Repo) recordGuidanceAnswered(ctx context.Context, id uuid.UUID) {
+	row, err := r.client.GuidanceRequest.Query().Where(guidancerequest.ID(id)).Only(ctx)
 	if err != nil {
 		if !ent.IsNotFound(err) {
 			log.Warn("[GuidanceRequest] answered but latency not observed", "id", id, "err", err)
@@ -114,17 +114,4 @@ func (r *EntRepository) recordGuidanceAnswered(ctx context.Context, id uuid.UUID
 		return
 	}
 	observeGuidanceAnswer(ctx, row)
-}
-
-// newGuidanceHooks wires the guidance store's callbacks to this repository's
-// metrics and item-change publisher.
-func (r *EntRepository) newGuidanceHooks() guidanceHooks {
-	return guidanceHooks{
-		answered:  r.recordGuidanceAnswered,
-		delivered: countGuidanceDelivery,
-		itemPendingChanged: func(ctx context.Context, row *ent.BacklogItem) {
-			item := BacklogItemToData(row)
-			r.publishItemChanged(ctx, &item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
-		},
-	}
 }

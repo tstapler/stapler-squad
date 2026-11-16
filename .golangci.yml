@@ -143,6 +143,22 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/guidancestore is a persistence leaf embedded by session.EntRepository: it never imports
+        # session, github or server; the one call back into backlog publishing is a constructor argument.
+        isolate_guidancestore:
+          list-mode: strict
+          files:
+            - "**/session/guidancestore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - go.opentelemetry.io/otel
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
         # session/flowstore is the flow-analytics ent reader: it never imports session, github or server
         # (the workflow engine is injected through New).
         isolate_flowstore:

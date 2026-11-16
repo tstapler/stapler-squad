@@ -36,5 +36,7 @@ session/historyadapters !server
 session/internal/entdbtest !server
 session/webhookstore !server
 session/webhookstore !github
+session/guidancestore !server
+session/guidancestore !github
 session/flowstore !server
 session/flowstore !github

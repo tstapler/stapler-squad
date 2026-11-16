@@ -35,6 +35,6 @@ func newSeededEntRepository(db *sql.DB, repo *EntRepository) (*EntRepository, er
 	}
 	repo.Client, repo.driver = newInstrumentedEntClient(db, nil)
 	repo.initStores()
-	repo.watchGuidanceWrites(repo.Client)
+	repo.WatchGuidanceWrites()
 	return repo, nil
 }

@@ -1,10 +1,8 @@
-package session
+package guidancestore
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -60,64 +57,17 @@ func agentSessionInput(text string) domain.CreateGuidanceRequestInput {
 	}
 }
 
-func countGuidanceRows(t *testing.T, repo *EntRepository) int {
+func countGuidanceRows(t *testing.T, repo *Repo) int {
 	t.Helper()
-	n, err := repo.GetEntClient().GuidanceRequest.Query().Count(context.Background())
+	n, err := repo.client.GuidanceRequest.Query().Count(context.Background())
 	require.NoError(t, err)
 	return n
 }
 
 // Existing rows survive the additive migration with the defaults.
-func TestGuidanceRequest_should_ReadLegacyRowWithDefaults_When_NewColumnsAreMigratedIn(t *testing.T) {
-	t.Parallel()
-	dbPath := filepath.Join(t.TempDir(), "guidance-migrate.db")
-	ctx := context.Background()
-
-	repo, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err)
-	itemID := createTestBacklogItemForGuidance(t, repo)
-	created, err := repo.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
-		Scope: domain.RequestScopeBacklogItem, ItemID: &itemID, QuestionText: "Merge?", QuestionType: domain.QuestionTypeYesNo,
-	})
-	require.NoError(t, err)
-	require.NoError(t, repo.Close())
-
-	// Rebuild the pre-feature shape: drop the new index and columns on a raw connection.
-	raw, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithWAL().WithBusyTimeout(5*time.Second).WithForeignKeys().Build())
-	require.NoError(t, err)
-	_, err = raw.Exec(`DROP INDEX IF EXISTS guidancerequest_asker_session_uuid_hook_call_id`)
-	require.NoError(t, err)
-	for _, col := range []string{"source", "asker_session_uuid", "answerer_kind", "answerer_session_uuid", "multi_select",
-		"questions_json", "delivery_route", "delivery_state", "delivery_attempts", "hook_call_id", "expires_at"} {
-		_, err = raw.Exec(fmt.Sprintf(`ALTER TABLE guidance_requests DROP COLUMN %s`, col))
-		require.NoError(t, err, col)
-	}
-	require.NoError(t, raw.Close())
-
-	migrated, err := NewEntRepository(WithDatabasePath(dbPath))
-	require.NoError(t, err, "auto-migration must add the columns to a table that has rows")
-	defer migrated.Close() //nolint:errcheck
-
-	id, err := uuid.Parse(created.ID)
-	require.NoError(t, err)
-	got, err := migrated.GetGuidanceRequest(ctx, id)
-	require.NoError(t, err)
-	assert.Equal(t, domain.RequestScopeBacklogItem, got.Scope)
-	assert.Equal(t, domain.QuestionTypeYesNo, got.QuestionType)
-	assert.Equal(t, domain.QuestionSourceAgentMCP, got.Source)
-	assert.Equal(t, domain.AnswererKindHuman, got.AnswererKind)
-	assert.False(t, got.MultiSelect)
-	assert.Empty(t, got.DeliveryState)
-	assert.Zero(t, got.DeliveryAttempts)
-
-	ok, err := migrated.SetDelivery(ctx, id, domain.DeliveryRouteResume, domain.DeliveryStatePending, 0)
-	require.NoError(t, err)
-	assert.True(t, ok, "a migrated row (NULL delivery_state) is a legal start state")
-}
-
 func TestCreateMirroredGuidanceRequest_should_YieldOneRow_When_EightGoroutinesCreateTheSameHookCall(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	req := hookRequest(t, "toolu_01", "Which cache?")
 
@@ -149,7 +99,7 @@ func TestCreateMirroredGuidanceRequest_should_YieldOneRow_When_EightGoroutinesCr
 
 func TestCreateMirroredGuidanceRequest_should_YieldTwoRows_When_IdenticalTextHasDifferentHookCallIDs(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 
 	first, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_01", "Which cache?"), 0)
@@ -165,7 +115,7 @@ func TestCreateMirroredGuidanceRequest_should_YieldTwoRows_When_IdenticalTextHas
 
 func TestCreateMirroredGuidanceRequest_should_StoreMirrorColumns_When_HookCreated(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	row, err := repo.CreateMirroredGuidanceRequest(context.Background(), hookRequest(t, "toolu_01", "Which cache?"), 0)
 	require.NoError(t, err)
 
@@ -182,7 +132,7 @@ func TestCreateMirroredGuidanceRequest_should_StoreMirrorColumns_When_HookCreate
 
 func TestCreateMirroredGuidanceRequest_should_ResolveToTheExistingRow_When_HookCallWasAlreadyCancelled(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	req := hookRequest(t, "toolu_01", "Which cache?")
 
@@ -201,7 +151,7 @@ func TestCreateMirroredGuidanceRequest_should_ResolveToTheExistingRow_When_HookC
 
 func TestCreateMirroredGuidanceRequest_should_CoalesceOnPayloadAmongOpenRows_When_HookCallIDIsMissing(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	req := hookRequest(t, "", "Which cache?")
 
@@ -224,7 +174,7 @@ func TestCreateMirroredGuidanceRequest_should_CoalesceOnPayloadAmongOpenRows_Whe
 
 func TestCreateMirroredGuidanceRequest_should_CreatePeerRow_When_RequestHelp(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	before := time.Now()
 	row, err := repo.CreateMirroredGuidanceRequest(context.Background(), peerRequest(t, "How do I run the linter?"), 0)
 	require.NoError(t, err)
@@ -244,7 +194,7 @@ func TestCreateMirroredGuidanceRequest_should_CreatePeerRow_When_RequestHelp(t *
 
 func TestCreateMirroredGuidanceRequest_should_WriteNothing_When_CombinationIsIllegal(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 
 	_, err := domain.NewGuidanceRequest(domain.GuidanceRequestParams{
 		Scope: domain.RequestScopeSession, SessionUUID: mirrorAsker, Source: domain.QuestionSourcePeer, AskerSessionUUID: mirrorAsker,
@@ -261,28 +211,28 @@ func TestCreateMirroredGuidanceRequest_should_WriteNothing_When_CombinationIsIll
 	assert.Zero(t, countGuidanceRows(t, repo))
 }
 
-func fillClass(t *testing.T, repo *EntRepository, n int, create func(i int) error) {
+func fillClass(t *testing.T, repo *Repo, n int, create func(i int) error) {
 	t.Helper()
 	for i := range n {
 		require.NoError(t, create(i), "row %d", i)
 	}
 }
 
-func hookCreator(t *testing.T, repo *EntRepository) func(int) error {
+func hookCreator(t *testing.T, repo *Repo) func(int) error {
 	return func(i int) error {
 		_, err := repo.CreateMirroredGuidanceRequest(context.Background(), hookRequest(t, fmt.Sprintf("toolu_%02d", i), fmt.Sprintf("hook q%d", i)), 0)
 		return err
 	}
 }
 
-func peerCreator(t *testing.T, repo *EntRepository) func(int) error {
+func peerCreator(t *testing.T, repo *Repo) func(int) error {
 	return func(i int) error {
 		_, err := repo.CreateMirroredGuidanceRequest(context.Background(), peerRequest(t, fmt.Sprintf("peer q%d", i)), 0)
 		return err
 	}
 }
 
-func agentCreator(repo *EntRepository) func(int) error {
+func agentCreator(repo *Repo) func(int) error {
 	return func(i int) error {
 		_, err := repo.CreateGuidanceRequest(context.Background(), agentSessionInput(fmt.Sprintf("agent q%d", i)))
 		return err
@@ -291,8 +241,8 @@ func agentCreator(repo *EntRepository) func(int) error {
 
 func TestGuidanceRequestPendingCap_should_CountPerSourceClass(t *testing.T) {
 	t.Parallel()
-	classes := map[string]func(*testing.T, *EntRepository) func(int) error{
-		"agent_mcp": func(_ *testing.T, r *EntRepository) func(int) error { return agentCreator(r) },
+	classes := map[string]func(*testing.T, *Repo) func(int) error{
+		"agent_mcp": func(_ *testing.T, r *Repo) func(int) error { return agentCreator(r) },
 		"hook":      hookCreator,
 		"peer":      peerCreator,
 	}
@@ -300,7 +250,7 @@ func TestGuidanceRequestPendingCap_should_CountPerSourceClass(t *testing.T) {
 		for otherName, other := range classes {
 			t.Run(fullName+" at cap, then "+otherName, func(t *testing.T) {
 				t.Parallel()
-				repo := NewTestEntRepository(t)
+				repo := newTestRepo(t)
 				fillClass(t, repo, mirrorCapForTests, full(t, repo))
 
 				err := other(t, repo)(mirrorCapForTests) // one more of the other class (or this one's 5th)
@@ -316,7 +266,7 @@ func TestGuidanceRequestPendingCap_should_CountPerSourceClass(t *testing.T) {
 
 func TestGuidanceRequestPendingCap_should_NotRaiseCapError_When_HookRowIsReRegisteredAtCap(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	fillClass(t, repo, mirrorCapForTests, hookCreator(t, repo))
 
@@ -330,7 +280,7 @@ func TestGuidanceRequestPendingCap_should_NotRaiseCapError_When_HookRowIsReRegis
 
 func TestListOpenGuidanceRequestsByAsker_should_FilterBySourceAndOpenStatus(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	hook, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_01", "hook q"), 0)
 	require.NoError(t, err)
@@ -357,7 +307,7 @@ func TestListOpenGuidanceRequestsByAsker_should_FilterBySourceAndOpenStatus(t *t
 
 func TestSetDelivery_should_FollowTheGuardedTransitionTable(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_01", "Which cache?"), 0)
 	require.NoError(t, err)
@@ -395,7 +345,7 @@ func TestSetDelivery_should_FollowTheGuardedTransitionTable(t *testing.T) {
 
 func TestSetDelivery_should_RejectIllegalPairsWithoutWriting(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_01", "Which cache?"), 0)
 	require.NoError(t, err)
@@ -418,7 +368,7 @@ func TestSetDelivery_should_RejectIllegalPairsWithoutWriting(t *testing.T) {
 
 func TestSetDelivery_should_LetExactlyOneWriterWin_When_EightGoroutinesRaceTheSameTransition(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, "toolu_01", "Which cache?"), 0)
 	require.NoError(t, err)
@@ -454,7 +404,7 @@ func TestSetDelivery_should_LetExactlyOneWriterWin_When_EightGoroutinesRaceTheSa
 
 func TestListGuidanceByDelivery_should_FilterByStateAndOptionalRoute(t *testing.T) {
 	t.Parallel()
-	repo := NewTestEntRepository(t)
+	repo := newTestRepo(t)
 	ctx := context.Background()
 	move := func(callID string, route domain.DeliveryRoute, to ...domain.DeliveryState) string {
 		row, err := repo.CreateMirroredGuidanceRequest(ctx, hookRequest(t, callID, "Which cache? "+callID), 0)

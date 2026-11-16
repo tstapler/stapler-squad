@@ -22,7 +22,7 @@ import (
 // Status is derived, not stored: pending (answered_at AND cancelled_at both
 // NULL), cancelled (cancelled_at set — terminal, dominates even if
 // answered_at is also set), otherwise answered. See GuidanceRequestData.Status
-// in session/ent_repository_guidance.go.
+// in session/guidancestore/guidance.go.
 type GuidanceRequest struct {
 	ent.Schema
 }

@@ -1,4 +1,4 @@
-package session
+package guidancestore
 
 import (
 	"context"
@@ -15,19 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/guidancerequest"
 )
-
-// guidanceHooks are the guidance store's only calls out to the rest of the
-// repository, so the store itself needs no other session symbol. Wired by
-// EntRepository.initStores; every field is required.
-type guidanceHooks struct {
-	// answered observes a just-applied answer's latency (best effort).
-	answered func(ctx context.Context, id uuid.UUID)
-	// delivered counts a delivery transition that was applied.
-	delivered func(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState)
-	// itemPendingChanged republishes the owning item after its
-	// has_pending_guidance_requests flag may have flipped.
-	itemPendingChanged func(ctx context.Context, item *ent.BacklogItem)
-}
 
 // guidanceInputSource is the pending-cap class and coalescing-key selector of this create.
 func guidanceInputSource(in domain.CreateGuidanceRequestInput) domain.QuestionSource {
@@ -124,7 +111,7 @@ func guidanceRequestToData(row *ent.GuidanceRequest) *domain.GuidanceRequestData
 //     skipped entirely and that existing row is returned — this is what makes
 //     re-asking an identical question at cap succeed instead of being
 //     cap-rejected.
-func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
+func (r *Repo) CreateGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
 	return r.createGuidanceRequest(ctx, in)
 }
 
@@ -133,7 +120,7 @@ func (r *EntRepository) CreateGuidanceRequest(ctx context.Context, in domain.Cre
 // coalesces on (asker_session_uuid, hook_call_id) and bypasses the legacy
 // (scope, scope_key, question_text) coalesce; every source is capped per
 // (scope, scope_key, source). capLimit <= 0 means the default cap.
-func (r *EntRepository) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error) {
+func (r *Repo) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error) {
 	p := req.Params()
 	in := domain.CreateGuidanceRequestInput{
 		Scope: p.Scope, SessionUUID: p.SessionUUID, QuestionText: p.QuestionText,
@@ -149,14 +136,14 @@ func (r *EntRepository) CreateMirroredGuidanceRequest(ctx context.Context, req d
 	return r.createGuidanceRequest(ctx, in)
 }
 
-func (r *EntRepository) createGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
+func (r *Repo) createGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput) (*domain.GuidanceRequestData, error) {
 	capLimit, scopeKey, err := validateCreateGuidanceRequestInput(in)
 	if err != nil {
 		return nil, err
 	}
 	candidateID := uuid.New()
 
-	tx, err := r.Client.Tx(ctx)
+	tx, err := r.client.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create guidance request: begin transaction: %w", err)
 	}
@@ -183,7 +170,7 @@ func (r *EntRepository) createGuidanceRequest(ctx context.Context, in domain.Cre
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("create guidance request: commit: %w", err)
 	}
-	r.pendingGuidance.invalidate() // the mutation hook ran before this commit
+	r.cache.invalidate() // the mutation hook ran before this commit
 	r.publishGuidanceChange(ctx, row.Scope, row.ScopeKey)
 	return guidanceRequestToData(row), nil
 }
@@ -283,8 +270,8 @@ func enforceGuidanceRequestPendingCap(ctx context.Context, tx *ent.Tx, scope dom
 // NULL, mirroring ResolveStuck exactly. Returns whether this call actually
 // persisted the answer; a second call racing against an already-answered (or
 // already-cancelled) row is a no-op, not an error or overwrite.
-func (r *EntRepository) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (applied bool, err error) {
-	n, err := r.Client.GuidanceRequest.Update().
+func (r *Repo) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (applied bool, err error) {
+	n, err := r.client.GuidanceRequest.Update().
 		Where(
 			guidancerequest.ID(id),
 			guidancerequest.AnsweredAtIsNil(),
@@ -297,7 +284,7 @@ func (r *EntRepository) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID,
 		return false, fmt.Errorf("answer guidance request %s: %w", id, err)
 	}
 	if n > 0 {
-		r.guidanceHooks.answered(ctx, id)
+		r.recordGuidanceAnswered(ctx, id)
 		r.publishGuidanceChangeByID(ctx, id)
 	}
 	return n > 0, nil
@@ -307,8 +294,8 @@ func (r *EntRepository) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID,
 // via a single conditional UPDATE ... WHERE notified_at IS NULL, mirroring
 // MarkStuckNotified exactly. A no-op (not an error) if already notified or
 // nonexistent.
-func (r *EntRepository) MarkGuidanceRequestNotified(ctx context.Context, id uuid.UUID) (bool, error) {
-	n, err := r.Client.GuidanceRequest.Update().
+func (r *Repo) MarkGuidanceRequestNotified(ctx context.Context, id uuid.UUID) (bool, error) {
+	n, err := r.client.GuidanceRequest.Update().
 		Where(
 			guidancerequest.ID(id),
 			guidancerequest.NotifiedAtIsNil(),
@@ -325,8 +312,8 @@ func (r *EntRepository) MarkGuidanceRequestNotified(ctx context.Context, id uuid
 // single conditional UPDATE ... WHERE answered_at IS NULL AND cancelled_at IS
 // NULL, mirroring AnswerGuidanceRequest's shape. reason is stored in
 // cancel_reason so a card can say why the question went away.
-func (r *EntRepository) CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reason string) (applied bool, err error) {
-	n, err := r.Client.GuidanceRequest.Update().
+func (r *Repo) CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reason string) (applied bool, err error) {
+	n, err := r.client.GuidanceRequest.Update().
 		Where(
 			guidancerequest.ID(id),
 			guidancerequest.AnsweredAtIsNil(),
@@ -345,8 +332,8 @@ func (r *EntRepository) CancelGuidanceRequest(ctx context.Context, id uuid.UUID,
 }
 
 // GetGuidanceRequest reads a single GuidanceRequest row by id.
-func (r *EntRepository) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error) {
-	row, err := r.Client.GuidanceRequest.Get(ctx, id)
+func (r *Repo) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error) {
+	row, err := r.client.GuidanceRequest.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: guidance request %s", domain.ErrNotFound, id)
@@ -368,8 +355,8 @@ func guidanceRequestsToData(rows []*ent.GuidanceRequest) []*domain.GuidanceReque
 
 // queryOpenGuidanceRequests returns every open (answered_at AND cancelled_at
 // both NULL) row for (scope, scopeKey), newest first.
-func (r *EntRepository) queryOpenGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string) ([]*ent.GuidanceRequest, error) {
-	return r.Client.GuidanceRequest.Query().
+func (r *Repo) queryOpenGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string) ([]*ent.GuidanceRequest, error) {
+	return r.client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Scope(string(scope)),
 			guidancerequest.ScopeKey(scopeKey),
@@ -382,8 +369,8 @@ func (r *EntRepository) queryOpenGuidanceRequests(ctx context.Context, scope dom
 
 // queryAnsweredGuidanceRequests returns up to limit answered (non-cancelled)
 // rows for (scope, scopeKey), newest first.
-func (r *EntRepository) queryAnsweredGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, limit int) ([]*ent.GuidanceRequest, error) {
-	return r.Client.GuidanceRequest.Query().
+func (r *Repo) queryAnsweredGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, limit int) ([]*ent.GuidanceRequest, error) {
+	return r.client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Scope(string(scope)),
 			guidancerequest.ScopeKey(scopeKey),
@@ -400,7 +387,7 @@ func (r *EntRepository) queryAnsweredGuidanceRequests(ctx context.Context, scope
 // alongside the current pending count and the cap passed in — bundled
 // together so an RPC handler can populate a ListGuidanceRequestsResponse's
 // pending_count/cap fields directly from this one call.
-func (r *EntRepository) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
+func (r *Repo) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
 	rows, err := r.queryOpenGuidanceRequests(ctx, scope, scopeKey)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("list pending guidance requests scope=%s scope_key=%s: %w", scope, scopeKey, err)
@@ -436,7 +423,7 @@ const listGuidanceRequestsForScopeLimit = 50
 // over all non-cancelled rows could silently drop a pending row from the page
 // once enough newer rows were answered, directly undermining AC3/AC4's
 // "pending questions must be visible."
-func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
+func (r *Repo) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*domain.GuidanceRequestData, int, int, error) {
 	if cap <= 0 {
 		cap = domain.DefaultGuidanceRequestPendingCap
 	}
@@ -461,12 +448,12 @@ func (r *EntRepository) ListGuidanceRequestsForScope(ctx context.Context, scope 
 
 // ListAllPendingGuidanceRequests returns every open GuidanceRequest row across
 // every scope — backs the nav badge (Epic 7).
-func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error) {
-	if cached, ok := r.pendingGuidance.get(); ok {
+func (r *Repo) ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error) {
+	if cached, ok := r.cache.get(); ok {
 		return cached, nil
 	}
-	readGen := r.pendingGuidance.gen.Load()
-	rows, err := r.Client.GuidanceRequest.Query().
+	readGen := r.cache.gen.Load()
+	rows, err := r.client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.AnsweredAtIsNil(),
 			guidancerequest.CancelledAtIsNil(),
@@ -476,17 +463,17 @@ func (r *EntRepository) ListAllPendingGuidanceRequests(ctx context.Context) ([]*
 		return nil, fmt.Errorf("list all pending guidance requests: %w", err)
 	}
 	data := guidanceRequestsToData(rows)
-	r.pendingGuidance.put(readGen, data)
+	r.cache.put(readGen, data)
 	return copyGuidanceRows(data), nil
 }
 
 // pendingGuidanceItemIDs returns the subset of itemIDs that have at least one
 // open backlog-item-scoped GuidanceRequest, in a single query.
-func (r *EntRepository) pendingGuidanceItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+func (r *Repo) pendingGuidanceItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
 	if len(itemIDs) == 0 {
 		return map[string]bool{}, nil
 	}
-	keys, err := r.Client.GuidanceRequest.Query().
+	keys, err := r.client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Scope(string(domain.RequestScopeBacklogItem)),
 			guidancerequest.ScopeKeyIn(itemIDs...),
@@ -505,15 +492,15 @@ func (r *EntRepository) pendingGuidanceItemIDs(ctx context.Context, itemIDs []st
 	return set, nil
 }
 
-// attachPendingGuidance sets HasPendingGuidanceRequests on item. Best-effort:
+// AttachPendingGuidance sets HasPendingGuidanceRequests on item. Best-effort:
 // a lookup failure is logged and leaves the flag false.
-func (r *EntRepository) attachPendingGuidance(ctx context.Context, item *backlogdto.BacklogItemData) {
+func (r *Repo) AttachPendingGuidance(ctx context.Context, item *backlogdto.BacklogItemData) {
 	if item == nil || item.ID == "" {
 		return
 	}
 	set, err := r.pendingGuidanceItemIDs(ctx, []string{item.ID})
 	if err != nil {
-		log.WarningLog().Printf("[EntRepository] attachPendingGuidance: item %s: %v", item.ID, err)
+		log.WarningLog().Printf("[guidancestore] AttachPendingGuidance: item %s: %v", item.ID, err)
 		return
 	}
 	item.HasPendingGuidanceRequests = set[item.ID]
@@ -521,7 +508,7 @@ func (r *EntRepository) attachPendingGuidance(ctx context.Context, item *backlog
 
 // publishGuidanceChange republishes the owning item so WatchBacklogItems
 // subscribers see HasPendingGuidanceRequests flip. No-op for non-item scopes.
-func (r *EntRepository) publishGuidanceChange(ctx context.Context, scope string, scopeKey string) {
+func (r *Repo) publishGuidanceChange(ctx context.Context, scope string, scopeKey string) {
 	if scope != string(domain.RequestScopeBacklogItem) || scopeKey == "" {
 		return
 	}
@@ -531,30 +518,32 @@ func (r *EntRepository) publishGuidanceChange(ctx context.Context, scope string,
 	if err != nil {
 		return
 	}
-	row, err := r.Client.BacklogItem.Query().Where(backlogitem.ID(itemID)).WithSource().Only(ctx)
+	row, err := r.client.BacklogItem.Query().Where(backlogitem.ID(itemID)).WithSource().Only(ctx)
 	if err != nil {
 		if !ent.IsNotFound(err) {
-			log.WarningLog().Printf("[EntRepository] publishGuidanceChange: item %s: %v", scopeKey, err)
+			log.WarningLog().Printf("[guidancestore] publishGuidanceChange: item %s: %v", scopeKey, err)
 		}
 		return
 	}
-	r.guidanceHooks.itemPendingChanged(ctx, row)
+	if r.itemPendingChanged != nil {
+		r.itemPendingChanged(ctx, row)
+	}
 }
 
-func (r *EntRepository) publishGuidanceChangeByID(ctx context.Context, id uuid.UUID) {
-	row, err := r.Client.GuidanceRequest.Get(ctx, id)
+func (r *Repo) publishGuidanceChangeByID(ctx context.Context, id uuid.UUID) {
+	row, err := r.client.GuidanceRequest.Get(ctx, id)
 	if err != nil {
-		log.WarningLog().Printf("[EntRepository] publishGuidanceChangeByID: guidance request %s: %v", id, err)
+		log.WarningLog().Printf("[guidancestore] publishGuidanceChangeByID: guidance request %s: %v", id, err)
 		return
 	}
 	r.publishGuidanceChange(ctx, row.Scope, row.ScopeKey)
 }
 
 // applyPendingGuidance sets the flag for ids via set, using one batched query.
-func (r *EntRepository) applyPendingGuidance(ctx context.Context, ids []string, set func(i int, pending bool)) {
+func (r *Repo) applyPendingGuidance(ctx context.Context, ids []string, set func(i int, pending bool)) {
 	pending, err := r.pendingGuidanceItemIDs(ctx, ids)
 	if err != nil {
-		log.WarningLog().Printf("[EntRepository] applyPendingGuidance: %v", err)
+		log.WarningLog().Printf("[guidancestore] applyPendingGuidance: %v", err)
 		return
 	}
 	for i, id := range ids {
@@ -562,7 +551,7 @@ func (r *EntRepository) applyPendingGuidance(ctx context.Context, ids []string, 
 	}
 }
 
-func (r *EntRepository) applyPendingGuidanceToData(ctx context.Context, items []backlogdto.BacklogItemData) {
+func (r *Repo) ApplyPendingGuidanceToData(ctx context.Context, items []backlogdto.BacklogItemData) {
 	ids := make([]string, len(items))
 	for i := range items {
 		ids[i] = items[i].ID
@@ -570,7 +559,7 @@ func (r *EntRepository) applyPendingGuidanceToData(ctx context.Context, items []
 	r.applyPendingGuidance(ctx, ids, func(i int, p bool) { items[i].HasPendingGuidanceRequests = p })
 }
 
-func (r *EntRepository) applyPendingGuidanceToSummaries(ctx context.Context, items []backlogdto.BacklogItemSummary) {
+func (r *Repo) ApplyPendingGuidanceToSummaries(ctx context.Context, items []backlogdto.BacklogItemSummary) {
 	ids := make([]string, len(items))
 	for i := range items {
 		ids[i] = items[i].ID

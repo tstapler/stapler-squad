@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "guidancestore",
+    srcs = [
+        "cache.go",
+        "guidance.go",
+        "metrics.go",
+        "mirror.go",
+        "peer.go",
+        "purge.go",
+        "store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/guidancestore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//telemetry",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:guidancerequest",
+        "//tools/bzl/ent:predicate",
+        "@com_github_google_uuid//:uuid",
+        "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":guidancestore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "guidancestore_test",
+    srcs = [
+        "cache_test.go",
+        "guidance_test.go",
+        "metrics_test.go",
+        "mirror_test.go",
+        "purge_test.go",
+        "testutil_test.go",
+    ],
+    embed = [":guidancestore"],
+    deps = [
+        "//session/domain",
+        "//session/internal/entdbtest",
+        "//tools/bzl/ent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//:ent",
+    ],
+)
