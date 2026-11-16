@@ -14,26 +14,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// JulesPendingUUIDPrefix marks a jules_work ItemSession's session_uuid as a
-// reservation written before the CreateSession POST, swapped for the real
-// "jules-sessions/{id}" name once the call succeeds (ADR-004). Declared here
-// rather than imported from server/services (which will hold the write-side
-// copy, e.g. jules_dispatch_service.go) because that package imports session,
-// so the reverse import would cycle — same precedent as headlessTriageUUIDPrefix/
-// headlessTriageSessionUUIDPrefix (session/backlog_lifecycle_triage.go:43-50).
-// Keep byte-identical with the server/services copy; a future value change
-// must update both.
-const JulesPendingUUIDPrefix = "jules-pending-"
-
 // julesDispatchFailedEndReason marks a jules_work ItemSession that was created
 // as a reservation but never reached a real Jules session — the CreateSession
 // call itself failed. Excluded from CountJulesItemSessionsSince alongside
-// JulesPendingUUIDPrefix rows so a bad key or Jules outage doesn't burn the
+// domain.JulesPendingUUIDPrefix rows so a bad key or Jules outage doesn't burn the
 // daily dispatch cap on attempts nothing was ever billed for.
 const julesDispatchFailedEndReason = "dispatch_failed"
 
@@ -72,7 +62,7 @@ func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlo
 // CountJulesItemSessionsSince counts jules_work ItemSessions created since since
 // that reached a confirmed, billed Jules session — feeds MaxJulesSessionsPerDay
 // (Story 2.2.2), the daily cloud-spend cap. Excludes rows still carrying the
-// JulesPendingUUIDPrefix reservation (never confirmed) and rows that ended with
+// domain.JulesPendingUUIDPrefix reservation (never confirmed) and rows that ended with
 // end_reason "dispatch_failed" (failed at CreateSession), so a bad key or a
 // Jules-side outage doesn't consume the day's cap on attempts nothing was
 // actually billed for (pre-mortem P2 #5).
@@ -81,7 +71,7 @@ func (r *EntRepository) CountJulesItemSessionsSince(ctx context.Context, since t
 		Where(
 			itemsession.SessionRole(instance.SessionRoleJulesWork),
 			itemsession.CreatedAtGTE(since),
-			itemsession.Not(itemsession.SessionUUIDHasPrefix(JulesPendingUUIDPrefix)),
+			itemsession.Not(itemsession.SessionUUIDHasPrefix(domain.JulesPendingUUIDPrefix)),
 			itemsession.EndReasonNEQ(julesDispatchFailedEndReason),
 		).
 		Count(ctx)

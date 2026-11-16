@@ -444,7 +444,7 @@ func (s *BacklogService) TriggerTriage(
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
 	// Snapshot the resolved PipelineMode slug + content hash — see the comment on the
 	// equivalent SpawnSessionFromItem call site above for the nil-guard rationale.
-	triageSessionUUID := services.HeadlessTriageUUIDPrefix + uuid.New().String()
+	triageSessionUUID := domain.HeadlessTriageUUIDPrefix + uuid.New().String()
 	var triagePipelineModeSnapshotHash string
 	if s.pipelineEngine != nil {
 		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlogdto.PipelineMode(item.PipelineMode))

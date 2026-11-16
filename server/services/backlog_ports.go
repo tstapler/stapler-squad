@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"regexp"
-	"strings"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -303,44 +302,3 @@ const ReasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
 // reasonNameChangesRequested has no manual-nudge counterpart, so a
 // changes-requested-only steer never suppresses a thread nudge.
 const ReasonNameChangesRequested = "CHANGES_REQUESTED"
-
-// Synthetic ItemSession UUID prefixes of the headless (no tmux pane) roles.
-// Callers must not treat such a UUID as a tmux session.
-const (
-	HeadlessTriageUUIDPrefix   = "headless-triage-"
-	HeadlessReReviewUUIDPrefix = "headless-re-review-"
-)
-
-// HeadlessRole names a role whose ItemSessions carry a synthetic UUID prefix.
-type HeadlessRole string
-
-const (
-	HeadlessRoleTriage   HeadlessRole = "triage"
-	HeadlessRoleReReview HeadlessRole = "re-review"
-)
-
-// headlessRolePrefixes is the one role <-> UUID-prefix table; a new headless
-// role is one row. No prefix may be a prefix of another.
-var headlessRolePrefixes = []struct {
-	role   HeadlessRole
-	prefix string
-}{
-	{HeadlessRoleTriage, HeadlessTriageUUIDPrefix},
-	{HeadlessRoleReReview, HeadlessReReviewUUIDPrefix},
-}
-
-// HeadlessRoleOf returns the headless role that minted sessionUUID, if any.
-func HeadlessRoleOf(sessionUUID string) (HeadlessRole, bool) {
-	for _, row := range headlessRolePrefixes {
-		if strings.HasPrefix(sessionUUID, row.prefix) {
-			return row.role, true
-		}
-	}
-	return "", false
-}
-
-// IsHeadlessRole reports whether sessionUUID was minted for role.
-func IsHeadlessRole(sessionUUID string, role HeadlessRole) bool {
-	got, ok := HeadlessRoleOf(sessionUUID)
-	return ok && got == role
-}

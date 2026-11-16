@@ -558,7 +558,6 @@ go_test(
         "guidance_runtime_wiring_test.go",
         "guidance_session_reaper_test.go",
         "handoff_summary_service_test.go",
-        "headless_role_test.go",
         "headless_service_test.go",
         "hermetic_lookup_test.go",
         "hidden_event_sites_gate_test.go",
