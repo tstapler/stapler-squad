@@ -18,12 +18,13 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // replayFixture builds a database file with the built-in stages and n idea
 // items, lets mutate edit the stage configuration, and returns its path.
-func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, workflowengine.StageCRUDRepository)) string {
+func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, stagecfg.StageCRUDRepository)) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "copy.db")
 	repo, err := NewEntRepository(WithDatabasePath(path))
@@ -35,21 +36,21 @@ func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, wor
 		require.NoError(t, err)
 	}
 	if mutate != nil {
-		mutate(ctx, NewEntStageConfigRepository(repo.GetEntClient()))
+		mutate(ctx, stagecfg.NewEntStageConfigRepository(repo.GetEntClient()))
 	}
 	require.NoError(t, repo.Close())
 	return path
 }
 
-func replayDisableEdge(t *testing.T, edge domain.SystemEdge) func(context.Context, workflowengine.StageCRUDRepository) {
-	return func(ctx context.Context, repo workflowengine.StageCRUDRepository) {
+func replayDisableEdge(t *testing.T, edge domain.SystemEdge) func(context.Context, stagecfg.StageCRUDRepository) {
+	return func(ctx context.Context, repo stagecfg.StageCRUDRepository) {
 		t.Helper()
 		ts, err := repo.ListAllTransitions(ctx, string(edge.From))
 		require.NoError(t, err)
 		off := false
 		for _, tr := range ts {
 			if tr.ToStageSlug == string(edge.To) {
-				_, err := repo.UpdateTransition(ctx, tr.ID, workflowengine.TransitionUpdateInput{Enabled: &off})
+				_, err := repo.UpdateTransition(ctx, tr.ID, stagecfg.TransitionUpdateInput{Enabled: &off})
 				require.NoError(t, err)
 				return
 			}
@@ -71,8 +72,8 @@ func dirNames(t *testing.T, dir string) []string {
 
 // entStageRepoFactory is the production wiring, supplied by tests because the
 // engine itself no longer names the ent constructor.
-func entStageRepoFactory(client *ent.Client) workflowengine.StageConfigRepository {
-	return NewEntStageConfigRepository(client)
+func entStageRepoFactory(client *ent.Client) stagecfg.StageConfigRepository {
+	return stagecfg.NewEntStageConfigRepository(client)
 }
 
 func replayReport(t *testing.T, path string) *workflowengine.ReplayReport {
@@ -212,17 +213,17 @@ func TestReplayDecision_Failure_FlagsOnlyAgentAndSystemGraphDenials(t *testing.T
 	}
 	_, failed := denied(domain.ClassOperator, backlogdto.DeniedConfigGraph).Failure()
 	assert.False(t, failed, "operators choose their edge, so a disabled edge denies them by design")
-	_, failed = workflowengine.ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}.Failure()
+	_, failed = (workflowengine.ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}).Failure()
 	assert.False(t, failed)
 }
 
 func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing.T) {
-	addGate := func(ctx context.Context, repo workflowengine.StageCRUDRepository) {
+	addGate := func(ctx context.Context, repo stagecfg.StageCRUDRepository) {
 		ts, err := repo.ListAllTransitions(ctx, string(domain.BacklogStatusPRPending))
 		require.NoError(t, err)
 		for _, tr := range ts {
 			if tr.ToStageSlug == string(domain.BacklogStatusDone) {
-				_, err := repo.CreateGate(ctx, workflowengine.GateCreateInput{TransitionID: tr.ID, Kind: string(domain.GateKindHumanApproval), Enabled: true})
+				_, err := repo.CreateGate(ctx, stagecfg.GateCreateInput{TransitionID: tr.ID, Kind: string(domain.GateKindHumanApproval), Enabled: true})
 				require.NoError(t, err)
 			}
 		}
@@ -290,7 +291,7 @@ func TestReplayGateOverlay_AddsOneUnsatisfiedGateInMemoryOnly(t *testing.T) {
 	client, closeFn, err := workflowengine.OpenReplayCopy(path, nil)
 	require.NoError(t, err)
 	defer closeFn()
-	base := NewEntStageConfigRepository(client)
+	base := stagecfg.NewEntStageConfigRepository(client)
 	edge := domain.SystemEdge{From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued}
 
 	plain, err := base.ListEnabledTransitions(context.Background())

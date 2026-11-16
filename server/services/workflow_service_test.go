@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -62,7 +63,7 @@ func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService)
 	t.Cleanup(func() { sessSvc.Shutdown() })
 
 	repo := createTestEntClient(t)
-	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 	workflowSvc := NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
 	sessSvc.SetWorkflowService(workflowSvc)
 

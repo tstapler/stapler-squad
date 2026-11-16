@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -21,7 +22,7 @@ const enfOverride = "ship per owner"
 
 // enfService is an Enforce-mode service whose CRUD RPCs invalidate the same
 // Configured engine the gate consults.
-func enfService(t *testing.T) (*BacklogService, *session.Storage, *session.EntStageConfigRepository, *workflowengine.ConfiguredWorkflowEngine) {
+func enfService(t *testing.T) (*BacklogService, *session.Storage, *stagecfg.EntStageConfigRepository, *workflowengine.ConfiguredWorkflowEngine) {
 	t.Helper()
 	svc, storage, repo, cfg := newEnforcedGateService(t)
 	svc.SetStageCRUDRepository(repo)
@@ -36,7 +37,7 @@ func enfItemAt(t *testing.T, storage *session.Storage, status domain.BacklogStat
 	return item
 }
 
-func enfEdgeID(t *testing.T, repo *session.EntStageConfigRepository, from, to domain.BacklogStatus) string {
+func enfEdgeID(t *testing.T, repo *stagecfg.EntStageConfigRepository, from, to domain.BacklogStatus) string {
 	t.Helper()
 	edges, err := repo.ListAllTransitions(t.Context(), string(from))
 	require.NoError(t, err)
@@ -119,7 +120,7 @@ func TestEnforcement_IdeaWithoutAcceptanceCriteriaIsDeniedWithACRequired(t *test
 func TestEnforcement_CacheLoadFailureFallsBackToDefaultGraphAndCountsIt(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	broken := svctest.CreateTestStorage(t)
-	brokenRepo := session.NewEntStageConfigRepository(broken.GetEntClient())
+	brokenRepo := stagecfg.NewEntStageConfigRepository(broken.GetEntClient())
 	require.NoError(t, broken.GetEntClient().Close())
 	failing, err := workflowengine.NewConfiguredWorkflowEngine(brokenRepo, nil, nil)
 	require.NoError(t, err)
@@ -193,8 +194,8 @@ func TestEnforcement_ShadowModeMatchesOffModeThroughHandler(t *testing.T) {
 	run := func(mode workflowengine.EngineMode) []string {
 		storage := svctest.CreateTestStorage(t)
 		require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(t.Context(), storage.GetEntClient()))
-		repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-		cfg, err := workflowengine.NewConfiguredWorkflowEngine(repo, session.NewEntGateSatisfactionRepository(storage.GetEntClient()), nil)
+		repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+		cfg, err := workflowengine.NewConfiguredWorkflowEngine(repo, stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient()), nil)
 		require.NoError(t, err)
 		sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, enfModeSource{mode})
 		svc := NewBacklogService(storage, nil, nil, sel, nil, nil)
@@ -233,7 +234,7 @@ func (m enfModeSource) Mode() workflowengine.EngineMode { return m.mode }
 
 // enfBuiltTransition reports whether the operator handler lets an item move
 // from->to once configure has edited the stage config.
-func enfBuiltTransition(t *testing.T, from, to domain.BacklogStatus, configure func(*BacklogService, *session.EntStageConfigRepository)) bool {
+func enfBuiltTransition(t *testing.T, from, to domain.BacklogStatus, configure func(*BacklogService, *stagecfg.EntStageConfigRepository)) bool {
 	t.Helper()
 	svc, storage, repo, _ := enfService(t)
 	configure(svc, repo)
@@ -244,12 +245,12 @@ func enfBuiltTransition(t *testing.T, from, to domain.BacklogStatus, configure f
 func TestConfigSurfaceProof_UpdateStageTransition_ChangesHandlerAnswer(t *testing.T) {
 	d, r := domain.BacklogStatusDone, domain.BacklogStatusRefining
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return enfBuiltTransition(t, d, r, func(svc *BacklogService, repo *session.EntStageConfigRepository) {
+		return enfBuiltTransition(t, d, r, func(svc *BacklogService, repo *stagecfg.EntStageConfigRepository) {
 			require.NoError(t, enfSetEdge(t, svc, enfEdgeID(t, repo, d, r), setting.(bool)))
 		})
 	}, false, true)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return enfBuiltTransition(t, d, r, func(svc *BacklogService, repo *session.EntStageConfigRepository) {
+		return enfBuiltTransition(t, d, r, func(svc *BacklogService, repo *stagecfg.EntStageConfigRepository) {
 			require.NoError(t, enfSetEdge(t, svc, enfEdgeID(t, repo, setting.(domain.BacklogStatus), r), false))
 		})
 	}, domain.BacklogStatusDone, domain.BacklogStatusReview)
@@ -258,12 +259,12 @@ func TestConfigSurfaceProof_UpdateStageTransition_ChangesHandlerAnswer(t *testin
 func TestConfigSurfaceProof_CreateTransitionGate_ChangesHandlerAnswer(t *testing.T) {
 	i, r := domain.BacklogStatusIdea, domain.BacklogStatusRefining
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return enfBuiltTransition(t, i, r, func(svc *BacklogService, repo *session.EntStageConfigRepository) {
+		return enfBuiltTransition(t, i, r, func(svc *BacklogService, repo *stagecfg.EntStageConfigRepository) {
 			enfAddApprovalGate(t, svc, enfEdgeID(t, repo, i, r), setting.(bool))
 		})
 	}, true, false)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return enfBuiltTransition(t, i, r, func(svc *BacklogService, repo *session.EntStageConfigRepository) {
+		return enfBuiltTransition(t, i, r, func(svc *BacklogService, repo *stagecfg.EntStageConfigRepository) {
 			enfAddApprovalGate(t, svc, enfEdgeID(t, repo, setting.(domain.BacklogStatus), r), true)
 		})
 	}, domain.BacklogStatusIdea, domain.BacklogStatusDone)

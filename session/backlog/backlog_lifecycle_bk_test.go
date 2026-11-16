@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -4225,8 +4226,8 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 		Save(ctx)
 	require.NoError(t, err)
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateRepo := session.NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
@@ -4264,8 +4265,8 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 		Save(ctx)
 	require.NoError(t, err)
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateRepo := session.NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
@@ -4297,8 +4298,8 @@ func TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCus
 	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateRepo := session.NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 

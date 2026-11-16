@@ -16,9 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // requirePersistedOutcome fetches the (assumed single) TriggerFireEvent row for
@@ -47,7 +47,7 @@ func requireNoRowPersisted(t *testing.T, infra *webhookTestInfra, deliveryID str
 // used to distinguish "infra failure listing candidates" (500) from "no candidate's
 // secret verified" (401) in verifySignatureForRepo.
 type erroringWorkflowRepo struct {
-	session.WorkflowRepository
+	stagecfg.WorkflowRepository
 }
 
 func (e *erroringWorkflowRepo) ListByTriggerType(context.Context, string) ([]*ent.Workflow, error) {
@@ -585,7 +585,7 @@ func TestHandlePRFixEvent_should_PersistNoMatchWithoutCallingRouter_When_Deliver
 func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretEmpty(t *testing.T) {
 	infra := newWebhookTestInfra(t)
 	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
-	_, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+	_, err := infra.workflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:                   "gh-5",
 		Name:                   "GH Push Trigger",
 		Command:                "base instructions",

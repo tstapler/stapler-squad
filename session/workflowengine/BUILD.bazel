@@ -6,11 +6,7 @@ go_library(
     srcs = [
         "configured_workflow_engine.go",
         "gate_latch.go",
-        "gate_satisfaction_repository.go",
-        "pipeline_mode_executor.go",
-        "pipeline_mode_repository.go",
         "stage_config_cache.go",
-        "stage_config_repository.go",
         "test_seams.go",
         "workflow_engine.go",
         "workflow_engine_bypass.go",
@@ -32,6 +28,7 @@ go_library(
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/hostclaim",
+        "//session/stagecfg",
         "//telemetry",
         "//tools/bzl/ent",
         "//tools/bzl/ent:backlogitem",
@@ -54,7 +51,6 @@ alias(
 go_test(
     name = "workflowengine_test",
     srcs = [
-        "pipeline_mode_executor_test.go",
         "workflow_engine_soak_test.go",
         "workflow_engine_test.go",
         "workflow_slug_test.go",

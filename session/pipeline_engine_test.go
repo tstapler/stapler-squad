@@ -1,10 +1,10 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/workflowengine"
+import "github.com/tstapler/stapler-squad/session/stagecfg"
 
 // ─── fakePipelineModeRepository ─────────────────────────────────────────────
 
-var _ workflowengine.PipelineModeRepository = (*fakePipelineModeRepository)(nil)
+var _ stagecfg.PipelineModeRepository = (*fakePipelineModeRepository)(nil)
 
 // warningLogMu and swapWarningLog live in session/sync_buffer_test.go, shared
 // with session/review_gate_test.go and session/backlog_lifecycle_test.go.

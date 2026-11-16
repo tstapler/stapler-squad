@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -271,7 +272,7 @@ type BacklogLifecycleListener struct {
 	// makes that sweep a no-op — matches every other optional-dependency
 	// detector's nil-safe convention in this file. Wired via
 	// SetGateSatisfactionRepository.
-	gateSatisfactionRepo workflowengine.GateSatisfactionRepository
+	gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 
 	// workflowEngineMu guards workflowEngine for concurrent Set/get access.
 	workflowEngineMu sync.RWMutex
@@ -331,7 +332,7 @@ func (l *BacklogLifecycleListener) getWorkflowEngine() domain.WorkflowEngine {
 // SetGateSatisfactionRepository wires the repository reconcileCustomGateChecks
 // (session/backlog_lifecycle_gates.go) scans for in-flight custom-check
 // invocations. nil (the default) is safe — see the field's doc comment.
-func (l *BacklogLifecycleListener) SetGateSatisfactionRepository(repo workflowengine.GateSatisfactionRepository) {
+func (l *BacklogLifecycleListener) SetGateSatisfactionRepository(repo stagecfg.GateSatisfactionRepository) {
 	l.gateSatisfactionRepoMu.Lock()
 	defer l.gateSatisfactionRepoMu.Unlock()
 	l.gateSatisfactionRepo = repo
@@ -339,7 +340,7 @@ func (l *BacklogLifecycleListener) SetGateSatisfactionRepository(repo workflowen
 
 // getGateSatisfactionRepo returns the currently-wired GateSatisfactionRepository
 // (nil if none).
-func (l *BacklogLifecycleListener) getGateSatisfactionRepo() workflowengine.GateSatisfactionRepository {
+func (l *BacklogLifecycleListener) getGateSatisfactionRepo() stagecfg.GateSatisfactionRepository {
 	l.gateSatisfactionRepoMu.RLock()
 	defer l.gateSatisfactionRepoMu.RUnlock()
 	return l.gateSatisfactionRepo
@@ -351,7 +352,7 @@ func (l *BacklogLifecycleListener) getGateSatisfactionRepo() workflowengine.Gate
 // recordGateSatisfaction). Distinct from SetGateSatisfactionRepository above
 // (which wires reconcileCustomGateChecks' unrelated sweep): the runner holds
 // its own copy of the repository, not a shared reference to this listener's.
-func (l *BacklogLifecycleListener) SetReviewGateSatisfactionRepository(repo workflowengine.GateSatisfactionRepository) {
+func (l *BacklogLifecycleListener) SetReviewGateSatisfactionRepository(repo stagecfg.GateSatisfactionRepository) {
 	l.runner.SetGateSatisfactionRepository(repo)
 }
 

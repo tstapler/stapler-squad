@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -35,7 +36,7 @@ type WorkflowSchedulerInterface interface {
 
 // WorkflowService implements the workflow-related RPCs on SessionService.
 type WorkflowService struct {
-	repo      session.WorkflowRepository
+	repo      stagecfg.WorkflowRepository
 	scheduler WorkflowSchedulerInterface
 	// storage is used by ArchiveWorkflowSessions and DeleteWorkflowFailedSessions to
 	// access the ent client for bulk updates. Wired at construction time.
@@ -57,7 +58,7 @@ type WorkflowService struct {
 // NewWorkflowService creates a new WorkflowService.
 // storage is required for ArchiveWorkflowSessions / DeleteWorkflowFailedSessions; pass nil
 // to disable those RPCs (they will return CodeUnavailable).
-func NewWorkflowService(repo session.WorkflowRepository, scheduler WorkflowSchedulerInterface, storage session.InstanceStore) *WorkflowService {
+func NewWorkflowService(repo stagecfg.WorkflowRepository, scheduler WorkflowSchedulerInterface, storage session.InstanceStore) *WorkflowService {
 	return &WorkflowService{repo: repo, scheduler: scheduler, storage: storage}
 }
 
@@ -273,7 +274,7 @@ func (s *WorkflowService) CreateWorkflow(
 		}
 	}
 
-	createInput := session.WorkflowCreateInput{
+	createInput := stagecfg.WorkflowCreateInput{
 		Slug:            req.Msg.Slug,
 		Name:            req.Msg.Name,
 		Description:     req.Msg.Description,
@@ -420,7 +421,7 @@ func (s *WorkflowService) UpdateWorkflow(
 		}
 	}
 
-	update := session.WorkflowUpdateInput{
+	update := stagecfg.WorkflowUpdateInput{
 		Name:            req.Msg.Name,
 		Description:     req.Msg.Description,
 		Command:         req.Msg.Command,

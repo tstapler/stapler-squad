@@ -35,7 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // notifyTriagePersistFailure publishes an operator-facing notification when one or more of
@@ -445,7 +445,7 @@ func (s *BacklogService) TriggerTriage(
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
 	// Snapshot the resolved PipelineMode slug + content hash — see the comment on the
 	// equivalent SpawnSessionFromItem call site above for the nil-guard rationale.
-	triageSessionUUID := services.HeadlessTriageUUIDPrefix + uuid.New().String()
+	triageSessionUUID := domain.HeadlessTriageUUIDPrefix + uuid.New().String()
 	var triagePipelineModeSnapshotHash string
 	if s.pipelineEngine != nil {
 		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlogdto.PipelineMode(item.PipelineMode))
@@ -460,7 +460,7 @@ func (s *BacklogService) TriggerTriage(
 	// mode-side hash (Task 5.2.4a).
 	var triageExecProgram, triageExecModel string
 	if s.pipelineEngine != nil {
-		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, workflowengine.StageRoleTriage)
+		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, stagecfg.StageRoleTriage)
 	}
 	triageExecutorHash := pipeline.ComputeExecutorHash(triageExecProgram, triageExecModel)
 	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")

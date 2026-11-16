@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -1768,7 +1769,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 
 	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Configured automated-review gate FAIL test")
 
-	repo := session.NewEntGateSatisfactionRepository(client)
+	repo := stagecfg.NewEntGateSatisfactionRepository(client)
 	spawner := &blktest.MockReviewGateSpawner{}
 	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() domain.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
@@ -1785,7 +1786,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 
 	// PendingGates must report the SAME outcome for this transition, replacing
 	// evaluateGate's pre-follow-up unconditional Satisfied:false placeholder.
-	stageRepo := session.NewEntStageConfigRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, repo, nil)
 	require.NoError(t, err)
 
@@ -1809,7 +1810,7 @@ func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateConte
 
 	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Built-in gate context must not record satisfaction")
 
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	spawner := &blktest.MockReviewGateSpawner{}
 	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() domain.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)

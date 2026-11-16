@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // githubPushBody builds a minimal GitHub push-event JSON payload.
@@ -38,7 +38,7 @@ func githubPushBody(t *testing.T, fullName, branch, commitMessage string) []byte
 // repo@branch, with secret encrypted under infra's key.
 func newGitHubPushWorkflow(t *testing.T, infra *webhookTestInfra, slug, secret, repo, branch, promptTemplate string) *ent.Workflow {
 	t.Helper()
-	wf, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := infra.workflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:                   slug,
 		Name:                   "GH Push Trigger",
 		Command:                "base instructions",
@@ -123,7 +123,7 @@ func TestGitHubWebhookHandler_should_Return401AndRecordRejected_When_SignatureIn
 // same way a repo mismatch would be, so it surfaces as no_match, not a 401/403.
 func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_EnabledIsFalse_EvenIfCronEnabledTrue(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	_, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+	_, err := infra.workflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:                   "gh-push-disabled",
 		Name:                   "GH Push Trigger",
 		Command:                "base instructions",

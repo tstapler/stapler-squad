@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -533,8 +534,8 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 	ctx := context.Background()
 	client := repo.Client
 
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
@@ -551,7 +552,7 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 	require.Len(t, ids, 1)
 	gateID := ids[0]
 
-	_, err = gateSatisfactionRepo.Create(ctx, workflowengine.GateSatisfactionCreateInput{
+	_, err = gateSatisfactionRepo.Create(ctx, stagecfg.GateSatisfactionCreateInput{
 		ItemID:    uuid.MustParse(item.ID),
 		GateID:    gateID,
 		Satisfied: true,
@@ -636,8 +637,8 @@ func newDeletedStageItemFixture(t *testing.T) (engine *workflowengine.Configured
 	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err = workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
@@ -712,8 +713,8 @@ func TestConfiguredWorkflowEngine_should_NeverConsultFallback_When_StageIsLiveBu
 	// No StageTransition row is ever created from deadEndStage — it is live
 	// and enabled, just terminal by construction (no outgoing edges).
 
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
@@ -852,9 +853,9 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 			assert.Contains(t, statuses[0].Description, "nothing has run yet")
 
 			// Satisfied record: reports Satisfied:true with its recorded detail.
-			gateRepo := NewEntGateSatisfactionRepository(client)
+			gateRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 			now := time.Now()
-			_, err = gateRepo.Create(ctx, workflowengine.GateSatisfactionCreateInput{
+			_, err = gateRepo.Create(ctx, stagecfg.GateSatisfactionCreateInput{
 				ItemID:        item.ID,
 				GateID:        gateID,
 				Satisfied:     true,
@@ -871,7 +872,7 @@ func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRep
 
 			// Flip to an unsatisfied outcome: reports Satisfied:false with the new detail.
 			satisfiedFalse := false
-			_, err = gateRepo.Update(ctx, item.ID, gateID, workflowengine.GateSatisfactionUpdateInput{
+			_, err = gateRepo.Update(ctx, item.ID, gateID, stagecfg.GateSatisfactionUpdateInput{
 				Satisfied:     &satisfiedFalse,
 				OutcomeDetail: map[string]interface{}{"detail": "needs rework"},
 			})
@@ -896,27 +897,27 @@ type failOnCallGateSatisfactionRepo struct {
 	t *testing.T
 }
 
-func (f *failOnCallGateSatisfactionRepo) Create(context.Context, workflowengine.GateSatisfactionCreateInput) (*workflowengine.GateSatisfactionData, error) {
+func (f *failOnCallGateSatisfactionRepo) Create(context.Context, stagecfg.GateSatisfactionCreateInput) (*stagecfg.GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.Create must not be called when a config error short-circuits evaluation")
 	return nil, nil //nolint:nilnil // unreachable after t.Fatal (which calls runtime.Goexit); only here to satisfy the compiler's return requirement
 }
 
-func (f *failOnCallGateSatisfactionRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*workflowengine.GateSatisfactionData, error) {
+func (f *failOnCallGateSatisfactionRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*stagecfg.GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.GetByItemAndGate must not be called when a config error short-circuits evaluation")
 	return nil, nil //nolint:nilnil // unreachable after t.Fatal (which calls runtime.Goexit); only here to satisfy the compiler's return requirement
 }
 
-func (f *failOnCallGateSatisfactionRepo) Update(context.Context, uuid.UUID, uuid.UUID, workflowengine.GateSatisfactionUpdateInput) (*workflowengine.GateSatisfactionData, error) {
+func (f *failOnCallGateSatisfactionRepo) Update(context.Context, uuid.UUID, uuid.UUID, stagecfg.GateSatisfactionUpdateInput) (*stagecfg.GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.Update must not be called when a config error short-circuits evaluation")
 	return nil, nil //nolint:nilnil // unreachable after t.Fatal (which calls runtime.Goexit); only here to satisfy the compiler's return requirement
 }
 
-func (f *failOnCallGateSatisfactionRepo) ListUnsatisfied(context.Context) ([]*workflowengine.GateSatisfactionData, error) {
+func (f *failOnCallGateSatisfactionRepo) ListUnsatisfied(context.Context) ([]*stagecfg.GateSatisfactionData, error) {
 	f.t.Fatal("GateSatisfactionRepository.ListUnsatisfied must not be called when a config error short-circuits evaluation")
 	return nil, nil
 }
 
-var _ workflowengine.GateSatisfactionRepository = (*failOnCallGateSatisfactionRepo)(nil)
+var _ stagecfg.GateSatisfactionRepository = (*failOnCallGateSatisfactionRepo)(nil)
 
 // newGateWithConfig creates a fresh custom stage pair plus one enabled gate of
 // kind on the transition between them, carrying config, invalidates engine's
@@ -958,7 +959,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Cus
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	client := repo.Client
-	stageRepo := NewEntStageConfigRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
 	require.NoError(t, err)
 
@@ -983,8 +984,8 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	client := repo.Client
-	stageRepo := NewEntStageConfigRepository(client)
-	pipelineModeRepo := NewEntPipelineModeRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	pipelineModeRepo := stagecfg.NewEntPipelineModeRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, pipelineModeRepo)
 	require.NoError(t, err)
 
@@ -1008,7 +1009,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	client := repo.Client
-	stageRepo := NewEntStageConfigRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
 	require.NoError(t, err)
 
@@ -1032,8 +1033,8 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConf
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	client := repo.Client
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 	ctx := context.Background()
@@ -1052,7 +1053,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConf
 
 	// And a recorded satisfaction is still honored exactly as before.
 	itemID := uuid.New()
-	_, err = gateSatisfactionRepo.Create(ctx, workflowengine.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: true})
+	_, err = gateSatisfactionRepo.Create(ctx, stagecfg.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: true})
 	require.NoError(t, err)
 	statuses, err = engine.PendingGates(domain.BacklogItemTransitionInput{ItemID: itemID.String(), Status: from}, to, nil)
 	require.NoError(t, err)
@@ -1070,9 +1071,9 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	client := repo.Client
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
-	pipelineModeRepo := NewEntPipelineModeRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
+	pipelineModeRepo := stagecfg.NewEntPipelineModeRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, pipelineModeRepo)
 	require.NoError(t, err)
 	ctx := context.Background()
@@ -1086,7 +1087,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 	})
 
 	t.Run("resolvable pipeline_mode", func(t *testing.T) {
-		_, err := pipelineModeRepo.Create(ctx, workflowengine.PipelineModeCreateInput{Slug: "real-mode", Name: "Real Mode", Enabled: true})
+		_, err := pipelineModeRepo.Create(ctx, stagecfg.PipelineModeCreateInput{Slug: "real-mode", Name: "Real Mode", Enabled: true})
 		require.NoError(t, err)
 
 		from, to, _ := newGateWithConfig(t, client, engine, domain.GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "real-mode"})
@@ -1100,11 +1101,11 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 // deadlineGateRepo returns context.DeadlineExceeded the way a database read
 // that outlived its deadline would, and records the deadline it was given.
 type deadlineGateRepo struct {
-	workflowengine.GateSatisfactionRepository
+	stagecfg.GateSatisfactionRepository
 	sawDeadline time.Duration
 }
 
-func (r *deadlineGateRepo) GetByItemAndGate(ctx context.Context, _, _ uuid.UUID) (*workflowengine.GateSatisfactionData, error) {
+func (r *deadlineGateRepo) GetByItemAndGate(ctx context.Context, _, _ uuid.UUID) (*stagecfg.GateSatisfactionData, error) {
 	if d, ok := ctx.Deadline(); ok {
 		r.sawDeadline = time.Until(d)
 	}
@@ -1116,7 +1117,7 @@ func TestConfiguredWorkflowEngine_StatefulGateFailsClosed_WhenRepoTimesOut(t *te
 	repo := NewTestEntRepository(t)
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &deadlineGateRepo{}
-	engine, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	from, to := newCustomTransitionWithGates(t, repo.Client, engine, []domain.GateKind{domain.GateKindHumanApproval}, []bool{true})
 	item := domain.BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
@@ -1136,7 +1137,7 @@ func TestConfiguredWorkflowEngine_PendingGatesStructuralOnly_SkipsStatefulKindsW
 	repo := NewTestEntRepository(t)
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &deadlineGateRepo{}
-	engine, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	from, to := newCustomTransitionWithGates(t, repo.Client, engine,
 		[]domain.GateKind{domain.GateKindStructural, domain.GateKindHumanApproval}, []bool{false, true})

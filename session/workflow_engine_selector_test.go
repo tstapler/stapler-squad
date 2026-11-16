@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -32,20 +33,18 @@ func (panickingShadow) RecordShadowCall(workflowengine.EngineMethod, workfloweng
 // failIfCalledGateRepo is a GateSatisfactionRepository that fails the test on
 // any read; the embedded nil interface panics on every other method.
 type failIfCalledGateRepo struct {
-	workflowengine.GateSatisfactionRepository
+	stagecfg.GateSatisfactionRepository
 	t     *testing.T
 	calls atomic.Int64
 }
 
-func (r *failIfCalledGateRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*workflowengine.GateSatisfactionData, error) {
+func (r *failIfCalledGateRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*stagecfg.GateSatisfactionData, error) {
 	r.calls.Add(1)
 	r.t.Errorf("GateSatisfactionRepository.GetByItemAndGate must not be called")
 	return nil, errors.New("unexpected call")
 }
 
-type failingStageRepo struct {
-	workflowengine.StageConfigRepository
-}
+type failingStageRepo struct{ stagecfg.StageConfigRepository }
 
 func (failingStageRepo) ListEnabledStages(context.Context) ([]*ent.BacklogStage, error) {
 	return nil, errors.New("db down")
@@ -148,7 +147,7 @@ func TestSwitchableWorkflowEngine_ShadowCountsGateExtra_WhenOperatorAddsStructur
 func TestSwitchableWorkflowEngine_FallsBackToDefaultGraph_WhenConfiguredCacheEmptyOrNil(t *testing.T) {
 	t.Parallel()
 	emptyRepo := NewTestEntRepository(t)
-	emptyCfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(emptyRepo.Client), nil, nil)
+	emptyCfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(emptyRepo.Client), nil, nil)
 	require.NoError(t, err)
 	loadErrCfg, err := workflowengine.NewConfiguredWorkflowEngine(failingStageRepo{}, nil, nil)
 	require.NoError(t, err)
@@ -311,7 +310,7 @@ func TestSwitchableWorkflowEngine_ShadowDoesNoStatefulGateIo_WhenStatefulGateOnE
 	repo := NewTestEntRepository(t)
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &failIfCalledGateRepo{t: t}
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	from, to := newCustomTransitionWithGates(t, repo.Client, cfg,
 		[]domain.GateKind{domain.GateKindHumanApproval, domain.GateKindAutomatedReview, domain.GateKindCustom}, []bool{true, true, true})
@@ -365,11 +364,11 @@ func TestShadow_SamplesReadPathOneInTen_AndEvaluatesEveryTransition(t *testing.T
 // --- mode caching ----------------------------------------------------------
 
 type countingGateRepo struct {
-	workflowengine.GateSatisfactionRepository
+	stagecfg.GateSatisfactionRepository
 	calls atomic.Int64
 }
 
-func (r *countingGateRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*workflowengine.GateSatisfactionData, error) {
+func (r *countingGateRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUID) (*stagecfg.GateSatisfactionData, error) {
 	r.calls.Add(1)
 	return nil, errors.New("not found")
 }
@@ -382,7 +381,7 @@ func TestSwitchableWorkflowEngine_ReadsModeFromTtlCache_NotConfigFileEveryCall(t
 	gateRepo := &countingGateRepo{}
 	repo := NewTestEntRepository(t)
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, modes, workflowengine.WithSelectorClock(clock))
 

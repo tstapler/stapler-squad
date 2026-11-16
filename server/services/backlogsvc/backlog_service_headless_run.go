@@ -28,7 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // classifyHeadlessCallError buckets a headless.CallBlocking error into a coarse category
@@ -235,7 +235,7 @@ func (s *BacklogService) TriggerReReview(
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
 			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
 				log.Warn("[TriggerReReview] branch drift blocked review", "item", item.ID, "branch", wt.BranchName, "summary", blockedSummary)
-				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
+				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), domain.HeadlessReReviewUUIDPrefix, blockedSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
 				}
@@ -330,7 +330,7 @@ Do not modify the code. Only write the review verdict.
 		// ReviewGateRunner.Run (session/review_gate.go) blocks on an unrecoverable diff.
 		if workSessionDiff == "" && !codebaseWorkDirExists {
 			blockedSummary := fmt.Sprintf("Review blocked: no diff could be computed and the codebase-read fallback directory (%s) does not exist on disk. The recorded worktree may have been cleaned up without its DB row being updated — this needs investigation, not rework.", codebaseWorkDir)
-			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
+			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), domain.HeadlessReReviewUUIDPrefix, blockedSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
 			}
@@ -405,10 +405,10 @@ Do not modify the code. Only write the review verdict.
 		// into callOpts.Model below — see ComputeExecutorHash's doc comment.
 		var reviewExecProgram, reviewExecModel string
 		if s.pipelineEngine != nil {
-			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, workflowengine.StageRoleReview)
+			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, stagecfg.StageRoleReview)
 		}
 		reviewExecutorHash := pipeline.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
-		reviewExecModel = pinnedStageModel(workflowengine.StageRoleReview, reviewExecProgram, reviewExecModel)
+		reviewExecModel = pinnedStageModel(stagecfg.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
 		if reviewModelErr != nil {
@@ -433,7 +433,7 @@ Do not modify the code. Only write the review verdict.
 		if reviewPath == "codebase-read" && !s.capabilityCheck.Ensure(ctx, s.headlessPool) {
 			reviewPath = "codebase-read-degraded"
 			capSummary := "Review UNVERIFIABLE: codebase-read capability self-check failed — this process's claude CLI/config does not appear to grant WorkDir+AllowedTools+PermissionMode read access, so no real codebase-read call was attempted."
-			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, capSummary)
+			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), domain.HeadlessReReviewUUIDPrefix, capSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
 			}
@@ -479,7 +479,7 @@ Do not modify the code. Only write the review verdict.
 			if reviewPath == "codebase-read" && (errors.Is(reviewCtx.Err(), context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.Canceled)) {
 				reviewPath = "codebase-read-degraded"
 				timeoutSummary := fmt.Sprintf("Review UNVERIFIABLE: codebase-read call timed out or was cancelled after %s (%v) — could not independently verify criteria against the codebase.", callTimeout, reviewCtx.Err())
-				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, timeoutSummary)
+				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), domain.HeadlessReReviewUUIDPrefix, timeoutSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
 				}
@@ -495,12 +495,12 @@ Do not modify the code. Only write the review verdict.
 			// exactly the gap captureHeadlessFailure exists to close. Never blocks or
 			// changes the returned error: every step here is best-effort/log-and-continue.
 			errType := classifyHeadlessCallError(callErr, time.Since(callStart), callTimeout)
-			capturePath := s.captureHeadlessFailure(services.HeadlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
+			capturePath := s.captureHeadlessFailure(domain.HeadlessReReviewUUIDPrefix+uuid.New().String(), reviewResult)
 			log.Error("[TriggerReReview] headless re-review call failed", "item", item.ID, "errType", errType, "capture", capturePath, "error", callErr)
 			failCleanupCtx, failCleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, backlogdto.ItemSessionData{
 				ItemID:      item.ID,
-				SessionUUID: services.HeadlessReReviewUUIDPrefix + uuid.New().String(),
+				SessionUUID: domain.HeadlessReReviewUUIDPrefix + uuid.New().String(),
 				SessionRole: instance.SessionRoleReview,
 				AcSnapshot:  domain.AcCriteriaJSON(acSnapshotJSON),
 			}); failCreateErr != nil {
@@ -533,7 +533,7 @@ Do not modify the code. Only write the review verdict.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 
-		reviewSessionUUID := services.HeadlessReReviewUUIDPrefix + uuid.New().String()
+		reviewSessionUUID := domain.HeadlessReReviewUUIDPrefix + uuid.New().String()
 		is, createErr := s.storage.CreateItemSessionWithVerdict(cleanupCtx, backlogdto.ItemSessionData{
 			ItemID:                 item.ID,
 			SessionUUID:            reviewSessionUUID,

@@ -37,6 +37,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -174,7 +175,7 @@ type ServerDependencies struct {
 	GeminiCaller *headless.GeminiCaller
 
 	// WorkflowRepo persists workflow definitions.
-	WorkflowRepo session.WorkflowRepository
+	WorkflowRepo stagecfg.WorkflowRepository
 
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler
@@ -666,7 +667,7 @@ type RuntimeDeps struct {
 	GeminiCaller *headless.GeminiCaller
 
 	// WorkflowRepo persists workflow definitions.
-	WorkflowRepo session.WorkflowRepository
+	WorkflowRepo stagecfg.WorkflowRepository
 
 	// WorkflowScheduler manages cron-based workflow execution.
 	WorkflowScheduler *workflows.Scheduler

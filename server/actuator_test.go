@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
@@ -375,7 +376,7 @@ func newConfigDiffFixture(t *testing.T) (*ent.Client, *workflowengine.Configured
 	if err := workflowengine.EnsureBuiltInWorkflowStages(ctx, client); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(session.NewEntStageConfigRepository(client), session.NewEntGateSatisfactionRepository(client), nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(client), stagecfg.NewEntGateSatisfactionRepository(client), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

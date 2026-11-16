@@ -28,8 +28,8 @@ go_library(
         "//session/gitprovider",
         "//session/headless",
         "//session/instance",
+        "//session/stagecfg",
         "//session/vc",
-        "//session/workflowengine",
         "@com_github_google_uuid//:uuid",
     ],
 )
@@ -69,7 +69,7 @@ go_test(
         "//session/headless",
         "//session/instance",
         "//session/internal/sessiontest",
-        "//session/workflowengine",
+        "//session/stagecfg",
         "//testutil/gitfake",
         "//tools/bzl/ent",
         "@com_github_google_uuid//:uuid",

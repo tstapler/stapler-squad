@@ -11,20 +11,21 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // newTestInfra opens a fresh SQLite database for a test and returns the
 // ent client plus a workflow repository backed by the same database.
-func newTestInfra(t *testing.T) (repo *session.EntRepository, wfRepo session.WorkflowRepository) {
+func newTestInfra(t *testing.T) (repo *session.EntRepository, wfRepo stagecfg.WorkflowRepository) {
 	t.Helper()
 	entRepo := session.NewTestEntRepository(t)
-	return entRepo, session.NewEntWorkflowRepository(entRepo.GetEntClient())
+	return entRepo, stagecfg.NewEntWorkflowRepository(entRepo.GetEntClient())
 }
 
 // createWorkflowWithRetention creates a workflow with the given retention settings.
-func createWorkflowWithRetention(t *testing.T, wfRepo session.WorkflowRepository, slug string, keepSessions, archiveAfterHours int) {
+func createWorkflowWithRetention(t *testing.T, wfRepo stagecfg.WorkflowRepository, slug string, keepSessions, archiveAfterHours int) {
 	t.Helper()
-	_, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	_, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:              slug,
 		Name:              slug,
 		Command:           "echo test",

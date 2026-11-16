@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -17,7 +18,7 @@ func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 	if err := workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
 		b.Fatal(err)
 	}
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), nil, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), nil, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

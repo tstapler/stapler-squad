@@ -8,7 +8,6 @@ go_library(
     deps = [
         "//config",
         "//log",
-        "//server/services",
         "//session",
         "//session/backlog/pipeline",
         "//session/domain",

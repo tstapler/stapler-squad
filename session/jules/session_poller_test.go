@@ -20,7 +20,6 @@ import (
 	"github.com/tstapler/stapler-squad/internal/reporoot"
 	julesapi "github.com/tstapler/stapler-squad/jules"
 	ssqlog "github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -294,7 +293,7 @@ func TestJulesSessionPoller_tick_should_PollEachOpenSessionExactlyOnce_When_Thre
 	names := []julesapi.JulesSessionName{"sessions/a", "sessions/b", "sessions/c"}
 	for i, name := range names {
 		itemID := fmt.Sprintf("item-%d", i)
-		uuid := julesSessionUUIDPrefix + string(name)
+		uuid := domain.JulesSessionUUIDPrefix + string(name)
 		storage.addOpenSession(testEntry(itemID, uuid), testRow(fmt.Sprintf("row-%d", i), nil, time.Now()))
 		client.sessions[name] = newSession(name, julesapi.JulesStateInProgress)
 	}
@@ -313,7 +312,7 @@ func TestJulesSessionPoller_tick_should_SkipTickEntirely_When_ClientIsRateLimite
 	client := newFakeJulesStatusClient()
 	client.limited = true
 	storage := newFakeJulesPollerStorage()
-	storage.addOpenSession(testEntry("item-1", julesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
+	storage.addOpenSession(testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
 
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 	p.tick(context.Background())
@@ -335,7 +334,7 @@ func TestJulesSessionPoller_tick_should_ApplyRemainingSessions_When_OneSessionGe
 	names := []julesapi.JulesSessionName{"sessions/a", "sessions/b", "sessions/c"}
 	for i, name := range names {
 		itemID := fmt.Sprintf("item-%d", i)
-		uuid := julesSessionUUIDPrefix + string(name)
+		uuid := domain.JulesSessionUUIDPrefix + string(name)
 		storage.addOpenSession(testEntry(itemID, uuid), testRow(fmt.Sprintf("row-%d", i), nil, time.Now()))
 	}
 	client.sessions[names[0]] = newSession(names[0], julesapi.JulesStateInProgress)
@@ -362,7 +361,7 @@ func TestJulesSessionPoller_tick_should_LogAndSwallow_When_GetSessionCallTimesOu
 	client := newFakeJulesStatusClient()
 	client.blockUntilCtxDone = true
 	storage := newFakeJulesPollerStorage()
-	storage.addOpenSession(testEntry("item-1", julesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
+	storage.addOpenSession(testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
 
 	cfg := DefaultJulesSessionPollerConfig()
 	cfg.CallTimeout = 10 * time.Millisecond
@@ -412,7 +411,7 @@ func TestApplyJulesState_should_TouchProgressOnly_When_StateIsNonTerminal(t *tes
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", julesapi.JulesStateInProgress)
 
@@ -432,7 +431,7 @@ func TestApplyJulesState_should_AppendExactlyOneNote_When_StateChangesThenRepeat
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 
 	// Establish baseline: last seen QUEUED.
@@ -464,7 +463,7 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules completed item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
-	sessionUUID := julesSessionUUIDPrefix + "sessions/xyz"
+	sessionUUID := domain.JulesSessionUUIDPrefix + "sessions/xyz"
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
@@ -509,7 +508,7 @@ func TestJulesApplyCompleted_ShouldCreateTwoItemDirectLinks_WhenTwoOutputs(t *te
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", julesapi.JulesStateCompleted)
 	pr31 := "https://github.com/tstapler/stapler-squad/pull/31"
@@ -538,7 +537,7 @@ func TestJulesApplyCompleted_ShouldSkipTombstonedRef_WhenRepolled(t *testing.T) 
 	storage.tombstoned = map[string]bool{pr32: true}
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	s := newSession("sessions/a", julesapi.JulesStateCompleted)
 	s.Outputs = []julesapi.JulesSessionOutput{
 		{PullRequest: &julesapi.JulesPullRequestOutput{URL: "https://github.com/tstapler/stapler-squad/pull/31"}},
@@ -558,7 +557,7 @@ func TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs(
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", julesapi.JulesStateCompleted)
 	s.Outputs = nil
@@ -617,7 +616,7 @@ func TestApplyJulesState_should_RejectMaliciousPRURL_When_CompletedWithNonGitHub
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", julesapi.JulesStateCompleted)
 	s.Outputs = []julesapi.JulesSessionOutput{
@@ -644,7 +643,7 @@ func TestApplyJulesState_should_LogUnknownStateAtError_When_StateIsUnrecognized(
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/a", julesapi.ParseJulesSessionState("AWAITING_HUMAN_TEA_BREAK"))
 
@@ -726,10 +725,10 @@ func TestApplyJulesState_should_HandleEveryDeclaredState_When_StatesEnumerated(t
 			p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
 			itemID := fmt.Sprintf("item-%d", i)
-			sessionUUID := julesSessionUUIDPrefix + fmt.Sprintf("sessions/s%d", i)
+			sessionUUID := domain.JulesSessionUUIDPrefix + fmt.Sprintf("sessions/s%d", i)
 			entry := testEntry(itemID, sessionUUID)
 			row := testRow(fmt.Sprintf("row-%d", i), nil, time.Now())
-			s := newSession(julesapi.JulesSessionName(strings.TrimPrefix(sessionUUID, julesSessionUUIDPrefix)), state)
+			s := newSession(julesapi.JulesSessionName(strings.TrimPrefix(sessionUUID, domain.JulesSessionUUIDPrefix)), state)
 			if state == julesapi.JulesStateFailed {
 				s.Title = "build failed"
 			}
@@ -755,7 +754,7 @@ func TestApplyJulesState_should_ReturnItemToReadyWithJulesMessage_When_StateIsFa
 	storage := newFakeJulesPollerStorage()
 	p := NewJulesSessionPoller(client, storage, DefaultJulesSessionPollerConfig())
 
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/xyz")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/xyz")
 	row := testRow("row-1", nil, time.Now())
 	s := newSession("sessions/xyz", julesapi.JulesStateFailed)
 	s.Title = "could not push branch: permission denied"
@@ -784,7 +783,7 @@ func TestJulesSessionPoller_tick_should_EndSessionAsSessionMissing_When_GetSessi
 	t.Parallel()
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/gone")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/gone")
 	storage.addOpenSession(entry, testRow("row-1", nil, time.Now()))
 	client.errs["sessions/gone"] = julesapi.ErrJulesSessionNotFound
 
@@ -806,7 +805,7 @@ func TestJulesSessionPoller_tick_should_TimeOutSession_When_StartedAtExceedsMaxS
 	storage := newFakeJulesPollerStorage()
 
 	started := time.Now().Add(-25 * time.Hour)
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/old")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/old")
 	storage.addOpenSession(entry, testRow("row-1", &started, time.Now().Add(-25*time.Hour)))
 
 	cfg := DefaultJulesSessionPollerConfig()
@@ -842,7 +841,7 @@ func TestJulesSessionPoller_tick_should_FailAbandonedReservation_When_PendingOld
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules pending item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
-	pendingUUID := session.JulesPendingUUIDPrefix + "reservation-1"
+	pendingUUID := domain.JulesPendingUUIDPrefix + "reservation-1"
 	parsedItemID, err := uuid.Parse(item.ID)
 	require.NoError(t, err)
 	is, err := storage.GetEntClient().ItemSession.Create().
@@ -884,7 +883,7 @@ func TestJulesSessionPoller_tick_should_SetAuthReconnectRequiredAndSkipSession_W
 	t.Parallel()
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	storage.addOpenSession(entry, testRow("row-1", nil, time.Now()))
 	client.errs["sessions/a"] = julesapi.ErrJulesNotConfigured
 
@@ -905,7 +904,7 @@ func TestJulesSessionPoller_tick_should_AppendReauthNoteExactlyOnce_When_ThreeCo
 	t.Parallel()
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	storage.addOpenSession(entry, testRow("row-1", nil, time.Now()))
 	client.errs["sessions/a"] = julesapi.ErrJulesNotConfigured
 
@@ -929,7 +928,7 @@ func TestJulesSessionPoller_tick_should_ClearAuthReconnectRequiredAndAppendRecov
 	t.Parallel()
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
-	entry := testEntry("item-1", julesSessionUUIDPrefix+"sessions/a")
+	entry := testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a")
 	storage.addOpenSession(entry, testRow("row-1", nil, time.Now()))
 	client.errs["sessions/a"] = julesapi.ErrJulesNotConfigured
 
@@ -965,8 +964,8 @@ func TestJulesSessionPoller_tick_should_SetAuthReconnectRequiredOnceNotPerSessio
 	t.Parallel()
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
-	storage.addOpenSession(testEntry("item-1", julesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
-	storage.addOpenSession(testEntry("item-2", julesSessionUUIDPrefix+"sessions/b"), testRow("row-2", nil, time.Now()))
+	storage.addOpenSession(testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
+	storage.addOpenSession(testEntry("item-2", domain.JulesSessionUUIDPrefix+"sessions/b"), testRow("row-2", nil, time.Now()))
 	client.errs["sessions/a"] = julesapi.ErrJulesNotConfigured
 	client.errs["sessions/b"] = julesapi.ErrJulesNotConfigured
 
@@ -995,8 +994,8 @@ func TestJulesSessionPoller_tick_should_LeaveAuthReconnectRequiredUntouched_When
 	t.Parallel()
 	client := newFakeJulesStatusClient()
 	storage := newFakeJulesPollerStorage()
-	storage.addOpenSession(testEntry("item-1", julesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
-	storage.addOpenSession(testEntry("item-2", julesSessionUUIDPrefix+"sessions/b"), testRow("row-2", nil, time.Now()))
+	storage.addOpenSession(testEntry("item-1", domain.JulesSessionUUIDPrefix+"sessions/a"), testRow("row-1", nil, time.Now()))
+	storage.addOpenSession(testEntry("item-2", domain.JulesSessionUUIDPrefix+"sessions/b"), testRow("row-2", nil, time.Now()))
 	client.errs["sessions/a"] = julesapi.ErrJulesTransient
 	client.errs["sessions/b"] = julesapi.ErrJulesSessionNotFound
 

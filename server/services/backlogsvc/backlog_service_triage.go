@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -1038,7 +1039,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// value would permanently false-flag drift against the mode-side hash.
 	var workExecProgram, workExecModel string
 	if s.pipelineEngine != nil {
-		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, workflowengine.StageRoleWork)
+		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, stagecfg.StageRoleWork)
 	}
 	workExecutorHash := pipeline.ComputeExecutorHash(workExecProgram, workExecModel)
 	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
@@ -2961,7 +2962,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 		// as before. Sessions older than maxTriageSessionAge are treated as orphaned
 		// regardless, to prevent a genuinely hung or leaked call from blocking
 		// re-trigger indefinitely.
-		isHeadless := services.IsHeadlessRole(is.SessionUUID, services.HeadlessRoleTriage)
+		isHeadless := domain.IsHeadlessRole(is.SessionUUID, domain.HeadlessRoleTriage)
 		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
 		var live bool
 		if isHeadless {

@@ -23,7 +23,6 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -4982,8 +4981,8 @@ func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
 	}{
 		{"dead tmux session link is ignored", "", false, true},
 		{"live tmux session link still blocks", "", true, false},
-		{"headless triage not in flight is ignored", services.HeadlessTriageUUIDPrefix, false, true},
-		{"headless re-review always blocks", services.HeadlessReReviewUUIDPrefix, false, false},
+		{"headless triage not in flight is ignored", domain.HeadlessTriageUUIDPrefix, false, true},
+		{"headless re-review always blocks", domain.HeadlessReReviewUUIDPrefix, false, false},
 		{"jules link (non-tmux role) always blocks", "jules-", false, false},
 	}
 	for _, tc := range tests {

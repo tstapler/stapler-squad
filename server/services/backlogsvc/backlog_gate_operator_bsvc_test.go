@@ -14,10 +14,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
-func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) workflowengine.TransitionData {
+func gateEdge(t *testing.T, repo *stagecfg.EntStageConfigRepository, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) stagecfg.TransitionData {
 	t.Helper()
 	edges, err := repo.ListAllTransitions(t.Context(), string(from))
 	require.NoError(t, err)
@@ -27,14 +28,14 @@ func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *workflo
 		}
 	}
 	require.Failf(t, "edge not seeded", "%s->%s", from, to)
-	return workflowengine.TransitionData{}
+	return stagecfg.TransitionData{}
 }
 
 // addApprovalGate puts an unsatisfied human_approval gate on a seeded edge.
-func addApprovalGate(t *testing.T, repo *session.EntStageConfigRepository, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) {
+func addApprovalGate(t *testing.T, repo *stagecfg.EntStageConfigRepository, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) {
 	t.Helper()
 	edge := gateEdge(t, repo, cfg, from, to)
-	_, err := repo.CreateGate(t.Context(), workflowengine.GateCreateInput{
+	_, err := repo.CreateGate(t.Context(), stagecfg.GateCreateInput{
 		TransitionID: edge.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 	})
 	require.NoError(t, err)
@@ -69,7 +70,7 @@ func TestTransitionHandler_Enforce_GraphEditAndGateDenyWithUnchangedCodes(t *tes
 	// A graph edit: idea->refining disabled.
 	edge := gateEdge(t, repo, cfg, domain.BacklogStatusIdea, domain.BacklogStatusRefining)
 	disabled := false
-	_, err := repo.UpdateTransition(ctx, edge.ID, workflowengine.TransitionUpdateInput{Enabled: &disabled})
+	_, err := repo.UpdateTransition(ctx, edge.ID, stagecfg.TransitionUpdateInput{Enabled: &disabled})
 	require.NoError(t, err)
 	require.NoError(t, cfg.InvalidateCache(ctx))
 	item := newItemAt(t, storage, domain.BacklogStatusIdea)

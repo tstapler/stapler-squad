@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -355,7 +356,7 @@ type SessionService struct {
 
 	// workflowRepo is used to populate the workflow meta cache.
 	// Injected via SetWorkflowRepository to avoid bootstrapping cycle.
-	workflowRepo session.WorkflowRepository
+	workflowRepo stagecfg.WorkflowRepository
 
 	// workflowMetaCache provides workflow name and retention settings keyed by workflow UUID.
 	// Populated on startup and refreshed every minute. Protected by workflowMetaMu.

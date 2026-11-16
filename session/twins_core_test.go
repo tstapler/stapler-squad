@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -135,8 +136,8 @@ func newSeededConfiguredWorkflowEngine(t *testing.T) (*workflowengine.Configured
 
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
 
-	stageRepo := NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 	return engine, client
@@ -165,11 +166,11 @@ type fakePipelineModeRepository struct {
 	listEnabledFn func(ctx context.Context) ([]*ent.PipelineMode, error)
 }
 
-func (f *fakePipelineModeRepository) Create(context.Context, workflowengine.PipelineModeCreateInput) (*ent.PipelineMode, error) {
+func (f *fakePipelineModeRepository) Create(context.Context, stagecfg.PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	return nil, errors.New("fakePipelineModeRepository.Create: not implemented")
 }
 
-func (f *fakePipelineModeRepository) Update(context.Context, uuid.UUID, workflowengine.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
+func (f *fakePipelineModeRepository) Update(context.Context, uuid.UUID, stagecfg.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
 	return nil, errors.New("fakePipelineModeRepository.Update: not implemented")
 }
 
@@ -240,7 +241,7 @@ func newGateHarness(t *testing.T, mode workflowengine.EngineMode) *gateHarness {
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
 	require.NoError(t, err)
 	storage, err := NewStorageWithRepository(repo)
 	require.NoError(t, err)

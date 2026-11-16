@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -101,7 +102,7 @@ func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_Custom
 
 	item, gateID := newGateTimeoutTestFixture(t, storage, toSlug, 16*time.Minute, 10*time.Minute, 5*time.Minute)
 
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	listener := NewBacklogLifecycleListener(storage)
 	listener.livenessEngine = engine
 	listener.gateSatisfactionRepo = repo
@@ -127,7 +128,7 @@ func TestReconcileCustomGateChecks_should_NotMarkStuck_When_CustomCheckWithinBud
 
 	item, _ := newGateTimeoutTestFixture(t, storage, "gate-within-budget", 2*time.Minute, 10*time.Minute, 5*time.Minute)
 
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	listener := NewBacklogLifecycleListener(storage)
 	listener.gateSatisfactionRepo = repo
 
@@ -198,8 +199,8 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 		Save(ctx)
 	require.NoError(t, err)
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateRepo := session.NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
@@ -230,7 +231,7 @@ func TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_T
 	gateID := blktest.NewCustomCheckTestGate(t, storage)
 	item := blktest.NewCustomCheckTestItem(t, storage, "runCustomGateCheckWithCaller wiring test")
 
-	repo := session.NewEntGateSatisfactionRepository(client)
+	repo := stagecfg.NewEntGateSatisfactionRepository(client)
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetGateSatisfactionRepository(repo)
 

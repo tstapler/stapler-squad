@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -43,7 +44,7 @@ func newShadowRig(t *testing.T, label string, opts ...workflowengine.SelectorOpt
 
 func mustEmptyConfigured(t *testing.T) *workflowengine.ConfiguredWorkflowEngine {
 	t.Helper()
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(session.NewEntStageConfigRepository(session.NewTestEntRepository(t).Client), nil, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(session.NewTestEntRepository(t).Client), nil, nil)
 	require.NoError(t, err)
 	return cfg
 }

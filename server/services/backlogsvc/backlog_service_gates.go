@@ -24,12 +24,12 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // gateSatisfactionToProto converts a session.GateSatisfactionData to its
 // proto representation.
-func gateSatisfactionToProto(rec *workflowengine.GateSatisfactionData) *sessionv1.GateSatisfactionRecord {
+func gateSatisfactionToProto(rec *stagecfg.GateSatisfactionData) *sessionv1.GateSatisfactionRecord {
 	out := &sessionv1.GateSatisfactionRecord{
 		Id:          rec.ID.String(),
 		ItemId:      rec.ItemID.String(),

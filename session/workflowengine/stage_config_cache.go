@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // resolvedGate is a deep-copied-at-load-time snapshot of one enabled
@@ -70,7 +71,7 @@ type stageConfigCache struct {
 
 // Load populates the cache from repo. Shares its implementation (and
 // writeMu serialization) with Invalidate — see refresh.
-func (c *stageConfigCache) Load(ctx context.Context, repo StageConfigRepository) error {
+func (c *stageConfigCache) Load(ctx context.Context, repo stagecfg.StageConfigRepository) error {
 	return c.refresh(ctx, repo)
 }
 
@@ -78,13 +79,13 @@ func (c *stageConfigCache) Load(ctx context.Context, repo StageConfigRepository)
 // Exposed as a distinct method name from Load for call-site clarity at the
 // Epic 2.7 RPC write handlers that must invalidate the cache after every
 // Create/Update/Delete of a stage, transition, or gate.
-func (c *stageConfigCache) Invalidate(ctx context.Context, repo StageConfigRepository) error {
+func (c *stageConfigCache) Invalidate(ctx context.Context, repo stagecfg.StageConfigRepository) error {
 	return c.refresh(ctx, repo)
 }
 
 // refresh is the shared, writer-serialized read-then-store sequence used by
 // both Load and Invalidate.
-func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigRepository) error {
+func (c *stageConfigCache) refresh(ctx context.Context, repo stagecfg.StageConfigRepository) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 

@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -35,7 +36,7 @@ func TestShadow_SkipsStatefulStructuralGateWithoutIo_WhenFieldSet(t *testing.T) 
 		repo := NewTestEntRepository(t)
 		require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 		gateRepo := &failIfCalledGateRepo{t: t}
-		cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+		cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 		require.NoError(t, err)
 		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{tc.stateful})
 		h := newSelectorHarness(t, workflowengine.ModeShadow, cfg)
@@ -52,7 +53,7 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 	for _, stateful := range []bool{true, false} {
 		repo := NewTestEntRepository(t)
 		require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
-		cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
+		cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
 		require.NoError(t, err)
 		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{stateful})
 		itemID := uuid.NewString()

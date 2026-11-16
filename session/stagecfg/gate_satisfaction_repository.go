@@ -1,4 +1,4 @@
-package workflowengine
+package stagecfg
 
 import (
 	"context"

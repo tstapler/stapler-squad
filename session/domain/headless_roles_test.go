@@ -1,4 +1,4 @@
-package services
+package domain
 
 import (
 	"strings"
@@ -45,4 +45,13 @@ func TestHeadlessRolePrefixes_should_BeUnambiguous(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSyntheticUUIDPrefixes_should_PinWireValues(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "headless-triage-", HeadlessTriageUUIDPrefix)
+	assert.Equal(t, "headless-re-review-", HeadlessReReviewUUIDPrefix)
+	assert.Equal(t, "jules-", JulesSessionUUIDPrefix)
+	assert.Equal(t, "jules-pending-", JulesPendingUUIDPrefix)
+	assert.True(t, strings.HasPrefix(JulesPendingUUIDPrefix, JulesSessionUUIDPrefix))
 }

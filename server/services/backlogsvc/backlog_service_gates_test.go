@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -39,8 +40,8 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 	ctx := t.Context()
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
-	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
@@ -65,14 +66,14 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 // can add a custom stage/transition/gate directly, mirroring
 // newStageCRUDTestService's shape but wiring the engine into svc.engine (not
 // just svc.stageConfigEngine), which is what GetPendingGates actually reads.
-func newGatesTestService(t *testing.T) (*BacklogService, workflowengine.StageCRUDRepository, *workflowengine.ConfiguredWorkflowEngine, *session.Storage) {
+func newGatesTestService(t *testing.T) (*BacklogService, stagecfg.StageCRUDRepository, *workflowengine.ConfiguredWorkflowEngine, *session.Storage) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
-	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
@@ -90,13 +91,13 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 	svc, repo, engine, storage := newGatesTestService(t)
 	ctx := t.Context()
 
-	fromStage, err := repo.CreateStage(ctx, workflowengine.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
+	fromStage, err := repo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
 	require.NoError(t, err)
-	toStage, err := repo.CreateStage(ctx, workflowengine.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
+	toStage, err := repo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
 	require.NoError(t, err)
-	transition, err := repo.CreateTransition(ctx, workflowengine.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
+	transition, err := repo.CreateTransition(ctx, stagecfg.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
 	require.NoError(t, err)
-	gate, err := repo.CreateGate(ctx, workflowengine.GateCreateInput{
+	gate, err := repo.CreateGate(ctx, stagecfg.GateCreateInput{
 		TransitionID: transition.ID,
 		Kind:         string(domain.GateKindStructural),
 		Config:       map[string]interface{}{"check_id": domain.StructuralCheckACComplete},
@@ -142,14 +143,14 @@ func TestGetPendingGates_should_SetConfigError_When_CustomGateReferencesUnregist
 	svc, repo, engine, storage := newGatesTestService(t)
 	ctx := t.Context()
 
-	fromStage, err := repo.CreateStage(ctx, workflowengine.StageCreateInput{Slug: "needs-review", Name: "Needs Review", Enabled: true})
+	fromStage, err := repo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "needs-review", Name: "Needs Review", Enabled: true})
 	require.NoError(t, err)
-	toStage, err := repo.CreateStage(ctx, workflowengine.StageCreateInput{Slug: "reviewed", Name: "Reviewed", Enabled: true})
+	toStage, err := repo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "reviewed", Name: "Reviewed", Enabled: true})
 	require.NoError(t, err)
-	transition, err := repo.CreateTransition(ctx, workflowengine.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
+	transition, err := repo.CreateTransition(ctx, stagecfg.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
 	require.NoError(t, err)
 	const unregisteredSkill = "no-such-skill"
-	_, err = repo.CreateGate(ctx, workflowengine.GateCreateInput{
+	_, err = repo.CreateGate(ctx, stagecfg.GateCreateInput{
 		TransitionID: transition.ID,
 		Kind:         string(domain.GateKindCustom),
 		Config:       map[string]interface{}{"skill": unregisteredSkill},

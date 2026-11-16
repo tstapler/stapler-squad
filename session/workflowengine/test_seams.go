@@ -4,6 +4,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // Seams for white-box tests in package session, which need its ent-backed
@@ -28,6 +29,6 @@ func (e *ConfiguredWorkflowEngine) CachedGateIDs(from, to domain.BacklogStatus) 
 }
 
 // NewReplayGateOverlay wraps base so every read of the edge's transition carries one unsatisfied gate.
-func NewReplayGateOverlay(base StageConfigRepository, edge domain.SystemEdge) StageConfigRepository {
+func NewReplayGateOverlay(base stagecfg.StageConfigRepository, edge domain.SystemEdge) stagecfg.StageConfigRepository {
 	return replayGateOverlay{base, edge}
 }

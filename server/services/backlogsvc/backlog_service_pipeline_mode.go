@@ -36,7 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // pipelineModeToProto converts an ent.PipelineMode to its proto representation,
@@ -84,10 +84,10 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 // allStageRoles is the fixed iteration order for the DENSE
 // stage_executor_hashes map built by stageExecutorHashesToProto — every role
 // gets an entry below, whether or not it has a configured override.
-var allStageRoles = [...]workflowengine.StageRole{
-	workflowengine.StageRoleTriage,
-	workflowengine.StageRoleReview,
-	workflowengine.StageRoleWork,
+var allStageRoles = [...]stagecfg.StageRole{
+	stagecfg.StageRoleTriage,
+	stagecfg.StageRoleReview,
+	stagecfg.StageRoleWork,
 }
 
 // parseStageExecutorsForProto parses pm's stage_executors_json once, shared by
@@ -96,11 +96,11 @@ var allStageRoles = [...]workflowengine.StageRole{
 // session.SerializeStageExecutors is the only writer) — logged and treated as
 // no overrides configured rather than failing the whole response for one bad
 // row.
-func parseStageExecutorsForProto(pm *ent.PipelineMode) map[workflowengine.StageRole]workflowengine.PipelineStageExecutor {
-	stageExecutors, err := workflowengine.ParseStageExecutors(pm.StageExecutorsJSON)
+func parseStageExecutorsForProto(pm *ent.PipelineMode) map[stagecfg.StageRole]stagecfg.PipelineStageExecutor {
+	stageExecutors, err := stagecfg.ParseStageExecutors(pm.StageExecutorsJSON)
 	if err != nil {
 		log.WarningLog().Printf("[PipelineMode] failed to parse stage_executors_json for pipeline mode %s: %v — treating as empty", pm.ID, err)
-		return map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{}
+		return map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{}
 	}
 	return stageExecutors
 }
@@ -108,7 +108,7 @@ func parseStageExecutorsForProto(pm *ent.PipelineMode) map[workflowengine.StageR
 // stageExecutorsToProto converts the already-parsed stage executor map to the
 // proto map shape — sparse, only configured roles appear (unchanged from
 // Task 1.2.2c's original behavior).
-func stageExecutorsToProto(stageExecutors map[workflowengine.StageRole]workflowengine.PipelineStageExecutor) map[string]*sessionv1.PipelineStageExecutor {
+func stageExecutorsToProto(stageExecutors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor) map[string]*sessionv1.PipelineStageExecutor {
 	protoStageExecutors := make(map[string]*sessionv1.PipelineStageExecutor, len(stageExecutors))
 	for role, executor := range stageExecutors {
 		protoStageExecutors[string(role)] = &sessionv1.PipelineStageExecutor{
@@ -128,7 +128,7 @@ func stageExecutorsToProto(stageExecutors map[workflowengine.StageRole]workflowe
 // "no entry" against a real per-session hash, falsely flagging every
 // ordinary default-executor session as drifted. See plan.md Story 5.2.4's
 // Engineering-lens design note for the full rationale.
-func stageExecutorHashesToProto(stageExecutors map[workflowengine.StageRole]workflowengine.PipelineStageExecutor) map[string]string {
+func stageExecutorHashesToProto(stageExecutors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor) map[string]string {
 	hashes := make(map[string]string, len(allStageRoles))
 	for _, role := range allStageRoles {
 		entry := stageExecutors[role] // zero-value PipelineStageExecutor{} when absent
@@ -141,16 +141,16 @@ func stageExecutorHashesToProto(stageExecutors map[workflowengine.StageRole]work
 // keyed by session.StageRole. Key validation against the 3 known roles is
 // Epic 1.3's responsibility (ValidatePipelineModeContent); this function
 // performs no validation of its own.
-func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[workflowengine.StageRole]workflowengine.PipelineStageExecutor {
+func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[stagecfg.StageRole]stagecfg.PipelineStageExecutor {
 	if len(m) == 0 {
 		return nil
 	}
-	out := make(map[workflowengine.StageRole]workflowengine.PipelineStageExecutor, len(m))
+	out := make(map[stagecfg.StageRole]stagecfg.PipelineStageExecutor, len(m))
 	for role, executor := range m {
 		if executor == nil {
 			continue
 		}
-		out[workflowengine.StageRole(role)] = workflowengine.PipelineStageExecutor{
+		out[stagecfg.StageRole(role)] = stagecfg.PipelineStageExecutor{
 			Program: executor.Program,
 			Model:   executor.Model,
 		}
@@ -194,7 +194,7 @@ func (s *BacklogService) CreatePipelineMode(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	input := workflowengine.PipelineModeCreateInput{
+	input := stagecfg.PipelineModeCreateInput{
 		Slug:                  req.Msg.Slug,
 		Name:                  req.Msg.Name,
 		Description:           req.Msg.Description,
@@ -279,11 +279,11 @@ func (s *BacklogService) UpdatePipelineMode(
 	// nil req.Msg.StageExecutors means "leave untouched" (see the field's own
 	// doc comment) — nothing new to validate in that case. When present,
 	// validate the same map that's about to be written below.
-	var stageExecutors map[workflowengine.StageRole]workflowengine.PipelineStageExecutor
+	var stageExecutors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor
 	if req.Msg.StageExecutors != nil {
 		stageExecutors = stageExecutorsFromProto(req.Msg.StageExecutors.Values)
 		if stageExecutors == nil {
-			stageExecutors = map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{}
+			stageExecutors = map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{}
 		}
 		contentFields.StageExecutors = stageExecutors
 	}
@@ -292,7 +292,7 @@ func (s *BacklogService) UpdatePipelineMode(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	update := workflowengine.PipelineModeUpdateInput{
+	update := stagecfg.PipelineModeUpdateInput{
 		Name:                  req.Msg.Name,
 		Description:           req.Msg.Description,
 		Enabled:               req.Msg.Enabled,

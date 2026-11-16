@@ -33,6 +33,7 @@ go_test(
         "//session",
         "//session/domain",
         "//session/internal/sessiontest",
+        "//session/stagecfg",
         "//session/workflowengine",
         "//tools/bzl/ent",
         "//tools/bzl/ent:backlogstage",

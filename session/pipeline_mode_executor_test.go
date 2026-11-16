@@ -1,20 +1,23 @@
-package workflowengine
+package session
 
-import "testing"
+import (
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"testing"
+)
 
 func TestSerializeStageExecutors_should_RoundTripThroughJSON_When_MapHasAllThreeRoles(t *testing.T) {
-	m := map[StageRole]PipelineStageExecutor{
-		StageRoleTriage: {Model: "claude-haiku-4-5"},
-		StageRoleReview: {Program: "gemini", Model: "gemini-2.5-pro"},
-		StageRoleWork:   {Program: "aider"},
+	m := map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+		stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
+		stagecfg.StageRoleReview: {Program: "gemini", Model: "gemini-2.5-pro"},
+		stagecfg.StageRoleWork:   {Program: "aider"},
 	}
 
-	raw, err := SerializeStageExecutors(m)
+	raw, err := stagecfg.SerializeStageExecutors(m)
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
 	}
 
-	got, err := ParseStageExecutors(raw)
+	got, err := stagecfg.ParseStageExecutors(raw)
 	if err != nil {
 		t.Fatalf("ParseStageExecutors: %v", err)
 	}
@@ -29,11 +32,11 @@ func TestSerializeStageExecutors_should_RoundTripThroughJSON_When_MapHasAllThree
 }
 
 func TestSerializeStageExecutors_should_ProduceExpectedJSONShape_When_MapHasOneRole(t *testing.T) {
-	m := map[StageRole]PipelineStageExecutor{
-		StageRoleTriage: {Model: "claude-haiku-4-5"},
+	m := map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+		stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 	}
 
-	raw, err := SerializeStageExecutors(m)
+	raw, err := stagecfg.SerializeStageExecutors(m)
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
 	}
@@ -46,7 +49,7 @@ func TestSerializeStageExecutors_should_ProduceExpectedJSONShape_When_MapHasOneR
 
 func TestParseStageExecutors_should_ReturnEmptyNonNilMap_When_InputIsEmptyStringOrEmptyObject(t *testing.T) {
 	for _, raw := range []string{"", "{}"} {
-		got, err := ParseStageExecutors(raw)
+		got, err := stagecfg.ParseStageExecutors(raw)
 		if err != nil {
 			t.Fatalf("ParseStageExecutors(%q): unexpected error: %v", raw, err)
 		}
@@ -60,7 +63,7 @@ func TestParseStageExecutors_should_ReturnEmptyNonNilMap_When_InputIsEmptyString
 }
 
 func TestParseStageExecutors_should_ReturnErrorNotPanic_When_JSONIsMalformed(t *testing.T) {
-	_, err := ParseStageExecutors(`{"triage": not-json`)
+	_, err := stagecfg.ParseStageExecutors(`{"triage": not-json`)
 	if err == nil {
 		t.Fatal("ParseStageExecutors: expected error for malformed JSON, got nil")
 	}
@@ -71,7 +74,7 @@ func TestParseStageExecutors_should_ReturnErrorNotPanic_When_JSONIsMalformed(t *
 // would violate the stage_executors_json schema invariant (see
 // session/ent/schema/pipeline_mode.go's "no override configured" doc comment).
 func TestSerializeStageExecutors_should_ProduceEmptyObjectNotNull_When_MapIsNil(t *testing.T) {
-	raw, err := SerializeStageExecutors(nil)
+	raw, err := stagecfg.SerializeStageExecutors(nil)
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors(nil): %v", err)
 	}
@@ -79,7 +82,7 @@ func TestSerializeStageExecutors_should_ProduceEmptyObjectNotNull_When_MapIsNil(
 		t.Fatalf("SerializeStageExecutors(nil) = %q, want %q", raw, "{}")
 	}
 
-	got, err := ParseStageExecutors(raw)
+	got, err := stagecfg.ParseStageExecutors(raw)
 	if err != nil {
 		t.Fatalf("ParseStageExecutors(%q): %v", raw, err)
 	}

@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // FakePipelineModeRepository is a test double for session.PipelineModeRepository.
@@ -18,11 +18,11 @@ type FakePipelineModeRepository struct {
 	ListEnabledFn func(ctx context.Context) ([]*ent.PipelineMode, error)
 }
 
-func (f *FakePipelineModeRepository) Create(context.Context, workflowengine.PipelineModeCreateInput) (*ent.PipelineMode, error) {
+func (f *FakePipelineModeRepository) Create(context.Context, stagecfg.PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	return nil, errors.New("FakePipelineModeRepository.Create: not implemented")
 }
 
-func (f *FakePipelineModeRepository) Update(context.Context, uuid.UUID, workflowengine.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
+func (f *FakePipelineModeRepository) Update(context.Context, uuid.UUID, stagecfg.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
 	return nil, errors.New("FakePipelineModeRepository.Update: not implemented")
 }
 

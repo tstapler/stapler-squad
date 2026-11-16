@@ -11,7 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // gate_custom_check.go — Story 2.4.4's custom/pluggable check gate
@@ -116,7 +116,7 @@ var _ CustomCheckCaller = (*headless.Pool)(nil)
 func InvokeCustomGateCheck(
 	ctx context.Context,
 	caller CustomCheckCaller,
-	repo workflowengine.GateSatisfactionRepository,
+	repo stagecfg.GateSatisfactionRepository,
 	item *backlogdto.BacklogItemData,
 	gateID uuid.UUID,
 	cfg domain.CustomCheckConfig,
@@ -141,7 +141,7 @@ func InvokeCustomGateCheck(
 	}
 
 	if repo != nil {
-		_, createErr := repo.Create(ctx, workflowengine.GateSatisfactionCreateInput{
+		_, createErr := repo.Create(ctx, stagecfg.GateSatisfactionCreateInput{
 			ItemID:    itemID,
 			GateID:    gateID,
 			Satisfied: false,
@@ -189,11 +189,11 @@ func InvokeCustomGateCheck(
 // context.Background() rather than the (possibly already-timed-out) callCtx
 // from the invocation itself, so a slow-but-completed call can still record
 // its outcome even if its own bounded context expired first.
-func recordCustomCheckTerminalOutcome(repo workflowengine.GateSatisfactionRepository, itemID, gateID uuid.UUID, satisfied bool, outcomeDetail map[string]interface{}) {
+func recordCustomCheckTerminalOutcome(repo stagecfg.GateSatisfactionRepository, itemID, gateID uuid.UUID, satisfied bool, outcomeDetail map[string]interface{}) {
 	if repo == nil {
 		return
 	}
-	if _, err := repo.Update(context.Background(), itemID, gateID, workflowengine.GateSatisfactionUpdateInput{
+	if _, err := repo.Update(context.Background(), itemID, gateID, stagecfg.GateSatisfactionUpdateInput{
 		Satisfied:     &satisfied,
 		OutcomeDetail: outcomeDetail,
 	}); err != nil {

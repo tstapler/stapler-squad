@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -70,7 +71,7 @@ func (f *countingTriggerFirer) callCount() int {
 // (WireChainFirer).
 type chainTestFixture struct {
 	repo       *session.EntRepository
-	workflows  session.WorkflowRepository
+	workflows  stagecfg.WorkflowRepository
 	fireEvents session.TriggerFireEventRepository
 }
 
@@ -80,14 +81,14 @@ func newChainTestFixture(t *testing.T) (*chainTestFixture, func()) {
 	client := repo.GetEntClient()
 	return &chainTestFixture{
 		repo:       repo,
-		workflows:  session.NewEntWorkflowRepository(client),
+		workflows:  stagecfg.NewEntWorkflowRepository(client),
 		fireEvents: session.NewEntTriggerFireEventRepository(client),
 	}, cleanup
 }
 
 func (f *chainTestFixture) createWorkflow(t *testing.T, slug string) *ent.Workflow {
 	t.Helper()
-	wf, err := f.workflows.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := f.workflows.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            slug,
 		Name:            slug,
 		Command:         "do the next thing",

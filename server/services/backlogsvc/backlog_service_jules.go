@@ -84,7 +84,7 @@ func (s *BacklogService) DispatchToJules(
 		return nil, classifyJulesDispatchError(dispatchErr)
 	}
 
-	sessionUUID := services.JulesSessionUUIDPrefix + string(sessionName)
+	sessionUUID := domain.JulesSessionUUIDPrefix + string(sessionName)
 	summary, err := s.storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	if err != nil {
 		// The dispatch itself already succeeded (item transitioned, billed

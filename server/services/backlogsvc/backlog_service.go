@@ -18,6 +18,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 
 	"github.com/google/uuid"
@@ -330,7 +331,7 @@ type BacklogService struct {
 	// constructor from the same repository instance server/dependencies.go
 	// uses to construct pipelineEngine (Epic 1.5.1a). May be nil in tests
 	// that don't pass one; handlers nil-check and return CodeUnavailable.
-	pipelineModeRepo workflowengine.PipelineModeRepository
+	pipelineModeRepo stagecfg.PipelineModeRepository
 
 	// livenessRepo backs the LivenessDefinition CRUD RPCs (Epic 1.3 of
 	// backlog-custom-workflow-stages): CreateLivenessDefinition/
@@ -357,7 +358,7 @@ type BacklogService struct {
 	// transition/gate siblings. Wired post-construction via
 	// SetStageCRUDRepository, same rationale as livenessRepo above. May be
 	// nil; handlers nil-check and return CodeUnavailable.
-	stageCRUDRepo workflowengine.StageCRUDRepository
+	stageCRUDRepo stagecfg.StageCRUDRepository
 	// stageConfigEngine is the ConfiguredWorkflowEngine whose stageConfigCache
 	// the stage/transition/gate CRUD write handlers invalidate on success.
 	// Wired post-construction via SetStageConfigEngine. May be nil; cache
@@ -367,7 +368,7 @@ type BacklogService struct {
 	// 2.4.1). Wired post-construction via SetGateSatisfactionRepository, same
 	// rationale as stageCRUDRepo above. May be nil; the handler nil-checks and
 	// returns CodeUnavailable.
-	gateSatisfactionRepo workflowengine.GateSatisfactionRepository
+	gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 }
 
 // CacheInvalidator is the narrow, consumer-defined write-side hook the CRUD
@@ -404,7 +405,7 @@ func invalidateEngineCache(ctx context.Context, engine any, name engineLabel, id
 // SetStageCRUDRepository wires the repository backing the Stage/
 // StageTransition/TransitionGate CRUD RPCs. nil (the default) makes those
 // RPCs return CodeUnavailable, mirroring pipelineModeRepo's nil-guard shape.
-func (s *BacklogService) SetStageCRUDRepository(repo workflowengine.StageCRUDRepository) {
+func (s *BacklogService) SetStageCRUDRepository(repo stagecfg.StageCRUDRepository) {
 	s.stageCRUDRepo = repo
 }
 
@@ -427,7 +428,7 @@ func (s *BacklogService) invalidateStageConfigCache(ctx context.Context, id stri
 // SetGateSatisfactionRepository wires the repository backing the
 // RecordGateApproval RPC. nil (the default) makes that RPC return
 // CodeUnavailable, mirroring stageCRUDRepo's nil-guard shape.
-func (s *BacklogService) SetGateSatisfactionRepository(repo workflowengine.GateSatisfactionRepository) {
+func (s *BacklogService) SetGateSatisfactionRepository(repo stagecfg.GateSatisfactionRepository) {
 	s.gateSatisfactionRepo = repo
 }
 
@@ -558,7 +559,7 @@ func (s *BacklogService) SetEventBus(b *events.EventBus) {
 // Degradation contract: If creator is nil, RPCs that spawn sessions will return
 // CodeUnimplemented. This is expected in test environments where a real session
 // manager is unavailable.
-func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine domain.WorkflowEngine, pipelineEngine pipeline.PipelineEngine, pipelineModeRepo workflowengine.PipelineModeRepository) *BacklogService {
+func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine domain.WorkflowEngine, pipelineEngine pipeline.PipelineEngine, pipelineModeRepo stagecfg.PipelineModeRepository) *BacklogService {
 	if engine == nil {
 		engine = workflowengine.NewDefaultWorkflowEngine()
 	}

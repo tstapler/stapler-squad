@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // ConfiguredWorkflowEngine is a DB-backed WorkflowEngine implementation
@@ -32,7 +33,7 @@ import (
 // is fully usable starting now; the one-line server/dependencies.go change
 // remains a deliberate, separate, later step.
 type ConfiguredWorkflowEngine struct {
-	repo  StageConfigRepository
+	repo  stagecfg.StageConfigRepository
 	cache *stageConfigCache
 
 	// gateSatisfactionRepo backs PendingGates' human_approval branch (Epic
@@ -41,14 +42,14 @@ type ConfiguredWorkflowEngine struct {
 	// can hold (it's per-item, not per-graph). May be nil (e.g. in tests that
 	// only exercise CanTransition/AllowedTransitions) — every lookup through
 	// it is nil-guarded and degrades to "unsatisfied", never panics.
-	gateSatisfactionRepo GateSatisfactionRepository
+	gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 
 	// pipelineModeRepo backs the automated_review config-error check
 	// (ADR-006, Part B): resolves a gate's configured pipeline_mode slug to
 	// confirm it still exists. May be nil (e.g. in tests) — the check
 	// degrades to treating any non-empty pipeline_mode as unresolvable rather
 	// than panicking.
-	pipelineModeRepo PipelineModeRepository
+	pipelineModeRepo stagecfg.PipelineModeRepository
 
 	// loadErr is the outcome of the most recent cache load/invalidate; the
 	// selector reads it to tell a failed load from a legitimately empty config.
@@ -76,7 +77,7 @@ var _ domain.WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
 // AllowedTransitions/PendingGates all degrade to "no configured graph"
 // rather than panicking. gateSatisfactionRepo and pipelineModeRepo may both
 // be nil (e.g. in tests that don't exercise those paths).
-func NewConfiguredWorkflowEngine(repo StageConfigRepository, gateSatisfactionRepo GateSatisfactionRepository, pipelineModeRepo PipelineModeRepository) (*ConfiguredWorkflowEngine, error) {
+func NewConfiguredWorkflowEngine(repo stagecfg.StageConfigRepository, gateSatisfactionRepo stagecfg.GateSatisfactionRepository, pipelineModeRepo stagecfg.PipelineModeRepository) (*ConfiguredWorkflowEngine, error) {
 	e := &ConfiguredWorkflowEngine{repo: repo, cache: &stageConfigCache{}, gateSatisfactionRepo: gateSatisfactionRepo, pipelineModeRepo: pipelineModeRepo}
 	err := e.cache.Load(context.Background(), repo)
 	e.recordLoadResult(err)
@@ -129,7 +130,7 @@ func (e *ConfiguredWorkflowEngine) GateLookupTimeouts() int64 {
 // lookupGateRecord reads a persisted gate satisfaction under a bounded
 // deadline and counts deadline/cancel failures. Any error, including a
 // timeout, is returned so the caller leaves the gate unsatisfied.
-func (e *ConfiguredWorkflowEngine) lookupGateRecord(itemID, gateID uuid.UUID) (*GateSatisfactionData, error) {
+func (e *ConfiguredWorkflowEngine) lookupGateRecord(itemID, gateID uuid.UUID) (*stagecfg.GateSatisfactionData, error) {
 	timeout := e.gateLookupTimeout
 	if timeout <= 0 {
 		timeout = DefaultGateLookupTimeout
@@ -487,7 +488,7 @@ func (e *ConfiguredWorkflowEngine) evaluateRecordedGate(g resolvedGate, item dom
 // write into OutcomeDetail (session/review_gate.go, session/gate_custom_check.go)
 // and falling back to a generic satisfied/not-satisfied phrase for a record
 // shape that carries none (e.g. a legacy or hand-written row).
-func describeGateSatisfactionRecord(record *GateSatisfactionData, kindLabel string) string {
+func describeGateSatisfactionRecord(record *stagecfg.GateSatisfactionData, kindLabel string) string {
 	if detail, ok := record.OutcomeDetail["detail"].(string); ok && detail != "" {
 		return detail
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -25,15 +26,15 @@ import (
 // stages/transitions, plus a real ConfiguredWorkflowEngine sharing that same
 // repository instance for cache-invalidation assertions — mirroring
 // newPipelineModeTestService's shape in backlog_service_pipeline_mode_test.go.
-func newStageCRUDTestService(t *testing.T) (*BacklogService, workflowengine.StageCRUDRepository, *workflowengine.ConfiguredWorkflowEngine, *session.Storage) {
+func newStageCRUDTestService(t *testing.T) (*BacklogService, stagecfg.StageCRUDRepository, *workflowengine.ConfiguredWorkflowEngine, *session.Storage) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
-	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	engine, err := workflowengine.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 

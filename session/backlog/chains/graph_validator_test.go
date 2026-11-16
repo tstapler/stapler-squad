@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -14,12 +15,12 @@ import (
 // (no cycle exists).
 func TestGraphValidator_should_AcceptValidGraph_When_EveryStageIsReachableAndEveryNonTerminalHasAnOutgoingEdge(t *testing.T) {
 	t.Parallel()
-	stages := []workflowengine.StageDefinition{
+	stages := []stagecfg.StageDefinition{
 		{Slug: "idea", IsEntry: true},
 		{Slug: "in_progress"},
 		{Slug: "done", IsTerminal: true},
 	}
-	transitions := []workflowengine.TransitionDefinition{
+	transitions := []stagecfg.TransitionDefinition{
 		{FromSlug: "idea", ToSlug: "in_progress", Enabled: true},
 		{FromSlug: "in_progress", ToSlug: "done", Enabled: true},
 	}
@@ -35,11 +36,11 @@ func TestGraphValidator_should_AcceptValidGraph_When_EveryStageIsReachableAndEve
 // transitions is rejected even though it's reachable from an entry stage.
 func TestGraphValidator_should_RejectDeadEndStage_When_NonTerminalStageHasZeroOutgoingTransitions(t *testing.T) {
 	t.Parallel()
-	stages := []workflowengine.StageDefinition{
+	stages := []stagecfg.StageDefinition{
 		{Slug: "idea", IsEntry: true},
 		{Slug: "orphan-review"},
 	}
-	transitions := []workflowengine.TransitionDefinition{
+	transitions := []stagecfg.TransitionDefinition{
 		{FromSlug: "idea", ToSlug: "orphan-review", Enabled: true},
 	}
 
@@ -59,31 +60,31 @@ func TestGraphValidator_should_RejectDeadEndStage_When_NonTerminalStageHasZeroOu
 func TestGraphValidator_should_RejectUnreachableStage_When_SelfLoopMultiCycleAndDisconnectedComponentFixturesAreEachSubmitted(t *testing.T) {
 	t.Parallel()
 
-	entry := workflowengine.StageDefinition{Slug: "idea", IsEntry: true, IsTerminal: true}
+	entry := stagecfg.StageDefinition{Slug: "idea", IsEntry: true, IsTerminal: true}
 
 	tests := map[string]struct {
-		stages      []workflowengine.StageDefinition
-		transitions []workflowengine.TransitionDefinition
+		stages      []stagecfg.StageDefinition
+		transitions []stagecfg.TransitionDefinition
 		wantStage   string
 	}{
 		"self-loop": {
-			stages: []workflowengine.StageDefinition{entry, {Slug: "trapped"}},
-			transitions: []workflowengine.TransitionDefinition{
+			stages: []stagecfg.StageDefinition{entry, {Slug: "trapped"}},
+			transitions: []stagecfg.TransitionDefinition{
 				{FromSlug: "trapped", ToSlug: "trapped", Enabled: true},
 			},
 			wantStage: "trapped",
 		},
 		"multi-node cycle": {
-			stages: []workflowengine.StageDefinition{entry, {Slug: "a"}, {Slug: "b"}},
-			transitions: []workflowengine.TransitionDefinition{
+			stages: []stagecfg.StageDefinition{entry, {Slug: "a"}, {Slug: "b"}},
+			transitions: []stagecfg.TransitionDefinition{
 				{FromSlug: "a", ToSlug: "b", Enabled: true},
 				{FromSlug: "b", ToSlug: "a", Enabled: true},
 			},
 			wantStage: "a",
 		},
 		"disconnected component": {
-			stages: []workflowengine.StageDefinition{entry, {Slug: "island1"}, {Slug: "island2", IsTerminal: true}},
-			transitions: []workflowengine.TransitionDefinition{
+			stages: []stagecfg.StageDefinition{entry, {Slug: "island1"}, {Slug: "island2", IsTerminal: true}},
+			transitions: []stagecfg.TransitionDefinition{
 				{FromSlug: "island1", ToSlug: "island2", Enabled: true},
 			},
 			wantStage: "island1",
@@ -108,12 +109,12 @@ func TestGraphValidator_should_RejectUnreachableStage_When_SelfLoopMultiCycleAnd
 // rejection — the save still succeeds.
 func TestGraphValidator_should_ReturnNonBlockingWarning_When_ThreeStageCycleHasNoGateOnAnyEdge(t *testing.T) {
 	t.Parallel()
-	stages := []workflowengine.StageDefinition{
+	stages := []stagecfg.StageDefinition{
 		{Slug: "a", IsEntry: true},
 		{Slug: "b"},
 		{Slug: "c"},
 	}
-	transitions := []workflowengine.TransitionDefinition{
+	transitions := []stagecfg.TransitionDefinition{
 		{FromSlug: "a", ToSlug: "b", Enabled: true},
 		{FromSlug: "b", ToSlug: "c", Enabled: true},
 		{FromSlug: "c", ToSlug: "a", Enabled: true},
@@ -131,12 +132,12 @@ func TestGraphValidator_should_ReturnNonBlockingWarning_When_ThreeStageCycleHasN
 // is a legitimate loop (e.g. review -> in_progress) and produces no warning.
 func TestGraphValidator_should_ReturnNoWarning_When_CycleHasAtLeastOneGatedEdge(t *testing.T) {
 	t.Parallel()
-	stages := []workflowengine.StageDefinition{
+	stages := []stagecfg.StageDefinition{
 		{Slug: "a", IsEntry: true},
 		{Slug: "b"},
 		{Slug: "c"},
 	}
-	transitions := []workflowengine.TransitionDefinition{
+	transitions := []stagecfg.TransitionDefinition{
 		{FromSlug: "a", ToSlug: "b", Enabled: true},
 		{FromSlug: "b", ToSlug: "c", Enabled: true},
 		{FromSlug: "c", ToSlug: "a", Enabled: true, GateCount: 1},
@@ -155,7 +156,7 @@ func TestGraphValidator_should_ReturnNoWarning_When_CycleHasAtLeastOneGatedEdge(
 func TestGraphValidator_should_RejectDisable_When_LastEnabledOutgoingEdgeHasLiveItems(t *testing.T) {
 	t.Parallel()
 	// candidateEdges reflects the graph AFTER the proposed disable.
-	candidateEdges := []workflowengine.TransitionDefinition{
+	candidateEdges := []stagecfg.TransitionDefinition{
 		{FromSlug: "design-review", ToSlug: "ready", Enabled: false},
 	}
 	liveItemCountByStage := map[string]int{"design-review": 1}
@@ -174,7 +175,7 @@ func TestGraphValidator_should_RejectDisable_When_LastEnabledOutgoingEdgeHasLive
 // transition available to the live item.
 func TestGraphValidator_should_AllowDisable_When_MultipleEnabledOutgoingEdgesRemain(t *testing.T) {
 	t.Parallel()
-	candidateEdges := []workflowengine.TransitionDefinition{
+	candidateEdges := []stagecfg.TransitionDefinition{
 		{FromSlug: "design-review", ToSlug: "ready", Enabled: false},
 		{FromSlug: "design-review", ToSlug: "legal-review", Enabled: true},
 	}
@@ -190,7 +191,7 @@ func TestGraphValidator_should_AllowDisable_When_MultipleEnabledOutgoingEdgesRem
 // items is always allowed, regardless of remaining enabled-edge count.
 func TestGraphValidator_should_AllowDisable_When_StageHasZeroLiveItems(t *testing.T) {
 	t.Parallel()
-	candidateEdges := []workflowengine.TransitionDefinition{
+	candidateEdges := []stagecfg.TransitionDefinition{
 		{FromSlug: "design-review", ToSlug: "ready", Enabled: false},
 	}
 	liveItemCountByStage := map[string]int{"design-review": 0}
@@ -206,7 +207,7 @@ func TestGraphValidator_should_AllowDisable_When_StageHasZeroLiveItems(t *testin
 // yet) must never panic or be treated as having live items.
 func TestGraphValidator_should_TreatUnknownStageAsZeroLiveItems_When_MapHasNoEntry(t *testing.T) {
 	t.Parallel()
-	candidateEdges := []workflowengine.TransitionDefinition{
+	candidateEdges := []stagecfg.TransitionDefinition{
 		{FromSlug: "design-review", ToSlug: "ready", Enabled: false},
 	}
 
@@ -228,7 +229,7 @@ func TestValidateDisableSystemRequiredEdge_should_RejectSystemEdgesAndAllowOther
 
 func TestStrandedStatuses_should_FlagOnlyPopulatedStatusesWithNoEnforcedOutgoingEdge(t *testing.T) {
 	t.Parallel()
-	edges := []workflowengine.TransitionDefinition{
+	edges := []stagecfg.TransitionDefinition{
 		{FromSlug: "refining", ToSlug: "ready", Enabled: false},
 		{FromSlug: "custom", ToSlug: "ready", Enabled: true},
 	}

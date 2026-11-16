@@ -8,11 +8,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInPreRegisteredAllowlist
@@ -26,7 +26,7 @@ func TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInP
 
 	item := blktest.NewCustomCheckTestItem(t, storage, "Unregistered skill test item")
 	caller := &blktest.FakeCustomCheckCaller{Output: "VERDICT: PASS"}
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	gateID := blktest.NewCustomCheckTestGate(t, storage)
 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
@@ -57,7 +57,7 @@ func TestInvokeCustomGateCheck_should_BlockAndLogWarn_When_SpawnFailsSynchronous
 	item := blktest.NewCustomCheckTestItem(t, storage, "Synchronous spawn failure test item")
 	spawnErr := errors.New("exit status 127: claude: command not found")
 	caller := &blktest.FakeCustomCheckCaller{Err: spawnErr}
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	gateID := blktest.NewCustomCheckTestGate(t, storage)
 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
@@ -84,7 +84,7 @@ func TestInvokeCustomGateCheck_should_RecordPassVerdict_When_SkillReportsPass(t 
 
 	item := blktest.NewCustomCheckTestItem(t, storage, "Pass verdict test item")
 	caller := &blktest.FakeCustomCheckCaller{Output: "Looks buildable.\n\nVERDICT: PASS"}
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	gateID := blktest.NewCustomCheckTestGate(t, storage)
 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}

@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -183,7 +184,7 @@ func newGateHarness(t *testing.T, mode workflowengine.EngineMode) *gateHarness {
 	repo := session.NewTestEntRepository(t)
 	ctx := context.Background()
 	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
-	cfg, err := workflowengine.NewConfiguredWorkflowEngine(session.NewEntStageConfigRepository(repo.Client), session.NewEntGateSatisfactionRepository(repo.Client), nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
 	require.NoError(t, err)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)

@@ -3,7 +3,6 @@ package backlog
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -57,16 +56,6 @@ type TriageRespawner interface {
 	// items 404b362c — stuck since 2026-10-16 — and ec050b7d — stuck 41+ days).
 	IsRetriagePointless(ctx context.Context, itemID string) bool
 }
-
-// headlessTriageSessionUUIDPrefix mirrors server/services/backlog_service_triage.go's
-// headlessTriageUUIDPrefix constant (duplicated here rather than imported: server/services
-// imports this package, so the reverse import would cycle). Headless triage sessions have
-// no live in-memory Instance to check liveness against — per that file's
-// tombstoneOrphanTriageSessions, an "open" (EndedAt nil) row found later means the call
-// that would have closed it on completion already finished or crashed, not that it's
-// genuinely still running — so they warrant a much shorter staleness threshold than the
-// general 2h ceiling below.
-const headlessTriageSessionUUIDPrefix = "headless-triage-"
 
 // latestTriageSession returns the most recent triage-role ItemSession (by
 // CreatedAt), regardless of whether it has ended yet, or nil if none exists.
@@ -295,7 +284,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			if !isIdea {
 				continue
 			}
-			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
+			isHeadless := domain.IsHeadlessRole(latestTriage.SessionUUID, domain.HeadlessRoleTriage)
 			staleness := liveness.MaxWorkSessionStaleness
 			if isHeadless {
 				// Shape A (liveness.LivenessKindDurationBudget), keyed BacklogStatusIdea — Epic 1.4,
