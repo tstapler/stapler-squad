@@ -27,7 +27,7 @@ jobs:
   # baseline-"pass" entries; mobile-webkit's coverage is preserved via PW_WEBKIT=1.
   e2e-secondary-browsers:
     name: e2e secondary browsers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright has no browser build for ubuntu-26.04 (ubuntu-latest)
     needs: prepare
     continue-on-error: true
     timeout-minutes: 50

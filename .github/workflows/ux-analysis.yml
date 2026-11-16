@@ -38,7 +38,7 @@ concurrency:
 jobs:
   ux-analysis:
     name: UX Analysis (Axe + Lighthouse + Claude)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright has no chromium build for ubuntu-26.04 (ubuntu-latest)
     # This job runs in parallel with other jobs, never blocks main build.
     # Typical runtime is 6-9 min; 10 min cancelled otherwise-green runs (#1221, #1206).
     timeout-minutes: 15
