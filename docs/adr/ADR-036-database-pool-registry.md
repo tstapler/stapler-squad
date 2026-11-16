@@ -92,7 +92,7 @@ output not committed); the empty table is left in place.
 | `escape` (file `analytics.db`) | `escape_events` | batch writer; 7-day retention |
 | `analytics_events` | `analytics_events` | `analytics` provider |
 | `workflow` | `workflows`, `trigger_fire_events`, `webhook_registrations`, `webhook_request_ledgers`, `pipeline_modes` | tx single-table (`ent_repository_webhook_registration.go:184`, `ent_repository_webhook_lifecycle.go:58`); `workflow_id` is a plain UUID, same DB so unchanged |
-| `wake` | `wake_triggers` | all tx single-table (`ent_repository_wake*.go`); `owner_session_uuid` string |
+| `wake` | `wake_triggers` | all tx single-table (`session/wakestore/*.go`); `owner_session_uuid` string |
 | `credentials` | `integration_credentials` | secrets; own file for blast radius and 0600 perms |
 | `errors` | `error_events` | none |
 | stay in `core` until justified | `session_goals`, `session_summaries`, `handoff_summaries`, `dismissed_findings`, `tagging_rules`, `tagging_rule_fires`, `approval_rules` | keyed by `session_id`/`session_uuid`/`rule_id` strings, no FKs; tiny and low write, so moving buys little |
