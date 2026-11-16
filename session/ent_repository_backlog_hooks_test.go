@@ -156,3 +156,47 @@ func TestEntRepository_should_publishAndChainFireAfterCommit_When_TransitionedTo
 	assert.Equal(t, 1, chainCalls)
 	assert.Equal(t, []string{string(domain.BacklogStatusDone)}, chainStatus)
 }
+
+// The chain firer is called only for a done transition of an item that has a
+// next workflow and has not already fired its chain.
+func TestEntRepository_should_notChainFire_When_GuardNotSatisfied(t *testing.T) {
+	t.Parallel()
+	nextWF := uuid.New()
+	tests := []struct {
+		name       string
+		to         domain.BacklogStatus
+		withNext   bool
+		chainFired bool
+	}{
+		{name: "non_done_transition", to: domain.BacklogStatusInProgress, withNext: true},
+		{name: "chain_already_fired", to: domain.BacklogStatusDone, withNext: true, chainFired: true},
+		{name: "no_next_workflow", to: domain.BacklogStatusDone},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo, cleanup := createTestEntRepository(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t", Status: string(domain.BacklogStatusReview)})
+			require.NoError(t, err)
+			upd := backlogdto.BacklogItemUpdate{ChainFired: &tc.chainFired}
+			if tc.withNext {
+				upd.NextWorkflowID = &nextWF
+			}
+			_, err = repo.UpdateBacklogItem(ctx, item.ID, upd, nil)
+			require.NoError(t, err)
+			pre, err := repo.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			require.Equal(t, tc.chainFired, pre.ChainFired, "test setup: chain_fired must be persisted")
+			require.Equal(t, tc.withNext, pre.NextWorkflowID != nil, "test setup: next_workflow_id must be persisted")
+
+			var chainCalls int
+			repo.SetChainFirer(hookChain{func(*backlogdto.BacklogItemData) { chainCalls++ }})
+			_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, tc.to, nil, instance.TriggeredBySystem)
+			require.NoError(t, err)
+			assert.Zero(t, chainCalls)
+		})
+	}
+}
