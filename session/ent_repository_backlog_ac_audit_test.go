@@ -235,7 +235,7 @@ func TestAcAudit_should_KeepWaiverRow_When_DeniedFloodExceedsRefusalCap(t *testi
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "owner call"))
 
 	for i := 0; i < 500+5; i++ {
-		require.NoError(t, repo.RecordAcAudit(ownerCtx(), session.AcAuditEventData{ItemID: item.ID, Outcome: "denied:flood"}))
+		require.NoError(t, repo.RecordAcAudit(ownerCtx(), backlogdto.AcAuditEventData{ItemID: item.ID, Outcome: "denied:flood"}))
 	}
 
 	rows, err := repo.ListAcAudit(context.Background(), id)
@@ -259,7 +259,7 @@ func TestPruneAcAuditOlderThan_should_KeepLiveItemWaiverRow_But_DropOldRefusals(
 	item, err := repo.GetBacklogItem(context.Background(), id)
 	require.NoError(t, err)
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "r"))
-	require.NoError(t, repo.RecordAcAudit(ownerCtx(), session.AcAuditEventData{ItemID: item.ID, Outcome: "denied:x"}))
+	require.NoError(t, repo.RecordAcAudit(ownerCtx(), backlogdto.AcAuditEventData{ItemID: item.ID, Outcome: "denied:x"}))
 
 	n, err := repo.PruneAcAuditOlderThan(context.Background(), time.Now().Add(time.Hour))
 

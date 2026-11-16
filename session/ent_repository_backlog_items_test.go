@@ -314,7 +314,7 @@ func TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatc
 	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/confirmed", 2*time.Hour)
 	newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, domain.JulesPendingUUIDPrefix+"reservation", 1*time.Hour)
 	_, failedID := newTestJulesItemSession(t, storage, instance.SessionRoleJulesWork, "jules-sessions/failed-attempt", 30*time.Minute)
-	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, failedID, time.Now(), julesDispatchFailedEndReason))
+	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, failedID, time.Now(), domain.JulesDispatchFailedEndReason))
 
 	got, err := storage.CountJulesItemSessionsSince(ctx, time.Now().Add(-24*time.Hour))
 	require.NoError(t, err)

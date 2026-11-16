@@ -182,7 +182,7 @@ func TestSuggestWorkflowAction_should_RejectBadArgsAndDuplicates(t *testing.T) {
 		require.False(t, post("same").IsError)
 		dup := post("same")
 		assert.Equal(t, ErrInvalidArgument, parseResult(t, dup)["error"].(map[string]interface{})["code"])
-		for i := 1; i < session.MaxActiveWorkflowSuggestions; i++ {
+		for i := 1; i < backlogdto.MaxActiveWorkflowSuggestions; i++ {
 			require.False(t, post(fmt.Sprintf("rec %d", i)).IsError)
 		}
 		over := post("one too many")

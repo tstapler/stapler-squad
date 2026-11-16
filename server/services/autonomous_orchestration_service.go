@@ -546,7 +546,7 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 							//     since nothing is left driving this session toward exit.
 							//   - The abandoned_review detector's FindStuckReviewItems query
 							//     explicitly excludes items with any EndedAt-nil review/work
-							//     session (session/storage_backlog.go).
+							//     session (session/ent_repository_backlog_items.go).
 							// Deliberately do NOT spawn a competing review session here —
 							// session/backlog_lifecycle.go's abandoned_review detector (itself
 							// already bouncing-gate-aware, see BUG-043's RemediationBlocked fix)

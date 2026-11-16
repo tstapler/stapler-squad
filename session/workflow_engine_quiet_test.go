@@ -43,7 +43,7 @@ func TestGatedTransition_RealGraphDenialCountsOnce_OperatorOverrideCountsNone(t 
 	item := h.newItem(t, domain.BacklogStatusIdea)
 
 	_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerMCPResumeWork, ItemID: item.ID, To: domain.BacklogStatusDone})
-	require.ErrorIs(t, err, ErrTransitionNotAllowed)
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(workflowengine.DenialConfigGraph))
 
 	_, err = h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusDone, OverrideReason: "owner says so"})

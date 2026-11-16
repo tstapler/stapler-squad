@@ -1,7 +1,7 @@
 package session
 
 // ent_repository_backlog_jules.go — the Jules-specific EntRepository queries (Story
-// 2.1.2), split out of storage_backlog.go to keep that file under the
+// 2.1.2), split out of ent_repository_backlog_items.go to keep that file under the
 // file-length-limit gate (`make ready-complexity-gate`) rather than growing
 // it past 1000 non-comment lines. Mirrors this repo's existing convention of
 // isolating Jules feature code into dedicated `*_jules.go` files (e.g.
@@ -19,13 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
-
-// julesDispatchFailedEndReason marks a jules_work ItemSession that was created
-// as a reservation but never reached a real Jules session — the CreateSession
-// call itself failed. Excluded from CountJulesItemSessionsSince alongside
-// domain.JulesPendingUUIDPrefix rows so a bad key or Jules outage doesn't burn the
-// daily dispatch cap on attempts nothing was ever billed for.
-const julesDispatchFailedEndReason = "dispatch_failed"
 
 // ListOpenJulesItemSessions returns every not-yet-ended jules_work ItemSession
 // across all backlog items, joined with enough of its parent item's metadata
@@ -72,7 +65,7 @@ func (r *EntRepository) CountJulesItemSessionsSince(ctx context.Context, since t
 			itemsession.SessionRole(instance.SessionRoleJulesWork),
 			itemsession.CreatedAtGTE(since),
 			itemsession.Not(itemsession.SessionUUIDHasPrefix(domain.JulesPendingUUIDPrefix)),
-			itemsession.EndReasonNEQ(julesDispatchFailedEndReason),
+			itemsession.EndReasonNEQ(domain.JulesDispatchFailedEndReason),
 		).
 		Count(ctx)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -70,7 +71,7 @@ func truncateAuditField(s string, n int) string {
 // recordDeniedAcAttempt appends an audit row for an attempt refused before it reached storage.
 // Failing to write it is logged, never allowed to turn a denial into an allow.
 func (s *BacklogService) recordDeniedAcAttempt(ctx context.Context, itemID string, index int, reason, outcome string) {
-	err := s.storage.RecordAcAudit(ctx, session.AcAuditEventData{
+	err := s.storage.RecordAcAudit(ctx, backlogdto.AcAuditEventData{
 		ItemID: itemID, CriterionIndex: index, NewStatus: string(domain.AcStatusWaived), Reason: reason, Outcome: outcome,
 	})
 	if err != nil {

@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -13,27 +12,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-// Workflow suggestion action types accepted by suggest_workflow_action.
-var WorkflowSuggestionActionTypes = []string{"transition_status", "set_config", "operator_note"}
-
-// WorkflowSuggestionData is one entry of backlog_items.workflow_suggestions.
-type WorkflowSuggestionData struct {
-	SuggestionID   string    `json:"suggestion_id"`
-	ActionType     string    `json:"action_type"`
-	Recommendation string    `json:"recommendation"`
-	SessionUUID    string    `json:"session_uuid"`
-	CreatedAt      time.Time `json:"created_at"`
-	Dismissed      bool      `json:"dismissed"`
-}
-
-// MaxActiveWorkflowSuggestions caps non-dismissed suggestions per item.
-const MaxActiveWorkflowSuggestions = 20
-
-var (
-	ErrTooManyWorkflowSuggestions  = errors.New("too many active workflow suggestions")
-	ErrDuplicateWorkflowSuggestion = errors.New("duplicate workflow suggestion")
-)
-
 // ParseDiagnoseResult decodes an ItemSessionSummary.DiagnoseResult column; ok is false when empty or invalid.
 func ParseDiagnoseResult(raw string) (backlogdto.DiagnoseResultData, bool) {
 	var d backlogdto.DiagnoseResultData
@@ -41,19 +19,6 @@ func ParseDiagnoseResult(raw string) (backlogdto.DiagnoseResultData, bool) {
 		return backlogdto.DiagnoseResultData{}, false
 	}
 	return d, true
-}
-
-// ParseWorkflowSuggestions decodes the workflow_suggestions column; a malformed value yields nil.
-func ParseWorkflowSuggestions(raw string) []WorkflowSuggestionData {
-	if raw == "" {
-		return nil
-	}
-	var out []WorkflowSuggestionData
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		log.WarningLog().Printf("[ParseWorkflowSuggestions] invalid JSON: %v", err)
-		return nil
-	}
-	return out
 }
 
 // UpdateItemSessionDiagnoseResult stores the structured diagnose outcome on an ItemSession.
@@ -78,24 +43,24 @@ func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id 
 }
 
 // AppendWorkflowSuggestion adds a suggestion to the item atomically and returns its id.
-func (r *EntRepository) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug WorkflowSuggestionData) (string, error) {
+func (r *EntRepository) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug backlogdto.WorkflowSuggestionData) (string, error) {
 	sug.SuggestionID = uuid.NewString()
 	if sug.CreatedAt.IsZero() {
 		sug.CreatedAt = time.Now().UTC()
 	}
-	err := r.mutateWorkflowSuggestions(ctx, itemID, func(list []WorkflowSuggestionData) ([]WorkflowSuggestionData, error) {
+	err := r.mutateWorkflowSuggestions(ctx, itemID, func(list []backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error) {
 		active := 0
 		for _, e := range list {
 			if e.Dismissed {
 				continue
 			}
 			if e.Recommendation == sug.Recommendation {
-				return nil, fmt.Errorf("%w: %q", ErrDuplicateWorkflowSuggestion, sug.Recommendation)
+				return nil, fmt.Errorf("%w: %q", backlogdto.ErrDuplicateWorkflowSuggestion, sug.Recommendation)
 			}
 			active++
 		}
-		if active >= MaxActiveWorkflowSuggestions {
-			return nil, fmt.Errorf("%w (max %d); dismiss some first", ErrTooManyWorkflowSuggestions, MaxActiveWorkflowSuggestions)
+		if active >= backlogdto.MaxActiveWorkflowSuggestions {
+			return nil, fmt.Errorf("%w (max %d); dismiss some first", backlogdto.ErrTooManyWorkflowSuggestions, backlogdto.MaxActiveWorkflowSuggestions)
 		}
 		return append(list, sug), nil
 	})
@@ -107,7 +72,7 @@ func (r *EntRepository) AppendWorkflowSuggestion(ctx context.Context, itemID str
 
 // DismissWorkflowSuggestion marks a suggestion dismissed; ErrNotFound if the id is unknown.
 func (r *EntRepository) DismissWorkflowSuggestion(ctx context.Context, itemID, suggestionID string) error {
-	return r.mutateWorkflowSuggestions(ctx, itemID, func(list []WorkflowSuggestionData) ([]WorkflowSuggestionData, error) {
+	return r.mutateWorkflowSuggestions(ctx, itemID, func(list []backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error) {
 		for i := range list {
 			if list[i].SuggestionID == suggestionID {
 				list[i].Dismissed = true
@@ -119,7 +84,7 @@ func (r *EntRepository) DismissWorkflowSuggestion(ctx context.Context, itemID, s
 }
 
 // mutateWorkflowSuggestions read-modify-writes the JSON column in one transaction.
-func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID string, mutate func([]WorkflowSuggestionData) ([]WorkflowSuggestionData, error)) error {
+func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID string, mutate func([]backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error)) error {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
@@ -154,4 +119,17 @@ func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID st
 		r.publishItemChanged(ctx, data, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"workflowSuggestions"}})
 	}
 	return nil
+}
+
+// ParseWorkflowSuggestions decodes the workflow_suggestions column; a malformed value yields nil.
+func ParseWorkflowSuggestions(raw string) []backlogdto.WorkflowSuggestionData {
+	if raw == "" {
+		return nil
+	}
+	var out []backlogdto.WorkflowSuggestionData
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		log.WarningLog().Printf("[ParseWorkflowSuggestions] invalid JSON: %v", err)
+		return nil
+	}
+	return out
 }

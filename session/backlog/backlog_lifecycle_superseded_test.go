@@ -226,7 +226,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 //
 // The BUG-047 guard (`lastCommitSha == lastWork.BaseCommitSha`) only fires when
 // BaseCommitSha is a real, non-empty value. GetBaseCommitSHAsForSessions
-// (storage_backlog.go) already documents that BaseCommitSha reads "" both for
+// (ent_repository_backlog_items.go) already documents that BaseCommitSha reads "" both for
 // legacy pre-split rows and for any session that spawned without it ever being
 // seeded — and falls back to LastCommitSha in that case. closeIfSupersededByMain's
 // guard was never given the same fallback: an empty BaseCommitSha can never equal

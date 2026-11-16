@@ -2006,7 +2006,7 @@ type transitionDeniedError struct {
 // failure such as a lost compare-and-swap.
 func isTransitionDenied(err error) bool {
 	for _, sentinel := range []error{
-		session.ErrTransitionNotAllowed, domain.ErrGateNotSatisfied,
+		domain.ErrTransitionNotAllowed, domain.ErrGateNotSatisfied,
 		domain.ErrACRequired, domain.ErrPlanRequired, domain.ErrPlanArtifactsRequired, domain.ErrPlanArtifactsMissing,
 		domain.ErrVerdictRequired, domain.ErrCodeNotOnMain, domain.ErrVerdictClearRequiredForReady, domain.ErrUnresolvedBlockers,
 	} {
@@ -2025,7 +2025,7 @@ func transitionDeniedResult(err error, from, to domain.BacklogStatus) *mcpgo.Cal
 	switch {
 	case errors.Is(err, domain.ErrGateNotSatisfied):
 		blockedBy, hint = blockedByOperatorGate, hintAskOperatorApprove
-	case errors.Is(err, session.ErrTransitionNotAllowed):
+	case errors.Is(err, domain.ErrTransitionNotAllowed):
 		blockedBy, hint = blockedByConfigGraph, hintAskOperatorEnable
 	}
 	// Marshaling plain strings cannot fail, as in errResult.
