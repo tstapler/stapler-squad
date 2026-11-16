@@ -14,11 +14,12 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
-func nudgeRows(t *testing.T, storage *session.Storage, itemID string) []session.FlowMarkerData {
+func nudgeRows(t *testing.T, storage *session.Storage, itemID string) []markerstore.FlowMarkerData {
 	t.Helper()
-	rows, err := storage.ListFlowMarkersForItem(t.Context(), itemID, session.FlowMarkerManualNudge,
+	rows, err := storage.ListFlowMarkersForItem(t.Context(), itemID, markerstore.FlowMarkerManualNudge,
 		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	return rows
@@ -32,7 +33,7 @@ func TestTransitionBacklogItemStatus_should_RecordManualNudge_When_ActorIsUser(t
 
 	rows := nudgeRows(t, storage, item.ID)
 	require.Len(t, rows, 1)
-	assert.Equal(t, session.ManualNudgeStatusTransition, rows[0].Value)
+	assert.Equal(t, markerstore.ManualNudgeStatusTransition, rows[0].Value)
 }
 
 func TestTransitionBacklogItemStatus_should_NotRecordManualNudge_When_ActorIsAgentOrSystem(t *testing.T) {

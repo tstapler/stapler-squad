@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "markerstore",
+    srcs = [
+        "episodes.go",
+        "limiter.go",
+        "markers.go",
+        "store.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/markerstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogflowmarker",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:backlogstuckepisode",
+        "@com_github_google_uuid//:uuid",
+        "@io_entgo_ent//dialect/sql",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":markerstore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "markerstore_test",
+    srcs = [
+        "limiter_test.go",
+        "no_mcp_exposure_test.go",
+    ],
+    data = ["//server/mcp:go_sources"],
+    embed = [":markerstore"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session's legacy item-PR reader scan.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)

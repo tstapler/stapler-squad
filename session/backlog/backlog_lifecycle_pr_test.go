@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -588,7 +589,7 @@ func TestPRBodies_ClosingKeyword(t *testing.T) {
 // triggerValuesFor returns the pr_fix_trigger marker values stored for itemID, oldest first.
 func triggerValuesFor(t *testing.T, er *session.EntRepository, itemID string) []string {
 	t.Helper()
-	got, err := er.ListFlowMarkersForItem(context.Background(), itemID, session.FlowMarkerPRFixTrigger,
+	got, err := er.ListFlowMarkersForItem(context.Background(), itemID, markerstore.FlowMarkerPRFixTrigger,
 		time.Unix(0, 0), time.Now().Add(100*365*24*time.Hour))
 	require.NoError(t, err)
 	vals := make([]string, 0, len(got))
@@ -617,17 +618,17 @@ func TestPrFixReopen_should_RecordTriggerOnce_When_PollerDecidesFix(t *testing.T
 	for i := 0; i < 5; i++ {
 		listener.ReconcilePRPending(ctx, er)
 	}
-	assert.Equal(t, []string{session.PRFixTriggerCI}, triggerValuesFor(t, er, item.ID), "thrash ticks dedupe to one record")
+	assert.Equal(t, []string{markerstore.PRFixTriggerCI}, triggerValuesFor(t, er, item.ID), "thrash ticks dedupe to one record")
 
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"},
 	})
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerCI, session.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID), "changed trigger value is written immediately")
+	assert.Equal(t, []string{markerstore.PRFixTriggerCI, markerstore.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID), "changed trigger value is written immediately")
 
-	clk.Advance(session.TriggerRecordMinInterval)
+	clk.Advance(markerstore.TriggerRecordMinInterval)
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerCI, session.PRFixTriggerConflict, session.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, []string{markerstore.PRFixTriggerCI, markerstore.PRFixTriggerConflict, markerstore.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
 }
 
 func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
@@ -645,7 +646,7 @@ func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, []string{markerstore.PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
 }
 
 func TestPrFixReopen_should_RecordClosedTriggerWithoutCountingUnknown_When_PRClosedWithoutMerge(t *testing.T) {
@@ -660,8 +661,8 @@ func TestPrFixReopen_should_RecordClosedTriggerWithoutCountingUnknown_When_PRClo
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}})
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
-	before := session.PRFixTriggerUnknownCount()
+	before := markerstore.PRFixTriggerUnknownCount()
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerClosed}, triggerValuesFor(t, er, item.ID))
-	assert.Equal(t, before, session.PRFixTriggerUnknownCount(), "closed branch must not move the unknown counter")
+	assert.Equal(t, []string{markerstore.PRFixTriggerClosed}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, before, markerstore.PRFixTriggerUnknownCount(), "closed branch must not move the unknown counter")
 }

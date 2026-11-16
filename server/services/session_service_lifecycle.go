@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 func (s *SessionService) findLifecycleInstance(instances []*instancepkg.Instance, id string) *instancepkg.Instance {
@@ -710,7 +711,7 @@ func (s *SessionService) RestartSession(
 	if err := s.storage.SaveInstances([]*instancepkg.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save restarted instance: %w", err))
 	}
-	s.concStorage.RecordManualNudgeForSession(ctx, instance.GetStableID(), session.ManualNudgeRestart)
+	s.concStorage.RecordManualNudgeForSession(ctx, instance.GetStableID(), markerstore.ManualNudgeRestart)
 
 	// Publish SessionUpdated event
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at"}))

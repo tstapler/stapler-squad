@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // resolveStuckOnManualTransition immediately resolves the durable stuck
@@ -1076,7 +1077,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 	if services.TransitionActorFromContext(ctx) == instance.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
 		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
-		s.storage.RecordManualNudgeForItem(ctx, req.Msg.ItemId, session.ManualNudgeStatusTransition)
+		s.storage.RecordManualNudgeForItem(ctx, req.Msg.ItemId, markerstore.ManualNudgeStatusTransition)
 	}
 
 	// override_reason set means this was a manual operator override (bypassing
