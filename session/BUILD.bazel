@@ -39,6 +39,7 @@ go_library(
         "ent_repository_backlog.go",
         "ent_repository_backlog_ac_audit.go",
         "ent_repository_backlog_diagnose.go",
+        "ent_repository_backlog_hooks.go",
         "ent_repository_backlog_items.go",
         "ent_repository_backlog_jules.go",
         "ent_repository_backlog_source.go",
