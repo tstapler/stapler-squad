@@ -485,14 +485,17 @@ func clsIdentDefinedFromBacklogItem(fd *ast.FuncDecl, name string, depth int) bo
 	return found
 }
 
-// clsSetStatusViolations scans <root>/session (the only package that can reach
-// the ent client) for SetStatus calls on a BacklogItem builder outside allowed.
+// clsSetStatusViolations scans every non-test file in the module except the
+// generated session/ent tree for SetStatus calls on a BacklogItem builder
+// outside allowed. It is deliberately not scoped to a directory: session/ leaf
+// packages (workflowengine, stagecfg, markerstore, ...) may import session/ent
+// via depguard allow entries, so any directory list would rot as leaves land.
 func clsSetStatusViolations(t *testing.T, root string, allowed map[string]string) []string {
 	t.Helper()
 	var problems []string
 	hit := map[string]bool{}
 	walkModuleFuncs(t, root, func(rel string, fd *ast.FuncDecl) {
-		if filepath.ToSlash(filepath.Dir(rel)) != "session" {
+		if strings.HasPrefix(rel, "session/ent/") {
 			return
 		}
 		key := rel + " " + funcDisplayName(fd)
@@ -524,6 +527,23 @@ func clsSetStatusViolations(t *testing.T, root string, allowed map[string]string
 func TestBacklogItemSetStatus_OnlyInsideAllowListedWriters(t *testing.T) {
 	problems := clsSetStatusViolations(t, moduleRoot(t), clsSetStatusAllowed)
 	assert.Empty(t, problems, strings.Join(problems, "\n"))
+}
+
+func TestBacklogItemSetStatus_FixtureLeafPackageViolationIsFlagged(t *testing.T) {
+	dir := t.TempDir()
+	leaf := filepath.Join(dir, "session", "workflowengine")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	src := `package workflowengine
+func Sneaky(c *entClient, id int) error {
+	_, err := c.BacklogItem.UpdateOneID(id).SetStatus("done").Save(nil)
+	return err
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(leaf, "zz_violation.go"), []byte(src), 0o600))
+
+	problems := clsSetStatusViolations(t, dir, nil)
+	require.Len(t, problems, 1, strings.Join(problems, "\n"))
+	assert.Contains(t, problems[0], "session/workflowengine/zz_violation.go Sneaky")
 }
 
 func TestBacklogItemSetStatus_FixtureSeventhWriterIsFlaggedNamingFileAndFunction(t *testing.T) {
