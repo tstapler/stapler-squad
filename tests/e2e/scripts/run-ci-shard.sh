@@ -45,9 +45,11 @@ if [ "${E2E_SKIP_BASELINE_FAIL:-}" = 1 ]; then
   # Count what the regex really removes (parallel-pass list, stress specs excluded), not the baseline row count.
   all_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${projects[@]}" 2>"$list_err") \
     || { cat "$list_err" >&2; fail_plan "playwright --list (unfiltered) failed"; }
-  printf '%s' "$all_json" > "$list_err"; n_all=$(bun scripts/baseline-skip.ts count "$list_err")
-  printf '%s' "$list_json" > "$list_err"; n_kept=$(bun scripts/baseline-skip.ts count "$list_err")
-  skip_summary=$(bun scripts/baseline-skip.ts summary --removed $(( n_all - n_kept ))) || fail_plan "baseline-skip summary failed"
+  printf '%s' "$all_json" > "$list_err"; n_all=$(bun scripts/baseline-skip.ts count "$list_err" || true)
+  printf '%s' "$list_json" > "$list_err"; n_kept=$(bun scripts/baseline-skip.ts count "$list_err" || true)
+  removed_args=()
+  case "$n_all$n_kept" in ''|*[!0-9]*) echo "run-ci-shard: could not count removed tests; reporting the count as unavailable" >&2 ;; *) removed_args=(--removed $(( n_all - n_kept ))) ;; esac
+  skip_summary=$(bun scripts/baseline-skip.ts summary ${removed_args[@]+"${removed_args[@]}"}) || fail_plan "baseline-skip summary failed"
   printf '%s\n' "$skip_summary"
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$skip_summary" >> "$GITHUB_STEP_SUMMARY"
 fi
