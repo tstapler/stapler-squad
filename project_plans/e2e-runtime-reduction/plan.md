@@ -154,6 +154,15 @@ Then, in order of value: O5 (workers=4 A/B), O10/O11, O8 (needs D1), O7 (only if
 - **D4**: Only if O9 is wanted: change which jobs are required checks. Today no check is required (`docs/reference/ci-job-budget.md`); if branch protection is added, require the `e2e-bun` aggregate job, not shards, and keep the check count within the 20-concurrent rule.
 - **D5**: Accept the metric below; in particular whether runner-minutes (not wall-clock) is the goal when the two disagree (more shards).
 
+### Decisions recorded (owner, 2026-11-16)
+
+| ID | Decision | Effect |
+|---|---|---|
+| D1 | Amend ADR-009: PR runs may select specs with `select-specs.ts`; `main` and `workflow_dispatch` stay full | Amendment appended to `project_plans/bazel-conversion/decisions/ADR-009-selective-e2e-and-expensive-tests-in-bazel.md`. Unblocks O8. |
+| D2 | PR runs may skip baseline-`fail`-class tests and cut retries; `main` and nightly still run them | Implemented in PR 1: `E2E_SKIP_BASELINE_FAIL=1` on `pull_request` makes `run-ci-shard.sh` pass `--grep-invert` built by `tests/e2e/scripts/baseline-skip.ts`. The skipped set is printed and written to each shard's step summary. Skipped tests never run, so their retries disappear with them; retries for other tests stay at 1. |
+| D3 | DOM-reading specs run only in `chromium-dom` on PRs; nightly keeps both projects | Separate later PR (PR 3 above), not part of PR 1. |
+| D5 | The goal is total runner-minutes, not wall-clock, when they disagree | Section 7 targets stand; wall-clock stays a guard only. |
+
 ## 7. Measurable target
 
 | Metric | Today (VERIFIED) | After PR 1 | After PR 1 to 3 | How measured |

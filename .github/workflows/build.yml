@@ -549,6 +549,8 @@ jobs:
           MEM_LABEL: e2e-shard-${{ matrix.shard }}
           # Set only for a PR subset run (see e2e-env); empty = the full suite. Passed via env, never inlined in the script.
           E2E_SPEC_SELECTION: ${{ needs.e2e-env.outputs.mode == 'subset' && needs.e2e-env.outputs.specs || '' }}
+          # PR runs skip tests the baseline records as class fail (D2, project_plans/e2e-runtime-reduction/plan.md); main/dispatch run them.
+          E2E_SKIP_BASELINE_FAIL: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           cd tests/e2e
           mem-sampler --out "$GITHUB_WORKSPACE/ci-mem-head/metrics.json" --label "$MEM_LABEL" -- \
