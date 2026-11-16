@@ -18,12 +18,13 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // systemGateHarness is the storage's gate, backed by a Configured engine whose
 // stage config a test can edit.
 type systemGateHarness struct {
-	repo   session.StageCRUDRepository
+	repo   stagecfg.StageCRUDRepository
 	engine *session.ConfiguredWorkflowEngine
 }
 
@@ -34,15 +35,15 @@ func wireEnforcedGate(t *testing.T, svc *BacklogService) *systemGateHarness {
 	ctx := context.Background()
 	client := svc.storage.GetEntClient()
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
-	repo := session.NewEntStageConfigRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(repo, session.NewEntGateSatisfactionRepository(client), nil)
+	repo := stagecfg.NewEntStageConfigRepository(client)
+	engine, err := session.NewConfiguredWorkflowEngine(repo, stagecfg.NewEntGateSatisfactionRepository(client), nil)
 	require.NoError(t, err)
 	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), engine, enforceEveryClass{})
 	require.NoError(t, svc.storage.SetTransitionGate(sel, svc.TransitionDeniedReporter()))
 	return &systemGateHarness{repo: repo, engine: engine}
 }
 
-func (h *systemGateHarness) transitionID(t *testing.T, from, to domain.BacklogStatus) *session.TransitionData {
+func (h *systemGateHarness) transitionID(t *testing.T, from, to domain.BacklogStatus) *stagecfg.TransitionData {
 	t.Helper()
 	ts, err := h.repo.ListAllTransitions(context.Background(), string(from))
 	require.NoError(t, err)
@@ -60,7 +61,7 @@ func (h *systemGateHarness) transitionID(t *testing.T, from, to domain.BacklogSt
 func (h *systemGateHarness) blockWithGate(t *testing.T, from, to domain.BacklogStatus) (remove func()) {
 	t.Helper()
 	ctx := context.Background()
-	gate, err := h.repo.CreateGate(ctx, session.GateCreateInput{
+	gate, err := h.repo.CreateGate(ctx, stagecfg.GateCreateInput{
 		TransitionID: h.transitionID(t, from, to).ID,
 		Kind:         string(domain.GateKindHumanApproval),
 		Enabled:      true,

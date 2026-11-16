@@ -33,6 +33,7 @@ import (
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -3307,8 +3308,8 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -3727,8 +3728,8 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -3803,14 +3804,14 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                  "sonnet-work",
 		Name:                  "Sonnet Work",
 		Enabled:               true,
 		InitialPromptTemplate: "kickoff: {{item_title}}",
-		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
-			session.StageRoleWork: {Model: "family:sonnet"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleWork: {Model: "family:sonnet"},
 		},
 	})
 	require.NoError(t, err)
@@ -3935,8 +3936,8 @@ func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
 		Enabled:               true,
@@ -4354,8 +4355,8 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -4404,13 +4405,13 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:    "cheap-triage",
 		Name:    "Cheap Triage",
 		Enabled: true,
-		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
-			session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 		},
 	})
 	require.NoError(t, err)
@@ -4491,8 +4492,8 @@ func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardl
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -4550,8 +4551,8 @@ func TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawn
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
 		Enabled:               true,

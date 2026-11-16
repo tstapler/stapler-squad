@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
@@ -117,13 +118,13 @@ func checkBrowserDeps() (vnc.DepsResult, cdp.DepsResult) {
 // buildWorkflows builds the workflow repository, scheduler and service plus the chain
 // firer; the scheduler and trigger repo are nil when no ent client is available.
 func buildWorkflows(svc *ServiceDeps, cfg *config.Config, backlogSvc *backlogsvc.BacklogService,
-	backlogLifecycleListener *backlog.BacklogLifecycleListener) (session.WorkflowRepository, *workflows.Scheduler, session.TriggerFireEventRepository) {
+	backlogLifecycleListener *backlog.BacklogLifecycleListener) (stagecfg.WorkflowRepository, *workflows.Scheduler, session.TriggerFireEventRepository) {
 	storage, eventBus, sessionService := svc.Storage, svc.EventBus, svc.SessionService
 	// Initialize WorkflowRepository using the ent client from storage.
 	// Nil-safe: when the storage is not ent-backed (e.g. tests), WorkflowRepo is nil.
-	var workflowRepo session.WorkflowRepository
+	var workflowRepo stagecfg.WorkflowRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
-		workflowRepo = session.NewEntWorkflowRepository(entClient)
+		workflowRepo = stagecfg.NewEntWorkflowRepository(entClient)
 		log.Info("WorkflowRepository initialized")
 	} else {
 		log.Warn("WorkflowRepository unavailable: storage has no ent client")

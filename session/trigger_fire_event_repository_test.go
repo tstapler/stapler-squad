@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
@@ -16,8 +17,8 @@ func TestEntTriggerFireEventRepository_Create_should_PersistAndRoundTrip_When_Va
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	wfRepo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug:            "trigger-fire-wf",
 		Name:            "Trigger Fire WF",
 		Command:         "cmd",
@@ -53,8 +54,8 @@ func TestEntTriggerFireEventRepository_Create_should_ReturnErrDuplicateDelivery_
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	wfRepo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug:            "dedup-wf",
 		Name:            "Dedup WF",
 		Command:         "cmd",
@@ -89,12 +90,12 @@ func TestEntTriggerFireEventRepository_Create_should_AllowSameDeliveryIDAcrossDi
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	wfRepo := NewEntWorkflowRepository(storage.GetEntClient())
-	wfA, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wfA, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "watcher-a", Name: "Watcher A", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
-	wfB, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfB, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "watcher-b", Name: "Watcher B", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -125,8 +126,8 @@ func TestEntTriggerFireEventRepository_Create_should_AllowMultipleRowsWithNoDeli
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	wfRepo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "cron-only-wf", Name: "Cron Only", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -153,8 +154,8 @@ func TestEntTriggerFireEventRepository_Create_should_RejectExactlyOneConcurrentD
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	wfRepo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "race-wf", Name: "Race WF", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -261,8 +262,8 @@ func TestEntTriggerFireEventRepository_ListByWorkflow_should_DefaultLimitAndOrde
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	wfRepo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := wfRepo.Create(t.Context(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := wfRepo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "order-wf", Name: "Order WF", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)

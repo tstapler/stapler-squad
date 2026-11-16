@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // GenericWebhookHandler handles POST /webhooks/{slug}: generic `webhook`-type Workflow
@@ -16,14 +17,14 @@ import (
 // type, not an interface — one implementation, per
 // the `interface-pollution-checklist` skill.
 type GenericWebhookHandler struct {
-	repo       session.WorkflowRepository
+	repo       stagecfg.WorkflowRepository
 	scheduler  *workflows.Scheduler
 	fireEvents session.TriggerFireEventRepository
 	cfg        *config.Config
 }
 
 // NewGenericWebhookHandler constructs a GenericWebhookHandler.
-func NewGenericWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GenericWebhookHandler {
+func NewGenericWebhookHandler(repo stagecfg.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config) *GenericWebhookHandler {
 	return &GenericWebhookHandler{repo: repo, scheduler: scheduler, fireEvents: fireEvents, cfg: cfg}
 }
 

@@ -182,6 +182,7 @@ go_test(
         "//session/queue",
         "//session/scrollback",
         "//session/sendkeysguard",
+        "//session/stagecfg",
         "//session/streamhub",
         "//session/tmux",
         "//testutil/wait",

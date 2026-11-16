@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -50,7 +50,7 @@ func (f *fakeWorkflowEventSender) Sent() []*sessionv1.WorkflowEvent {
 func newTestWorkflowServiceWithBus(t *testing.T) (*WorkflowService, *events.EventBus) {
 	t.Helper()
 	repo := createTestEntClient(t)
-	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 	svc := NewWorkflowService(workflowRepo, nil /* scheduler unused by these tests */, nil)
 	bus := events.NewEventBus(100)
 	svc.SetEventBus(bus)
@@ -184,7 +184,7 @@ func TestWatchWorkflows_should_broadcastLiveEvents_When_CreateUpdateDeleteRunSuc
 func TestWatchWorkflows_should_broadcastRunEvent_When_RunWorkflowSucceeds(t *testing.T) {
 	t.Parallel()
 	repo := createTestEntClient(t)
-	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 	scheduler := &mockScheduler{}
 	svc := NewWorkflowService(workflowRepo, scheduler, nil)
 	bus := events.NewEventBus(100)
@@ -221,7 +221,7 @@ func TestWatchWorkflows_should_broadcastRunEvent_When_RunWorkflowSucceeds(t *tes
 func TestWatchWorkflows_should_returnUnavailable_When_EventBusNotWired(t *testing.T) {
 	t.Parallel()
 	repo := createTestEntClient(t)
-	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 	svc := NewWorkflowService(workflowRepo, nil, nil) // no SetEventBus call
 
 	err := svc.watchWorkflows(context.Background(), &sessionv1.WatchWorkflowsRequest{}, &fakeWorkflowEventSender{})

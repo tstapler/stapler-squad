@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // backfillTriggerTypes is a one-time migration step (webhook-triggers plan Task 1.1.1d).
@@ -29,7 +29,7 @@ import (
 // "correcting" it here would mask the mismatch rather than surface it — the tightened
 // cron-registration gate (addCronEntry) is what's supposed to refuse to register that
 // row, not this backfill.
-func backfillTriggerTypes(ctx context.Context, repo session.WorkflowRepository) {
+func backfillTriggerTypes(ctx context.Context, repo stagecfg.WorkflowRepository) {
 	if repo == nil {
 		return
 	}
@@ -52,7 +52,7 @@ func backfillTriggerTypes(ctx context.Context, repo session.WorkflowRepository) 
 			continue
 		}
 		triggerType := "cron"
-		if _, updateErr := repo.Update(ctx, wf.ID, session.WorkflowUpdateInput{TriggerType: &triggerType}); updateErr != nil {
+		if _, updateErr := repo.Update(ctx, wf.ID, stagecfg.WorkflowUpdateInput{TriggerType: &triggerType}); updateErr != nil {
 			log.Warn("[WorkflowScheduler] trigger_type backfill: failed to update workflow",
 				"slug", wf.Slug, "err", updateErr)
 			continue

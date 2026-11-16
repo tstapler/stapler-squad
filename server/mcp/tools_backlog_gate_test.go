@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // Story 1.5.5d: the agent writers decide through the transition gate.
@@ -26,9 +27,9 @@ func (enforceEveryClass) ModeFor(domain.CallerClass) session.EngineMode { return
 
 type gateFixture struct {
 	storage *session.Storage
-	repo    *session.EntStageConfigRepository
+	repo    *stagecfg.EntStageConfigRepository
 	cfg     *session.ConfiguredWorkflowEngine
-	gates   session.GateSatisfactionRepository
+	gates   stagecfg.GateSatisfactionRepository
 }
 
 // newEnforcedGateFixture wires an Enforce-mode gate over a real configured
@@ -37,8 +38,8 @@ func newEnforcedGateFixture(t *testing.T) *gateFixture {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(t.Context(), storage.GetEntClient()))
-	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	gates := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+	gates := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	cfg, err := session.NewConfiguredWorkflowEngine(repo, gates, nil)
 	require.NoError(t, err)
 	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), cfg, enforceEveryClass{})
@@ -57,7 +58,7 @@ func (f *gateFixture) addApprovalGate(t *testing.T, from, to domain.BacklogStatu
 		if e.ToStageSlug != string(to) {
 			continue
 		}
-		gate, gateErr := f.repo.CreateGate(t.Context(), session.GateCreateInput{
+		gate, gateErr := f.repo.CreateGate(t.Context(), stagecfg.GateCreateInput{
 			TransitionID: e.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 		})
 		require.NoError(t, gateErr)

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // PRFixEventRouter looks up and immediately reconciles a tracked pr_pending item for
@@ -42,7 +43,7 @@ type GitHubPollerInvalidator interface {
 // handlePRFixEvent. Concrete type, not an interface — one implementation, per
 // the `interface-pollution-checklist` skill.
 type GitHubWebhookHandler struct {
-	repo                session.WorkflowRepository
+	repo                stagecfg.WorkflowRepository
 	scheduler           *workflows.Scheduler
 	fireEvents          session.TriggerFireEventRepository
 	cfg                 *config.Config
@@ -69,7 +70,7 @@ type GitHubWebhookHandler struct {
 // "fired_failed" rather than panicking. prPollerInvalidator may also be nil (e.g.
 // in tests that don't exercise poller invalidation) — handlePRFixEvent skips the
 // call entirely rather than panicking.
-func NewGitHubWebhookHandler(repo session.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config, prFixRouter PRFixEventRouter, prPollerInvalidator GitHubPollerInvalidator) *GitHubWebhookHandler {
+func NewGitHubWebhookHandler(repo stagecfg.WorkflowRepository, scheduler *workflows.Scheduler, fireEvents session.TriggerFireEventRepository, cfg *config.Config, prFixRouter PRFixEventRouter, prPollerInvalidator GitHubPollerInvalidator) *GitHubWebhookHandler {
 	firstPRFixDelivery := make(map[string]*sync.Once, len(prFixEventTypes))
 	for _, eventType := range prFixEventTypes {
 		firstPRFixDelivery[eventType] = &sync.Once{}

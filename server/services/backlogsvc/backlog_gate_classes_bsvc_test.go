@@ -14,26 +14,27 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // clsGateHarness is an Enforce-for-every-class gate over a Configured engine.
 type clsGateHarness struct {
 	svc  *BacklogService
 	h    *systemGateHarness
-	sats session.GateSatisfactionRepository
+	sats stagecfg.GateSatisfactionRepository
 }
 
 func newClsGateHarness(t *testing.T) *clsGateHarness {
 	t.Helper()
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	return &clsGateHarness{svc: svc, h: h, sats: session.NewEntGateSatisfactionRepository(svc.storage.GetEntClient())}
+	return &clsGateHarness{svc: svc, h: h, sats: stagecfg.NewEntGateSatisfactionRepository(svc.storage.GetEntClient())}
 }
 
 // block adds an unsatisfied human_approval gate to from->to and returns its id.
 func (c *clsGateHarness) block(t *testing.T, from, to domain.BacklogStatus) uuid.UUID {
 	t.Helper()
-	gate, err := c.h.repo.CreateGate(t.Context(), session.GateCreateInput{
+	gate, err := c.h.repo.CreateGate(t.Context(), stagecfg.GateCreateInput{
 		TransitionID: c.h.transitionID(t, from, to).ID,
 		Kind:         string(domain.GateKindHumanApproval),
 		Enabled:      true,
