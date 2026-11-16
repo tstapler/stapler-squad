@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // fakeSessionService is a test double for SessionServiceInterface that records
@@ -75,11 +76,11 @@ func (f *fakeFireEventRecorder) Create(_ context.Context, input session.TriggerF
 
 // newTestScheduler builds a Scheduler backed by a fresh in-memory ent-backed
 // WorkflowRepository (same pattern as retention_test.go's newTestInfra).
-func newTestScheduler(t *testing.T, sessionSvc SessionServiceInterface) (*Scheduler, session.WorkflowRepository, *session.EntRepository) {
+func newTestScheduler(t *testing.T, sessionSvc SessionServiceInterface) (*Scheduler, stagecfg.WorkflowRepository, *session.EntRepository) {
 	t.Helper()
 	entRepo := session.NewTestEntRepository(t)
 
-	wfRepo := session.NewEntWorkflowRepository(entRepo.GetEntClient())
+	wfRepo := stagecfg.NewEntWorkflowRepository(entRepo.GetEntClient())
 	sched := NewScheduler(wfRepo, sessionSvc, events.NewEventBus(10))
 	return sched, wfRepo, entRepo
 }
@@ -96,7 +97,7 @@ func TestFireNow_AdmissionRejected_DoesNotCreateSession(t *testing.T) {
 	recorder := &fakeFireEventRecorder{}
 	sched.SetTriggerFireEventRepo(recorder)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "admission-rejected-wf",
 		Name:            "Admission Rejected",
 		Command:         "do the thing",
@@ -124,7 +125,7 @@ func TestFireNow_AdmissionError_DoesNotCreateSession(t *testing.T) {
 	gate := &fakeAdmissionGate{err: errors.New("boom")}
 	sched.SetAdmissionGate(gate)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "admission-error-wf",
 		Name:            "Admission Error",
 		Command:         "do the thing",
@@ -146,7 +147,7 @@ func TestFireNow_AdmissionAllowed_CreatesSession(t *testing.T) {
 	gate := &fakeAdmissionGate{admitted: true}
 	sched.SetAdmissionGate(gate)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "admission-allowed-wf",
 		Name:            "Admission Allowed",
 		Command:         "do the thing",
@@ -192,7 +193,7 @@ func TestFireNow_PRUrlArg_UsesOwnerRepoTitleAndInjectsSessionID(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "pr-review",
 		Name:            "PR Review",
 		Command:         "Review {{input}}. Your session_id is {{session_id}} -- rename yourself once you know the PR title.",
@@ -216,7 +217,7 @@ func TestScheduler_Start_DoesNotRegisterMismatchedTriggerAsCron(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "mismatched-cron-wf",
 		Name:            "Mismatched",
 		Command:         "do the thing",
@@ -245,7 +246,7 @@ func TestScheduler_Reload_DoesNotRegisterMismatchedTriggerAsCron(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "mismatched-reload-wf",
 		Name:            "Mismatched",
 		Command:         "do the thing",
@@ -274,7 +275,7 @@ func TestBackfillTriggerTypes_CorrectsLegacyRowsOnly(t *testing.T) {
 	_, wfRepo, _ := newTestScheduler(t, &fakeSessionService{})
 	ctx := context.Background()
 
-	legacyCron, err := wfRepo.Create(ctx, session.WorkflowCreateInput{
+	legacyCron, err := wfRepo.Create(ctx, stagecfg.WorkflowCreateInput{
 		Slug:            "legacy-cron",
 		Name:            "Legacy Cron",
 		Command:         "cmd",
@@ -286,7 +287,7 @@ func TestBackfillTriggerTypes_CorrectsLegacyRowsOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mismatched, err := wfRepo.Create(ctx, session.WorkflowCreateInput{
+	mismatched, err := wfRepo.Create(ctx, stagecfg.WorkflowCreateInput{
 		Slug:            "explicit-mismatch",
 		Name:            "Explicit Mismatch",
 		Command:         "cmd",
@@ -316,7 +317,7 @@ func TestScheduler_Start_RegistersValidCronTrigger(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "valid-cron-wf",
 		Name:            "Valid Cron",
 		Command:         "do the thing",
@@ -363,7 +364,7 @@ func TestFireNow_RateLimited_RejectsExcessFiresInTightLoop(t *testing.T) {
 	recorder := &fakeFireEventRecorder{}
 	sched.SetTriggerFireEventRepo(recorder)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "rate-limited-wf",
 		Name:            "Rate Limited",
 		Command:         "do the thing",
@@ -396,7 +397,7 @@ func TestFireTrigger_Success_UpdatesLastFiredAt(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "last-fired-wf",
 		Name:            "Last Fired",
 		Command:         "do the thing",
@@ -432,7 +433,7 @@ func TestFireTrigger_WithDeliveryID_DoesNotDoubleClaimFireEvent(t *testing.T) {
 	recorder := &fakeFireEventRecorder{}
 	sched.SetTriggerFireEventRepo(recorder)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "webhook-shaped-wf",
 		Name:            "Webhook Shaped",
 		Command:         "do the thing",
@@ -458,7 +459,7 @@ func TestFireTrigger_NeverSetsAutoApproveFlag(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:            "no-bypass-wf",
 		Name:            "No Bypass",
 		Command:         "do the thing",
@@ -658,7 +659,7 @@ func TestMostRecentCronOccurrence_FindsOccurrence_AcrossALargeGap(t *testing.T) 
 func TestFireNow_FamilyAlias_ExpectResolvedToConcreteModelInProgram(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "sonnet-family-wf", Name: "sonnet-family-wf",
 		Command: "echo hi", TargetDirectory: "/tmp", Model: "family:sonnet",
 	})
@@ -673,7 +674,7 @@ func TestFireNow_FamilyAlias_ExpectResolvedToConcreteModelInProgram(t *testing.T
 func TestFireNow_ExistingLiteralModelID_ExpectUnchangedProgramString(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "literal-model-wf", Name: "literal-model-wf",
 		Command: "echo hi", TargetDirectory: "/tmp", Model: "claude-sonnet-4-6",
 	})
@@ -688,7 +689,7 @@ func TestFireNow_ExistingLiteralModelID_ExpectUnchangedProgramString(t *testing.
 func TestFireNow_UnknownFamilyAlias_ExpectErrorAndNoSessionCreated(t *testing.T) {
 	fakeSess := &fakeSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fakeSess)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "unknown-family-wf", Name: "unknown-family-wf",
 		Command: "echo hi", TargetDirectory: "/tmp", Model: "family:retired-name",
 	})
@@ -711,7 +712,7 @@ func TestFireNow_OverrideFile_ExpectNewLatestPickedUpWithoutCodeChange(t *testin
 	require.NoError(t, err)
 	sched.SetModelFamilies(families)
 
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "sonnet-override-wf", Name: "sonnet-override-wf",
 		Command: "echo hi", TargetDirectory: "/tmp", Model: "family:sonnet",
 	})
@@ -758,7 +759,7 @@ func TestFireNow_ConcurrentSameMinuteRuns_AllCreated(t *testing.T) {
 	const n = 8
 	fake := &uniqueTitleSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fake)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "concurrent-wf", Name: "PR Code Review", Command: "review {{input}}", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -785,7 +786,7 @@ func TestFireNow_ConcurrentSameMinuteRuns_AllCreated(t *testing.T) {
 func TestFireNow_TitleCollision_AutoDeduped(t *testing.T) {
 	fake := &uniqueTitleSessionService{}
 	sched, wfRepo, _ := newTestScheduler(t, fake)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "dedupe-wf", Name: "PR Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -806,7 +807,7 @@ func TestFireNow_TitleCollision_AutoDeduped(t *testing.T) {
 func TestFireNow_TitleDedupe_DoesNotCorruptArgInPrompt(t *testing.T) {
 	fake := &uniqueTitleSessionService{titles: map[string]bool{"foo/bar": true}, prompts: map[string]string{}}
 	sched, wfRepo, _ := newTestScheduler(t, fake)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "argcorrupt-wf", Name: "Repo Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -830,7 +831,7 @@ func TestAppendAttachmentBlock(t *testing.T) {
 func TestFireNow_Attachments_ListedInPromptAndKeptOnTitleDedupe(t *testing.T) {
 	fake := &uniqueTitleSessionService{titles: map[string]bool{"foo/bar": true}, prompts: map[string]string{}}
 	sched, wfRepo, _ := newTestScheduler(t, fake)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "attach-wf", Name: "Repo Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -845,7 +846,7 @@ func TestFireNow_Attachments_ListedInPromptAndKeptOnTitleDedupe(t *testing.T) {
 func TestFireNow_NoAttachments_PromptHasNoImageBlock(t *testing.T) {
 	fake := &uniqueTitleSessionService{prompts: map[string]string{}}
 	sched, wfRepo, _ := newTestScheduler(t, fake)
-	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "noattach-wf", Name: "Plain", Command: "do {{input}}", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)

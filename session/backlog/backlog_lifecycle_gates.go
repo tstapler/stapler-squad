@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // maxConcurrentCustomGateChecks bounds runCustomGateCheck goroutine fan-out,
@@ -186,7 +187,7 @@ func (l *BacklogLifecycleListener) reconcileCustomGateChecks(ctx context.Context
 // ok is false only when OutcomeDetail carries neither a resolvable engine
 // value nor a bound fallback (a malformed/legacy row) — reconcileCustomGateChecks
 // skips such a row rather than guessing a threshold.
-func (l *BacklogLifecycleListener) resolveCustomCheckStalenessThreshold(record *session.GateSatisfactionData) (time.Duration, bool) {
+func (l *BacklogLifecycleListener) resolveCustomCheckStalenessThreshold(record *stagecfg.GateSatisfactionData) (time.Duration, bool) {
 	return resolveCustomCheckStalenessThresholdWithEngine(l.livenessEngine, record)
 }
 
@@ -194,7 +195,7 @@ func (l *BacklogLifecycleListener) resolveCustomCheckStalenessThreshold(record *
 // resolveCustomCheckStalenessThreshold's logic as a free function so
 // gate_custom_check_test.go can exercise it directly without constructing a
 // full BacklogLifecycleListener.
-func resolveCustomCheckStalenessThresholdWithEngine(engine liveness.LivenessEngine, record *session.GateSatisfactionData) (time.Duration, bool) {
+func resolveCustomCheckStalenessThresholdWithEngine(engine liveness.LivenessEngine, record *stagecfg.GateSatisfactionData) (time.Duration, bool) {
 	targetStage, hasStage := record.OutcomeDetail["target_stage"].(string)
 	mode, _ := record.OutcomeDetail["pipeline_mode"].(string)
 	if engine != nil && hasStage {

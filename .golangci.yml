@@ -186,6 +186,18 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
+        # imports session, github or server.
+        isolate_stagecfg:
+          list-mode: strict
+          files:
+            - "**/session/stagecfg/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and flowstore.Reader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.
@@ -413,7 +425,7 @@ linters:
             # instead of importing session/ent directly.
             - "!**/server/services/handoff_summary_service_test.go"
             # github_webhook_pr_fix_test.go's erroringWorkflowRepo wraps the real
-            # session.WorkflowRepository and overrides only ListByTriggerType to
+            # stagecfg.WorkflowRepository and overrides only ListByTriggerType to
             # simulate an infra failure (e.g. a DB error) — the interface method's
             # signature itself returns []*ent.Workflow, so implementing that one
             # override requires naming the type. Same justification as

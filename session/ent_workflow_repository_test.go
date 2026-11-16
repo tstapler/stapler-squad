@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // TestWorkflow_EnabledField_DefaultsTrue verifies the ent schema default for the new
@@ -40,14 +41,14 @@ func TestEntWorkflowRepository_UpdateConditional_should_ApplyWrite_When_UpdatedA
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := repo.Create(t.Context(), WorkflowCreateInput{
+	repo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := repo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "cas-match-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
 
 	newName := "Updated"
-	updated, err := repo.UpdateConditional(t.Context(), wf.ID, WorkflowUpdateInput{Name: &newName}, wf.UpdatedAt)
+	updated, err := repo.UpdateConditional(t.Context(), wf.ID, stagecfg.WorkflowUpdateInput{Name: &newName}, wf.UpdatedAt)
 	require.NoError(t, err)
 	assert.Equal(t, "Updated", updated.Name)
 }
@@ -60,15 +61,15 @@ func TestEntWorkflowRepository_UpdateConditional_should_ReturnErrPreconditionFai
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := repo.Create(t.Context(), WorkflowCreateInput{
+	repo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := repo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "cas-stale-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
 
 	staleTimestamp := wf.UpdatedAt.Add(-time.Hour)
 	newName := "Updated"
-	_, err = repo.UpdateConditional(t.Context(), wf.ID, WorkflowUpdateInput{Name: &newName}, staleTimestamp)
+	_, err = repo.UpdateConditional(t.Context(), wf.ID, stagecfg.WorkflowUpdateInput{Name: &newName}, staleTimestamp)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
@@ -88,8 +89,8 @@ func TestEntWorkflowRepository_UpdateConditional_should_RejectExactlyOneConcurre
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntWorkflowRepository(storage.GetEntClient())
-	wf, err := repo.Create(t.Context(), WorkflowCreateInput{
+	repo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
+	wf, err := repo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug: "cas-race-wf", Name: "Original", Command: "cmd", TargetDirectory: "/tmp/test",
 	})
 	require.NoError(t, err)
@@ -102,7 +103,7 @@ func TestEntWorkflowRepository_UpdateConditional_should_RejectExactlyOneConcurre
 		go func(idx int) {
 			defer wg.Done()
 			name := names[idx]
-			_, errs[idx] = repo.UpdateConditional(context.Background(), wf.ID, WorkflowUpdateInput{Name: &name}, wf.UpdatedAt)
+			_, errs[idx] = repo.UpdateConditional(context.Background(), wf.ID, stagecfg.WorkflowUpdateInput{Name: &name}, wf.UpdatedAt)
 		}(i)
 	}
 	wg.Wait()
@@ -136,9 +137,9 @@ func TestEntWorkflowRepository_Update_should_ClearWebhookSlugWithoutUniqueConstr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntWorkflowRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
 
-	wf1, err := repo.Create(t.Context(), WorkflowCreateInput{
+	wf1, err := repo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug:            "clear-slug-wf-1",
 		Name:            "Clear Slug WF 1",
 		Command:         "cmd",
@@ -147,7 +148,7 @@ func TestEntWorkflowRepository_Update_should_ClearWebhookSlugWithoutUniqueConstr
 	})
 	require.NoError(t, err)
 
-	wf2, err := repo.Create(t.Context(), WorkflowCreateInput{
+	wf2, err := repo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug:            "clear-slug-wf-2",
 		Name:            "Clear Slug WF 2",
 		Command:         "cmd",
@@ -160,14 +161,14 @@ func TestEntWorkflowRepository_Update_should_ClearWebhookSlugWithoutUniqueConstr
 
 	// Clearing the first workflow's webhook_slug must succeed and leave the
 	// column NULL (not "").
-	updated1, err := repo.Update(t.Context(), wf1.ID, WorkflowUpdateInput{WebhookSlug: &empty})
+	updated1, err := repo.Update(t.Context(), wf1.ID, stagecfg.WorkflowUpdateInput{WebhookSlug: &empty})
 	require.NoError(t, err)
 	require.Empty(t, updated1.WebhookSlug)
 
 	// Clearing the second workflow's webhook_slug must ALSO succeed — before the
 	// fix, this would fail with a unique-constraint violation because the first
 	// clear left "" (not NULL) in the column.
-	updated2, err := repo.Update(t.Context(), wf2.ID, WorkflowUpdateInput{WebhookSlug: &empty})
+	updated2, err := repo.Update(t.Context(), wf2.ID, stagecfg.WorkflowUpdateInput{WebhookSlug: &empty})
 	require.NoError(t, err, "clearing a second workflow's webhook_slug must not collide with the first workflow's cleared slug")
 	require.Empty(t, updated2.WebhookSlug)
 }
@@ -180,9 +181,9 @@ func TestEntWorkflowRepository_Update_should_SetWebhookSlug_When_NonEmptyValuePr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntWorkflowRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntWorkflowRepository(storage.GetEntClient())
 
-	wf, err := repo.Create(t.Context(), WorkflowCreateInput{
+	wf, err := repo.Create(t.Context(), stagecfg.WorkflowCreateInput{
 		Slug:            "set-slug-wf",
 		Name:            "Set Slug WF",
 		Command:         "cmd",
@@ -192,7 +193,7 @@ func TestEntWorkflowRepository_Update_should_SetWebhookSlug_When_NonEmptyValuePr
 	require.Empty(t, wf.WebhookSlug)
 
 	newSlug := "newly-set-hook"
-	updated, err := repo.Update(t.Context(), wf.ID, WorkflowUpdateInput{WebhookSlug: &newSlug})
+	updated, err := repo.Update(t.Context(), wf.ID, stagecfg.WorkflowUpdateInput{WebhookSlug: &newSlug})
 	require.NoError(t, err)
 	require.Equal(t, newSlug, updated.WebhookSlug)
 }

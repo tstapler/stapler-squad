@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // --- fixtures --------------------------------------------------------------
@@ -679,7 +680,7 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	edge, ok := h.cfg.cache.Get(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	require.True(t, ok)
 	require.Len(t, edge.Gates, 1)
-	_, err := RecordGateApproval(ctx, NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), edge.Gates[0].ID, "operator", true)
+	_, err := RecordGateApproval(ctx, stagecfg.NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), edge.Gates[0].ID, "operator", true)
 	require.NoError(t, err)
 
 	moved, err := h.storage.GatedReconcileStuck(ctx)

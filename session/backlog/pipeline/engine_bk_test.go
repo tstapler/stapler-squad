@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 func assertWarnLogContainsUnresolved(t *testing.T, logOutput, itemID, mode string) {
@@ -589,7 +589,7 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 	// No PipelineMode rows exist in this DB at all — ListEnabled returns an
 	// empty set, so "nonexistent-slug-via-sql" is genuinely unresolvable via a
 	// real DB read, not just absent from a hand-built fake.
-	pipelineModeRepo := session.NewEntPipelineModeRepository(entClient)
+	pipelineModeRepo := stagecfg.NewEntPipelineModeRepository(entClient)
 	engine, err := NewPipelineEngine(pipelineModeRepo)
 	if err != nil {
 		t.Fatalf("NewPipelineEngine: %v", err)
@@ -626,7 +626,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault
 	item := &backlogdto.BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
 
 	buf := blktest.CaptureWarningLog(t)
-	program, model := engine.ExecutorFor(item, session.StageRoleWork)
+	program, model := engine.ExecutorFor(item, stagecfg.StageRoleWork)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
 	}
@@ -650,7 +650,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 	item := &backlogdto.BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
 
 	buf := blktest.CaptureWarningLog(t)
-	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
+	program, model := engine.ExecutorFor(item, stagecfg.StageRoleTriage)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
 	}
@@ -659,8 +659,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 
 func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_RoleHasOverride(t *testing.T) {
 	t.Parallel()
-	stageJSON, err := session.SerializeStageExecutors(map[session.StageRole]session.PipelineStageExecutor{
-		session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+	stageJSON, err := stagecfg.SerializeStageExecutors(map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+		stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 	})
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
@@ -677,7 +677,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_Rol
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 	item := &backlogdto.BacklogItemData{ID: "item-override", PipelineMode: "cheap-triage"}
 
-	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
+	program, model := engine.ExecutorFor(item, stagecfg.StageRoleTriage)
 	if program != "" || model != "claude-haiku-4-5" {
 		t.Fatalf("triage: got (%q, %q), want (\"\", \"claude-haiku-4-5\")", program, model)
 	}
@@ -687,8 +687,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeH
 	t.Parallel()
 	// The mode overrides triage only -- review must inherit the default, not
 	// leak triage's override.
-	stageJSON, err := session.SerializeStageExecutors(map[session.StageRole]session.PipelineStageExecutor{
-		session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+	stageJSON, err := stagecfg.SerializeStageExecutors(map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+		stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 	})
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
@@ -705,7 +705,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeH
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 	item := &backlogdto.BacklogItemData{ID: "item-no-override", PipelineMode: "cheap-triage"}
 
-	program, model := engine.ExecutorFor(item, session.StageRoleReview)
+	program, model := engine.ExecutorFor(item, stagecfg.StageRoleReview)
 	if program != "" || model != "" {
 		t.Fatalf("review: got (%q, %q), want (\"\", \"\")", program, model)
 	}

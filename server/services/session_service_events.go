@@ -11,10 +11,10 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -405,7 +405,7 @@ func (s *SessionService) SetWorkflowService(svc *WorkflowService) {
 
 // SetWorkflowRepository injects the workflow repository used to populate the meta cache.
 // Must be called after both SessionService and WorkflowRepository are constructed.
-func (s *SessionService) SetWorkflowRepository(repo session.WorkflowRepository) {
+func (s *SessionService) SetWorkflowRepository(repo stagecfg.WorkflowRepository) {
 	s.workflowRepo = repo
 	s.refreshWorkflowMetaCache(context.Background())
 }

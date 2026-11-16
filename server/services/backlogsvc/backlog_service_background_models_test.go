@@ -7,16 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 func TestPinnedStageModel_should_PinOnlyClaudeWithoutModeModel(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	assert.Equal(t, "family:sonnet", pinnedStageModel(session.StageRoleReview, "", ""))
-	assert.Equal(t, "family:sonnet", pinnedStageModel(session.StageRoleReview, "claude", ""))
-	assert.Equal(t, "family:opus", pinnedStageModel(session.StageRoleReview, "", "family:opus"), "mode pin wins")
+	assert.Equal(t, "family:sonnet", pinnedStageModel(stagecfg.StageRoleReview, "", ""))
+	assert.Equal(t, "family:sonnet", pinnedStageModel(stagecfg.StageRoleReview, "claude", ""))
+	assert.Equal(t, "family:opus", pinnedStageModel(stagecfg.StageRoleReview, "", "family:opus"), "mode pin wins")
 	for _, prog := range []string{"agy", "gemini", "proxy-claude"} {
-		assert.Empty(t, pinnedStageModel(session.StageRoleReview, prog, ""), prog)
+		assert.Empty(t, pinnedStageModel(stagecfg.StageRoleReview, prog, ""), prog)
 	}
 }
 

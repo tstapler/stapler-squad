@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 func TestEntPipelineModeRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
@@ -13,9 +14,9 @@ func TestEntPipelineModeRepository_Create_should_PersistAndRoundTrip_When_ValidI
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	created, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -40,15 +41,15 @@ func TestEntPipelineModeRepository_Create_should_ReturnConstraintError_When_Dupl
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	_, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	_, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug: "quick",
 		Name: "Quick Fix",
 	})
 	require.NoError(t, err)
 
-	_, err = repo.Create(t.Context(), PipelineModeCreateInput{
+	_, err = repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug: "quick",
 		Name: "Quick Fix Again",
 	})
@@ -61,9 +62,9 @@ func TestEntPipelineModeRepository_Update_should_OnlyChangeSuppliedFields_When_P
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	created, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
 		Enabled:               true,
@@ -80,7 +81,7 @@ func TestEntPipelineModeRepository_Update_should_OnlyChangeSuppliedFields_When_P
 	require.NoError(t, err)
 
 	newName := "Quick Fix Renamed"
-	updated, err := repo.Update(t.Context(), created.ID, PipelineModeUpdateInput{
+	updated, err := repo.Update(t.Context(), created.ID, stagecfg.PipelineModeUpdateInput{
 		Name: &newName,
 	})
 	require.NoError(t, err)
@@ -105,25 +106,25 @@ func TestEntPipelineModeRepository_should_RoundTripStageExecutorsJSON_When_Creat
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	created, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug: "cheap-triage",
 		Name: "Cheap Triage",
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 		},
 	})
 	require.NoError(t, err)
 
-	parsed, err := ParseStageExecutors(created.StageExecutorsJSON)
+	parsed, err := stagecfg.ParseStageExecutors(created.StageExecutorsJSON)
 	require.NoError(t, err)
-	assert.Equal(t, "claude-haiku-4-5", parsed[StageRoleTriage].Model)
-	assert.Empty(t, parsed[StageRoleTriage].Program)
+	assert.Equal(t, "claude-haiku-4-5", parsed[stagecfg.StageRoleTriage].Model)
+	assert.Empty(t, parsed[stagecfg.StageRoleTriage].Program)
 
 	fetched, err := repo.GetBySlug(t.Context(), "cheap-triage")
 	require.NoError(t, err)
-	fetchedParsed, err := ParseStageExecutors(fetched.StageExecutorsJSON)
+	fetchedParsed, err := stagecfg.ParseStageExecutors(fetched.StageExecutorsJSON)
 	require.NoError(t, err)
 	assert.Equal(t, parsed, fetchedParsed)
 }
@@ -133,29 +134,29 @@ func TestEntPipelineModeRepository_Update_should_ReplaceStageExecutors_When_Stag
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	created, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug: "cheap-triage",
 		Name: "Cheap Triage",
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 		},
 	})
 	require.NoError(t, err)
 
-	newExecutors := map[StageRole]PipelineStageExecutor{
-		StageRoleReview: {Model: "claude-opus-4-5"},
+	newExecutors := map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+		stagecfg.StageRoleReview: {Model: "claude-opus-4-5"},
 	}
-	updated, err := repo.Update(t.Context(), created.ID, PipelineModeUpdateInput{
+	updated, err := repo.Update(t.Context(), created.ID, stagecfg.PipelineModeUpdateInput{
 		StageExecutors: &newExecutors,
 	})
 	require.NoError(t, err)
 
-	parsed, err := ParseStageExecutors(updated.StageExecutorsJSON)
+	parsed, err := stagecfg.ParseStageExecutors(updated.StageExecutorsJSON)
 	require.NoError(t, err)
-	assert.Equal(t, "claude-opus-4-5", parsed[StageRoleReview].Model)
-	_, hasTriage := parsed[StageRoleTriage]
+	assert.Equal(t, "claude-opus-4-5", parsed[stagecfg.StageRoleReview].Model)
+	_, hasTriage := parsed[stagecfg.StageRoleTriage]
 	assert.False(t, hasTriage, "Update with a non-nil StageExecutors pointer replaces the map entirely")
 }
 
@@ -164,19 +165,19 @@ func TestEntPipelineModeRepository_Update_should_LeaveStageExecutorsUntouched_Wh
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	created, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	created, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug: "cheap-triage",
 		Name: "Cheap Triage",
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 		},
 	})
 	require.NoError(t, err)
 
 	newName := "Cheap Triage Renamed"
-	updated, err := repo.Update(t.Context(), created.ID, PipelineModeUpdateInput{
+	updated, err := repo.Update(t.Context(), created.ID, stagecfg.PipelineModeUpdateInput{
 		Name: &newName,
 	})
 	require.NoError(t, err)
@@ -189,16 +190,16 @@ func TestEntPipelineModeRepository_ListEnabled_should_ExcludeDisabledRows_When_M
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
-	enabledMode, err := repo.Create(t.Context(), PipelineModeCreateInput{
+	enabledMode, err := repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:    "quick",
 		Name:    "Quick Fix",
 		Enabled: true,
 	})
 	require.NoError(t, err)
 
-	_, err = repo.Create(t.Context(), PipelineModeCreateInput{
+	_, err = repo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:    "disabled-mode",
 		Name:    "Disabled Mode",
 		Enabled: false,

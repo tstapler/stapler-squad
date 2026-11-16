@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // initialPromptFor returns s.pipelineEngine.InitialPromptFor(...) when pipelineEngine
@@ -1037,7 +1038,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// value would permanently false-flag drift against the mode-side hash.
 	var workExecProgram, workExecModel string
 	if s.pipelineEngine != nil {
-		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
+		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, stagecfg.StageRoleWork)
 	}
 	workExecutorHash := pipeline.ComputeExecutorHash(workExecProgram, workExecModel)
 	// Pin after hashing: the hash must stay the raw mode-side pair (see above).

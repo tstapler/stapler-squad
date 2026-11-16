@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // maxChainDepth caps how many hops a pipeline chain may take before ChainFirer
@@ -94,7 +95,7 @@ type TriggerFirer interface {
 // package boundary and needs one (TriggerFirer, above).
 type ChainFirer struct {
 	repo       *session.EntRepository
-	workflows  session.WorkflowRepository
+	workflows  stagecfg.WorkflowRepository
 	fireEvents session.TriggerFireEventRepository
 	firer      TriggerFirer
 	// cfg is nil-safe (config.Config.GetFeatureFlag tolerates a nil receiver) —
@@ -112,7 +113,7 @@ type ChainFirer struct {
 // itemChangePublisher wiring as every other backlog mutation) — callers
 // should obtain it via WireChainFirer rather than constructing a
 // second EntRepository around the same ent.Client.
-func NewChainFirer(repo *session.EntRepository, workflows session.WorkflowRepository, fireEvents session.TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
+func NewChainFirer(repo *session.EntRepository, workflows stagecfg.WorkflowRepository, fireEvents session.TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
 	return &ChainFirer{
 		repo:       repo,
 		workflows:  workflows,
@@ -374,7 +375,7 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *sessio
 // calls share the same callbackDispatcher/itemChangePublisher wiring as every other backlog mutation) and wires it as
 // that repository's chain-fire dispatcher (EntRepository.SetChainFirer, the happy-path caller from
 // TransitionBacklogItemStatus, webhook-triggers Phase 6).
-func WireChainFirer(storage *session.Storage, workflows session.WorkflowRepository, fireEvents session.TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
+func WireChainFirer(storage *session.Storage, workflows stagecfg.WorkflowRepository, fireEvents session.TriggerFireEventRepository, firer TriggerFirer, cfg *config.Config) *ChainFirer {
 	repo := storage.Repository()
 	cf := NewChainFirer(repo, workflows, fireEvents, firer, cfg)
 	repo.SetChainFirer(cf)

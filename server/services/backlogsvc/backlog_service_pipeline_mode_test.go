@@ -20,11 +20,11 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -46,7 +46,7 @@ func swapWarningLog(t *testing.T) *tslog.SyncBuffer {
 // earlier Create's invalidation) that must keep succeeding against the real
 // backing store.
 type failAfterNListEnabledRepo struct {
-	session.PipelineModeRepository
+	stagecfg.PipelineModeRepository
 	mu        sync.Mutex
 	callCount int
 	failAfter int
@@ -67,10 +67,10 @@ func (r *failAfterNListEnabledRepo) ListEnabled(ctx context.Context) ([]*ent.Pip
 // ent-backed PipelineModeRepository and a real CachingPipelineEngine
 // constructed over that same repository — mirroring how
 // server/dependencies.go wires production (both share one instance).
-func newPipelineModeTestService(t *testing.T) (*BacklogService, session.PipelineModeRepository, *pipeline.CachingPipelineEngine) {
+func newPipelineModeTestService(t *testing.T) (*BacklogService, stagecfg.PipelineModeRepository, *pipeline.CachingPipelineEngine) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	repo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 	engine, err := pipeline.NewPipelineEngine(repo)
 	require.NoError(t, err)
 	svc := NewBacklogService(storage, nil, nil, nil, engine, repo)
@@ -281,7 +281,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 	// TestResolveAndValidateCallbackHost_RejectsMixedSafetyResultSet's
 	// sibling comment in webhook_ssrf_test.go.
 	storage := svctest.CreateTestStorage(t)
-	realRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
+	realRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 	// failAfter=2: call 1 is the engine's construction-time Load (must
 	// succeed), call 2 is CreatePipelineMode's invalidation (must succeed so
 	// the mode actually exists to update). Call 3 — UpdatePipelineMode's

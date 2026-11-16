@@ -42,3 +42,5 @@ session/flowstore !server
 session/flowstore !github
 session/wakestore !server
 session/wakestore !github
+session/stagecfg !server
+session/stagecfg !github
