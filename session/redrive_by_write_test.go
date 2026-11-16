@@ -18,4 +18,3 @@ func TestRedriveByWrite_OnlyNamesRegisteredSystemCallers(t *testing.T) {
 		require.Equal(t, domain.ClassSystem, spec.Class, caller)
 	}
 }
-
