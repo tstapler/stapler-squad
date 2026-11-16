@@ -460,6 +460,10 @@ func (f *prMaintenanceClock) config(hook prBackfillHook) prMaintenanceConfig {
 	}
 }
 
+// The first ERROR log line lazily starts lumberjack's process-global mill
+// goroutine, which has no stop hook; whichever test logs first would "leak" it.
+var ignoreLogFileMill = goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun")
+
 func newMaintenanceStorage(t *testing.T) (*Storage, *EntRepository) {
 	t.Helper()
 	repo := newPRRepo(t)
@@ -471,7 +475,7 @@ func newMaintenanceStorage(t *testing.T) (*Storage, *EntRepository) {
 func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T) {
 	storage, repo := newMaintenanceStorage(t)
 	ctx := context.Background()
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent(), ignoreLogFileMill)
 
 	addLegacySession(t, repo, legacySession{title: "has-links", uuid: "u1", owner: "acme", repo: "app", number: 12})
 	upsertLink(t, repo, SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
@@ -504,7 +508,7 @@ func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T)
 
 func TestMaintenance_ShouldStartNoTicker_WhenFirstPassSucceeds(t *testing.T) {
 	storage, repo := newMaintenanceStorage(t)
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent(), ignoreLogFileMill)
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
 
 	clock := &prMaintenanceClock{}
@@ -518,7 +522,7 @@ func TestMaintenance_ShouldStartNoTicker_WhenFirstPassSucceeds(t *testing.T) {
 
 func TestMaintenance_ShouldStopTicker_WhenContextCancelled(t *testing.T) {
 	storage, repo := newMaintenanceStorage(t)
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent(), ignoreLogFileMill)
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -531,7 +535,7 @@ func TestMaintenance_ShouldStopTicker_WhenContextCancelled(t *testing.T) {
 
 func TestMaintenance_ShouldNotCountFailure_WhenShutdownInterruptsBoot(t *testing.T) {
 	storage, repo := newMaintenanceStorage(t)
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent(), ignoreLogFileMill)
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
 
 	ctx, cancel := context.WithCancel(context.Background())
