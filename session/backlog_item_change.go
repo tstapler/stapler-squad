@@ -65,7 +65,7 @@ type BacklogItemChange struct {
 	// Verdict is populated only when Kind == ChangeVerdictRecorded, set
 	// directly from the ReviewVerdictData value the caller already has in
 	// hand (the actual parameter type of SaveReviewVerdict /
-	// CreateItemSessionWithVerdict, session/storage_backlog.go) — this
+	// CreateItemSessionWithVerdict, session/ent_repository_backlog_items.go) — this
 	// carries the verdict through the pipeline as first-class data, not via
 	// a client-side join against item_sessions.
 	Verdict *backlogdto.ReviewVerdictData

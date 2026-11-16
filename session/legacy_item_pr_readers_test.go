@@ -54,7 +54,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/ent_repository_backlog.go":                          {itemScalarOK, "persistence mapping of the stored columns"},
 	"session/session_pr_backfill.go":                             {itemScalarOK, "backfill imports the stored scalar into links"},
 	"session/storage.go":                                         {itemScalarOK, "PR reassignment guard compares the stored scalar"},
-	"session/storage_backlog.go":                                 {itemScalarOK, "storage helpers derive a number from the stored URL"},
+	"session/ent_repository_backlog_items.go":                    {itemScalarOK, "storage helpers derive a number from the stored URL"},
 }
 
 var legacyItemPRFieldRe = regexp.MustCompile(`\b(PrNumber|PrURL)\b`)
