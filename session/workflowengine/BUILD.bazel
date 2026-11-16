@@ -80,6 +80,7 @@ go_test(
         "//tools/bzl/ent",
         "//tools/bzl/ent:backlogstage",
         "//tools/bzl/ent:stagetransition",
+        "//tools/bzl/ent:transitiongate",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

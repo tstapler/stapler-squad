@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent/transitiongate"
 	"github.com/tstapler/stapler-squad/session/internal/entdbtest"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
@@ -73,22 +74,44 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 	}
 }
 
-func TestClearLatches_RemovesStatefulLatch_SoRegressedGateFailsAgain(t *testing.T) {
+func TestClearLatches_RemovesOnlyStatefulStructuralLatchesOfThatItem(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	entClient := entdbtest.NewClient(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), entClient))
-	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(entClient), stagecfg.NewEntGateSatisfactionRepository(entClient), nil)
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, entClient))
+	gateRepo := stagecfg.NewEntGateSatisfactionRepository(entClient)
+	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(entClient), gateRepo, nil)
 	require.NoError(t, err)
-	from, to := newCustomTransitionWithGates(t, entClient, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{true})
-	itemID := uuid.NewString()
-	satisfied := domain.BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACDone}
-	regressed := domain.BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACPending}
+	from, to := newCustomTransitionWithGates(t, entClient, cfg,
+		[]domain.GateKind{domain.GateKindStructural, domain.GateKindStructural, domain.GateKindHumanApproval}, []bool{true, false, true})
+	gateID := func(kind domain.GateKind, stateful bool) uuid.UUID {
+		g, err := entClient.TransitionGate.Query().Where(transitiongate.Kind(string(kind)), transitiongate.Stateful(stateful)).Only(ctx)
+		require.NoError(t, err)
+		return g.ID
+	}
+	latchGate, plainGate, approvalGate := gateID(domain.GateKindStructural, true), gateID(domain.GateKindStructural, false), gateID(domain.GateKindHumanApproval, true)
+	has := func(item string, gate uuid.UUID) bool {
+		_, err := gateRepo.GetByItemAndGate(ctx, uuid.MustParse(item), gate)
+		if err != nil {
+			require.ErrorIs(t, err, domain.ErrNotFound)
+		}
+		return err == nil
+	}
+	itemA, itemB := uuid.NewString(), uuid.NewString()
+	for _, id := range []string{itemA, itemB} {
+		cfg.RecordLatchesAfterCommit(domain.BacklogItemTransitionInput{Status: from, ItemID: id, AcCriteria: latchACDone}, to)
+	}
+	for _, g := range []uuid.UUID{plainGate, approvalGate} {
+		_, err := gateRepo.Create(ctx, stagecfg.GateSatisfactionCreateInput{ItemID: uuid.MustParse(itemA), GateID: g, Satisfied: true})
+		require.NoError(t, err)
+	}
+	require.True(t, has(itemA, latchGate), "precondition: item A latched")
+	require.True(t, has(itemB, latchGate), "precondition: item B latched")
 
-	cfg.RecordLatchesAfterCommit(satisfied, to)
-	require.NoError(t, cfg.ValidateGates(regressed, to, nil), "latched")
+	cfg.ClearLatches(itemA, from, to)
 
-	cfg.ClearLatches(itemID, from, to)
-
-	require.Error(t, cfg.ValidateGates(regressed, to, nil), "cleared latch no longer answers satisfied")
-	require.NoError(t, cfg.ValidateGates(satisfied, to, nil), "the live check still passes")
+	require.False(t, has(itemA, latchGate), "the stateful structural latch of the item is cleared")
+	require.True(t, has(itemA, plainGate), "a stateless structural gate's record survives")
+	require.True(t, has(itemA, approvalGate), "a non-structural gate's record survives")
+	require.True(t, has(itemB, latchGate), "another item's latch survives")
 }
