@@ -1,6 +1,6 @@
 package session
 
-// storage_backlog_jules.go — the Jules-specific EntRepository queries (Story
+// ent_repository_backlog_jules.go — the Jules-specific EntRepository queries (Story
 // 2.1.2), split out of storage_backlog.go to keep that file under the
 // file-length-limit gate (`make ready-complexity-gate`) rather than growing
 // it past 1000 non-comment lines. Mirrors this repo's existing convention of
