@@ -135,7 +135,8 @@ func resolveNativeAddBaseCommit(repo *git.Repository, p SetupParams) (string, er
 }
 
 // WriteAdminFiles writes LockedMarker, GitdirFile, CommondirFile, and HEAD
-// into adminDir in real git's crash-safe order (Tasks 2.1.1a-b): locked first (content
+// into adminDir in real git's order (Tasks 2.1.1a-b; every file but locked is crash-safe
+// via AdminFileWriter, locked is written directly, see writeLockedMarker): locked first (content
 // "initializing"), then gitdir (absolute path to worktreePath's own WorktreeRedirectFile),
 // then commondir (always "../.."), then HEAD (a symbolic ref to branchName — the branch
 // itself doesn't need to exist yet; Checkout creates it).
@@ -166,12 +167,21 @@ const lockedMarkerRecreateAttempts = 3
 // worktree-prune task (run after every `git commit` under git's geometric default
 // strategy) deletes such a dir, then rmdirs .git/worktrees; the temp+rename+fsync
 // window made that race reproducible in CI. A locked dir is skipped by prune, and
-// the marker's content is irrelevant, so a plain create is safe. If prune still wins the
-// remaining microsecond window, the dir is re-created (we own the name under the repo lock).
+// the marker's content is never read (an empty locked file means locked with no reason), so
+// neither atomicity nor fsync is needed; real git does not fsync it either. If prune still
+// wins the remaining window (its own check-then-delete gap), the dir is re-created (we own
+// the name under the repo lock). Later files are not retried: once locked exists, prune skips the dir.
 func writeLockedMarker(adminDir string) error {
+	return writeLockedMarkerWith(adminDir, func(path string) error {
+		return os.WriteFile(path, []byte("initializing"), 0o666)
+	})
+}
+
+// writeLockedMarkerWith is writeLockedMarker with the file write injectable for tests.
+func writeLockedMarkerWith(adminDir string, write func(path string) error) error {
 	var err error
 	for attempt := 0; attempt < lockedMarkerRecreateAttempts; attempt++ {
-		err = os.WriteFile(filepath.Join(adminDir, "locked"), []byte("initializing"), 0o666)
+		err = write(filepath.Join(adminDir, "locked"))
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

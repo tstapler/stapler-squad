@@ -310,6 +310,43 @@ func TestWriteAdminFiles_RecreatesAdminDir_When_PrunedBeforeLockedMarker(t *test
 	}
 }
 
+func TestWriteLockedMarker_ReturnsLastError_When_PruneWinsEveryAttempt(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	adminDir, err := AllocateAdminDirName(repoPath, "always-pruned")
+	require.NoError(t, err)
+	calls := 0
+
+	err = writeLockedMarkerWith(adminDir, func(string) error {
+		calls++
+		require.NoError(t, os.RemoveAll(filepath.Join(repoPath, ".git", "worktrees")))
+		return fmt.Errorf("write: %w", os.ErrNotExist)
+	})
+
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, lockedMarkerRecreateAttempts, calls)
+}
+
+func TestWriteLockedMarker_Succeeds_When_DirVanishesAfterFirstAttempt(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	adminDir, err := AllocateAdminDirName(repoPath, "pruned-once")
+	require.NoError(t, err)
+	calls := 0
+
+	err = writeLockedMarkerWith(adminDir, func(path string) error {
+		calls++
+		if calls == 1 {
+			require.NoError(t, os.RemoveAll(filepath.Join(repoPath, ".git", "worktrees")))
+		}
+		return os.WriteFile(path, []byte("initializing"), 0o666)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.FileExists(t, filepath.Join(adminDir, "locked"))
+}
+
 func TestWriteLockedMarker_ReturnsError_When_ParentIsNotADirectory(t *testing.T) {
 	t.Parallel()
 	blocker := filepath.Join(t.TempDir(), "file")
