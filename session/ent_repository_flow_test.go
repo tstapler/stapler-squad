@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/flowstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // newFlowTestRepo opens an on-disk repository (dbpool reader/writer split).
@@ -184,5 +185,5 @@ func poolQueries(name string) int64 {
 
 // newFlowReader builds a flowstore.Reader with the default workflow engine.
 func newFlowReader(c *ent.Client) *flowstore.Reader {
-	return flowstore.New(c, NewDefaultWorkflowEngine())
+	return flowstore.New(c, workflowengine.NewDefaultWorkflowEngine())
 }

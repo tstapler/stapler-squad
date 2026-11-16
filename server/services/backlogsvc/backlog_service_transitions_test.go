@@ -24,12 +24,13 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // newTransitionCRUDTestService mirrors newStageCRUDTestService
 // (backlog_service_stages_test.go) — same wiring, reused here under its own
 // name for this file's readability.
-func newTransitionCRUDTestService(t *testing.T) (*BacklogService, session.StageCRUDRepository, *session.ConfiguredWorkflowEngine, *session.Storage) {
+func newTransitionCRUDTestService(t *testing.T) (*BacklogService, workflowengine.StageCRUDRepository, *workflowengine.ConfiguredWorkflowEngine, *session.Storage) {
 	t.Helper()
 	return newStageCRUDTestService(t)
 }

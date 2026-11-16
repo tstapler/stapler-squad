@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"

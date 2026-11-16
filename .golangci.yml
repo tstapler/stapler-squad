@@ -186,6 +186,29 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/workflowengine is the transition-gate engine leaf: ent-backed repositories stay in
+        # session and satisfy its consumer-side ports, so it never imports session, github or server.
+        isolate_workflowengine:
+          list-mode: strict
+          files:
+            - "**/session/workflowengine/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/metric
+            - golang.org/x/sync/singleflight
+            - github.com/tstapler/stapler-squad/config
+            - github.com/tstapler/stapler-squad/internal/sqlitedsn
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/hostclaim
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and flowstore.Reader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.

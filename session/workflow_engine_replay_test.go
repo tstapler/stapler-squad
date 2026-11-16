@@ -18,17 +18,18 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // replayFixture builds a database file with the built-in stages and n idea
 // items, lets mutate edit the stage configuration, and returns its path.
-func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, StageCRUDRepository)) string {
+func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, workflowengine.StageCRUDRepository)) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "copy.db")
 	repo, err := NewEntRepository(WithDatabasePath(path))
 	require.NoError(t, err)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.GetEntClient()))
 	for range ideaItems {
 		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "replay item", Status: string(domain.BacklogStatusIdea)})
 		require.NoError(t, err)
@@ -40,15 +41,15 @@ func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, Sta
 	return path
 }
 
-func replayDisableEdge(t *testing.T, edge domain.SystemEdge) func(context.Context, StageCRUDRepository) {
-	return func(ctx context.Context, repo StageCRUDRepository) {
+func replayDisableEdge(t *testing.T, edge domain.SystemEdge) func(context.Context, workflowengine.StageCRUDRepository) {
+	return func(ctx context.Context, repo workflowengine.StageCRUDRepository) {
 		t.Helper()
 		ts, err := repo.ListAllTransitions(ctx, string(edge.From))
 		require.NoError(t, err)
 		off := false
 		for _, tr := range ts {
 			if tr.ToStageSlug == string(edge.To) {
-				_, err := repo.UpdateTransition(ctx, tr.ID, TransitionUpdateInput{Enabled: &off})
+				_, err := repo.UpdateTransition(ctx, tr.ID, workflowengine.TransitionUpdateInput{Enabled: &off})
 				require.NoError(t, err)
 				return
 			}
@@ -70,27 +71,27 @@ func dirNames(t *testing.T, dir string) []string {
 
 // entStageRepoFactory is the production wiring, supplied by tests because the
 // engine itself no longer names the ent constructor.
-func entStageRepoFactory(client *ent.Client) StageConfigRepository {
+func entStageRepoFactory(client *ent.Client) workflowengine.StageConfigRepository {
 	return NewEntStageConfigRepository(client)
 }
 
-func replayReport(t *testing.T, path string) *ReplayReport {
+func replayReport(t *testing.T, path string) *workflowengine.ReplayReport {
 	t.Helper()
-	client, closeFn, err := OpenReplayCopy(path, nil)
+	client, closeFn, err := workflowengine.OpenReplayCopy(path, nil)
 	require.NoError(t, err)
 	defer closeFn()
-	report, err := BuildWorkflowEngineReplay(context.Background(), client, entStageRepoFactory)
+	report, err := workflowengine.BuildWorkflowEngineReplay(context.Background(), client, entStageRepoFactory)
 	require.NoError(t, err)
 	return report
 }
 
-func (r *ReplayReport) find(caller domain.TransitionCaller, from, to domain.BacklogStatus) (ReplayDecision, bool) {
+func findDecision(r *workflowengine.ReplayReport, caller domain.TransitionCaller, from, to domain.BacklogStatus) (workflowengine.ReplayDecision, bool) {
 	for _, d := range r.Decisions {
 		if d.Caller == caller && d.Edge.From == from && d.Edge.To == to {
 			return d, true
 		}
 	}
-	return ReplayDecision{}, false
+	return workflowengine.ReplayDecision{}, false
 }
 
 func TestValidateReplayDBPath_RefusesLiveDirectoryAliasesAndStaleWAL(t *testing.T) {
@@ -99,39 +100,39 @@ func TestValidateReplayDBPath_RefusesLiveDirectoryAliasesAndStaleWAL(t *testing.
 	require.NoError(t, os.WriteFile(liveDB, []byte("live"), 0o600))
 	outside := t.TempDir()
 
-	_, err := ValidateReplayDBPath(liveDB, []string{live})
-	require.ErrorIs(t, err, ErrReplayLiveDatabase, "the live database itself")
+	_, err := workflowengine.ValidateReplayDBPath(liveDB, []string{live})
+	require.ErrorIs(t, err, workflowengine.ErrReplayLiveDatabase, "the live database itself")
 
 	nested := filepath.Join(live, "instances", "x", "copy.db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(nested), 0o750))
 	require.NoError(t, os.WriteFile(nested, []byte("x"), 0o600))
-	_, err = ValidateReplayDBPath(nested, []string{live})
-	require.ErrorIs(t, err, ErrReplayLiveDatabase, "any file under a live directory, copy or not")
+	_, err = workflowengine.ValidateReplayDBPath(nested, []string{live})
+	require.ErrorIs(t, err, workflowengine.ErrReplayLiveDatabase, "any file under a live directory, copy or not")
 
 	link := filepath.Join(outside, "link.db")
 	require.NoError(t, os.Symlink(liveDB, link))
-	_, err = ValidateReplayDBPath(link, []string{live})
-	require.ErrorIs(t, err, ErrReplayLiveDatabase, "a symlink to the live database")
+	_, err = workflowengine.ValidateReplayDBPath(link, []string{live})
+	require.ErrorIs(t, err, workflowengine.ErrReplayLiveDatabase, "a symlink to the live database")
 
 	hard := filepath.Join(outside, "hard.db")
 	require.NoError(t, os.Link(liveDB, hard))
-	_, err = ValidateReplayDBPath(hard, []string{live})
-	require.ErrorIs(t, err, ErrReplayLiveDatabase, "a hard link to the live database")
+	_, err = workflowengine.ValidateReplayDBPath(hard, []string{live})
+	require.ErrorIs(t, err, workflowengine.ErrReplayLiveDatabase, "a hard link to the live database")
 
 	copyPath := filepath.Join(outside, "copy.db")
 	require.NoError(t, os.WriteFile(copyPath, []byte("copy"), 0o600))
-	_, err = ValidateReplayDBPath(copyPath, []string{live})
+	_, err = workflowengine.ValidateReplayDBPath(copyPath, []string{live})
 	require.NoError(t, err, "a real copy elsewhere is accepted")
 
 	require.NoError(t, os.WriteFile(copyPath+"-wal", []byte("pending"), 0o600))
-	_, err = ValidateReplayDBPath(copyPath, []string{live})
+	_, err = workflowengine.ValidateReplayDBPath(copyPath, []string{live})
 	require.ErrorContains(t, err, "-wal is not empty")
 
-	_, err = ValidateReplayDBPath("", nil)
+	_, err = workflowengine.ValidateReplayDBPath("", nil)
 	require.Error(t, err)
-	_, err = ValidateReplayDBPath(outside, nil)
+	_, err = workflowengine.ValidateReplayDBPath(outside, nil)
 	require.ErrorContains(t, err, "is a directory")
-	_, err = ValidateReplayDBPath(filepath.Join(outside, "missing.db"), nil)
+	_, err = workflowengine.ValidateReplayDBPath(filepath.Join(outside, "missing.db"), nil)
 	require.Error(t, err)
 }
 
@@ -141,9 +142,9 @@ func TestRunWorkflowEngineReplay_RefusesAPathInsideALiveDirectoryBeforeOpeningIt
 	inside := filepath.Join(live, "copy.db")
 	require.NoError(t, os.Rename(path, inside))
 
-	_, _, err := RunWorkflowEngineReplay(context.Background(), inside, []string{live}, entStageRepoFactory)
+	_, _, err := workflowengine.RunWorkflowEngineReplay(context.Background(), inside, []string{live}, entStageRepoFactory)
 
-	require.ErrorIs(t, err, ErrReplayLiveDatabase)
+	require.ErrorIs(t, err, workflowengine.ErrReplayLiveDatabase)
 }
 
 func TestReplay_OpensTheCopyReadOnlyAndLeavesItByteIdentical(t *testing.T) {
@@ -152,7 +153,7 @@ func TestReplay_OpensTheCopyReadOnlyAndLeavesItByteIdentical(t *testing.T) {
 	require.NoError(t, err)
 	namesBefore := dirNames(t, filepath.Dir(path))
 
-	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, nil, entStageRepoFactory)
+	out, failed, err := workflowengine.RunWorkflowEngineReplay(context.Background(), path, nil, entStageRepoFactory)
 	require.NoError(t, err)
 	require.False(t, failed)
 	require.NotEmpty(t, out)
@@ -162,7 +163,7 @@ func TestReplay_OpensTheCopyReadOnlyAndLeavesItByteIdentical(t *testing.T) {
 	assert.Equal(t, sha256.Sum256(before), sha256.Sum256(after), "the copy is byte-identical after a replay")
 	assert.Equal(t, namesBefore, dirNames(t, filepath.Dir(path)), "no -wal, -shm or other file appeared next to the copy")
 
-	client, closeFn, err := OpenReplayCopy(path, nil)
+	client, closeFn, err := workflowengine.OpenReplayCopy(path, nil)
 	require.NoError(t, err)
 	defer closeFn()
 	_, err = client.BacklogItem.Create().SetTitle("must not persist").Save(context.Background())
@@ -179,17 +180,17 @@ func TestReplay_SeededCopy_AllowsEveryAgentAndSystemEdgeAndGatesEachSystemRequir
 
 	want := 0
 	for _, spec := range domain.TransitionCallers() {
-		want += len(replayEdges(spec))
+		want += len(workflowengine.ReplayEdges(spec))
 	}
 	assert.Len(t, report.Decisions, want, "one row per registered caller and declared edge")
 
-	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone)
+	merge, ok := findDecision(report, domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", merge.Live)
 	assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, merge.Synthetic, "the edited path: an unsatisfied operator gate denies the merge advance")
 
 	for _, d := range report.Decisions {
-		if d.Synthetic != "-" && d.Synthetic != replayNoStoredTransition {
+		if d.Synthetic != "-" && d.Synthetic != workflowengine.ReplayNoStoredTransition {
 			assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, d.Synthetic, "%s %s->%s", d.Caller, d.Edge.From, d.Edge.To)
 		}
 	}
@@ -197,31 +198,31 @@ func TestReplay_SeededCopy_AllowsEveryAgentAndSystemEdgeAndGatesEachSystemRequir
 }
 
 func TestReplayDecision_Failure_FlagsOnlyAgentAndSystemGraphDenials(t *testing.T) {
-	denied := func(class domain.CallerClass, reason string) ReplayDecision {
-		return ReplayDecision{Caller: "c", Class: class, Edge: domain.SystemEdge{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady}, Live: replayDeniedPrefix + reason}
+	denied := func(class domain.CallerClass, reason string) workflowengine.ReplayDecision {
+		return workflowengine.ReplayDecision{Caller: "c", Class: class, Edge: domain.SystemEdge{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady}, Live: workflowengine.ReplayDeniedPrefix + reason}
 	}
 	for _, class := range []domain.CallerClass{domain.ClassAgent, domain.ClassSystem} {
-		msg, failed := denied(class, backlogdto.DeniedConfigGraph).failure()
+		msg, failed := denied(class, backlogdto.DeniedConfigGraph).Failure()
 		assert.True(t, failed, class)
 		assert.Contains(t, msg, "no gate involved")
-		_, failed = denied(class, backlogdto.DeniedTargetStageRemoved).failure()
+		_, failed = denied(class, backlogdto.DeniedTargetStageRemoved).Failure()
 		assert.True(t, failed, class)
-		_, failed = denied(class, backlogdto.DeniedOperatorGate).failure()
+		_, failed = denied(class, backlogdto.DeniedOperatorGate).Failure()
 		assert.False(t, failed, "a denial by a real operator gate is the configuration working")
 	}
-	_, failed := denied(domain.ClassOperator, backlogdto.DeniedConfigGraph).failure()
+	_, failed := denied(domain.ClassOperator, backlogdto.DeniedConfigGraph).Failure()
 	assert.False(t, failed, "operators choose their edge, so a disabled edge denies them by design")
-	_, failed = (ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}).failure()
+	_, failed = workflowengine.ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}.Failure()
 	assert.False(t, failed)
 }
 
 func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing.T) {
-	addGate := func(ctx context.Context, repo StageCRUDRepository) {
+	addGate := func(ctx context.Context, repo workflowengine.StageCRUDRepository) {
 		ts, err := repo.ListAllTransitions(ctx, string(domain.BacklogStatusPRPending))
 		require.NoError(t, err)
 		for _, tr := range ts {
 			if tr.ToStageSlug == string(domain.BacklogStatusDone) {
-				_, err := repo.CreateGate(ctx, GateCreateInput{TransitionID: tr.ID, Kind: string(domain.GateKindHumanApproval), Enabled: true})
+				_, err := repo.CreateGate(ctx, workflowengine.GateCreateInput{TransitionID: tr.ID, Kind: string(domain.GateKindHumanApproval), Enabled: true})
 				require.NoError(t, err)
 			}
 		}
@@ -230,7 +231,7 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 	report := replayReport(t, replayFixture(t, 0, addGate))
 
 	assert.Equal(t, "edited", report.Config)
-	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone)
+	merge, ok := findDecision(report, domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone)
 	require.True(t, ok)
 	assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, merge.Live)
 	assert.False(t, report.Failed(), strings.Join(report.Failures, "\n"))
@@ -239,10 +240,10 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 func TestReplay_SystemRequiredEdgeWithNoStoredTransitionCannotCarryAGate(t *testing.T) {
 	report := replayReport(t, replayFixture(t, 0, nil))
 
-	d, ok := report.find(domain.CallerRecoverDriftedPR, domain.BacklogStatusReady, domain.BacklogStatusPRPending)
+	d, ok := findDecision(report, domain.CallerRecoverDriftedPR, domain.BacklogStatusReady, domain.BacklogStatusPRPending)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", d.Live)
-	assert.Equal(t, replayNoStoredTransition, d.Synthetic)
+	assert.Equal(t, workflowengine.ReplayNoStoredTransition, d.Synthetic)
 }
 
 func TestReplay_PreviewsItemsStrandedByAnEditedGraph(t *testing.T) {
@@ -259,7 +260,7 @@ func TestReplay_RenderListsEveryCallerAndTheVerdict(t *testing.T) {
 	out := replayReport(t, replayFixture(t, 0, nil)).Render()
 
 	for _, spec := range domain.TransitionCallers() {
-		if len(replayEdges(spec)) > 0 {
+		if len(workflowengine.ReplayEdges(spec)) > 0 {
 			assert.Contains(t, out, string(spec.Name))
 		}
 	}
@@ -276,7 +277,7 @@ func TestWorkflowEngineReplayCommand(t *testing.T) {
 	if path == "" {
 		t.Skip("set WORKFLOW_ENGINE_REPLAY_DB to a COPY of the database (make workflow-engine-replay DB=<copy>)")
 	}
-	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, LiveStateDirs(), entStageRepoFactory)
+	out, failed, err := workflowengine.RunWorkflowEngineReplay(context.Background(), path, workflowengine.LiveStateDirs(), entStageRepoFactory)
 	require.NoError(t, err)
 	_, _ = os.Stdout.WriteString(out)
 	if failed {
@@ -286,7 +287,7 @@ func TestWorkflowEngineReplayCommand(t *testing.T) {
 
 func TestReplayGateOverlay_AddsOneUnsatisfiedGateInMemoryOnly(t *testing.T) {
 	path := replayFixture(t, 0, nil)
-	client, closeFn, err := OpenReplayCopy(path, nil)
+	client, closeFn, err := workflowengine.OpenReplayCopy(path, nil)
 	require.NoError(t, err)
 	defer closeFn()
 	base := NewEntStageConfigRepository(client)
@@ -294,7 +295,7 @@ func TestReplayGateOverlay_AddsOneUnsatisfiedGateInMemoryOnly(t *testing.T) {
 
 	plain, err := base.ListEnabledTransitions(context.Background())
 	require.NoError(t, err)
-	over, err := replayGateOverlay{base, edge}.ListEnabledTransitions(context.Background())
+	over, err := workflowengine.NewReplayGateOverlay(base, edge).ListEnabledTransitions(context.Background())
 	require.NoError(t, err)
 
 	gates := func(ts []*ent.StageTransition) (n int) {

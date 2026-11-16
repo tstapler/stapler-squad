@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassignedAfterSessionStart
@@ -27,14 +28,14 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	ctx := context.Background()
 
 	pmRepo := session.NewEntPipelineModeRepository(repo.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
 		TriagePromptTemplate: "original quick triage prompt",
 	})
 	require.NoError(t, err)
-	_, err = pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err = pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                 "full",
 		Name:                 "Full Review",
 		Enabled:              true,
@@ -72,7 +73,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	quickMode, err := pmRepo.GetBySlug(ctx, "quick")
 	require.NoError(t, err)
 	newTemplate := "edited quick triage prompt — content since changed"
-	_, err = pmRepo.Update(ctx, quickMode.ID, session.PipelineModeUpdateInput{TriagePromptTemplate: &newTemplate})
+	_, err = pmRepo.Update(ctx, quickMode.ID, workflowengine.PipelineModeUpdateInput{TriagePromptTemplate: &newTemplate})
 	require.NoError(t, err)
 
 	// Sanity: "quick"'s live content hash has actually changed (proves the edit was real).
@@ -116,7 +117,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	// --- (1) Up: pre-existing PipelineMode and ItemSession rows read back safe defaults ---
 
 	pipelineModeRepo := session.NewEntPipelineModeRepository(repo.Client)
-	preExistingMode, err := pipelineModeRepo.Create(ctx, session.PipelineModeCreateInput{
+	preExistingMode, err := pipelineModeRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                  "pre-existing-mode",
 		Name:                  "Mode created before stage-executor fields existed",
 		Enabled:               true,
@@ -134,7 +135,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	})
 	require.NoError(t, err)
 
-	parsedExecutors, err := session.ParseStageExecutors(preExistingMode.StageExecutorsJSON)
+	parsedExecutors, err := workflowengine.ParseStageExecutors(preExistingMode.StageExecutorsJSON)
 	require.NoError(t, err, "a pre-existing row's stage_executors_json must parse cleanly")
 	assert.Equal(t, "{}", preExistingMode.StageExecutorsJSON)
 	assert.Empty(t, parsedExecutors)
@@ -170,7 +171,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	require.NoError(t, err)
 	itemOnPreExistingMode := &backlogdto.BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
 
-	for _, role := range []session.StageRole{session.StageRoleTriage, session.StageRoleReview, session.StageRoleWork} {
+	for _, role := range []workflowengine.StageRole{workflowengine.StageRoleTriage, workflowengine.StageRoleReview, workflowengine.StageRoleWork} {
 		program, model := engine.ExecutorFor(itemOnPreExistingMode, role)
 		assert.Equal(t, "", program, "role %s: pre-existing mode must never resolve a program override", role)
 		assert.Equal(t, "", model, "role %s: pre-existing mode must never resolve a model override", role)
@@ -179,7 +180,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	// --- (3) Rollback safety: round trip through pre-project accessors that never reference the new fields ---
 
 	newName := "Renamed pre-existing mode"
-	updatedMode, err := pipelineModeRepo.Update(ctx, preExistingMode.ID, session.PipelineModeUpdateInput{
+	updatedMode, err := pipelineModeRepo.Update(ctx, preExistingMode.ID, workflowengine.PipelineModeUpdateInput{
 		Name: &newName,
 	})
 	require.NoError(t, err)

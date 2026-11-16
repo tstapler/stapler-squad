@@ -3,8 +3,8 @@ package chains
 import (
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"sort"
 	"strings"
 )
@@ -55,7 +55,7 @@ var (
 // ValidateDisableSystemRequiredEdge rejects removing a system-required edge,
 // including every X->archived edge. Callers apply it to disables and deletes.
 func ValidateDisableSystemRequiredEdge(from, to string) error {
-	if !session.IsSystemRequired(domain.BacklogStatus(from), domain.BacklogStatus(to)) {
+	if !workflowengine.IsSystemRequired(domain.BacklogStatus(from), domain.BacklogStatus(to)) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s->%s. Automation relies on this transition; edit its gates instead of disabling it",
@@ -64,13 +64,13 @@ func ValidateDisableSystemRequiredEdge(from, to string) error {
 
 // BuiltInStatuses returns a copy of the built-in stage statuses in pipeline order.
 func BuiltInStatuses() []domain.BacklogStatus {
-	return append([]domain.BacklogStatus(nil), session.BuiltInStageOrder...)
+	return append([]domain.BacklogStatus(nil), workflowengine.BuiltInStageOrder...)
 }
 
 // StrandedStatuses returns, sorted, every status that has live items but no
 // allowed outgoing edge once candidateEdges (enabled edges only) are unioned
 // with the non-archive system-required edges, which is the enforced graph.
-func StrandedStatuses(candidateEdges []session.TransitionDefinition, liveCountByStatus map[string]int) []string {
+func StrandedStatuses(candidateEdges []workflowengine.TransitionDefinition, liveCountByStatus map[string]int) []string {
 	hasOut := make(map[string]bool, len(candidateEdges))
 	for _, t := range candidateEdges {
 		if t.Enabled {
@@ -82,7 +82,7 @@ func StrandedStatuses(candidateEdges []session.TransitionDefinition, liveCountBy
 		if n == 0 || status == string(domain.BacklogStatusArchived) || hasOut[status] {
 			continue
 		}
-		if len(session.SystemRequiredTargets(domain.BacklogStatus(status))) > 0 {
+		if len(workflowengine.SystemRequiredTargets(domain.BacklogStatus(status))) > 0 {
 			continue
 		}
 		stranded = append(stranded, status)
@@ -99,7 +99,7 @@ func StrandedStatuses(candidateEdges []session.TransitionDefinition, liveCountBy
 // union of every row ever saved. Every known stage gets an entry (possibly
 // nil) even with zero outgoing edges, so callers can distinguish "no edges"
 // from "unknown stage."
-func buildAdjacency(stages []session.StageDefinition, transitions []session.TransitionDefinition) map[string][]string {
+func buildAdjacency(stages []workflowengine.StageDefinition, transitions []workflowengine.TransitionDefinition) map[string][]string {
 	adjacency := make(map[string][]string, len(stages))
 	for _, s := range stages {
 		if _, ok := adjacency[s.Slug]; !ok {
@@ -153,7 +153,7 @@ func reachableFrom(entryStages []string, adjacency map[string][]string) map[stri
 // only computed for an otherwise-valid graph); this mirrors ValidateGraph's
 // single-error-return shape used by every other validator in this package
 // (e.g. TransitionGuard).
-func ValidateGraph(stages []session.StageDefinition, transitions []session.TransitionDefinition) ([]string, error) {
+func ValidateGraph(stages []workflowengine.StageDefinition, transitions []workflowengine.TransitionDefinition) ([]string, error) {
 	adjacency := buildAdjacency(stages, transitions)
 
 	// Task 2.6.1c: every non-terminal stage must have >=1 enabled outgoing
@@ -205,7 +205,7 @@ func ValidateGraph(stages []session.StageDefinition, transitions []session.Trans
 // layer's live-item-count-per-stage query) — this package makes no storage
 // calls of its own, keeping it pure/testable per the Pattern Decisions
 // table.
-func ValidateDisableTransition(candidateEdges []session.TransitionDefinition, fromStage string, liveItemCountByStage map[string]int) error {
+func ValidateDisableTransition(candidateEdges []workflowengine.TransitionDefinition, fromStage string, liveItemCountByStage map[string]int) error {
 	liveCount := liveItemCountByStage[fromStage]
 	if liveCount == 0 {
 		return nil
@@ -234,7 +234,7 @@ func ValidateDisableTransition(candidateEdges []session.TransitionDefinition, fr
 // lint's soft-warning purpose (operator-authored graphs of at most dozens of
 // nodes, per the Pattern Decisions table) without needing a full
 // enumerate-every-simple-cycle algorithm (e.g. Johnson's).
-func detectUngatedCycles(stages []session.StageDefinition, transitions []session.TransitionDefinition, adjacency map[string][]string) []string {
+func detectUngatedCycles(stages []workflowengine.StageDefinition, transitions []workflowengine.TransitionDefinition, adjacency map[string][]string) []string {
 	gateCounts := make(map[[2]string]int, len(transitions))
 	for _, t := range transitions {
 		if t.Enabled {

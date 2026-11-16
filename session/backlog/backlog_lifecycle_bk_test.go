@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -4206,7 +4207,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 	ctx := context.Background()
 	client := storage.GetEntClient()
 
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
 	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusInProgress))).Only(ctx)
 	require.NoError(t, err)
 	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusReview))).Only(ctx)
@@ -4226,7 +4227,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 
 	stageRepo := session.NewEntStageConfigRepository(client)
 	gateRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4265,7 +4266,7 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 
 	stageRepo := session.NewEntStageConfigRepository(client)
 	gateRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4298,7 +4299,7 @@ func TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCus
 
 	stageRepo := session.NewEntStageConfigRepository(client)
 	gateRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

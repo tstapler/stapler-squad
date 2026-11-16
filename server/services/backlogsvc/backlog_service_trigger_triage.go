@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // notifyTriagePersistFailure publishes an operator-facing notification when one or more of
@@ -459,7 +460,7 @@ func (s *BacklogService) TriggerTriage(
 	// mode-side hash (Task 5.2.4a).
 	var triageExecProgram, triageExecModel string
 	if s.pipelineEngine != nil {
-		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleTriage)
+		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, workflowengine.StageRoleTriage)
 	}
 	triageExecutorHash := pipeline.ComputeExecutorHash(triageExecProgram, triageExecModel)
 	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")

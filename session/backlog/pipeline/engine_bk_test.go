@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func assertWarnLogContainsUnresolved(t *testing.T, logOutput, itemID, mode string) {
@@ -626,7 +627,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault
 	item := &backlogdto.BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
 
 	buf := blktest.CaptureWarningLog(t)
-	program, model := engine.ExecutorFor(item, session.StageRoleWork)
+	program, model := engine.ExecutorFor(item, workflowengine.StageRoleWork)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
 	}
@@ -650,7 +651,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 	item := &backlogdto.BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
 
 	buf := blktest.CaptureWarningLog(t)
-	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
+	program, model := engine.ExecutorFor(item, workflowengine.StageRoleTriage)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
 	}
@@ -659,8 +660,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 
 func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_RoleHasOverride(t *testing.T) {
 	t.Parallel()
-	stageJSON, err := session.SerializeStageExecutors(map[session.StageRole]session.PipelineStageExecutor{
-		session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+	stageJSON, err := workflowengine.SerializeStageExecutors(map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{
+		workflowengine.StageRoleTriage: {Model: "claude-haiku-4-5"},
 	})
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
@@ -677,7 +678,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_Rol
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 	item := &backlogdto.BacklogItemData{ID: "item-override", PipelineMode: "cheap-triage"}
 
-	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
+	program, model := engine.ExecutorFor(item, workflowengine.StageRoleTriage)
 	if program != "" || model != "claude-haiku-4-5" {
 		t.Fatalf("triage: got (%q, %q), want (\"\", \"claude-haiku-4-5\")", program, model)
 	}
@@ -687,8 +688,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeH
 	t.Parallel()
 	// The mode overrides triage only -- review must inherit the default, not
 	// leak triage's override.
-	stageJSON, err := session.SerializeStageExecutors(map[session.StageRole]session.PipelineStageExecutor{
-		session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+	stageJSON, err := workflowengine.SerializeStageExecutors(map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{
+		workflowengine.StageRoleTriage: {Model: "claude-haiku-4-5"},
 	})
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
@@ -705,7 +706,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeH
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 	item := &backlogdto.BacklogItemData{ID: "item-no-override", PipelineMode: "cheap-triage"}
 
-	program, model := engine.ExecutorFor(item, session.StageRoleReview)
+	program, model := engine.ExecutorFor(item, workflowengine.StageRoleReview)
 	if program != "" || model != "" {
 		t.Fatalf("review: got (%q, %q), want (\"\", \"\")", program, model)
 	}

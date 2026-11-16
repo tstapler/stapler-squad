@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -790,7 +791,7 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			evt := &events.Event{Type: events.EventBacklogItemChanged, Timestamp: fixedTime, BacklogItemPayload: tc.payload}
-			out := convertEventToBacklogItemEvent(context.Background(), nil, session.NewDefaultWorkflowEngine(), evt, nil, nil)
+			out := convertEventToBacklogItemEvent(context.Background(), nil, workflowengine.NewDefaultWorkflowEngine(), evt, nil, nil)
 			require.NotNil(t, out)
 			tc.check(t, out)
 		})
@@ -846,10 +847,10 @@ func TestSnapshotEventsForItems_Should_BatchWorktreeLookups(t *testing.T) {
 	}
 
 	sessionQueries.Store(0)
-	snapshotEventsForItems(context.Background(), storage, session.NewDefaultWorkflowEngine(), build(3), nil, nil)
+	snapshotEventsForItems(context.Background(), storage, workflowengine.NewDefaultWorkflowEngine(), build(3), nil, nil)
 	small := sessionQueries.Load()
 	sessionQueries.Store(0)
-	evs := snapshotEventsForItems(context.Background(), storage, session.NewDefaultWorkflowEngine(), build(40), nil, nil)
+	evs := snapshotEventsForItems(context.Background(), storage, workflowengine.NewDefaultWorkflowEngine(), build(40), nil, nil)
 	assert.Len(t, evs, 40)
 	assert.Equal(t, small, sessionQueries.Load(), "session queries must not grow with item count")
 	assert.LessOrEqual(t, small, int64(2))

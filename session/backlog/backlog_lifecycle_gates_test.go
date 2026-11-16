@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // newGateTimeoutTestFixture creates a real TransitionGate row (fromSlug ->
@@ -179,7 +180,7 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 	ctx := context.Background()
 	client := storage.GetEntClient()
 
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
 	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusInProgress))).Only(ctx)
 	require.NoError(t, err)
 	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusReview))).Only(ctx)
@@ -199,7 +200,7 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 
 	stageRepo := session.NewEntStageConfigRepository(client)
 	gateRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

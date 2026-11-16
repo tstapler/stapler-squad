@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing verifies the
@@ -48,7 +49,7 @@ func TestEnsureDefaultSDDPipelineMode_should_BeNoOp_When_AlreadyExists(t *testin
 	// Simulate an operator hand-edit after the first seed.
 	first, err := repo.GetBySlug(t.Context(), DefaultSDDPipelineModeSlug)
 	require.NoError(t, err)
-	edited, err := repo.Update(t.Context(), first.ID, PipelineModeUpdateInput{
+	edited, err := repo.Update(t.Context(), first.ID, workflowengine.PipelineModeUpdateInput{
 		Name: strPtr("Operator's Custom SDD Mode"),
 	})
 	require.NoError(t, err)
@@ -135,11 +136,11 @@ type raceLosingPipelineModeRepo struct {
 	createCalled bool
 }
 
-func (r *raceLosingPipelineModeRepo) Create(_ context.Context, _ PipelineModeCreateInput) (*ent.PipelineMode, error) {
+func (r *raceLosingPipelineModeRepo) Create(_ context.Context, _ workflowengine.PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	r.createCalled = true
 	return nil, domain.ErrConflict
 }
-func (r *raceLosingPipelineModeRepo) Update(_ context.Context, _ uuid.UUID, _ PipelineModeUpdateInput) (*ent.PipelineMode, error) {
+func (r *raceLosingPipelineModeRepo) Update(_ context.Context, _ uuid.UUID, _ workflowengine.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
 	return nil, domain.ErrNotFound
 }
 func (r *raceLosingPipelineModeRepo) Delete(_ context.Context, _ uuid.UUID) error {
@@ -158,6 +159,6 @@ func (r *raceLosingPipelineModeRepo) ListEnabled(_ context.Context) ([]*ent.Pipe
 	return nil, nil
 }
 
-var _ PipelineModeRepository = (*raceLosingPipelineModeRepo)(nil)
+var _ workflowengine.PipelineModeRepository = (*raceLosingPipelineModeRepo)(nil)
 
 func strPtr(s string) *string { return &s }

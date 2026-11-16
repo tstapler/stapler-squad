@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // gateFixture is one guard scenario: an item input plus the transition it
@@ -47,9 +48,9 @@ type engineDiff struct {
 }
 
 func allStatusPairs() [][2]domain.BacklogStatus {
-	pairs := make([][2]domain.BacklogStatus, 0, len(BuiltInStageOrder)*len(BuiltInStageOrder))
-	for _, from := range BuiltInStageOrder {
-		for _, to := range BuiltInStageOrder {
+	pairs := make([][2]domain.BacklogStatus, 0, len(workflowengine.BuiltInStageOrder)*len(workflowengine.BuiltInStageOrder))
+	for _, from := range workflowengine.BuiltInStageOrder {
+		for _, to := range workflowengine.BuiltInStageOrder {
 			pairs = append(pairs, [2]domain.BacklogStatus{from, to})
 		}
 	}
@@ -83,7 +84,7 @@ func diffEngines(t *testing.T, reference, underTest domain.WorkflowEngine, corpu
 			d.Edges = append(d.Edges, fmt.Sprintf("CanTransition(%s,%s): reference=%t underTest=%t", from, to, r, u))
 		}
 	}
-	for _, from := range BuiltInStageOrder {
+	for _, from := range workflowengine.BuiltInStageOrder {
 		if r, u := reference.AllowedTransitions(from, nil), underTest.AllowedTransitions(from, nil); fmt.Sprint(r) != fmt.Sprint(u) {
 			d.Edges = append(d.Edges, fmt.Sprintf("AllowedTransitions(%s): reference=%v underTest=%v", from, r, u))
 		}
@@ -104,10 +105,10 @@ func diffEngines(t *testing.T, reference, underTest domain.WorkflowEngine, corpu
 
 func TestEquivalenceHarness_PassesAndCorpusCoversEverySentinel_WhenBothSidesAreDefault(t *testing.T) {
 	t.Parallel()
-	def := NewDefaultWorkflowEngine()
+	def := workflowengine.NewDefaultWorkflowEngine()
 	corpus := gateFixtureCorpus()
 
-	require.Equal(t, engineDiff{}, diffEngines(t, def, NewDefaultWorkflowEngine(), corpus))
+	require.Equal(t, engineDiff{}, diffEngines(t, def, workflowengine.NewDefaultWorkflowEngine(), corpus))
 
 	for _, f := range corpus {
 		got := def.ValidateGates(f.input, f.to, nil)
@@ -123,7 +124,7 @@ func TestConfiguredWorkflowEngine_MatchesDefaultOn81Pairs_WhenSeeded(t *testing.
 	t.Parallel()
 	configured, _ := newSeededConfiguredWorkflowEngine(t)
 
-	diff := diffEngines(t, NewDefaultWorkflowEngine(), configured, nil)
+	diff := diffEngines(t, workflowengine.NewDefaultWorkflowEngine(), configured, nil)
 
 	require.Empty(t, diff.Edges)
 	require.Len(t, allStatusPairs(), 81)
@@ -135,7 +136,7 @@ func TestConfiguredWorkflowEngine_MatchesDefaultOn81Pairs_WhenSeeded(t *testing.
 func TestRawConfiguredGateGap_ReportedAsInformation_NotFailure(t *testing.T) {
 	t.Parallel()
 	configured, _ := newSeededConfiguredWorkflowEngine(t)
-	def := NewDefaultWorkflowEngine()
+	def := workflowengine.NewDefaultWorkflowEngine()
 	idea := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 
 	require.ErrorIs(t, def.ValidateGates(idea, domain.BacklogStatusReady, nil), domain.ErrACRequired)
@@ -195,21 +196,21 @@ func TestSeededStageConfig_ByteEquivalentToValidTransitions_WhenSeedApplied(t *t
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.Client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
 
 	require.Empty(t, seededEdgeDiff(ctx, t, repo))
 	// Ordering-insensitive hash equality: the fingerprint of the live rows is
 	// the fingerprint of domain.ValidTransitions() and the seed tables.
-	live, err := StageConfigFingerprint(ctx, repo.Client)
+	live, err := workflowengine.StageConfigFingerprint(ctx, repo.Client)
 	require.NoError(t, err)
-	require.Equal(t, SeedFingerprint(), live)
+	require.Equal(t, workflowengine.SeedFingerprint(), live)
 }
 
 func TestSeededStageConfig_DetectsDrift_WhenOneEdgeRemoved(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.Client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
 
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
 	rows, err := repo.Client.StageTransition.Query().All(ctx)

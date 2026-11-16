@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestBacklogItemLink locks in the deep-link shape pushAndCreatePR and
@@ -482,7 +483,7 @@ func TestPushAndCreatePR_Preflight_SilentWhenUndetermined(t *testing.T) {
 func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhenSatisfied(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := newPRPendingTestItem(t, h.storage, 9701)
 	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
@@ -515,7 +516,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, domain.BacklogStatusReview)
 	listener := NewBacklogLifecycleListener(h.storage)
@@ -541,7 +542,7 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 
 func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReassignment(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, session.ModeOff)
+	h := newGateHarness(t, workflowengine.ModeOff)
 	item := h.newItem(t, domain.BacklogStatusInProgress)
 	listener := NewBacklogLifecycleListener(h.storage)
 

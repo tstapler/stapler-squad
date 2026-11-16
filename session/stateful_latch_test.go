@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 const (
@@ -18,10 +19,10 @@ const (
 
 func TestEffectiveGateStateful_FieldOrKind(t *testing.T) {
 	t.Parallel()
-	require.False(t, EffectiveGateStateful(domain.GateKindStructural, false))
-	require.True(t, EffectiveGateStateful(domain.GateKindStructural, true))
+	require.False(t, workflowengine.EffectiveGateStateful(domain.GateKindStructural, false))
+	require.True(t, workflowengine.EffectiveGateStateful(domain.GateKindStructural, true))
 	for _, k := range []domain.GateKind{domain.GateKindHumanApproval, domain.GateKindAutomatedReview, domain.GateKindCustom} {
-		require.True(t, EffectiveGateStateful(k, false), "%s is always stateful", k)
+		require.True(t, workflowengine.EffectiveGateStateful(k, false), "%s is always stateful", k)
 	}
 }
 
@@ -32,16 +33,16 @@ func TestShadow_SkipsStatefulStructuralGateWithoutIo_WhenFieldSet(t *testing.T) 
 		wantSkipped int
 	}{{true, 1}, {false, 0}} {
 		repo := NewTestEntRepository(t)
-		require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
+		require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 		gateRepo := &failIfCalledGateRepo{t: t}
-		cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+		cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 		require.NoError(t, err)
 		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{tc.stateful})
-		h := newSelectorHarness(t, ModeShadow, cfg)
+		h := newSelectorHarness(t, workflowengine.ModeShadow, cfg)
 
 		_ = h.sel.ValidateGates(domain.BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: latchACDone}, to, nil)
 
-		require.Equal(t, tc.wantSkipped, h.recorder.notCompared[NotComparedStatefulGate], "stateful=%t", tc.stateful)
+		require.Equal(t, tc.wantSkipped, h.recorder.notCompared[workflowengine.NotComparedStatefulGate], "stateful=%t", tc.stateful)
 		require.Zero(t, gateRepo.calls.Load())
 	}
 }
@@ -50,8 +51,8 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 	t.Parallel()
 	for _, stateful := range []bool{true, false} {
 		repo := NewTestEntRepository(t)
-		require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
-		cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
+		require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
+		cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
 		require.NoError(t, err)
 		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{stateful})
 		itemID := uuid.NewString()
@@ -76,7 +77,7 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 func TestRollback_ClearsStatefulLatchOfUndoneEdge(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	from, to := newCustomTransitionWithGates(t, h.repo.Client, h.cfg, []domain.GateKind{domain.GateKindStructural}, []bool{true})
 	item := h.newItem(t, from)
 	satisfied := domain.BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACDone}

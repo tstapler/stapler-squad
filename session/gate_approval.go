@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // gate_approval.go — Story 2.4.1's human-approval gate: a stateful gate
@@ -38,7 +39,7 @@ import (
 //
 // SatisfiedAt is set only when approved is true — a reject has no "satisfied
 // at" moment.
-func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*GateSatisfactionData, error) {
+func RecordGateApproval(ctx context.Context, repo workflowengine.GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*workflowengine.GateSatisfactionData, error) {
 	if repo == nil {
 		return nil, fmt.Errorf("gate_approval: no GateSatisfactionRepository configured")
 	}
@@ -60,7 +61,7 @@ func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, it
 		now := time.Now()
 		satisfiedAt = &now
 	}
-	record, err := repo.Update(ctx, itemID, gateID, GateSatisfactionUpdateInput{
+	record, err := repo.Update(ctx, itemID, gateID, workflowengine.GateSatisfactionUpdateInput{
 		Satisfied:         &approved,
 		SatisfiedBy:       &by,
 		SatisfiedAt:       satisfiedAt,
@@ -76,13 +77,13 @@ func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, it
 // Returns ErrConflict, via repo.Create, if a concurrent caller created the
 // row between this call's initial lookup and this Create — the schema's
 // UNIQUE(item_id, gate_id) index is the actual enforcement point.
-func createGateApproval(ctx context.Context, repo GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*GateSatisfactionData, error) {
+func createGateApproval(ctx context.Context, repo workflowengine.GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*workflowengine.GateSatisfactionData, error) {
 	var satisfiedAt *time.Time
 	if approved {
 		now := time.Now()
 		satisfiedAt = &now
 	}
-	record, err := repo.Create(ctx, GateSatisfactionCreateInput{
+	record, err := repo.Create(ctx, workflowengine.GateSatisfactionCreateInput{
 		ItemID:      itemID,
 		GateID:      gateID,
 		Satisfied:   approved,

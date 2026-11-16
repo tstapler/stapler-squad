@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 import (
 	"context"
@@ -105,7 +105,7 @@ func (e *ConfiguredWorkflowEngine) lookupTimeout() time.Duration {
 	if e.gateLookupTimeout > 0 {
 		return e.gateLookupTimeout
 	}
-	return defaultGateLookupTimeout
+	return DefaultGateLookupTimeout
 }
 
 // ClearLatches undoes RecordLatchesAfterCommit for the from->to edge; a no-op
@@ -121,7 +121,7 @@ func (s *SwitchableWorkflowEngine) ClearLatches(itemID string, from, to domain.B
 func (e *ConfiguredWorkflowEngine) recordLatch(itemID, gateID uuid.UUID) error {
 	timeout := e.gateLookupTimeout
 	if timeout <= 0 {
-		timeout = defaultGateLookupTimeout
+		timeout = DefaultGateLookupTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -153,7 +153,8 @@ func (v engineView) TransitionCommitted(item domain.BacklogItemTransitionInput, 
 	}
 }
 
-func notifyTransitionCommitted(view domain.WorkflowEngine, item domain.BacklogItemTransitionInput, to domain.BacklogStatus) {
+// NotifyTransitionCommitted forwards a committed transition to views that latch gates.
+func NotifyTransitionCommitted(view domain.WorkflowEngine, item domain.BacklogItemTransitionInput, to domain.BacklogStatus) {
 	if o, ok := view.(commitObserver); ok {
 		o.TransitionCommitted(item, to)
 	}

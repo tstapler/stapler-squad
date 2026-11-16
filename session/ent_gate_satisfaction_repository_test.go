@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // newTestGateSatisfactionFixture creates a fresh stage/transition/gate row
@@ -52,12 +53,12 @@ func TestEntGateSatisfactionRepository_Update_should_Succeed_When_ExpectedSatisf
 	ctx := context.Background()
 	itemID := uuid.New()
 
-	_, err := repo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
+	_, err := repo.Create(ctx, workflowengine.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
 	require.NoError(t, err)
 
 	expected := false
 	newSatisfied := true
-	updated, err := repo.Update(ctx, itemID, gateID, GateSatisfactionUpdateInput{
+	updated, err := repo.Update(ctx, itemID, gateID, workflowengine.GateSatisfactionUpdateInput{
 		Satisfied:         &newSatisfied,
 		ExpectedSatisfied: &expected,
 	})
@@ -74,12 +75,12 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnConflictAndLeaveRowUn
 	ctx := context.Background()
 	itemID := uuid.New()
 
-	_, err := repo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
+	_, err := repo.Create(ctx, workflowengine.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
 	require.NoError(t, err)
 
 	wrongExpectation := true // row is actually Satisfied: false
 	newSatisfied := true
-	_, err = repo.Update(ctx, itemID, gateID, GateSatisfactionUpdateInput{
+	_, err = repo.Update(ctx, itemID, gateID, workflowengine.GateSatisfactionUpdateInput{
 		Satisfied:         &newSatisfied,
 		ExpectedSatisfied: &wrongExpectation,
 	})
@@ -103,7 +104,7 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoes
 	ctx := context.Background()
 
 	newSatisfied := true
-	_, err := repo.Update(ctx, uuid.New(), gateID, GateSatisfactionUpdateInput{Satisfied: &newSatisfied})
+	_, err := repo.Update(ctx, uuid.New(), gateID, workflowengine.GateSatisfactionUpdateInput{Satisfied: &newSatisfied})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
@@ -120,7 +121,7 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoes
 
 	expected := false
 	newSatisfied := true
-	_, err := repo.Update(ctx, uuid.New(), gateID, GateSatisfactionUpdateInput{
+	_, err := repo.Update(ctx, uuid.New(), gateID, workflowengine.GateSatisfactionUpdateInput{
 		Satisfied:         &newSatisfied,
 		ExpectedSatisfied: &expected,
 	})

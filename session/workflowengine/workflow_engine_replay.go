@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 // workflow_engine_replay.go replays the caller registry against a COPY of the
 // database (Task 1.5.9d): for every registered caller and declared edge it
@@ -202,9 +202,9 @@ func newReplaySelector(repo StageConfigRepository) (*SwitchableWorkflowEngine, e
 	return NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, replayEnforceAll{}), nil
 }
 
-// replayEdges expands a caller's declared edges: the archive wildcard becomes
+// ReplayEdges expands a caller's declared edges: the archive wildcard becomes
 // one edge per built-in stage.
-func replayEdges(spec domain.TransitionCallerSpec) []domain.SystemEdge {
+func ReplayEdges(spec domain.TransitionCallerSpec) []domain.SystemEdge {
 	var out []domain.SystemEdge
 	for _, e := range spec.Edges {
 		if e.From != domain.AnyStatus {
@@ -228,10 +228,11 @@ func replayAnswer(sel *SwitchableWorkflowEngine, spec domain.TransitionCallerSpe
 	if v.Err == nil {
 		return "allowed"
 	}
-	return replayDeniedPrefix + v.Reason
+	return ReplayDeniedPrefix + v.Reason
 }
 
-const replayDeniedPrefix = "denied:"
+// ReplayDeniedPrefix starts the Live answer of a denied edge.
+const ReplayDeniedPrefix = "denied:"
 
 // replayRun holds the selectors one replay builds: the stored configuration and
 // one overlay per system-required edge that gets a synthetic gate.
@@ -244,10 +245,10 @@ type replayRun struct {
 	report         *ReplayReport
 }
 
-// replayNoStoredTransition marks a system-required edge with no stage
+// ReplayNoStoredTransition marks a system-required edge with no stage
 // transition row: it is allowed by the system-required union, and no operator
 // gate can attach to it, so configuration cannot change its answer.
-const replayNoStoredTransition = "n/a:no_stored_transition"
+const ReplayNoStoredTransition = "n/a:no_stored_transition"
 
 func replayStoredEdges(ctx context.Context, repo StageConfigRepository) (map[domain.SystemEdge]bool, error) {
 	transitions, err := repo.ListEnabledTransitions(ctx)
@@ -281,7 +282,7 @@ func (r *replayRun) decide(spec domain.TransitionCallerSpec, edge domain.SystemE
 		return d, nil
 	}
 	if !r.stored[edge] {
-		d.Synthetic = replayNoStoredTransition
+		d.Synthetic = ReplayNoStoredTransition
 		return d, nil
 	}
 	sel, err := r.syntheticFor(edge)
@@ -293,11 +294,11 @@ func (r *replayRun) decide(spec domain.TransitionCallerSpec, edge domain.SystemE
 	return d, nil
 }
 
-// failure describes an agent or system edge the stored configuration denies
+// Failure describes an agent or system edge the stored configuration denies
 // with no gate involved; operator callers choose their edge, so a denial there
 // is the configuration working.
-func (d ReplayDecision) failure() (string, bool) {
-	if d.Class == domain.ClassOperator || (d.Live != replayDeniedPrefix+backlogdto.DeniedConfigGraph && d.Live != replayDeniedPrefix+backlogdto.DeniedTargetStageRemoved) {
+func (d ReplayDecision) Failure() (string, bool) {
+	if d.Class == domain.ClassOperator || (d.Live != ReplayDeniedPrefix+backlogdto.DeniedConfigGraph && d.Live != ReplayDeniedPrefix+backlogdto.DeniedTargetStageRemoved) {
 		return "", false
 	}
 	return fmt.Sprintf("%s (%s) %s->%s is %s by the stored configuration with no gate involved", d.Caller, d.Class, d.Edge.From, d.Edge.To, d.Live), true
@@ -332,12 +333,12 @@ func BuildWorkflowEngineReplay(ctx context.Context, client *ent.Client, newRepo 
 		run.systemRequired[e] = true
 	}
 	for _, spec := range domain.TransitionCallers() {
-		for _, edge := range replayEdges(spec) {
+		for _, edge := range ReplayEdges(spec) {
 			d, err := run.decide(spec, edge)
 			if err != nil {
 				return nil, fmt.Errorf("replay %s %s->%s: %w", spec.Name, edge.From, edge.To, err)
 			}
-			if msg, failed := d.failure(); failed {
+			if msg, failed := d.Failure(); failed {
 				run.report.Failures = append(run.report.Failures, msg)
 			}
 			run.report.Decisions = append(run.report.Decisions, d)

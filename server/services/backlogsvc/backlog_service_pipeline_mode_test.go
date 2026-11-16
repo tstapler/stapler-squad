@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -46,7 +47,7 @@ func swapWarningLog(t *testing.T) *tslog.SyncBuffer {
 // earlier Create's invalidation) that must keep succeeding against the real
 // backing store.
 type failAfterNListEnabledRepo struct {
-	session.PipelineModeRepository
+	workflowengine.PipelineModeRepository
 	mu        sync.Mutex
 	callCount int
 	failAfter int
@@ -67,7 +68,7 @@ func (r *failAfterNListEnabledRepo) ListEnabled(ctx context.Context) ([]*ent.Pip
 // ent-backed PipelineModeRepository and a real CachingPipelineEngine
 // constructed over that same repository — mirroring how
 // server/dependencies.go wires production (both share one instance).
-func newPipelineModeTestService(t *testing.T) (*BacklogService, session.PipelineModeRepository, *pipeline.CachingPipelineEngine) {
+func newPipelineModeTestService(t *testing.T) (*BacklogService, workflowengine.PipelineModeRepository, *pipeline.CachingPipelineEngine) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	repo := session.NewEntPipelineModeRepository(storage.GetEntClient())

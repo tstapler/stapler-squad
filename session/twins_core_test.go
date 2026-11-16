@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string) {
@@ -126,17 +127,17 @@ func currentAttempts(t *testing.T, repo *EntRepository, itemID string, reason do
 // ent.Client (for tests that need to write additional rows directly, e.g. a
 // simulated operator-added custom transition — standing in for the
 // not-yet-implemented Epic 2.7 CRUD RPCs).
-func newSeededConfiguredWorkflowEngine(t *testing.T) (*ConfiguredWorkflowEngine, *ent.Client) {
+func newSeededConfiguredWorkflowEngine(t *testing.T) (*workflowengine.ConfiguredWorkflowEngine, *ent.Client) {
 	t.Helper()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
 	client := repo.Client
 
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
 
 	stageRepo := NewEntStageConfigRepository(client)
 	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
-	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 	return engine, client
 }
@@ -164,11 +165,11 @@ type fakePipelineModeRepository struct {
 	listEnabledFn func(ctx context.Context) ([]*ent.PipelineMode, error)
 }
 
-func (f *fakePipelineModeRepository) Create(context.Context, PipelineModeCreateInput) (*ent.PipelineMode, error) {
+func (f *fakePipelineModeRepository) Create(context.Context, workflowengine.PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	return nil, errors.New("fakePipelineModeRepository.Create: not implemented")
 }
 
-func (f *fakePipelineModeRepository) Update(context.Context, uuid.UUID, PipelineModeUpdateInput) (*ent.PipelineMode, error) {
+func (f *fakePipelineModeRepository) Update(context.Context, uuid.UUID, workflowengine.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
 	return nil, errors.New("fakePipelineModeRepository.Update: not implemented")
 }
 
@@ -229,23 +230,23 @@ func (r *recordingReporter) snapshot() []reportedDenial {
 type gateHarness struct {
 	storage *Storage
 	repo    *EntRepository
-	cfg     *ConfiguredWorkflowEngine
-	sel     *SwitchableWorkflowEngine
+	cfg     *workflowengine.ConfiguredWorkflowEngine
+	sel     *workflowengine.SwitchableWorkflowEngine
 	rep     *recordingReporter
 }
 
-func newGateHarness(t *testing.T, mode EngineMode) *gateHarness {
+func newGateHarness(t *testing.T, mode workflowengine.EngineMode) *gateHarness {
 	t.Helper()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.Client))
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
 	require.NoError(t, err)
 	storage, err := NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	sel := NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, allClasses(mode),
-		WithSelectorLoggers(func(string, ...any) {}, func(string, ...any) {}))
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, allClasses(mode),
+		workflowengine.WithSelectorLoggers(func(string, ...any) {}, func(string, ...any) {}))
 	rep := &recordingReporter{storage: storage}
 	require.NoError(t, storage.SetTransitionGate(sel, rep))
 	return &gateHarness{storage: storage, repo: repo, cfg: cfg, sel: sel, rep: rep}
@@ -284,42 +285,42 @@ func (h *gateHarness) newStuckInProgressItem(t *testing.T) *backlogdto.BacklogIt
 	return item
 }
 
-type fixedMode struct{ m EngineMode }
+type fixedMode struct{ m workflowengine.EngineMode }
 
-func (f fixedMode) Mode() EngineMode { return f.m }
+func (f fixedMode) Mode() workflowengine.EngineMode { return f.m }
 
 type divergenceKey struct {
-	Method EngineMethod
-	Class  DivergenceClass
+	Method workflowengine.EngineMethod
+	Class  workflowengine.DivergenceClass
 	Config string
-	Path   CallPath
+	Path   workflowengine.CallPath
 }
 
 type callKey struct {
-	Method EngineMethod
-	Path   CallPath
+	Method workflowengine.EngineMethod
+	Path   workflowengine.CallPath
 }
 
 type recordingShadow struct {
 	mu          sync.Mutex
 	calls       map[callKey]int
 	divergences map[divergenceKey]int
-	notCompared map[NotComparedReason]int
+	notCompared map[workflowengine.NotComparedReason]int
 }
 
-func (r *recordingShadow) RecordShadowCall(m EngineMethod, p CallPath) {
+func (r *recordingShadow) RecordShadowCall(m workflowengine.EngineMethod, p workflowengine.CallPath) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls[callKey{m, p}]++
 }
 
-func (r *recordingShadow) RecordDivergence(m EngineMethod, c DivergenceClass, config string, p CallPath) {
+func (r *recordingShadow) RecordDivergence(m workflowengine.EngineMethod, c workflowengine.DivergenceClass, config string, p workflowengine.CallPath) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.divergences[divergenceKey{m, c, config, p}]++
 }
 
-func (r *recordingShadow) RecordNotCompared(reason NotComparedReason) {
+func (r *recordingShadow) RecordNotCompared(reason workflowengine.NotComparedReason) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.notCompared[reason]++
@@ -353,8 +354,8 @@ func (l *lineSink) snapshot() []string {
 }
 
 type selectorHarness struct {
-	sel      *SwitchableWorkflowEngine
-	cfg      *ConfiguredWorkflowEngine
+	sel      *workflowengine.SwitchableWorkflowEngine
+	cfg      *workflowengine.ConfiguredWorkflowEngine
 	client   *ent.Client
 	recorder *recordingShadow
 	warns    *lineSink
@@ -362,7 +363,7 @@ type selectorHarness struct {
 	clock    *sessiontest.SelectorClock
 }
 
-func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEngine, from, to domain.BacklogStatus, enabled bool) {
+func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, enabled bool) {
 	t.Helper()
 	ctx := context.Background()
 	n, err := client.StageTransition.Update().
@@ -377,7 +378,7 @@ func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEng
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().
@@ -386,7 +387,7 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *ConfiguredWorkfl
 			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
 		).Only(ctx)
 	require.NoError(t, err)
-	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(IsStatefulGateKind(kind)).SetEnabled(true)
+	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(workflowengine.IsStatefulGateKind(kind)).SetEnabled(true)
 	if config != nil {
 		c = c.SetConfig(config)
 	}
@@ -399,12 +400,12 @@ func passingReviewItem() domain.BacklogItemTransitionInput {
 	return domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
-type classModes map[domain.CallerClass]EngineMode
+type classModes map[domain.CallerClass]workflowengine.EngineMode
 
-func (c classModes) Mode() EngineMode { return c[domain.ClassOperator] }
+func (c classModes) Mode() workflowengine.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k domain.CallerClass) EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) workflowengine.EngineMode { return c[k] }
 
-func allClasses(m EngineMode) classModes {
+func allClasses(m workflowengine.EngineMode) classModes {
 	return classModes{domain.ClassOperator: m, domain.ClassAgent: m, domain.ClassSystem: m, "bogus": m}
 }

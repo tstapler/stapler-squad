@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded
@@ -174,12 +175,12 @@ func TestRecordGateApproval_should_RemainRejectedIdempotently_When_RejectedTwice
 // rather than depending on which goroutine happens to reach the DB first —
 // the "controlled sequencing... not a flaky real-race" approach.
 type orderedWriteGateSatisfactionRepo struct {
-	GateSatisfactionRepository
+	workflowengine.GateSatisfactionRepository
 	goesFirst bool
 	firstDone chan struct{}
 }
 
-func (r *orderedWriteGateSatisfactionRepo) Update(ctx context.Context, itemID, gateID uuid.UUID, in GateSatisfactionUpdateInput) (*GateSatisfactionData, error) {
+func (r *orderedWriteGateSatisfactionRepo) Update(ctx context.Context, itemID, gateID uuid.UUID, in workflowengine.GateSatisfactionUpdateInput) (*workflowengine.GateSatisfactionData, error) {
 	if !r.goesFirst {
 		<-r.firstDone
 	}
@@ -205,7 +206,7 @@ func TestRecordGateApproval_should_YieldExactlyOneWinner_When_ApproveAndRejectRa
 	ctx := context.Background()
 	itemID := uuid.New()
 
-	_, err := repo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "original-rejector"})
+	_, err := repo.Create(ctx, workflowengine.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "original-rejector"})
 	require.NoError(t, err)
 
 	firstDone := make(chan struct{})

@@ -13,17 +13,20 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // enforceEveryClass is a class-aware mode source that enforces every class.
 type enforceEveryClass struct{}
 
-func (enforceEveryClass) Mode() session.EngineMode                      { return session.ModeEnforce }
-func (enforceEveryClass) ModeFor(domain.CallerClass) session.EngineMode { return session.ModeEnforce }
+func (enforceEveryClass) Mode() workflowengine.EngineMode { return workflowengine.ModeEnforce }
+func (enforceEveryClass) ModeFor(domain.CallerClass) workflowengine.EngineMode {
+	return workflowengine.ModeEnforce
+}
 
 func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSeparately_When_GateDeniesAgentAndSystem(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
-	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, enforceEveryClass{})
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, enforceEveryClass{})
 	require.NoError(t, svc.storage.SetTransitionGate(sel, svc.TransitionDeniedReporter()))
 	bus := events.NewEventBus(16)
 	svc.SetEventBus(bus)

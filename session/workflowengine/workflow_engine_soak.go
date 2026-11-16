@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 // workflow_engine_soak.go — the one soak evaluator behind `make
 // workflow-engine-soak-status`, /actuator/workflow-engine and the readiness

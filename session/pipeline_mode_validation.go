@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // pipelineModeSlugRe matches the allowed pipeline-mode slug character set:
@@ -81,7 +82,7 @@ type PipelineModeContentFields struct {
 	// trivially passes — an Update request that isn't touching stage
 	// executors at all only needs to leave this unset, same convention as
 	// the 9 content-template fields above.
-	StageExecutors    map[StageRole]PipelineStageExecutor
+	StageExecutors    map[workflowengine.StageRole]workflowengine.PipelineStageExecutor
 	ForceUnknownModel bool
 }
 
@@ -152,10 +153,10 @@ func ValidatePipelineModeContent(fields PipelineModeContentFields) error {
 // StageRole's 3 exported consts. A typo'd key (e.g. "wrok") would otherwise
 // round-trip silently through JSON/proto (StageRole is a newtype, not a
 // validated sum type) and simply never be consulted by ExecutorFor.
-var validStageRoles = map[StageRole]bool{
-	StageRoleTriage: true,
-	StageRoleReview: true,
-	StageRoleWork:   true,
+var validStageRoles = map[workflowengine.StageRole]bool{
+	workflowengine.StageRoleTriage: true,
+	workflowengine.StageRoleReview: true,
+	workflowengine.StageRoleWork:   true,
 }
 
 // headlessOnlyPrograms is the allow-list ADR-002 permits for
@@ -183,14 +184,14 @@ var headlessOnlyPrograms = map[string]bool{
 //     typo (syntactically valid, but not a real model) at save time. A
 //     "family:" alias skips the pricing cross-check entirely; it's already
 //     validated by ResolveModel's own unknown-alias error.
-func validateStageExecutors(executors map[StageRole]PipelineStageExecutor, forceUnknownModel bool) error {
+func validateStageExecutors(executors map[workflowengine.StageRole]workflowengine.PipelineStageExecutor, forceUnknownModel bool) error {
 	for role, executor := range executors {
 		if !validStageRoles[role] {
 			return fmt.Errorf("stage_executors: invalid role %q (must be one of %q, %q, %q)",
-				role, StageRoleTriage, StageRoleReview, StageRoleWork)
+				role, workflowengine.StageRoleTriage, workflowengine.StageRoleReview, workflowengine.StageRoleWork)
 		}
 
-		if executor.Program != "" && (role == StageRoleTriage || role == StageRoleReview) {
+		if executor.Program != "" && (role == workflowengine.StageRoleTriage || role == workflowengine.StageRoleReview) {
 			if !headlessOnlyPrograms[executor.Program] {
 				return fmt.Errorf("stage_executors[%s].program: %q has no headless mode (ADR-002) — must be one of \"claude\", \"gemini\"",
 					role, executor.Program)

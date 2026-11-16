@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // BenchmarkSwitchableWorkflowEngine_CanTransition compares the selector's
@@ -12,14 +14,14 @@ import (
 // reads. Run with `&` per docs/reference/benchmarks.md.
 func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 	repo := NewTestEntRepository(b)
-	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
+	if err := workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
 		b.Fatal(err)
 	}
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), nil, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), nil, nil)
 	if err != nil {
 		b.Fatal(err)
 	}
-	def := NewDefaultWorkflowEngine()
+	def := workflowengine.NewDefaultWorkflowEngine()
 
 	b.Run("default", func(b *testing.B) {
 		b.ReportAllocs()
@@ -29,9 +31,9 @@ func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 	})
 	for _, m := range []struct {
 		name string
-		mode EngineMode
-	}{{"off", ModeOff}, {"shadow", ModeShadow}, {"enforce", ModeEnforce}} {
-		sel := NewSwitchableWorkflowEngine(def, cfg, fixedMode{m.mode})
+		mode workflowengine.EngineMode
+	}{{"off", workflowengine.ModeOff}, {"shadow", workflowengine.ModeShadow}, {"enforce", workflowengine.ModeEnforce}} {
+		sel := workflowengine.NewSwitchableWorkflowEngine(def, cfg, fixedMode{m.mode})
 		b.Run(m.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {

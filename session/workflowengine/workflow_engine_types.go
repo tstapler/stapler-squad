@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 // Workflow-engine types and the shadow ledger that the session core uses and the backlog lifecycle code builds on.
 

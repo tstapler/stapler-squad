@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // EntPipelineModeRepository implements PipelineModeRepository using the ent ORM.
@@ -22,7 +23,7 @@ func NewEntPipelineModeRepository(client *ent.Client) *EntPipelineModeRepository
 
 // Create inserts a new pipeline mode definition.
 // Returns ent.ConstraintError when a duplicate slug exists.
-func (r *EntPipelineModeRepository) Create(ctx context.Context, m PipelineModeCreateInput) (*ent.PipelineMode, error) {
+func (r *EntPipelineModeRepository) Create(ctx context.Context, m workflowengine.PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	// The 9 content-template fields have no ent .Optional()/.Default() (see
 	// session/ent/schema/pipeline_mode.go) — they are required at insert time,
 	// so unlike WorkflowCreateInput's optional fields, these must always be set
@@ -47,7 +48,7 @@ func (r *EntPipelineModeRepository) Create(ctx context.Context, m PipelineModeCr
 	}
 
 	if len(m.StageExecutors) > 0 {
-		stageExecutorsJSON, err := SerializeStageExecutors(m.StageExecutors)
+		stageExecutorsJSON, err := workflowengine.SerializeStageExecutors(m.StageExecutors)
 		if err != nil {
 			return nil, fmt.Errorf("serialize stage executors: %w", err)
 		}
@@ -65,7 +66,7 @@ func (r *EntPipelineModeRepository) Create(ctx context.Context, m PipelineModeCr
 }
 
 // Update applies a partial update to an existing pipeline mode by UUID.
-func (r *EntPipelineModeRepository) Update(ctx context.Context, id uuid.UUID, m PipelineModeUpdateInput) (*ent.PipelineMode, error) {
+func (r *EntPipelineModeRepository) Update(ctx context.Context, id uuid.UUID, m workflowengine.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
 	u := r.client.PipelineMode.UpdateOneID(id)
 
 	if m.Name != nil {
@@ -105,7 +106,7 @@ func (r *EntPipelineModeRepository) Update(ctx context.Context, id uuid.UUID, m 
 		u.SetInitialPromptTemplate(*m.InitialPromptTemplate)
 	}
 	if m.StageExecutors != nil {
-		stageExecutorsJSON, err := SerializeStageExecutors(*m.StageExecutors)
+		stageExecutorsJSON, err := workflowengine.SerializeStageExecutors(*m.StageExecutors)
 		if err != nil {
 			return nil, fmt.Errorf("serialize stage executors: %w", err)
 		}

@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // ─── pipeline_mode presence gating (Story 1.4.4) ───────────────────────────────
@@ -1470,15 +1471,15 @@ func (e disabledEdgeWorkflowEngine) CanTransition(from, to domain.BacklogStatus,
 // ConfiguredWorkflowEngine seeded with the built-in stages, so a transition is
 // decided by the stage graph an operator edits (OverrideVerdict and the other
 // operator writers reach the engine through the gate, not through the service).
-func newEnforcedGateService(t *testing.T) (*BacklogService, *session.Storage, *session.EntStageConfigRepository, *session.ConfiguredWorkflowEngine) {
+func newEnforcedGateService(t *testing.T) (*BacklogService, *session.Storage, *session.EntStageConfigRepository, *workflowengine.ConfiguredWorkflowEngine) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 	stageRepo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	cfg, err := session.NewConfiguredWorkflowEngine(stageRepo, session.NewEntGateSatisfactionRepository(storage.GetEntClient()), nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, session.NewEntGateSatisfactionRepository(storage.GetEntClient()), nil)
 	require.NoError(t, err)
-	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), cfg, enforceEveryClass{})
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, enforceEveryClass{})
 	svc := NewBacklogService(storage, nil, nil, sel, nil, nil)
 	require.NoError(t, storage.SetTransitionGate(sel, svc.TransitionDeniedReporter()))
 	return svc, storage, stageRepo, cfg
@@ -1508,12 +1509,12 @@ func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHa
 	for _, e := range edges {
 		if e.ToStageSlug == string(domain.BacklogStatusReady) {
 			disabled := false
-			_, err = stageRepo.UpdateTransition(ctx, e.ID, session.TransitionUpdateInput{Enabled: &disabled})
+			_, err = stageRepo.UpdateTransition(ctx, e.ID, workflowengine.TransitionUpdateInput{Enabled: &disabled})
 			require.NoError(t, err)
 		}
 	}
 	require.NoError(t, cfg.InvalidateCache(ctx))
-	require.False(t, session.IsSystemRequired(domain.BacklogStatusRefining, domain.BacklogStatusReady), "the edge must be one an operator can disable")
+	require.False(t, workflowengine.IsSystemRequired(domain.BacklogStatusRefining, domain.BacklogStatusReady), "the edge must be one an operator can disable")
 
 	item, is := newOverrideVerdictItem(t, storage, domain.BacklogStatusRefining)
 	_, err = svc.OverrideVerdict(ctx, connect.NewRequest(&sessionv1.OverrideVerdictRequest{
@@ -1539,7 +1540,7 @@ func TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngi
 		"precondition: the static map must forbid review->queued for this test to prove anything")
 	svc, storage, stageRepo, cfg := newEnforcedGateService(t)
 	ctx := t.Context()
-	_, err := stageRepo.CreateTransition(ctx, session.TransitionCreateInput{
+	_, err := stageRepo.CreateTransition(ctx, workflowengine.TransitionCreateInput{
 		FromStageSlug: string(domain.BacklogStatusReview), ToStageSlug: string(domain.BacklogStatusQueued), Enabled: true,
 	})
 	require.NoError(t, err)

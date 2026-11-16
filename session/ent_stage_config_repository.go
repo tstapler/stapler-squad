@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/ent/transitiongate"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // EntStageConfigRepository implements StageConfigRepository using the ent ORM.
@@ -76,8 +77,8 @@ func (r *EntStageConfigRepository) graphClients() entGraphClients {
 	}
 }
 
-func stageDataFromRow(row *ent.BacklogStage) *StageData {
-	return &StageData{
+func stageDataFromRow(row *ent.BacklogStage) *workflowengine.StageData {
+	return &workflowengine.StageData{
 		ID:          row.ID,
 		Slug:        row.Slug,
 		Name:        row.Name,
@@ -90,8 +91,8 @@ func stageDataFromRow(row *ent.BacklogStage) *StageData {
 	}
 }
 
-func gateDataFromRow(row *ent.TransitionGate) *GateData {
-	return &GateData{
+func gateDataFromRow(row *ent.TransitionGate) *workflowengine.GateData {
+	return &workflowengine.GateData{
 		ID:           row.ID,
 		TransitionID: row.TransitionID,
 		Kind:         row.Kind,
@@ -107,15 +108,15 @@ func gateDataFromRow(row *ent.TransitionGate) *GateData {
 // transitionDataFromRow requires row's FromStage/ToStage/Gates edges to
 // already be eager-loaded (WithFromStage/WithToStage/WithGates) — every
 // query below that returns a *TransitionData loads them.
-func transitionDataFromRow(row *ent.StageTransition) (*TransitionData, error) {
+func transitionDataFromRow(row *ent.StageTransition) (*workflowengine.TransitionData, error) {
 	if row.Edges.FromStage == nil || row.Edges.ToStage == nil {
 		return nil, fmt.Errorf("transition %s: from/to stage edge not eager-loaded", row.ID)
 	}
-	gates := make([]GateData, 0, len(row.Edges.Gates))
+	gates := make([]workflowengine.GateData, 0, len(row.Edges.Gates))
 	for _, g := range row.Edges.Gates {
 		gates = append(gates, *gateDataFromRow(g))
 	}
-	return &TransitionData{
+	return &workflowengine.TransitionData{
 		ID:            row.ID,
 		FromStageSlug: row.Edges.FromStage.Slug,
 		ToStageSlug:   row.Edges.ToStage.Slug,
@@ -131,14 +132,14 @@ func transitionDataFromRow(row *ent.StageTransition) (*TransitionData, error) {
 // translates it into graph_validator.go's plain-data view. GateCount counts
 // only enabled gates, matching ListEnabledTransitions' eager-load filter and
 // Story 2.6.2's "does this edge have an active gate" cycle-escape lint.
-func listGraphForValidation(ctx context.Context, c entGraphClients) ([]StageDefinition, []TransitionDefinition, error) {
+func listGraphForValidation(ctx context.Context, c entGraphClients) ([]workflowengine.StageDefinition, []workflowengine.TransitionDefinition, error) {
 	stages, err := c.stages.Query().Where(backlogstage.Enabled(true)).All(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list enabled stages: %w", err)
 	}
-	stageDefs := make([]StageDefinition, 0, len(stages))
+	stageDefs := make([]workflowengine.StageDefinition, 0, len(stages))
 	for _, s := range stages {
-		stageDefs = append(stageDefs, StageDefinition{Slug: s.Slug, IsEntry: s.IsEntry, IsTerminal: s.IsTerminal})
+		stageDefs = append(stageDefs, workflowengine.StageDefinition{Slug: s.Slug, IsEntry: s.IsEntry, IsTerminal: s.IsTerminal})
 	}
 
 	transitions, err := c.transitions.Query().
@@ -152,12 +153,12 @@ func listGraphForValidation(ctx context.Context, c entGraphClients) ([]StageDefi
 	if err != nil {
 		return nil, nil, fmt.Errorf("list enabled transitions: %w", err)
 	}
-	transDefs := make([]TransitionDefinition, 0, len(transitions))
+	transDefs := make([]workflowengine.TransitionDefinition, 0, len(transitions))
 	for _, t := range transitions {
 		if t.Edges.FromStage == nil || t.Edges.ToStage == nil {
 			continue // defensive: same skip as stageConfigCache.refresh
 		}
-		transDefs = append(transDefs, TransitionDefinition{
+		transDefs = append(transDefs, workflowengine.TransitionDefinition{
 			FromSlug:  t.Edges.FromStage.Slug,
 			ToSlug:    t.Edges.ToStage.Slug,
 			Enabled:   t.Enabled,
@@ -178,7 +179,7 @@ func liveItemCountForStage(ctx context.Context, c entGraphClients, stageSlug str
 	return n, nil
 }
 
-func createTransitionRow(ctx context.Context, c entGraphClients, in TransitionCreateInput) (*TransitionData, error) {
+func createTransitionRow(ctx context.Context, c entGraphClients, in workflowengine.TransitionCreateInput) (*workflowengine.TransitionData, error) {
 	fromStage, err := c.stages.Query().Where(backlogstage.Slug(in.FromStageSlug)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -206,7 +207,7 @@ func createTransitionRow(ctx context.Context, c entGraphClients, in TransitionCr
 		return nil, fmt.Errorf("create transition %s -> %s: %w", in.FromStageSlug, in.ToStageSlug, err)
 	}
 
-	return &TransitionData{
+	return &workflowengine.TransitionData{
 		ID:            row.ID,
 		FromStageSlug: in.FromStageSlug,
 		ToStageSlug:   in.ToStageSlug,
@@ -216,7 +217,7 @@ func createTransitionRow(ctx context.Context, c entGraphClients, in TransitionCr
 	}, nil
 }
 
-func updateTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID, in TransitionUpdateInput) (*TransitionData, error) {
+func updateTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID, in workflowengine.TransitionUpdateInput) (*workflowengine.TransitionData, error) {
 	u := c.transitions.UpdateOneID(id)
 	if in.Enabled != nil {
 		u.SetEnabled(*in.Enabled)
@@ -242,7 +243,7 @@ func updateTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID, i
 
 // ListGraphForValidation implements TransitionTxRepository against the
 // non-transactional client.
-func (r *EntStageConfigRepository) ListGraphForValidation(ctx context.Context) ([]StageDefinition, []TransitionDefinition, error) {
+func (r *EntStageConfigRepository) ListGraphForValidation(ctx context.Context) ([]workflowengine.StageDefinition, []workflowengine.TransitionDefinition, error) {
 	return listGraphForValidation(ctx, r.graphClients())
 }
 
@@ -253,7 +254,7 @@ func (r *EntStageConfigRepository) LiveItemCountForStage(ctx context.Context, st
 }
 
 // CreateStage registers a new BacklogStage row.
-func (r *EntStageConfigRepository) CreateStage(ctx context.Context, in StageCreateInput) (*StageData, error) {
+func (r *EntStageConfigRepository) CreateStage(ctx context.Context, in workflowengine.StageCreateInput) (*workflowengine.StageData, error) {
 	row, err := r.client.BacklogStage.Create().
 		SetSlug(in.Slug).
 		SetName(in.Name).
@@ -272,7 +273,7 @@ func (r *EntStageConfigRepository) CreateStage(ctx context.Context, in StageCrea
 }
 
 // UpdateStage applies a partial update to an existing BacklogStage row.
-func (r *EntStageConfigRepository) UpdateStage(ctx context.Context, id uuid.UUID, in StageUpdateInput) (*StageData, error) {
+func (r *EntStageConfigRepository) UpdateStage(ctx context.Context, id uuid.UUID, in workflowengine.StageUpdateInput) (*workflowengine.StageData, error) {
 	u := r.client.BacklogStage.UpdateOneID(id)
 	if in.Name != nil {
 		u.SetName(*in.Name)
@@ -313,7 +314,7 @@ func (r *EntStageConfigRepository) DeleteStage(ctx context.Context, id uuid.UUID
 }
 
 // GetStageBySlug retrieves a single stage by slug.
-func (r *EntStageConfigRepository) GetStageBySlug(ctx context.Context, slug string) (*StageData, error) {
+func (r *EntStageConfigRepository) GetStageBySlug(ctx context.Context, slug string) (*workflowengine.StageData, error) {
 	row, err := r.client.BacklogStage.Query().Where(backlogstage.Slug(slug)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -325,7 +326,7 @@ func (r *EntStageConfigRepository) GetStageBySlug(ctx context.Context, slug stri
 }
 
 // GetStageByID retrieves a single stage by id.
-func (r *EntStageConfigRepository) GetStageByID(ctx context.Context, id uuid.UUID) (*StageData, error) {
+func (r *EntStageConfigRepository) GetStageByID(ctx context.Context, id uuid.UUID) (*workflowengine.StageData, error) {
 	row, err := r.client.BacklogStage.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -337,13 +338,13 @@ func (r *EntStageConfigRepository) GetStageByID(ctx context.Context, id uuid.UUI
 }
 
 // ListAllStages returns every stage, including disabled ones, ordered by slug.
-func (r *EntStageConfigRepository) ListAllStages(ctx context.Context) ([]*StageData, error) {
+func (r *EntStageConfigRepository) ListAllStages(ctx context.Context) ([]*workflowengine.StageData, error) {
 	//nolint:entfullscan workflow stages are a small, admin-configured table; ListAllStages' contract is every stage including disabled ones.
 	rows, err := r.client.BacklogStage.Query().Order(ent.Asc(backlogstage.FieldSlug)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list stages: %w", err)
 	}
-	out := make([]*StageData, len(rows))
+	out := make([]*workflowengine.StageData, len(rows))
 	for i, row := range rows {
 		out[i] = stageDataFromRow(row)
 	}
@@ -352,13 +353,13 @@ func (r *EntStageConfigRepository) ListAllStages(ctx context.Context) ([]*StageD
 
 // CreateTransition implements TransitionTxRepository against the
 // non-transactional client.
-func (r *EntStageConfigRepository) CreateTransition(ctx context.Context, in TransitionCreateInput) (*TransitionData, error) {
+func (r *EntStageConfigRepository) CreateTransition(ctx context.Context, in workflowengine.TransitionCreateInput) (*workflowengine.TransitionData, error) {
 	return createTransitionRow(ctx, r.graphClients(), in)
 }
 
 // UpdateTransition implements TransitionTxRepository against the
 // non-transactional client.
-func (r *EntStageConfigRepository) UpdateTransition(ctx context.Context, id uuid.UUID, in TransitionUpdateInput) (*TransitionData, error) {
+func (r *EntStageConfigRepository) UpdateTransition(ctx context.Context, id uuid.UUID, in workflowengine.TransitionUpdateInput) (*workflowengine.TransitionData, error) {
 	return updateTransitionRow(ctx, r.graphClients(), id, in)
 }
 
@@ -378,7 +379,7 @@ func deleteTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID) e
 }
 
 // GetTransition retrieves a single transition by id, with gates eager-loaded.
-func (r *EntStageConfigRepository) GetTransition(ctx context.Context, id uuid.UUID) (*TransitionData, error) {
+func (r *EntStageConfigRepository) GetTransition(ctx context.Context, id uuid.UUID) (*workflowengine.TransitionData, error) {
 	row, err := r.client.StageTransition.Query().
 		Where(stagetransition.ID(id)).
 		WithFromStage().
@@ -396,7 +397,7 @@ func (r *EntStageConfigRepository) GetTransition(ctx context.Context, id uuid.UU
 
 // ListAllTransitions returns every transition (enabled or not), optionally
 // filtered to those outgoing from fromStageSlug.
-func (r *EntStageConfigRepository) ListAllTransitions(ctx context.Context, fromStageSlug string) ([]*TransitionData, error) {
+func (r *EntStageConfigRepository) ListAllTransitions(ctx context.Context, fromStageSlug string) ([]*workflowengine.TransitionData, error) {
 	q := r.client.StageTransition.Query().WithFromStage().WithToStage().WithGates()
 	if fromStageSlug != "" {
 		fromStage, err := r.client.BacklogStage.Query().Where(backlogstage.Slug(fromStageSlug)).Only(ctx)
@@ -412,7 +413,7 @@ func (r *EntStageConfigRepository) ListAllTransitions(ctx context.Context, fromS
 	if err != nil {
 		return nil, fmt.Errorf("list transitions: %w", err)
 	}
-	out := make([]*TransitionData, 0, len(rows))
+	out := make([]*workflowengine.TransitionData, 0, len(rows))
 	for _, row := range rows {
 		td, err := transitionDataFromRow(row)
 		if err != nil {
@@ -426,7 +427,7 @@ func (r *EntStageConfigRepository) ListAllTransitions(ctx context.Context, fromS
 // CreateGate attaches a new TransitionGate row to a transition. Callers are
 // responsible for validating in.Config against in.Kind via ParseGateConfig
 // before calling this (Task 2.7.2g3) — this method persists verbatim.
-func (r *EntStageConfigRepository) CreateGate(ctx context.Context, in GateCreateInput) (*GateData, error) {
+func (r *EntStageConfigRepository) CreateGate(ctx context.Context, in workflowengine.GateCreateInput) (*workflowengine.GateData, error) {
 	row, err := r.client.TransitionGate.Create().
 		SetTransitionID(in.TransitionID).
 		SetKind(in.Kind).
@@ -444,7 +445,7 @@ func (r *EntStageConfigRepository) CreateGate(ctx context.Context, in GateCreate
 // UpdateGate applies a partial update to an existing TransitionGate row.
 // Callers are responsible for validating a Kind+Config pair via
 // ParseGateConfig before calling this (see GateUpdateInput's doc comment).
-func (r *EntStageConfigRepository) UpdateGate(ctx context.Context, id uuid.UUID, in GateUpdateInput) (*GateData, error) {
+func (r *EntStageConfigRepository) UpdateGate(ctx context.Context, id uuid.UUID, in workflowengine.GateUpdateInput) (*workflowengine.GateData, error) {
 	u := r.client.TransitionGate.UpdateOneID(id)
 	if in.Kind != nil {
 		u.SetKind(*in.Kind)
@@ -483,7 +484,7 @@ func (r *EntStageConfigRepository) DeleteGate(ctx context.Context, id uuid.UUID)
 }
 
 // GetGate retrieves a single gate by id.
-func (r *EntStageConfigRepository) GetGate(ctx context.Context, id uuid.UUID) (*GateData, error) {
+func (r *EntStageConfigRepository) GetGate(ctx context.Context, id uuid.UUID) (*workflowengine.GateData, error) {
 	row, err := r.client.TransitionGate.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -496,7 +497,7 @@ func (r *EntStageConfigRepository) GetGate(ctx context.Context, id uuid.UUID) (*
 
 // ListAllGates returns every gate, ordered by order_index, optionally
 // filtered to one transition.
-func (r *EntStageConfigRepository) ListAllGates(ctx context.Context, transitionID *uuid.UUID) ([]*GateData, error) {
+func (r *EntStageConfigRepository) ListAllGates(ctx context.Context, transitionID *uuid.UUID) ([]*workflowengine.GateData, error) {
 	q := r.client.TransitionGate.Query().Order(ent.Asc(transitiongate.FieldOrderIndex))
 	if transitionID != nil {
 		q = q.Where(transitiongate.TransitionID(*transitionID))
@@ -505,7 +506,7 @@ func (r *EntStageConfigRepository) ListAllGates(ctx context.Context, transitionI
 	if err != nil {
 		return nil, fmt.Errorf("list gates: %w", err)
 	}
-	out := make([]*GateData, len(rows))
+	out := make([]*workflowengine.GateData, len(rows))
 	for i, row := range rows {
 		out[i] = gateDataFromRow(row)
 	}
@@ -519,7 +520,7 @@ type entTransitionTx struct {
 	clients entGraphClients
 }
 
-func (t *entTransitionTx) ListGraphForValidation(ctx context.Context) ([]StageDefinition, []TransitionDefinition, error) {
+func (t *entTransitionTx) ListGraphForValidation(ctx context.Context) ([]workflowengine.StageDefinition, []workflowengine.TransitionDefinition, error) {
 	return listGraphForValidation(ctx, t.clients)
 }
 
@@ -527,11 +528,11 @@ func (t *entTransitionTx) LiveItemCountForStage(ctx context.Context, stageSlug s
 	return liveItemCountForStage(ctx, t.clients, stageSlug)
 }
 
-func (t *entTransitionTx) CreateTransition(ctx context.Context, in TransitionCreateInput) (*TransitionData, error) {
+func (t *entTransitionTx) CreateTransition(ctx context.Context, in workflowengine.TransitionCreateInput) (*workflowengine.TransitionData, error) {
 	return createTransitionRow(ctx, t.clients, in)
 }
 
-func (t *entTransitionTx) UpdateTransition(ctx context.Context, id uuid.UUID, in TransitionUpdateInput) (*TransitionData, error) {
+func (t *entTransitionTx) UpdateTransition(ctx context.Context, id uuid.UUID, in workflowengine.TransitionUpdateInput) (*workflowengine.TransitionData, error) {
 	return updateTransitionRow(ctx, t.clients, id, in)
 }
 
@@ -544,7 +545,7 @@ func (t *entTransitionTx) DeleteTransition(ctx context.Context, id uuid.UUID) er
 // LiveItemCountForStage calls see the transaction's own read view (including
 // any earlier write fn itself made inside the same transaction), and a nil
 // return commits while a non-nil return rolls back with no partial write.
-func (r *EntStageConfigRepository) WithTx(ctx context.Context, fn func(tx TransitionTxRepository) error) error {
+func (r *EntStageConfigRepository) WithTx(ctx context.Context, fn func(tx workflowengine.TransitionTxRepository) error) error {
 	tx, err := r.client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // ReviewGateSpawner can create a short-lived review session for a backlog item.
@@ -66,20 +67,20 @@ type ReviewGateRunner struct {
 	// nil (the default) makes recordGateSatisfaction a no-op, matching every
 	// other optional-dependency's nil-safe convention in this package. Wired
 	// via SetGateSatisfactionRepository.
-	gateSatisfactionRepo session.GateSatisfactionRepository
+	gateSatisfactionRepo workflowengine.GateSatisfactionRepository
 }
 
 // SetGateSatisfactionRepository wires the repository recordGateSatisfaction
 // writes a configured automated_review gate's terminal outcome to. nil (the
 // default) is safe — see the field's doc comment.
-func (r *ReviewGateRunner) SetGateSatisfactionRepository(repo session.GateSatisfactionRepository) {
+func (r *ReviewGateRunner) SetGateSatisfactionRepository(repo workflowengine.GateSatisfactionRepository) {
 	r.gateSatisfactionRepoMu.Lock()
 	defer r.gateSatisfactionRepoMu.Unlock()
 	r.gateSatisfactionRepo = repo
 }
 
 // getGateSatisfactionRepo returns the currently-wired GateSatisfactionRepository (nil if none).
-func (r *ReviewGateRunner) getGateSatisfactionRepo() session.GateSatisfactionRepository {
+func (r *ReviewGateRunner) getGateSatisfactionRepo() workflowengine.GateSatisfactionRepository {
 	r.gateSatisfactionRepoMu.RLock()
 	defer r.gateSatisfactionRepoMu.RUnlock()
 	return r.gateSatisfactionRepo
@@ -116,7 +117,7 @@ func (r *ReviewGateRunner) recordGateSatisfaction(gateContext GateContext, itemI
 	}
 	outcomeDetail := map[string]interface{}{"detail": detail}
 	ctx := context.Background()
-	if _, createErr := repo.Create(ctx, session.GateSatisfactionCreateInput{
+	if _, createErr := repo.Create(ctx, workflowengine.GateSatisfactionCreateInput{
 		ItemID:        itemUUID,
 		GateID:        gateUUID,
 		Satisfied:     satisfied,
@@ -126,7 +127,7 @@ func (r *ReviewGateRunner) recordGateSatisfaction(gateContext GateContext, itemI
 			log.ErrorLog().Printf("[ReviewGateRunner] recordGateSatisfaction create item=%s gate=%s: %v", itemID, gateContext.GateID, createErr)
 			return
 		}
-		if _, updateErr := repo.Update(ctx, itemUUID, gateUUID, session.GateSatisfactionUpdateInput{
+		if _, updateErr := repo.Update(ctx, itemUUID, gateUUID, workflowengine.GateSatisfactionUpdateInput{
 			Satisfied:     &satisfied,
 			OutcomeDetail: outcomeDetail,
 		}); updateErr != nil {

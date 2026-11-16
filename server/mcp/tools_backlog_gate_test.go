@@ -15,20 +15,23 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Story 1.5.5d: the agent writers decide through the transition gate.
 
 type enforceEveryClass struct{}
 
-func (enforceEveryClass) Mode() session.EngineMode                      { return session.ModeEnforce }
-func (enforceEveryClass) ModeFor(domain.CallerClass) session.EngineMode { return session.ModeEnforce }
+func (enforceEveryClass) Mode() workflowengine.EngineMode { return workflowengine.ModeEnforce }
+func (enforceEveryClass) ModeFor(domain.CallerClass) workflowengine.EngineMode {
+	return workflowengine.ModeEnforce
+}
 
 type gateFixture struct {
 	storage *session.Storage
 	repo    *session.EntStageConfigRepository
-	cfg     *session.ConfiguredWorkflowEngine
-	gates   session.GateSatisfactionRepository
+	cfg     *workflowengine.ConfiguredWorkflowEngine
+	gates   workflowengine.GateSatisfactionRepository
 }
 
 // newEnforcedGateFixture wires an Enforce-mode gate over a real configured
@@ -36,12 +39,12 @@ type gateFixture struct {
 func newEnforcedGateFixture(t *testing.T) *gateFixture {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(t.Context(), storage.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(t.Context(), storage.GetEntClient()))
 	repo := session.NewEntStageConfigRepository(storage.GetEntClient())
 	gates := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	cfg, err := session.NewConfiguredWorkflowEngine(repo, gates, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(repo, gates, nil)
 	require.NoError(t, err)
-	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), cfg, enforceEveryClass{})
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, enforceEveryClass{})
 	reporter := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil).TransitionDeniedReporter()
 	require.NoError(t, storage.SetTransitionGate(sel, reporter))
 	return &gateFixture{storage: storage, repo: repo, cfg: cfg, gates: gates}
@@ -57,7 +60,7 @@ func (f *gateFixture) addApprovalGate(t *testing.T, from, to domain.BacklogStatu
 		if e.ToStageSlug != string(to) {
 			continue
 		}
-		gate, gateErr := f.repo.CreateGate(t.Context(), session.GateCreateInput{
+		gate, gateErr := f.repo.CreateGate(t.Context(), workflowengine.GateCreateInput{
 			TransitionID: e.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 		})
 		require.NoError(t, gateErr)

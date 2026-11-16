@@ -14,13 +14,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 const enfOverride = "ship per owner"
 
 // enfService is an Enforce-mode service whose CRUD RPCs invalidate the same
 // Configured engine the gate consults.
-func enfService(t *testing.T) (*BacklogService, *session.Storage, *session.EntStageConfigRepository, *session.ConfiguredWorkflowEngine) {
+func enfService(t *testing.T) (*BacklogService, *session.Storage, *session.EntStageConfigRepository, *workflowengine.ConfiguredWorkflowEngine) {
 	t.Helper()
 	svc, storage, repo, cfg := newEnforcedGateService(t)
 	svc.SetStageCRUDRepository(repo)
@@ -120,9 +121,9 @@ func TestEnforcement_CacheLoadFailureFallsBackToDefaultGraphAndCountsIt(t *testi
 	broken := svctest.CreateTestStorage(t)
 	brokenRepo := session.NewEntStageConfigRepository(broken.GetEntClient())
 	require.NoError(t, broken.GetEntClient().Close())
-	failing, err := session.NewConfiguredWorkflowEngine(brokenRepo, nil, nil)
+	failing, err := workflowengine.NewConfiguredWorkflowEngine(brokenRepo, nil, nil)
 	require.NoError(t, err)
-	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), failing, enforceEveryClass{})
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), failing, enforceEveryClass{})
 	svc := NewBacklogService(storage, nil, nil, sel, nil, nil)
 	require.NoError(t, storage.SetTransitionGate(sel, svc.TransitionDeniedReporter()))
 	item := enfItemAt(t, storage, domain.BacklogStatusIdea)
@@ -130,7 +131,7 @@ func TestEnforcement_CacheLoadFailureFallsBackToDefaultGraphAndCountsIt(t *testi
 	require.NoError(t, enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, ""))
 
 	assert.Equal(t, string(domain.BacklogStatusRefining), storedStatus(t, storage, item.ID))
-	assert.Positive(t, sel.FallbackTotal(session.FallbackLoadError), "each engine call counts one fallback, so a single transition counts more than one")
+	assert.Positive(t, sel.FallbackTotal(workflowengine.FallbackLoadError), "each engine call counts one fallback, so a single transition counts more than one")
 }
 
 func TestEnforcement_OverrideReasonBypassesOperatorGateButNotDefaultSentinels(t *testing.T) {
@@ -189,13 +190,13 @@ func TestEnforcement_GraphBypassStaysWithinItsLimits(t *testing.T) {
 }
 
 func TestEnforcement_ShadowModeMatchesOffModeThroughHandler(t *testing.T) {
-	run := func(mode session.EngineMode) []string {
+	run := func(mode workflowengine.EngineMode) []string {
 		storage := svctest.CreateTestStorage(t)
-		require.NoError(t, session.EnsureBuiltInWorkflowStages(t.Context(), storage.GetEntClient()))
+		require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(t.Context(), storage.GetEntClient()))
 		repo := session.NewEntStageConfigRepository(storage.GetEntClient())
-		cfg, err := session.NewConfiguredWorkflowEngine(repo, session.NewEntGateSatisfactionRepository(storage.GetEntClient()), nil)
+		cfg, err := workflowengine.NewConfiguredWorkflowEngine(repo, session.NewEntGateSatisfactionRepository(storage.GetEntClient()), nil)
 		require.NoError(t, err)
-		sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), cfg, enfModeSource{mode})
+		sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, enfModeSource{mode})
 		svc := NewBacklogService(storage, nil, nil, sel, nil, nil)
 		svc.SetStageCRUDRepository(repo)
 		svc.SetStageConfigEngine(cfg)
@@ -216,7 +217,7 @@ func TestEnforcement_ShadowModeMatchesOffModeThroughHandler(t *testing.T) {
 		}
 		return out
 	}
-	assert.Equal(t, run(session.ModeOff), run(session.ModeShadow))
+	assert.Equal(t, run(workflowengine.ModeOff), run(workflowengine.ModeShadow))
 }
 
 func errText(err error) string {
@@ -226,9 +227,9 @@ func errText(err error) string {
 	return err.Error()
 }
 
-type enfModeSource struct{ mode session.EngineMode }
+type enfModeSource struct{ mode workflowengine.EngineMode }
 
-func (m enfModeSource) Mode() session.EngineMode { return m.mode }
+func (m enfModeSource) Mode() workflowengine.EngineMode { return m.mode }
 
 // enfBuiltTransition reports whether the operator handler lets an item move
 // from->to once configure has edited the stage config.

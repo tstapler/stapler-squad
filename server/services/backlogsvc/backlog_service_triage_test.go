@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -3308,7 +3309,7 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	ctx := t.Context()
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -3728,7 +3729,7 @@ func TestSpawnSessionFromItem_should_SnapshotEmptyHash_When_PipelineModeIsDefaul
 	ctx := t.Context()
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -3804,13 +3805,13 @@ func TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_W
 	ctx := t.Context()
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                  "sonnet-work",
 		Name:                  "Sonnet Work",
 		Enabled:               true,
 		InitialPromptTemplate: "kickoff: {{item_title}}",
-		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
-			session.StageRoleWork: {Model: "family:sonnet"},
+		StageExecutors: map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{
+			workflowengine.StageRoleWork: {Model: "family:sonnet"},
 		},
 	})
 	require.NoError(t, err)
@@ -3936,7 +3937,7 @@ func TestSpawnAndAttachSessionFromItem_should_ProduceIdenticalCommandFiles_When_
 	ctx := t.Context()
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
 		Enabled:               true,
@@ -4355,7 +4356,7 @@ func TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefault
 	svc.SetHeadlessPool(pool)
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(t.Context(), workflowengine.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -4405,12 +4406,12 @@ func TestTriggerTriage_should_SetCallOptionsModel_When_PipelineModeConfiguresTri
 	svc.SetHeadlessPool(pool)
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(t.Context(), workflowengine.PipelineModeCreateInput{
 		Slug:    "cheap-triage",
 		Name:    "Cheap Triage",
 		Enabled: true,
-		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
-			session.StageRoleTriage: {Model: "claude-haiku-4-5"},
+		StageExecutors: map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{
+			workflowengine.StageRoleTriage: {Model: "claude-haiku-4-5"},
 		},
 	})
 	require.NoError(t, err)
@@ -4492,7 +4493,7 @@ func TestTriggerTriage_should_UseUnmodifiedRetriagePrompt_When_RetriagingRegardl
 	svc.SetHeadlessPool(pool)
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(t.Context(), workflowengine.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
@@ -4551,7 +4552,7 @@ func TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawn
 	ctx := t.Context()
 
 	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err := pmRepo.Create(ctx, workflowengine.PipelineModeCreateInput{
 		Slug:                  "quick",
 		Name:                  "Quick Fix",
 		Enabled:               true,

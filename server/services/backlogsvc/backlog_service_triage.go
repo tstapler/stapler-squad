@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // initialPromptFor returns s.pipelineEngine.InitialPromptFor(...) when pipelineEngine
@@ -686,7 +687,7 @@ func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogd
 	// guard and stays the sole authority for the write. No Observed item: the gate
 	// would pin updated_at, which callers that edited the item first (queue
 	// metadata) have already moved.
-	if session.NewDefaultWorkflowEngine().CanTransition(from, to, nil) {
+	if workflowengine.NewDefaultWorkflowEngine().CanTransition(from, to, nil) {
 		if guardErr := domain.TransitionGuard(guardInput, to); guardErr != nil {
 			return nil, guardErr
 		}
@@ -1037,7 +1038,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// value would permanently false-flag drift against the mode-side hash.
 	var workExecProgram, workExecModel string
 	if s.pipelineEngine != nil {
-		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
+		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, workflowengine.StageRoleWork)
 	}
 	workExecutorHash := pipeline.ComputeExecutorHash(workExecProgram, workExecModel)
 	// Pin after hashing: the hash must stay the raw mode-side pair (see above).

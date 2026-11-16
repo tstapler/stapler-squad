@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/gatesatisfactionrecord"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // EntGateSatisfactionRepository implements GateSatisfactionRepository using
@@ -27,7 +28,7 @@ func NewEntGateSatisfactionRepository(client *ent.Client) *EntGateSatisfactionRe
 // Create inserts a new GateSatisfactionRecord row. Returns ErrConflict when a
 // row for the same (item_id, gate_id) pair already exists — the schema's
 // UNIQUE index.
-func (r *EntGateSatisfactionRepository) Create(ctx context.Context, in GateSatisfactionCreateInput) (*GateSatisfactionData, error) {
+func (r *EntGateSatisfactionRepository) Create(ctx context.Context, in workflowengine.GateSatisfactionCreateInput) (*workflowengine.GateSatisfactionData, error) {
 	c := r.client.GateSatisfactionRecord.Create().
 		SetItemID(in.ItemID).
 		SetGateID(in.GateID).
@@ -54,7 +55,7 @@ func (r *EntGateSatisfactionRepository) Create(ctx context.Context, in GateSatis
 }
 
 // GetByItemAndGate returns the row for (itemID, gateID), or ErrNotFound.
-func (r *EntGateSatisfactionRepository) GetByItemAndGate(ctx context.Context, itemID, gateID uuid.UUID) (*GateSatisfactionData, error) {
+func (r *EntGateSatisfactionRepository) GetByItemAndGate(ctx context.Context, itemID, gateID uuid.UUID) (*workflowengine.GateSatisfactionData, error) {
 	row, err := r.client.GateSatisfactionRecord.Query().
 		Where(gatesatisfactionrecord.ItemID(itemID), gatesatisfactionrecord.GateID(gateID)).
 		Only(ctx)
@@ -83,7 +84,7 @@ func (r *EntGateSatisfactionRepository) DeleteByItemAndGate(ctx context.Context,
 // When in.ExpectedSatisfied is set, the update's WHERE clause additionally
 // requires satisfied == *in.ExpectedSatisfied, turning the write into a
 // compare-and-swap: the affected-row count tells us whether the CAS won.
-func (r *EntGateSatisfactionRepository) Update(ctx context.Context, itemID, gateID uuid.UUID, in GateSatisfactionUpdateInput) (*GateSatisfactionData, error) {
+func (r *EntGateSatisfactionRepository) Update(ctx context.Context, itemID, gateID uuid.UUID, in workflowengine.GateSatisfactionUpdateInput) (*workflowengine.GateSatisfactionData, error) {
 	preds := []predicate.GateSatisfactionRecord{
 		gatesatisfactionrecord.ItemID(itemID),
 		gatesatisfactionrecord.GateID(gateID),
@@ -145,7 +146,7 @@ func (r *EntGateSatisfactionRepository) zeroRowsUpdateError(ctx context.Context,
 // EntLivenessRepository.ListAll's precedent; this table is expected to hold
 // at most a handful of concurrently in-flight invocations for a
 // single-operator install.
-func (r *EntGateSatisfactionRepository) ListUnsatisfied(ctx context.Context) ([]*GateSatisfactionData, error) {
+func (r *EntGateSatisfactionRepository) ListUnsatisfied(ctx context.Context) ([]*workflowengine.GateSatisfactionData, error) {
 	//nolint:entfullscan capped at Limit(1000) below; doc comment states this explicitly.
 	rows, err := r.client.GateSatisfactionRecord.Query().
 		Where(gatesatisfactionrecord.Satisfied(false)).
@@ -155,7 +156,7 @@ func (r *EntGateSatisfactionRepository) ListUnsatisfied(ctx context.Context) ([]
 	if err != nil {
 		return nil, fmt.Errorf("list unsatisfied gate satisfaction records: %w", err)
 	}
-	out := make([]*GateSatisfactionData, len(rows))
+	out := make([]*workflowengine.GateSatisfactionData, len(rows))
 	for i, row := range rows {
 		out[i] = dataFromEntGateSatisfactionRecord(row)
 	}
@@ -165,8 +166,8 @@ func (r *EntGateSatisfactionRepository) ListUnsatisfied(ctx context.Context) ([]
 // dataFromEntGateSatisfactionRecord converts a persisted ent row into the
 // ent-free GateSatisfactionData DTO — mirrors recordFromEntLivenessDefinition's
 // pattern (session/ent_liveness_repository.go).
-func dataFromEntGateSatisfactionRecord(row *ent.GateSatisfactionRecord) *GateSatisfactionData {
-	return &GateSatisfactionData{
+func dataFromEntGateSatisfactionRecord(row *ent.GateSatisfactionRecord) *workflowengine.GateSatisfactionData {
+	return &workflowengine.GateSatisfactionData{
 		ID:            row.ID,
 		ItemID:        row.ItemID,
 		GateID:        row.GateID,

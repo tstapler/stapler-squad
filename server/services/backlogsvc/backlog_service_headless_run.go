@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // classifyHeadlessCallError buckets a headless.CallBlocking error into a coarse category
@@ -404,10 +405,10 @@ Do not modify the code. Only write the review verdict.
 		// into callOpts.Model below — see ComputeExecutorHash's doc comment.
 		var reviewExecProgram, reviewExecModel string
 		if s.pipelineEngine != nil {
-			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
+			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, workflowengine.StageRoleReview)
 		}
 		reviewExecutorHash := pipeline.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
-		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
+		reviewExecModel = pinnedStageModel(workflowengine.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
 		if reviewModelErr != nil {

@@ -29,9 +29,9 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // PipelineEngine is the narrow (5-method) seam described in the package doc
@@ -76,7 +76,7 @@ type PipelineEngine interface {
 	// resolved mode with no override configured for role -> ("", ""). An
 	// empty return value from either half means "inherit the pool/session
 	// default" for that half, not "run with an empty program/model".
-	ExecutorFor(item *backlogdto.BacklogItemData, role session.StageRole) (program, model string)
+	ExecutorFor(item *backlogdto.BacklogItemData, role workflowengine.StageRole) (program, model string)
 }
 
 // resolvedPipelineMode is an unexported, immutable snapshot of one enabled
@@ -107,7 +107,7 @@ type resolvedPipelineMode struct {
 	// StageExecutors is ParseStageExecutors(m.StageExecutorsJSON), parsed once
 	// at cache load/refresh time so ExecutorFor never re-parses JSON on the hot
 	// path. Nil (not just empty) on a parse error — see refresh's handling.
-	StageExecutors map[session.StageRole]session.PipelineStageExecutor
+	StageExecutors map[workflowengine.StageRole]workflowengine.PipelineStageExecutor
 }
 
 // pipelineModeCache is an in-process, copy-on-write cache of enabled pipeline
@@ -131,7 +131,7 @@ type pipelineModeCache struct {
 
 // Load populates the cache from repo.ListEnabled. Shares its implementation
 // (and writeMu serialization) with Invalidate — see refresh.
-func (c *pipelineModeCache) Load(ctx context.Context, repo session.PipelineModeRepository) error {
+func (c *pipelineModeCache) Load(ctx context.Context, repo workflowengine.PipelineModeRepository) error {
 	return c.refresh(ctx, repo)
 }
 
@@ -139,7 +139,7 @@ func (c *pipelineModeCache) Load(ctx context.Context, repo session.PipelineModeR
 // Exposed as a distinct method name from Load for call-site clarity at RPC
 // write handlers (Epic 2.2) — the implementation is identical to Load beyond
 // both sharing the writeMu-guarded refresh sequence.
-func (c *pipelineModeCache) Invalidate(ctx context.Context, repo session.PipelineModeRepository) error {
+func (c *pipelineModeCache) Invalidate(ctx context.Context, repo workflowengine.PipelineModeRepository) error {
 	return c.refresh(ctx, repo)
 }
 
@@ -149,7 +149,7 @@ func (c *pipelineModeCache) Invalidate(ctx context.Context, repo session.Pipelin
 // each other (and against the initial Load) so the cache always ends up
 // reflecting whichever call's DB read *began last*, never an earlier call's
 // data lingering because its Store happened to land after a later call's.
-func (c *pipelineModeCache) refresh(ctx context.Context, repo session.PipelineModeRepository) error {
+func (c *pipelineModeCache) refresh(ctx context.Context, repo workflowengine.PipelineModeRepository) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
@@ -160,10 +160,10 @@ func (c *pipelineModeCache) refresh(ctx context.Context, repo session.PipelineMo
 
 	next := make(map[string]resolvedPipelineMode, len(modes))
 	for _, m := range modes {
-		stageExecutors, err := session.ParseStageExecutors(m.StageExecutorsJSON)
+		stageExecutors, err := workflowengine.ParseStageExecutors(m.StageExecutorsJSON)
 		if err != nil {
 			log.WarningLog().Printf("[PipelineEngine] pipeline_mode slug=%q has malformed stage_executors_json, treating as no overrides configured: %v", m.Slug, err)
-			stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
+			stageExecutors = map[workflowengine.StageRole]workflowengine.PipelineStageExecutor{}
 		}
 		next[m.Slug] = resolvedPipelineMode{
 			Slug:                  m.Slug,
@@ -285,7 +285,7 @@ func attachedImagesSuffix(description string) string {
 // slug (never a silent no-op, never a panic) — see Story 1.3.3's fail-closed
 // acceptance criteria.
 type CachingPipelineEngine struct {
-	repo  session.PipelineModeRepository
+	repo  workflowengine.PipelineModeRepository
 	cache *pipelineModeCache
 }
 
@@ -306,7 +306,7 @@ var _ PipelineEngine = (*CachingPipelineEngine)(nil)
 // specifically — PipelineEngine is purely additive/opt-in, so a transient DB
 // hiccup at boot must never crash the whole server for a feature most items
 // don't use yet.
-func NewPipelineEngine(repo session.PipelineModeRepository) (*CachingPipelineEngine, error) {
+func NewPipelineEngine(repo workflowengine.PipelineModeRepository) (*CachingPipelineEngine, error) {
 	e := &CachingPipelineEngine{repo: repo, cache: &pipelineModeCache{}}
 	if err := e.cache.Load(context.Background(), repo); err != nil {
 		log.WarningLog().Printf("[PipelineEngine] cache.Load failed at startup, continuing with an empty cache: %v", err)
@@ -477,7 +477,7 @@ func (e *CachingPipelineEngine) ContentHashFor(mode backlogdto.PipelineMode) (st
 }
 
 // ExecutorFor implements PipelineEngine.
-func (e *CachingPipelineEngine) ExecutorFor(item *backlogdto.BacklogItemData, role session.StageRole) (program, model string) {
+func (e *CachingPipelineEngine) ExecutorFor(item *backlogdto.BacklogItemData, role workflowengine.StageRole) (program, model string) {
 	mode := backlogdto.PipelineMode(item.PipelineMode)
 	if mode == backlogdto.PipelineModeDefault {
 		return "", ""

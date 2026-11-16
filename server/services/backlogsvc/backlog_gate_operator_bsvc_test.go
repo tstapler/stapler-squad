@@ -14,9 +14,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
-func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) session.TransitionData {
+func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) workflowengine.TransitionData {
 	t.Helper()
 	edges, err := repo.ListAllTransitions(t.Context(), string(from))
 	require.NoError(t, err)
@@ -26,14 +27,14 @@ func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *session
 		}
 	}
 	require.Failf(t, "edge not seeded", "%s->%s", from, to)
-	return session.TransitionData{}
+	return workflowengine.TransitionData{}
 }
 
 // addApprovalGate puts an unsatisfied human_approval gate on a seeded edge.
-func addApprovalGate(t *testing.T, repo *session.EntStageConfigRepository, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) {
+func addApprovalGate(t *testing.T, repo *session.EntStageConfigRepository, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus) {
 	t.Helper()
 	edge := gateEdge(t, repo, cfg, from, to)
-	_, err := repo.CreateGate(t.Context(), session.GateCreateInput{
+	_, err := repo.CreateGate(t.Context(), workflowengine.GateCreateInput{
 		TransitionID: edge.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 	})
 	require.NoError(t, err)
@@ -68,7 +69,7 @@ func TestTransitionHandler_Enforce_GraphEditAndGateDenyWithUnchangedCodes(t *tes
 	// A graph edit: idea->refining disabled.
 	edge := gateEdge(t, repo, cfg, domain.BacklogStatusIdea, domain.BacklogStatusRefining)
 	disabled := false
-	_, err := repo.UpdateTransition(ctx, edge.ID, session.TransitionUpdateInput{Enabled: &disabled})
+	_, err := repo.UpdateTransition(ctx, edge.ID, workflowengine.TransitionUpdateInput{Enabled: &disabled})
 	require.NoError(t, err)
 	require.NoError(t, cfg.InvalidateCache(ctx))
 	item := newItemAt(t, storage, domain.BacklogStatusIdea)
@@ -115,7 +116,7 @@ func TestTransitionHandler_Enforce_OperatorOverrideBypassesGateAgentDoesNot(t *t
 func TestTransitionHandler_Off_MatchesLegacyAnswers(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
-	svc := NewBacklogService(storage, nil, nil, session.NewDefaultWorkflowEngine(), nil, nil)
+	svc := NewBacklogService(storage, nil, nil, workflowengine.NewDefaultWorkflowEngine(), nil, nil)
 	require.False(t, storage.TransitionGateWired(), "no gate is injected, so the answer is Off")
 	item := newItemAt(t, storage, domain.BacklogStatusIdea)
 
@@ -214,12 +215,12 @@ func TestBacklogDecider_Transition_ReachesHandlerAsNotificationActionCaller(t *t
 	svc, storage, repo, cfg := newEnforcedGateService(t)
 	addApprovalGate(t, repo, cfg, domain.BacklogStatusReview, domain.BacklogStatusReady)
 	item := newItemAt(t, storage, domain.BacklogStatusReview)
-	before := session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, session.ModeEnforce)
+	before := session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, workflowengine.ModeEnforce)
 
 	// "rework" is Review -> Ready under the same operator caller, through the exported entry point.
 	decider := services.NewBacklogDecider(services.BacklogDeciderDeps{Status: services.NewItemStatusReader(storage), Transitions: svc})
 	res, err := decider.Decide(t.Context(), services.BacklogDecision{ItemID: item.ID, Choice: services.ChoiceRework})
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, res.Outcome, "the operator gate denies the click")
-	assert.Equal(t, before+1, session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, session.ModeEnforce))
+	assert.Equal(t, before+1, session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, workflowengine.ModeEnforce))
 }
