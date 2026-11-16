@@ -382,4 +382,4 @@ func WireChainFirer(storage *session.Storage, workflows stagecfg.WorkflowReposit
 	return cf
 }
 
-var _ session.ChainDispatcher = (*ChainFirer)(nil)
+var _ backlogdto.ChainDispatcher = (*ChainFirer)(nil)

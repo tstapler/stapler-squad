@@ -53,7 +53,7 @@ func storageOn(t *testing.T, repo *session.EntRepository) *session.Storage {
 // wired in.
 type panickingItemChangePublisher struct{}
 
-func (panickingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change session.BacklogItemChange) {
+func (panickingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
 	panic("boom")
 }
 

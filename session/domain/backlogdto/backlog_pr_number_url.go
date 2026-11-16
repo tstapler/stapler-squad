@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
+// PrNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
 // e.g. "https://github.com/owner/repo/pull/148" -> 148.
 var PrNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 

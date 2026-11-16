@@ -5,6 +5,7 @@ go_library(
     name = "backlogdto",
     srcs = [
         "backlog_ac_audit_event_data.go",
+        "backlog_hooks.go",
         "backlog_item.go",
         "backlog_item_id.go",
         "backlog_pr_number_url.go",

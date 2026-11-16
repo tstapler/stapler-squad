@@ -646,25 +646,25 @@ func TestGatedSetPRAndTransition_RejectsMissingObservedAndPrecondition(t *testin
 // countingPublisher records ChangeStatusTransition publishes per item.
 type countingPublisher struct {
 	mu          sync.Mutex
-	transitions map[string][]BacklogItemChange
+	transitions map[string][]backlogdto.BacklogItemChange
 }
 
-func (p *countingPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change BacklogItemChange) {
-	if change.Kind != ChangeStatusTransition {
+func (p *countingPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
+	if change.Kind != backlogdto.ChangeStatusTransition {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.transitions == nil {
-		p.transitions = map[string][]BacklogItemChange{}
+		p.transitions = map[string][]backlogdto.BacklogItemChange{}
 	}
 	p.transitions[item.ID] = append(p.transitions[item.ID], change)
 }
 
-func (p *countingPublisher) forItem(id string) []BacklogItemChange {
+func (p *countingPublisher) forItem(id string) []backlogdto.BacklogItemChange {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]BacklogItemChange(nil), p.transitions[id]...)
+	return append([]backlogdto.BacklogItemChange(nil), p.transitions[id]...)
 }
 
 func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *testing.T) {
@@ -697,8 +697,8 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	require.Equal(t, string(domain.BacklogStatusInProgress), ev.FromStatus)
 	require.Equal(t, string(domain.BacklogStatusReview), ev.ToStatus)
 	require.Len(t, got.StatusEvents, 1, "one status event for the moved item")
-	require.Equal(t, []BacklogItemChange{{Kind: ChangeStatusTransition, OldStatus: string(domain.BacklogStatusInProgress), NewStatus: string(domain.BacklogStatusReview)}}, pub.forItem(approved.ID),
-		"exactly one ChangeStatusTransition publish")
+	require.Equal(t, []backlogdto.BacklogItemChange{{Kind: backlogdto.ChangeStatusTransition, OldStatus: string(domain.BacklogStatusInProgress), NewStatus: string(domain.BacklogStatusReview)}}, pub.forItem(approved.ID),
+		"exactly one backlogdto.ChangeStatusTransition publish")
 
 	require.Equal(t, string(domain.BacklogStatusInProgress), h.status(t, gated.ID), "the gated item is not moved")
 	require.Empty(t, pub.forItem(gated.ID))

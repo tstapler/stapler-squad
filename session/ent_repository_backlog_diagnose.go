@@ -37,7 +37,7 @@ func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id 
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionDiagnoseResult: owning item lookup for %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"diagnoseResult"}})
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"diagnoseResult"}})
 	}
 	return nil
 }
@@ -116,7 +116,7 @@ func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID st
 		return fmt.Errorf("commit workflow_suggestions: %w", err)
 	}
 	if data, getErr := r.GetBacklogItem(ctx, parsedItemID.String()); getErr == nil {
-		r.publishItemChanged(ctx, data, BacklogItemChange{Kind: ChangeItemUpdated, UpdatedFields: []string{"workflowSuggestions"}})
+		r.publishItemChanged(ctx, data, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"workflowSuggestions"}})
 	}
 	return nil
 }

@@ -101,7 +101,7 @@ func (s *Storage) MaintenanceDriver() dialect.ExecQuerier {
 }
 
 // SetItemChangePublisher wires p into the underlying repository.
-func (s *Storage) SetItemChangePublisher(p ItemChangePublisher) {
+func (s *Storage) SetItemChangePublisher(p backlogdto.ItemChangePublisher) {
 	s.Repo.SetItemChangePublisher(p)
 }
 
@@ -136,7 +136,7 @@ func (s *Storage) ForeignClaim(externalURL string) (hostclaim.ClaimRecord, bool)
 }
 
 // SetCallbackDispatcher forwards to the underlying *EntRepository's SetCallbackDispatcher.
-func (s *Storage) SetCallbackDispatcher(d CallbackDispatcher) {
+func (s *Storage) SetCallbackDispatcher(d backlogdto.CallbackDispatcher) {
 	s.Repo.SetCallbackDispatcher(d)
 }
 

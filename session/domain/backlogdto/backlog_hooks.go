@@ -1,9 +1,7 @@
-package session
+package backlogdto
 
 import (
 	"time"
-
-	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BacklogChangeKind identifies which kind of backlog item mutation a
@@ -68,9 +66,9 @@ type BacklogItemChange struct {
 	// CreateItemSessionWithVerdict, session/ent_repository_backlog_items.go) — this
 	// carries the verdict through the pipeline as first-class data, not via
 	// a client-side join against item_sessions.
-	Verdict *backlogdto.ReviewVerdictData
+	Verdict *ReviewVerdictData
 	// ActivityNote is populated only when Kind == ChangeActivityNoteAdded.
-	ActivityNote *backlogdto.ActivityNoteData
+	ActivityNote *ActivityNoteData
 }
 
 // ItemChangePublisher publishes a backlog item mutation to interested
@@ -86,5 +84,23 @@ type BacklogItemChange struct {
 // publisher may not be wired (e.g. in tests, or a repository that hasn't had
 // SetItemChangePublisher called on it).
 type ItemChangePublisher interface {
-	PublishItemChanged(item *backlogdto.BacklogItemData, change BacklogItemChange)
+	PublishItemChanged(item *BacklogItemData, change BacklogItemChange)
+}
+
+// CallbackDispatcher fires an outbound HTTP callback for a named lifecycle event
+// (e.g. "session_complete", "session_stale", "queue_item_created" — see
+// server/services.CallbackDispatcher's Dispatch doc comment for the full event-type
+// list and payload shapes). Implemented outside the session package because
+// server/services imports session, so the reverse import would be a cycle.
+//
+// Dispatch must never block the caller (FR8) and must never panic into the caller —
+// implementations bound concurrent in-flight dispatch goroutines and drop+log beyond
+// that cap (AC10) rather than queuing unboundedly.
+type CallbackDispatcher interface {
+	Dispatch(eventType string, payload any)
+}
+
+// ChainDispatcher fires the pipeline-chain continuation for a "done" item; session/backlog/chains.ChainFirer implements it.
+type ChainDispatcher interface {
+	Dispatch(item *BacklogItemData)
 }

@@ -33,19 +33,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
-// SetItemChangePublisher wires an ItemChangePublisher into this repository so
-// its backlog mutation methods (TransitionBacklogItemStatus, UpdateBacklogItem,
-// ArchiveBacklogItem, DeleteBacklogItem, SaveReviewVerdict,
-// CreateItemSessionWithVerdict, CreateItemSession,
-// UpdateItemSessionSessionUUID, UpdateItemSessionTriageResult) can publish a
-// best-effort change notification after each successful mutation. Called via
-// Storage.SetItemChangePublisher's forwarding method (session/storage.go),
-// which is the only entry point server/dependencies.go has since it holds a
-// *Storage, not a concrete *EntRepository.
-func (r *EntRepository) SetItemChangePublisher(p ItemChangePublisher) {
-	r.itemChangePublisher = p
-}
-
 // statusEventInput bundles recordStatusEvent's write fields — kept as one
 // struct rather than a long same-typed-string parameter list (see the
 // primitive-obsession-checklist skill).
@@ -1190,8 +1177,8 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	result := BacklogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the update itself.
-	r.publishItemChanged(ctx, &result, BacklogItemChange{
-		Kind:          ChangeItemUpdated,
+	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		Kind:          backlogdto.ChangeItemUpdated,
 		UpdatedFields: updatedFieldsFromBacklogItemUpdate(update),
 	})
 
@@ -1587,8 +1574,8 @@ func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, pr
 	result := BacklogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the archive itself.
-	r.publishItemChanged(ctx, &result, BacklogItemChange{
-		Kind:       ChangeItemArchived,
+	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		Kind:       backlogdto.ChangeItemArchived,
 		ArchivedAt: result.ArchivedAt,
 	})
 
@@ -1664,8 +1651,8 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 	// status-transition event (not a lightweight archived-only shape) so
 	// "Show Archived" list views in other open tabs live-update.
 	r.attachItemSessionsForPublish(ctx, &result)
-	r.publishItemChanged(ctx, &result, BacklogItemChange{
-		Kind:      ChangeStatusTransition,
+	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		Kind:      backlogdto.ChangeStatusTransition,
 		OldStatus: current.Status,
 		NewStatus: string(domain.BacklogStatusIdea),
 	})
@@ -1782,8 +1769,8 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	// publishItemChangedSnapshot directly (not publishItemChanged) so this
 	// pre-captured snapshot isn't clobbered by a re-query that would now find
 	// no sessions.
-	r.publishItemChangedSnapshot(&result, BacklogItemChange{
-		Kind: ChangeItemRemoved,
+	r.publishItemChangedSnapshot(&result, backlogdto.BacklogItemChange{
+		Kind: backlogdto.ChangeItemRemoved,
 	})
 
 	return nil
@@ -1935,8 +1922,8 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 	result := BacklogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the transition itself.
-	r.publishItemChanged(ctx, &result, BacklogItemChange{
-		Kind:      ChangeStatusTransition,
+	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		Kind:      backlogdto.ChangeStatusTransition,
 		OldStatus: fromStatus,
 		NewStatus: string(toStatus),
 	})
@@ -2010,8 +1997,8 @@ func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedU
 	// Best-effort publish: never blocks or fails the claim itself.
 	if item, getErr := r.Client.BacklogItem.Get(ctx, parsedID); getErr == nil {
 		result := BacklogItemToData(item)
-		r.publishItemChanged(ctx, &result, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"chainFired"},
 		})
 	}
@@ -2158,8 +2145,8 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 	result := BacklogItemToData(item)
 
 	// Best-effort publish: never blocks or fails the transition itself.
-	r.publishItemChanged(ctx, &result, BacklogItemChange{
-		Kind:      ChangeStatusTransition,
+	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		Kind:      backlogdto.ChangeStatusTransition,
 		OldStatus: fromStatus,
 		NewStatus: string(toStatus),
 	})
@@ -2173,111 +2160,11 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 // call site should use except DeleteBacklogItem, whose snapshot must be
 // captured before the item's sessions are deleted and therefore cannot be
 // re-queried here — see publishItemChangedSnapshot's doc comment.
-func (r *EntRepository) publishItemChanged(ctx context.Context, item *backlogdto.BacklogItemData, change BacklogItemChange) {
+func (r *EntRepository) publishItemChanged(ctx context.Context, item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
 	r.attachItemSessionsForPublish(ctx, item)
 	r.attachStatusEventsForPublish(ctx, item)
 	r.AttachPendingGuidance(ctx, item)
 	r.publishItemChangedSnapshot(item, change)
-}
-
-// publishItemChangedSnapshot is a defense-in-depth wrapper around
-// r.itemChangePublisher.PublishItemChanged: nil-checked (a publisher may not
-// be wired, e.g. in tests or before server/dependencies.go calls
-// SetItemChangePublisher) and recover()-guarded at the call site itself, so a
-// panic can never propagate into a hooked repository method's return path —
-// regardless of whether itemChangePublisher is the real adapter
-// (server/services.BacklogItemEventPublisher, which already recovers inside
-// its own body per Task 1.3.2b) or some other ItemChangePublisher
-// implementation that doesn't. Task 2.1.1d's regression test proves this
-// holds end-to-end even when a raw, unwrapped test double panics.
-//
-// Publishes item as-is, without eager-loading ItemSessions first. Two call
-// sites use this directly: DeleteBacklogItem, which must build its publish
-// snapshot (including ItemSessions) before deleting the item's sessions and
-// the item itself, so re-querying at publish time (as publishItemChanged
-// does) would wrongly observe them as already gone; and AppendActivityNote,
-// whose ChangeActivityNoteAdded event never carries a full item snapshot
-// (ADR-001/ADR-002 — see project_plans/backlog-item-activity-log), so there
-// is nothing extra to eager-load beyond the Status/RepoPath it reads itself.
-func (r *EntRepository) publishItemChangedSnapshot(item *backlogdto.BacklogItemData, change BacklogItemChange) {
-	if r.itemChangePublisher == nil {
-		return
-	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.WarningLog().Printf("[EntRepository] itemChangePublisher.PublishItemChanged panicked (recovered): %v", rec)
-		}
-	}()
-	r.itemChangePublisher.PublishItemChanged(item, change)
-}
-
-// SetCallbackDispatcher wires a CallbackDispatcher into this repository so
-// TransitionBacklogItemStatus (on_session_complete) and
-// BacklogLifecycleListener.reconcileStaleWorkSessions (on_session_stale, which is
-// handed this *EntRepository directly) can fire outbound callbacks
-// (webhook-triggers Phase 5). Called via Storage.SetCallbackDispatcher's
-// forwarding method, the same pattern SetItemChangePublisher uses.
-func (r *EntRepository) SetCallbackDispatcher(d CallbackDispatcher) {
-	r.callbackDispatcher = d
-}
-
-// dispatchCallback is a defense-in-depth wrapper around
-// r.callbackDispatcher.Dispatch: nil-checked (a dispatcher may not be wired, e.g.
-// in tests or before server/dependencies.go calls SetCallbackDispatcher) and
-// recover()-guarded, mirroring publishItemChanged's shape — a panic in Dispatch
-// (or any CallbackDispatcher implementation) must never propagate into a hooked
-// repository method's return path. Dispatch itself is expected to be
-// non-blocking (bounded semaphore + go, per CallbackDispatcher's doc comment).
-func (r *EntRepository) DispatchCallback(eventType string, payload any) {
-	if r.callbackDispatcher == nil {
-		return
-	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.WarningLog().Printf("[EntRepository] callbackDispatcher.Dispatch panicked (recovered): %v", rec)
-		}
-	}()
-	r.callbackDispatcher.Dispatch(eventType, payload)
-}
-
-// ChainDispatcher fires the pipeline-chain continuation for a "done" item; *ChainFirer implements it.
-type ChainDispatcher interface {
-	Dispatch(item *backlogdto.BacklogItemData)
-}
-
-// SetChainFirer wires a ChainFirer into this repository so
-// TransitionBacklogItemStatus can dispatch the pipeline-chain fire
-// immediately after a "done" transition commits (webhook-triggers Phase 6,
-// AC5/AC9). Called via WireChainFirer's forwarding call in
-// server/dependencies.go, the same pattern SetCallbackDispatcher uses.
-func (r *EntRepository) SetChainFirer(f ChainDispatcher) {
-	r.ChainFirer = f
-}
-
-// dispatchChainFire is a defense-in-depth wrapper around r.chainFirer.Dispatch:
-// nil-checked (a ChainFirer may not be wired, e.g. in tests or before
-// server/dependencies.go calls SetChainFirer) and recover()-guarded, mirroring
-// dispatchCallback's shape — a panic in Dispatch (which is itself already
-// non-blocking: bounded semaphore + go, see ChainFirer.Dispatch) must never
-// propagate into TransitionBacklogItemStatus's own return path.
-//
-// ChainFirer.Dispatch itself takes no ctx (see its doc comment) — it always
-// derives its own context.WithTimeout(context.Background(), chainFireTimeout)
-// for the goroutine it spawns, because by the time that goroutine's
-// CreateSession call actually runs, the caller's own ctx (e.g. an RPC
-// handler's request-scoped context) may already be cancelled — AC9 requires
-// this fire to survive past the transition call's own lifetime, not be tied
-// to it.
-func (r *EntRepository) dispatchChainFire(item *backlogdto.BacklogItemData) {
-	if r.ChainFirer == nil {
-		return
-	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.WarningLog().Printf("[EntRepository] chainFirer.Dispatch panicked (recovered): %v", rec)
-		}
-	}()
-	r.ChainFirer.Dispatch(item)
 }
 
 // attachItemSessionsForPublish best-effort loads and attaches this item's
@@ -2941,7 +2828,7 @@ func (r *EntRepository) AppendActivityNote(ctx context.Context, itemID, authorSe
 		ID:       parsedItemID.String(),
 		Status:   itemFields.Status,
 		RepoPath: itemFields.RepoPath,
-	}, BacklogItemChange{Kind: ChangeActivityNoteAdded, ActivityNote: &note})
+	}, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeActivityNoteAdded, ActivityNote: &note})
 	return nil
 }
 

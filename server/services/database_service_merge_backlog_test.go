@@ -32,7 +32,7 @@ import (
 // backlog_stuck_states / backlog_progress_notes) at all. Backlog items are
 // simply outside MergeDatabase's data model entirely, so there is no code
 // path by which a merge could invoke the 9 hooked EntRepository methods (the
-// only place session.ItemChangePublisher.PublishItemChanged is ever called)
+// only place backlogdto.ItemChangePublisher.PublishItemChanged is ever called)
 // — no bypass/suppression parameter is needed per Task 7.2.1b's "else" branch.
 //
 // The three tests below are the confirming tests validation.md maps to R16,

@@ -97,8 +97,8 @@ func (r *EntRepository) TouchItemSessionProgress(ctx context.Context, id string,
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] TouchItemSessionProgress: failed to resolve owning backlog item for item session %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, BacklogItemChange{
-			Kind:          ChangeItemUpdated,
+		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{
+			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"itemSessions"},
 		})
 	}
