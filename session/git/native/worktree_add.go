@@ -142,7 +142,7 @@ func resolveNativeAddBaseCommit(repo *git.Repository, p SetupParams) (string, er
 func WriteAdminFiles(adminDir, worktreePath, branchName string) error {
 	w := NewAdminFileWriter(adminDir)
 
-	if err := w.WriteFile("locked", []byte("initializing")); err != nil {
+	if err := writeLockedMarker(adminDir); err != nil {
 		return fmt.Errorf("nativeSetupNewWorktree: failed to write locked marker in %q: %w", adminDir, err)
 	}
 	if err := w.WriteFile("gitdir", []byte(filepath.Join(worktreePath, ".git")+"\n")); err != nil {
@@ -155,6 +155,34 @@ func WriteAdminFiles(adminDir, worktreePath, branchName string) error {
 		return fmt.Errorf("nativeSetupNewWorktree: failed to write HEAD file in %q: %w", adminDir, err)
 	}
 	return nil
+}
+
+// lockedMarkerRecreateAttempts bounds how often writeLockedMarker re-creates an admin dir
+// that a concurrent prune removed out from under it.
+const lockedMarkerRecreateAttempts = 3
+
+// writeLockedMarker creates adminDir/locked directly, not via AdminFileWriter's
+// temp+rename. Until "locked" exists the dir is gitdir-less, and `git maintenance`'s
+// worktree-prune task (run after every `git commit` under git's geometric default
+// strategy) deletes such a dir, then rmdirs .git/worktrees; the temp+rename+fsync
+// window made that race reproducible in CI. A locked dir is skipped by prune, and
+// the marker's content is irrelevant, so a plain create is safe. If prune still wins the
+// remaining microsecond window, the dir is re-created (we own the name under the repo lock).
+func writeLockedMarker(adminDir string) error {
+	var err error
+	for attempt := 0; attempt < lockedMarkerRecreateAttempts; attempt++ {
+		err = os.WriteFile(filepath.Join(adminDir, "locked"), []byte("initializing"), 0o666)
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if mkErr := os.MkdirAll(filepath.Dir(adminDir), 0o777); mkErr != nil {
+			return mkErr
+		}
+		if mkErr := os.Mkdir(adminDir, 0o777); mkErr != nil && !errors.Is(mkErr, os.ErrExist) {
+			return mkErr
+		}
+	}
+	return err
 }
 
 // writeNativeWorktreeRedirectFile creates worktreePath and writes its own top-level `.git`

@@ -293,3 +293,27 @@ func TestNativeUnlockWorktree_NoMarkerPresent_NoOp(t *testing.T) {
 	_, err = os.Stat(filepath.Join(adminDir, "gitdir"))
 	assert.NoError(t, err, "admin dir must otherwise be unchanged")
 }
+
+// A concurrent `git maintenance` worktree-prune deletes a gitdir-less admin dir and then
+// .git/worktrees itself; WriteAdminFiles must survive that landing before its first write.
+func TestWriteAdminFiles_RecreatesAdminDir_When_PrunedBeforeLockedMarker(t *testing.T) {
+	t.Parallel()
+	repoPath := t.TempDir()
+	adminDir, err := AllocateAdminDirName(repoPath, "pruned-early")
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(filepath.Join(repoPath, ".git", "worktrees")))
+
+	require.NoError(t, WriteAdminFiles(adminDir, filepath.Join(repoPath, "wt"), "feature"))
+
+	for _, name := range []string{"locked", "gitdir", "commondir", "HEAD"} {
+		assert.FileExists(t, filepath.Join(adminDir, name))
+	}
+}
+
+func TestWriteLockedMarker_ReturnsError_When_ParentIsNotADirectory(t *testing.T) {
+	t.Parallel()
+	blocker := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	require.Error(t, writeLockedMarker(filepath.Join(blocker, "worktrees", "x")))
+}
