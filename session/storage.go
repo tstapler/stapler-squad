@@ -1455,7 +1455,7 @@ func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]str
 // It reports attached=false, with no error, when the item carries a tombstone for
 // that PR, so a re-poll cannot undo a detach.
 func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source domain.AttachSource) (bool, error) {
-	n, err := ParsePRNumberFromURL(prURL)
+	n, err := backlogdto.ParsePRNumberFromURL(prURL)
 	if err != nil {
 		return false, err
 	}
@@ -1551,7 +1551,7 @@ func (s *Storage) UpdateItemSessionDiagnoseResult(ctx context.Context, id string
 }
 
 // AppendWorkflowSuggestion records a diagnose session's operator recommendation.
-func (s *Storage) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug WorkflowSuggestionData) (string, error) {
+func (s *Storage) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug backlogdto.WorkflowSuggestionData) (string, error) {
 	return s.Repo.AppendWorkflowSuggestion(ctx, itemID, sug)
 }
 
@@ -1772,7 +1772,7 @@ func (s *Storage) WaiveAcCriterion(ctx context.Context, itemID string, criterion
 }
 
 // RecordAcAudit appends an AC audit row for an attempt refused before reaching the criterion.
-func (s *Storage) RecordAcAudit(ctx context.Context, d AcAuditEventData) error {
+func (s *Storage) RecordAcAudit(ctx context.Context, d backlogdto.AcAuditEventData) error {
 	return s.Repo.RecordAcAudit(ctx, d)
 }
 
@@ -1782,7 +1782,7 @@ func (s *Storage) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (
 }
 
 // ListAcAudit returns an item's AC audit trail, oldest first.
-func (s *Storage) ListAcAudit(ctx context.Context, itemID string) ([]AcAuditEventData, error) {
+func (s *Storage) ListAcAudit(ctx context.Context, itemID string) ([]backlogdto.AcAuditEventData, error) {
 	return s.Repo.ListAcAudit(ctx, itemID)
 }
 

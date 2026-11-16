@@ -51,7 +51,7 @@ func (f auditFixture) waive(t *testing.T, ctx context.Context, idx int32, reason
 	return err
 }
 
-func (f auditFixture) audit(t *testing.T) []session.AcAuditEventData {
+func (f auditFixture) audit(t *testing.T) []backlogdto.AcAuditEventData {
 	t.Helper()
 	rows, err := f.storage.ListAcAudit(t.Context(), f.itemID)
 	require.NoError(t, err)

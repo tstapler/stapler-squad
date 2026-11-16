@@ -53,7 +53,7 @@ func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionF
 
 	_, err = h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerQueueBacklogItem, Observed: observed, To: domain.BacklogStatusIdea, TriggeredBy: instance.TriggeredBySystem})
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
-	require.NotErrorIs(t, err, ErrTransitionNotAllowed)
+	require.NotErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	require.Equal(t, string(domain.BacklogStatusQueued), h.status(t, stale.ID), "nothing is written")
 	require.Empty(t, h.rep.snapshot(), "a lost CAS is not a denial")
 }
@@ -241,7 +241,7 @@ func TestGatedTransition_BeforeCommit_RunsAfterDecisionAndBeforeCAS(t *testing.T
 			Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusDone,
 			BeforeCommit: func(context.Context) error { t.Error("BeforeCommit ran for a denied request"); return nil },
 		})
-		require.ErrorIs(t, err, ErrTransitionNotAllowed)
+		require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	})
 }
 
@@ -350,7 +350,7 @@ func TestGatedTransition_ReporterPanicNeverChangesTheDenial(t *testing.T) {
 	h.rep.panics = true
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	_, err := h.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{Caller: domain.CallerMCPResumeWork, ItemID: item.ID, To: domain.BacklogStatusDone})
-	require.ErrorIs(t, err, ErrTransitionNotAllowed)
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	require.Len(t, h.rep.snapshot(), 1)
 }
 
@@ -389,7 +389,7 @@ func TestGatedTransition_UncheckedCallerIsAllowedInOffAndShadow_DeniedInEnforce(
 			require.NoErrorf(t, err, "mode %s", modeLabel(tc.mode))
 			require.Equal(t, string(domain.BacklogStatusDone), h.status(t, item.ID))
 		} else {
-			require.ErrorIsf(t, err, ErrTransitionNotAllowed, "mode %s", modeLabel(tc.mode))
+			require.ErrorIsf(t, err, domain.ErrTransitionNotAllowed, "mode %s", modeLabel(tc.mode))
 		}
 	}
 }
@@ -416,7 +416,7 @@ func TestGatedTransition_Unwired_BehavesAsOff_AndCountsUnwired(t *testing.T) {
 	other, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "unwired 2", Status: string(domain.BacklogStatusIdea)})
 	require.NoError(t, err)
 	_, err = storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{Caller: domain.CallerQueueBacklogItem, ItemID: other.ID, To: domain.BacklogStatusDone})
-	require.ErrorIs(t, err, ErrTransitionNotAllowed)
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 }
 
 func TestSetTransitionGate_RequiresEngineAndReporter(t *testing.T) {

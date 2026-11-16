@@ -26,10 +26,8 @@ import (
 )
 
 // prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
-// e.g. "https://github.com/owner/repo/pull/148" -> 148. Mirrors
-// session/storage_backlog.go's identical pattern (BackfillMissingPRNumbers) —
-// duplicated here rather than imported since session/git cannot import the
-// parent session package without a cycle.
+// e.g. "https://github.com/owner/repo/pull/148" -> 148. Same pattern as
+// backlogdto.ParsePRNumberFromURL, duplicated to keep session/git free of backlog imports.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
 // ghCommandCallsTotal / ghCommandDurationMs mirror github/gh_exec.go's

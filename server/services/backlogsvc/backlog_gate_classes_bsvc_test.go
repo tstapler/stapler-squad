@@ -123,7 +123,7 @@ func TestClassProof_Agent_GenericDelegateIsDeniedWhenAnOperatorDisablesTheEdge(t
 
 	err := enfTransition(agentCtx, svc, item.ID, refining, "")
 
-	require.ErrorIs(t, err, session.ErrTransitionNotAllowed)
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	assert.Equal(t, string(done), storedStatus(t, storage, item.ID))
 	rows := transitionDeniedRows(t, svc, item.ID)
 	require.Len(t, rows, 1, "the agent's denial is reported, not only returned")

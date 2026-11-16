@@ -86,7 +86,7 @@ func TestEnforcement_DisablingAnEdgeDeniesAndReenablingAllowsWithoutRestart(t *t
 
 	require.NoError(t, enfSetEdge(t, svc, edge, false))
 	err := enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, "")
-	require.ErrorIs(t, err, session.ErrTransitionNotAllowed)
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	assert.Equal(t, connect.CodeInvalidArgument, enfConnectCode(t, err))
 	assert.Equal(t, string(domain.BacklogStatusDone), storedStatus(t, storage, item.ID))
 
@@ -158,7 +158,7 @@ func TestEnforcement_OperatorOverrideReasonBypassesDisabledEdgeThroughHandler(t 
 	require.NoError(t, enfSetEdge(t, svc, enfEdgeID(t, repo, domain.BacklogStatusDone, domain.BacklogStatusRefining), false))
 	item := enfItemAt(t, storage, domain.BacklogStatusDone)
 
-	require.ErrorIs(t, enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, ""), session.ErrTransitionNotAllowed)
+	require.ErrorIs(t, enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, ""), domain.ErrTransitionNotAllowed)
 
 	require.NoError(t, enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, enfOverride))
 	assert.Equal(t, string(domain.BacklogStatusRefining), storedStatus(t, storage, item.ID))
@@ -180,13 +180,13 @@ func TestEnforcement_GraphBypassStaysWithinItsLimits(t *testing.T) {
 	t.Run("an agent never gets the graph bypass", func(t *testing.T) {
 		item := enfItemAt(t, storage, domain.BacklogStatusDone)
 		ctx := services.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
-		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), session.ErrTransitionNotAllowed)
+		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), domain.ErrTransitionNotAllowed)
 		assert.Equal(t, string(domain.BacklogStatusDone), storedStatus(t, storage, item.ID))
 	})
 	t.Run("an unknown actor fails closed to the agent", func(t *testing.T) {
 		item := enfItemAt(t, storage, domain.BacklogStatusDone)
 		ctx := services.WithTransitionActor(t.Context(), "robot")
-		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), session.ErrTransitionNotAllowed)
+		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), domain.ErrTransitionNotAllowed)
 	})
 }
 

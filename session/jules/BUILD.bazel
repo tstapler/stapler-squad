@@ -9,7 +9,6 @@ go_library(
     deps = [
         "//jules",
         "//log",
-        "//session",
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/instance",

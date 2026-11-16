@@ -10,7 +10,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -31,7 +30,7 @@ func registerSuggestWorkflowActionTool(s *mcpserver.MCPServer, dh *diagnoseHandl
 			mcpgo.WithDescription("Post a structured recommendation for the operator on the backlog item (e.g. \"Move item back to ready — stall resolved\"). It renders as a dismissible card on the item; nothing is applied automatically. Role: diagnose only."),
 			mcpgo.WithString("item_id", mcpgo.Description("UUID of the backlog item this diagnostic session was dispatched for"), mcpgo.Required()),
 			mcpgo.WithString("recommendation", mcpgo.Description("What the operator should do and why (max 500 chars)"), mcpgo.Required()),
-			mcpgo.WithString("action_type", mcpgo.Description("Kind of action recommended"), mcpgo.Enum(session.WorkflowSuggestionActionTypes...), mcpgo.Required()),
+			mcpgo.WithString("action_type", mcpgo.Description("Kind of action recommended"), mcpgo.Enum(backlogdto.WorkflowSuggestionActionTypes...), mcpgo.Required()),
 		),
 		dh.suggestWorkflowAction,
 	)
@@ -53,16 +52,16 @@ func (dh *diagnoseHandlers) suggestWorkflowAction(ctx context.Context, req mcpgo
 		return errResult(ErrInvalidArgument, fmt.Sprintf("recommendation is required and must be at most %d chars", maxWorkflowRecommendationLen), ""), nil
 	}
 	actionType, _ := args["action_type"].(string)
-	if !slices.Contains(session.WorkflowSuggestionActionTypes, actionType) {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("action_type must be one of %v", session.WorkflowSuggestionActionTypes), ""), nil
+	if !slices.Contains(backlogdto.WorkflowSuggestionActionTypes, actionType) {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("action_type must be one of %v", backlogdto.WorkflowSuggestionActionTypes), ""), nil
 	}
 	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID); errRes != nil {
 		return errRes, nil
 	}
-	id, appendErr := dh.storage.AppendWorkflowSuggestion(ctx, itemID, session.WorkflowSuggestionData{
+	id, appendErr := dh.storage.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{
 		ActionType: actionType, Recommendation: recommendation, SessionUUID: callerUUID,
 	})
-	if errors.Is(appendErr, session.ErrDuplicateWorkflowSuggestion) || errors.Is(appendErr, session.ErrTooManyWorkflowSuggestions) {
+	if errors.Is(appendErr, backlogdto.ErrDuplicateWorkflowSuggestion) || errors.Is(appendErr, backlogdto.ErrTooManyWorkflowSuggestions) {
 		return errResult(ErrInvalidArgument, appendErr.Error(), ""), nil
 	}
 	if appendErr != nil {
