@@ -557,7 +557,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	// A successful fetch resolves an unverified-terminal row and resets
 	// poll_fail_count; a counted failure leaves it unverified and increments it.
 	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *instance.Instance, ref domain.PRRef) error {
-		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
+		return prStatusPoller.Refresh(ctx, ref, domain.PRSourceReconcilerRefresh)
 	})
 	if err := w.Validate(); err != nil {
 		return nil, err

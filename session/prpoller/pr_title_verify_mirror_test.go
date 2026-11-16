@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -33,7 +32,7 @@ func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
 	inst.Status = domain.Active
 	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
 	p.SetInstances([]*instance.Instance{inst})
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, domain.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -45,7 +44,7 @@ func TestPoller_ShouldKeepStoredTitle_WhenFetchCarriesNone(t *testing.T) {
 	t.Parallel()
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen, Title: "Seeded title"})
+	seedStateRow(t, storage.Repo, domain.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen, Title: "Seeded title"})
 
 	p.checkAllSessions()
 
@@ -64,7 +63,7 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
 	p.SetInstances([]*instance.Instance{inst})
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
+	seedStateRow(t, storage.Repo, domain.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 	require.True(t, viewOf(t, inst, 9).UnverifiedTerminal())
 
 	seen := make([]int, 0, 6)
@@ -89,7 +88,7 @@ func TestPoller_ShouldClearMirroredVerifyAttempts_WhenLaterFetchResolvesTheRow(t
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
 	inst.MirrorPRPollFacts(prRefN(t, 9), domain.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
 	p.SetInstances([]*instance.Instance{inst})
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
+	seedStateRow(t, storage.Repo, domain.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 
 	p.checkAllSessions()
 

@@ -60,7 +60,7 @@ func TestSetPRAndTransition_ShouldDropReplacedItemLinkWithoutTombstone_WhenCorre
 	t.Parallel()
 	ctx := context.Background()
 	f := newItemPRFixture(t, 21)
-	f.link(ItemPROwner(f.itemID), 21, domain.PRStateOpen)
+	f.link(domain.ItemPROwner(f.itemID), 21, domain.PRStateOpen)
 	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	pr := prAssoc(22, domain.AttachSourceReportPRCreated)
 	pr.Guard = &backlogdto.PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
@@ -68,7 +68,7 @@ func TestSetPRAndTransition_ShouldDropReplacedItemLinkWithoutTombstone_WhenCorre
 	require.NoError(t, f.storage.setPRAndTransition(ctx, item, pr))
 
 	assert.Equal(t, []int{22}, itemLinkNumbers(t, f), "the replaced #21 link is gone, #22 is linked")
-	tombstoned, err := f.repo.IsTombstoned(ctx, ItemPROwner(f.itemID), testRef(21))
+	tombstoned, err := f.repo.IsTombstoned(ctx, domain.ItemPROwner(f.itemID), testRef(21))
 	require.NoError(t, err)
 	assert.False(t, tombstoned, "a correction is not a detach")
 }
@@ -77,7 +77,7 @@ func TestSetPRAndTransition_ShouldAttachFollowupAndKeepPending_WhenAdditive(t *t
 	t.Parallel()
 	ctx := context.Background()
 	f := newItemPRFixture(t, 21)
-	f.link(ItemPROwner(f.itemID), 21, domain.PRStateMerged)
+	f.link(domain.ItemPROwner(f.itemID), 21, domain.PRStateMerged)
 	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	pr := prAssoc(22, domain.AttachSourceReportPRCreated)
 	pr.Additive = true
@@ -102,8 +102,8 @@ func TestSetPRAndTransition_ShouldRefuseAdditive_WhenOperatorDetachedThatPR(t *t
 	t.Parallel()
 	ctx := context.Background()
 	f := newItemPRFixture(t, 21)
-	f.link(ItemPROwner(f.itemID), 22, domain.PRStateOpen)
-	f.detach(ItemPROwner(f.itemID), 22)
+	f.link(domain.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
+	f.detach(domain.ItemPROwner(f.itemID), 22)
 	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	pr := prAssoc(22, domain.AttachSourceReportPRCreated)
 	pr.Additive = true

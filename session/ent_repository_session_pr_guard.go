@@ -14,24 +14,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
 )
 
-// ItemGuardView is what the retention sweeper and the cleanup gate need to know
-// about one backlog item's own PRs.
-type ItemGuardView struct {
-	// Direct are the item-direct links (agent-reported, Jules, manual) with the
-	// item's tombstoned PRs removed.
-	Direct []domain.PRView
-	// LegacyUnrepresented is true when the item's scalar pr_number/pr_url is
-	// neither carried by a link of the item or its sessions nor covered by a
-	// tombstone, or cannot be turned into a ref at all. It fails closed.
-	LegacyUnrepresented bool
-}
-
 // ListItemGuardViews returns one ItemGuardView per requested item id. Statements
 // per chunk of 500 ids: links, states, tombstones (skipped when no id has a
 // direct link) and the item rows; the legacy coverage reads run only for items
 // with pr_number > 0.
-func (r *EntRepository) ListItemGuardViews(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error) {
-	out := make(map[string]ItemGuardView, len(itemIDs))
+func (r *EntRepository) ListItemGuardViews(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error) {
+	out := make(map[string]domain.ItemGuardView, len(itemIDs))
 	for _, chunk := range chunkSlice(itemIDs, itemSessionBatchChunk) {
 		if err := r.fillItemGuardChunk(ctx, chunk, out); err != nil {
 			return nil, err
@@ -40,7 +28,7 @@ func (r *EntRepository) ListItemGuardViews(ctx context.Context, itemIDs []string
 	return out, nil
 }
 
-func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, out map[string]ItemGuardView) error {
+func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, out map[string]domain.ItemGuardView) error {
 	direct, err := r.directItemViews(ctx, ids)
 	if err != nil {
 		return err
@@ -50,7 +38,7 @@ func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, ou
 		return err
 	}
 	for _, id := range ids {
-		out[id] = ItemGuardView{Direct: direct[id], LegacyUnrepresented: legacy[id]}
+		out[id] = domain.ItemGuardView{Direct: direct[id], LegacyUnrepresented: legacy[id]}
 	}
 	return nil
 }
@@ -106,7 +94,7 @@ func (r *EntRepository) legacyUnrepresentedItems(ctx context.Context, ids []stri
 	for i, it := range items {
 		itemIDs[i], itemUUIDs[i] = it.ID.String(), it.ID
 	}
-	cov, err := r.itemCoverage(ctx, itemIDs, itemUUIDs)
+	cov, err := newPRBackfiller(r).itemCoverage(ctx, itemIDs, itemUUIDs)
 	if err != nil {
 		return nil, err
 	}

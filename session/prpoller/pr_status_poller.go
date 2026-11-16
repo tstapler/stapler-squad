@@ -185,7 +185,7 @@ func (p *PRStatusPoller) ETagCache() *github.ETagCache {
 // The dispatched fetch's context is built from p.ctx (the poller's own lifetime),
 // not the passed-in ctx: the webhook handler does not block on this call, so a
 // request-scoped ctx would cancel the fetch as soon as the HTTP response is written.
-func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) bool {
+func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref domain.PRRef, src domain.PRObservationSource) bool {
 	_ = ctx // request-scoped; not used for the dispatched fetch's lifetime, see doc comment
 	if repoRef, err := instance.PRRepoRef(ref); err == nil {
 		p.etagCache.Invalidate(repoRef, ref.Number())
@@ -215,7 +215,7 @@ func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref domain.PR
 }
 
 // dispatchRowRefresh starts Refresh for ref's row, if it has one.
-func (p *PRStatusPoller) dispatchRowRefresh(ref domain.PRRef, src session.PRObservationSource) bool {
+func (p *PRStatusPoller) dispatchRowRefresh(ref domain.PRRef, src domain.PRObservationSource) bool {
 	if p.storage == nil || p.ctx == nil {
 		return false
 	}

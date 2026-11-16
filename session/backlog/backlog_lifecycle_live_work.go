@@ -165,7 +165,7 @@ const prRefreshWait = 10 * time.Second
 // PRRowRefresher refreshes one PR's state row from GitHub and returns once the poll
 // core has written it. *PRStatusPoller implements it.
 type PRRowRefresher interface {
-	Refresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) error
+	Refresh(ctx context.Context, ref domain.PRRef, src domain.PRObservationSource) error
 }
 
 // SetPRRowRefresher wires the poller's per-PR refresh into the reconcilers.
@@ -187,7 +187,7 @@ func (l *BacklogLifecycleListener) itemVerdictAfterMerge(ctx context.Context, er
 	if refresher != nil {
 		if ref, err := session.ParseItemPRRef(prURL, prNumber); err == nil {
 			rctx, cancel := context.WithTimeout(ctx, prRefreshWait)
-			if rerr := refresher.Refresh(rctx, ref, session.PRSourceReconcilerRefresh); rerr != nil {
+			if rerr := refresher.Refresh(rctx, ref, domain.PRSourceReconcilerRefresh); rerr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] item=%s refresh of merged PR %s: %v (verdict from existing rows)", itemID, ref, rerr)
 			}
 			cancel()

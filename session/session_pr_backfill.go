@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
@@ -171,7 +172,7 @@ func (r *PRBackfillReport) skipTitle(title string) {
 }
 
 type prBackfillCandidate struct {
-	owner    PROwner
+	owner    domain.PROwner
 	ref      domain.PRRef
 	title    string
 	url      string
@@ -180,12 +181,27 @@ type prBackfillCandidate struct {
 	hadLinks bool // session already had other links (a rollback import)
 }
 
+// prBackfiller is one backfill pass over its own dependencies instead of the whole EntRepository, so the
+// pass can move with the PR store.
+type prBackfiller struct {
+	client *ent.Client
+	driver dialect.Driver
+	links  prLinkStore
+}
+
+// prLinkStore is the slice of the PR store the backfill writes through.
+type prLinkStore interface {
+	UpsertSessionPR(ctx context.Context, owner domain.PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error)
+	ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRRef, error)
+	ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]domain.PRRef, error)
+}
+
 // prBackfillHook is a test seam called before each import; nil in production.
 type prBackfillHook func(domain.PRRef) error
 
 // runPRBackfill is one pass. A returned error is transient (retry); deterministic
 // per-row failures are counted in the report and the pass continues.
-func (r *EntRepository) runPRBackfill(ctx context.Context, hook prBackfillHook) (PRBackfillReport, error) {
+func (r *prBackfiller) runPRBackfill(ctx context.Context, hook prBackfillHook) (PRBackfillReport, error) {
 	var rep PRBackfillReport
 	sessions, err := r.collectSessionPRCandidates(ctx, &rep)
 	if err != nil {
@@ -221,7 +237,7 @@ func mergeBackfillSeeds(groups ...[]prBackfillCandidate) map[domain.PRRef]bool {
 	return seeds
 }
 
-func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfillCandidate, seeds map[domain.PRRef]bool, hook prBackfillHook, rep *PRBackfillReport) error {
+func (r *prBackfiller) importPRCandidates(ctx context.Context, group []prBackfillCandidate, seeds map[domain.PRRef]bool, hook prBackfillHook, rep *PRBackfillReport) error {
 	imported := 0
 	for _, c := range group {
 		if imported >= maxBackfillWritesPerBoot {
@@ -233,7 +249,7 @@ func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfi
 				return err
 			}
 		}
-		res, err := r.UpsertSessionPR(ctx, c.owner, c.ref, domain.PRLink{
+		res, err := r.links.UpsertSessionPR(ctx, c.owner, c.ref, domain.PRLink{
 			Role: domain.PRRolePrimary, Source: domain.AttachSourceBackfill,
 			Initial: domain.PRInitial{State: domain.PRStateUnknown, Terminal: seeds[c.ref], URL: c.url},
 		})
@@ -274,7 +290,7 @@ func recordImported(rep *PRBackfillReport, c prBackfillCandidate, res domain.PRL
 // isDeterministicPRImportError reports failures that would repeat identically on
 // every boot. Anything unrecognized is treated as transient.
 func isDeterministicPRImportError(err error) bool {
-	return errors.Is(err, instance.ErrZeroPRRef) || errors.Is(err, ErrInvalidPROwner) || errors.Is(err, domain.ErrSessionPRLinkCap) ||
+	return errors.Is(err, instance.ErrZeroPRRef) || errors.Is(err, domain.ErrInvalidPROwner) || errors.Is(err, domain.ErrSessionPRLinkCap) ||
 		ent.IsValidationError(err) || ent.IsConstraintError(err)
 }
 
@@ -294,8 +310,8 @@ type sessionPRRow struct {
 	terminal    bool
 }
 
-func (r *EntRepository) collectSessionPRCandidates(ctx context.Context, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
-	rows, err := r.Client.Session.Query().
+func (r *prBackfiller) collectSessionPRCandidates(ctx context.Context, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
+	rows, err := r.client.Session.Query().
 		Where(entsession.GithubPrNumberGT(0)).
 		Select(entsession.FieldUUID, entsession.FieldTitle, entsession.FieldGithubPrNumber, entsession.FieldGithubOwner,
 			entsession.FieldGithubRepo, entsession.FieldGithubHost, entsession.FieldGithubPrStatusTerminal,
@@ -328,7 +344,7 @@ func (r *EntRepository) collectSessionPRCandidates(ctx context.Context, rep *PRB
 	return r.filterUnrepresentedSessions(ctx, usable, rep)
 }
 
-func (r *EntRepository) filterUnrepresentedSessions(ctx context.Context, rows []sessionPRRow, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
+func (r *prBackfiller) filterUnrepresentedSessions(ctx context.Context, rows []sessionPRRow, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
@@ -340,7 +356,7 @@ func (r *EntRepository) filterUnrepresentedSessions(ctx context.Context, rows []
 	if err != nil {
 		return nil, err
 	}
-	tombs, err := r.ListSessionTombstonesByUUIDs(ctx, uuids)
+	tombs, err := r.links.ListSessionTombstonesByUUIDs(ctx, uuids)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +368,7 @@ func (r *EntRepository) filterUnrepresentedSessions(ctx context.Context, rows []
 			rep.SkippedTombstoned++
 		default:
 			out = append(out, prBackfillCandidate{
-				owner: SessionPROwner(row.uuid), ref: row.ref, title: row.title,
+				owner: domain.SessionPROwner(row.uuid), ref: row.ref, title: row.title,
 				url: synthesizePRURL(row.ref), terminal: row.terminal, hadLinks: len(links[row.uuid]) > 0,
 			})
 		}
@@ -362,7 +378,7 @@ func (r *EntRepository) filterUnrepresentedSessions(ctx context.Context, rows []
 
 // linkRefsByOwner returns each owner's linked PRRefs in one joined statement per
 // chunk of 500 owners. ownerColumn is a code constant, never caller input.
-func (r *EntRepository) linkRefsByOwner(ctx context.Context, ownerColumn string, ids []string) (map[string][]domain.PRRef, error) {
+func (r *prBackfiller) linkRefsByOwner(ctx context.Context, ownerColumn string, ids []string) (map[string][]domain.PRRef, error) {
 	out := make(map[string][]domain.PRRef)
 	for _, chunk := range chunkSlice(ids, itemSessionBatchChunk) {
 		query := "SELECT sp." + ownerColumn + ", ps.host, ps.owner, ps.repo, ps.number FROM session_prs sp " +
@@ -403,8 +419,8 @@ func scanLinkRefs(rows *entsql.Rows, out map[string][]domain.PRRef) error {
 
 // ---- item candidates -------------------------------------------------------------
 
-func (r *EntRepository) collectItemPRCandidates(ctx context.Context, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (r *prBackfiller) collectItemPRCandidates(ctx context.Context, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
+	items, err := r.client.BacklogItem.Query().
 		Where(backlogitem.PrNumberGT(0)).
 		Select(backlogitem.FieldID, backlogitem.FieldTitle, backlogitem.FieldPrURL, backlogitem.FieldPrNumber, backlogitem.FieldStatus).
 		All(ctx)
@@ -422,7 +438,7 @@ func (r *EntRepository) collectItemPRCandidates(ctx context.Context, rep *PRBack
 	return out, nil
 }
 
-func (r *EntRepository) unrepresentedItemPRs(ctx context.Context, items []*ent.BacklogItem, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
+func (r *prBackfiller) unrepresentedItemPRs(ctx context.Context, items []*ent.BacklogItem, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
 	ids := make([]string, len(items))
 	uuids := make([]uuid.UUID, len(items))
 	for i, it := range items {
@@ -443,7 +459,7 @@ func (r *EntRepository) unrepresentedItemPRs(ctx context.Context, items []*ent.B
 		case unrepresented:
 			url := strings.TrimSpace(it.PrURL)
 			out = append(out, prBackfillCandidate{
-				owner: ItemPROwner(id), ref: ref, title: it.Title, url: url,
+				owner: domain.ItemPROwner(id), ref: ref, title: it.Title, url: url,
 				terminal: it.Status == "done", isItem: true,
 			})
 		}
@@ -453,7 +469,7 @@ func (r *EntRepository) unrepresentedItemPRs(ctx context.Context, items []*ent.B
 
 // itemCoverage loads, for one chunk of item ids, the links and tombstones of the
 // items and of every session ever attached to them, and returns a per-item view.
-func (r *EntRepository) itemCoverage(ctx context.Context, itemIDs []string, itemUUIDs []uuid.UUID) (func(string) ItemPRCoverage, error) {
+func (r *prBackfiller) itemCoverage(ctx context.Context, itemIDs []string, itemUUIDs []uuid.UUID) (func(string) ItemPRCoverage, error) {
 	sessionsByItem, allSessions, err := r.sessionsOfItems(ctx, itemUUIDs)
 	if err != nil {
 		return nil, err
@@ -466,11 +482,11 @@ func (r *EntRepository) itemCoverage(ctx context.Context, itemIDs []string, item
 	if err != nil {
 		return nil, err
 	}
-	itemTombs, err := r.ListItemTombstones(ctx, itemIDs)
+	itemTombs, err := r.links.ListItemTombstones(ctx, itemIDs)
 	if err != nil {
 		return nil, err
 	}
-	sessionTombs, err := r.ListSessionTombstonesByUUIDs(ctx, allSessions)
+	sessionTombs, err := r.links.ListSessionTombstonesByUUIDs(ctx, allSessions)
 	if err != nil {
 		return nil, err
 	}
@@ -489,12 +505,12 @@ func (r *EntRepository) itemCoverage(ctx context.Context, itemIDs []string, item
 
 // sessionsOfItems maps each item to the uuids of every ItemSession it ever had
 // (any round and role) and returns the distinct union.
-func (r *EntRepository) sessionsOfItems(ctx context.Context, itemIDs []uuid.UUID) (map[string][]string, []string, error) {
+func (r *prBackfiller) sessionsOfItems(ctx context.Context, itemIDs []uuid.UUID) (map[string][]string, []string, error) {
 	byItem := make(map[string][]string, len(itemIDs))
 	seen := map[string]struct{}{}
 	var all []string
 	for _, chunk := range chunkSlice(itemIDs, itemSessionBatchChunk) {
-		rows, err := r.Client.ItemSession.Query().
+		rows, err := r.client.ItemSession.Query().
 			Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(chunk...)), itemsession.SessionUUIDNEQ("")).
 			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
 			All(ctx)

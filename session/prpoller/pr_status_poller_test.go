@@ -14,7 +14,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 // admissionControlFlagName mirrors github/http_client.go's unexported
@@ -233,7 +232,7 @@ func TestInvalidateAndRefresh_should_DispatchFetchAndReturnMatchedTrue_When_OneI
 	p := newTestPRStatusPoller()
 	p.AddInstance(newInvalidateTestInstance(t, "invalidate-match-test", 42))
 
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), domain.PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}
@@ -271,7 +270,7 @@ func TestInvalidateAndRefresh_should_ReturnMatchedFalse_When_NoTrackedInstanceMa
 	// Tracks a different PR number, so it must not match.
 	p.AddInstance(newInvalidateTestInstance(t, "invalidate-no-match-test", 99))
 
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), domain.PRSourceWebhook)
 	if matched {
 		t.Fatal("InvalidateAndRefresh() = true, want false when no tracked instance matches")
 	}
@@ -302,7 +301,7 @@ func TestInvalidateAndRefresh_should_DispatchFetchForEachInstance_When_TwoInstan
 	p.AddInstance(newInvalidateTestInstance(t, "session-a", 42))
 	p.AddInstance(newInvalidateTestInstance(t, "session-b", 42))
 
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), domain.PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true when two instances track the PR")
 	}
@@ -474,7 +473,7 @@ func TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin
 
 	// Webhook path: InvalidateAndRefresh tags OriginWebhookReconcile itself and
 	// dispatches fetchAndUpdatePRStatus out of band (see its doc comment).
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 43), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 43), domain.PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}

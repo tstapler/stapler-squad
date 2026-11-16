@@ -151,7 +151,7 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
-	owner := SessionPROwner(inst.UUID)
+	owner := domain.SessionPROwner(inst.UUID)
 	_, err := storage.Repo.UpsertSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
 	_, err = storage.Repo.DeleteSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "Acme", "App", 12))

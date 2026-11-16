@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -28,7 +27,7 @@ func TestPoller_ShouldNotifyTerminalListener_WhenOpenPRMerges_AndNotForStillOpen
 		got = append(got, ids...)
 		mu.Unlock()
 	}))
-	owner := session.ItemPROwner("item-1")
+	owner := domain.ItemPROwner("item-1")
 	for _, n := range []int{12, 13} {
 		seedStateRow(t, storage.Repo, owner, prRefN(t, n), domain.PRInitial{State: domain.PRStateOpen})
 	}

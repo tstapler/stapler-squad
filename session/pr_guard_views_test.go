@@ -15,16 +15,16 @@ import (
 func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessions(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	uuids := make([]string, 0, 1001)
 	for i := 0; i < 200; i++ {
 		uuids = append(uuids, fmt.Sprintf("sess-%03d", i))
-		upsertLink(t, repo, SessionPROwner(uuids[i]), fixturetest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceBackfill)
+		upsertLink(t, repo, domain.SessionPROwner(uuids[i]), fixturetest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceBackfill)
 	}
 
 	var got map[string][]domain.PRView
-	stmts := countStatements(t, repo, func() {
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
+		s := &Storage{Repo: counted}
 		var err error
 		got, err = s.ListSessionPRViewsByUUIDs(ctx, uuids)
 		require.NoError(t, err)
@@ -35,7 +35,8 @@ func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessi
 	for i := 200; i < 1001; i++ {
 		uuids = append(uuids, fmt.Sprintf("none-%04d", i))
 	}
-	stmts = countStatements(t, repo, func() {
+	stmts = countStatements(t, repo, func(counted *EntRepository) {
+		s := &Storage{Repo: counted}
 		_, err := s.ListSessionPRViewsByUUIDs(ctx, uuids)
 		require.NoError(t, err)
 	})
@@ -50,9 +51,9 @@ func TestListItemGuardViewsByItemIDs_ShouldReturnDirectLinksWithoutTombstoned(t 
 	item := addLegacyItem(t, repo, "item", "in_progress", 0, "")
 	open := fixturetest.MustPRRef(t, "", "acme", "app", 22)
 	gone := fixturetest.MustPRRef(t, "", "acme", "app", 23)
-	upsertLink(t, repo, ItemPROwner(item), open, domain.AttachSourceReportPRCreated)
-	upsertLink(t, repo, ItemPROwner(item), gone, domain.AttachSourceReportPRCreated)
-	_, err := repo.DeleteSessionPR(ctx, ItemPROwner(item), gone)
+	upsertLink(t, repo, domain.ItemPROwner(item), open, domain.AttachSourceReportPRCreated)
+	upsertLink(t, repo, domain.ItemPROwner(item), gone, domain.AttachSourceReportPRCreated)
+	_, err := repo.DeleteSessionPR(ctx, domain.ItemPROwner(item), gone)
 	require.NoError(t, err)
 
 	got, err := s.ListItemGuardViewsByItemIDs(ctx, []string{item})
@@ -71,10 +72,10 @@ func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHas
 	unlinked := addLegacyItem(t, repo, "unlinked", "pr_pending", 5, synthesizePRURL(ref))
 	badRef := addLegacyItem(t, repo, "bad-ref", "pr_pending", 5, "")
 	linked := addLegacyItem(t, repo, "linked", "pr_pending", 5, synthesizePRURL(ref))
-	upsertLink(t, repo, ItemPROwner(linked), ref, domain.AttachSourceBackfill)
+	upsertLink(t, repo, domain.ItemPROwner(linked), ref, domain.AttachSourceBackfill)
 	tombstoned := addLegacyItem(t, repo, "tombstoned", "pr_pending", 5, synthesizePRURL(ref))
-	upsertLink(t, repo, ItemPROwner(tombstoned), ref, domain.AttachSourceBackfill)
-	_, err := repo.DeleteSessionPR(ctx, ItemPROwner(tombstoned), ref)
+	upsertLink(t, repo, domain.ItemPROwner(tombstoned), ref, domain.AttachSourceBackfill)
+	_, err := repo.DeleteSessionPR(ctx, domain.ItemPROwner(tombstoned), ref)
 	require.NoError(t, err)
 	noNumber := addLegacyItem(t, repo, "no-number", "pr_pending", 0, "")
 
@@ -90,15 +91,15 @@ func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHas
 func TestListItemGuardViewsByItemIDs_ShouldStayWithinStatementBudget_WhenManyItems(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	ids := make([]string, 0, 200)
 	for i := 0; i < 200; i++ {
 		id := addLegacyItem(t, repo, fmt.Sprintf("item-%03d", i), "in_progress", 0, "")
 		ids = append(ids, id)
-		upsertLink(t, repo, ItemPROwner(id), fixturetest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceReportPRCreated)
+		upsertLink(t, repo, domain.ItemPROwner(id), fixturetest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceReportPRCreated)
 	}
-	stmts := countStatements(t, repo, func() {
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
+		s := &Storage{Repo: counted}
 		got, err := s.ListItemGuardViewsByItemIDs(ctx, ids)
 		require.NoError(t, err)
 		assert.Len(t, got, 200)

@@ -47,7 +47,7 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 	if w == nil {
 		return nil
 	}
-	owner := ItemPROwner(itemID)
+	owner := domain.ItemPROwner(itemID)
 	if w.Drop != nil && *w.Drop != w.Ref {
 		if err := deleteItemLinkTx(ctx, tx, owner, *w.Drop); err != nil {
 			return err
@@ -69,7 +69,7 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 }
 
 // deleteItemLinkTx removes the owner's link to ref (no tombstone) inside tx.
-func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domain.PRRef) error {
+func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner domain.PROwner, ref domain.PRRef) error {
 	ids, err := tx.PullRequestState.Query().Where(refPredicate(ref)).IDs(ctx)
 	if err != nil {
 		return fmt.Errorf("look up replaced PR state: %w", err)
@@ -84,22 +84,22 @@ func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domain
 	return nil
 }
 
-// SetItemPRFieldsWithLink writes the item's pr_url/pr_number and its item-direct link
+// setItemPRFieldsWithLink writes the item's pr_url/pr_number and its item-direct link
 // in one transaction (pushAndCreatePR and shipViaAgentOrFallback, BUG-058 narrowed):
 // a failure of either leaves neither. The transition to pr_pending stays a separate
 // call, so BUG-058 itself is not closed.
-func (r *EntRepository) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source domain.AttachSource) error {
+func setItemPRFieldsWithLink(ctx context.Context, client *ent.Client, afterLink func() error, itemID, prURL string, prNumber int, source domain.AttachSource) error {
 	id, err := uuid.Parse(itemID)
 	if err != nil {
 		return fmt.Errorf("set item PR fields: invalid item id %q: %w", itemID, err)
 	}
 	link := newItemPRLinkWrite(backlogdto.PRAssociation{URL: prURL, Number: prNumber, Source: source}, nil)
-	return r.withPRTx(ctx, "set item pr fields", func(tx *ent.Tx) error {
+	return withPRTx(ctx, client, "set item pr fields", func(tx *ent.Tx) error {
 		if n, uerr := tx.BacklogItem.Update().Where(backlogitem.ID(id)).SetPrURL(prURL).SetPrNumber(prNumber).Save(ctx); uerr != nil {
 			return fmt.Errorf("update item: %w", uerr)
 		} else if n == 0 {
 			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
-		return link.writeTx(ctx, tx, itemID, r.afterPRLinkHook)
+		return link.writeTx(ctx, tx, itemID, afterLink)
 	})
 }

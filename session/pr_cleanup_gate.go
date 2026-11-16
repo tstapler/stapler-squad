@@ -90,7 +90,7 @@ type GateOptions struct {
 // CleanupGateSource is the storage slice the gate reads; *Storage implements it.
 type CleanupGateSource interface {
 	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
-	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error)
+	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error)
 	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 }
 
@@ -212,7 +212,7 @@ func OwnPRsBlockReason(d domain.InstanceData, rows []domain.PRView) string {
 // ItemGuardBlockReason is the item-level counterpart: an item any of whose
 // item-direct PRs is not terminal, whose scalar PR number no link represents, or
 // that has no evidence at all (ok false) holds its sessions. "" means no hold.
-func ItemGuardBlockReason(itemID string, g ItemGuardView, ok bool) string {
+func ItemGuardBlockReason(itemID string, g domain.ItemGuardView, ok bool) string {
 	switch {
 	case !ok:
 		return "no PR evidence for item " + itemID

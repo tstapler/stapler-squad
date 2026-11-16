@@ -1424,7 +1424,7 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 	for i := 0; i < n; i++ {
 		uuid := fmt.Sprintf("uuid-%03d", i)
 		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
-		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
+		_, err := storage.Repo.UpsertSessionPR(context.Background(), domain.SessionPROwner(uuid),
 			fixturetest.MustPRRef(t, "", "acme", "app", 1000+i), domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}})
 		require.NoError(t, err)
 	}
@@ -1432,9 +1432,9 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 	var loaded []*instance.Instance
 	stmts := countStatementsMatching(t, storage.Repo, func(q string) bool {
 		return strings.Contains(q, "session_prs") || strings.Contains(q, "pull_request_states")
-	}, func() {
+	}, func(counted *EntRepository) {
 		var err error
-		loaded, err = storage.LoadInstances()
+		loaded, err = (&Storage{Repo: counted}).LoadInstances()
 		require.NoError(t, err)
 	})
 
@@ -1454,7 +1454,7 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 	prLoadFixture(t, storage, "skipped", "uuid-skipped", "", "", 41)
 	// A represented legacy number for contrast.
 	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
-	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
+	_, err := storage.Repo.UpsertSessionPR(context.Background(), domain.SessionPROwner("uuid-represented"),
 		fixturetest.MustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
 	require.NoError(t, err)
 

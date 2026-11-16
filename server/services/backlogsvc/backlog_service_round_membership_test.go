@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -41,7 +40,7 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 		require.NoError(t, rerr)
 		return r
 	}
-	link := func(owner session.PROwner, n int) {
+	link := func(owner domain.PROwner, n int) {
 		res, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), domain.PRLink{
 			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual,
 			Initial: domain.PRInitial{State: domain.PRStateOpen},
@@ -62,17 +61,17 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	s1 := uuid.New().String()
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: s1, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
-	link(session.SessionPROwner(s1), 30)
+	link(domain.SessionPROwner(s1), 30)
 
 	s2 := uuid.New().String()
 	_, err = svc.AttachSessionToItem(ctx, connect.NewRequest(&sessionv1.AttachSessionToItemRequest{ItemId: itemID, SessionUuid: s2}))
 	require.NoError(t, err)
 	assert.Equal(t, []int{30}, numbers(), "(a) earlier round stays until the new session links")
 
-	link(session.SessionPROwner(s2), 31)
+	link(domain.SessionPROwner(s2), 31)
 	assert.Equal(t, []int{31}, numbers(), "(b) earlier round leaves once the new session links")
 
-	_, err = repo.DeleteSessionPR(ctx, session.SessionPROwner(s2), ref(31))
+	_, err = repo.DeleteSessionPR(ctx, domain.SessionPROwner(s2), ref(31))
 	require.NoError(t, err)
 	assert.Empty(t, numbers(), "(c) a detached latest round does not resurrect the earlier one")
 }

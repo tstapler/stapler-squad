@@ -10,7 +10,6 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -119,7 +118,7 @@ func (p *PRStatusPoller) pollPullRequestStates(ctx context.Context, fanOut bool)
 			fctx, cancel := context.WithTimeout(ctx, p.config.CallTimeout)
 			defer cancel()
 			fctx = github.WithGitHubCallOrigin(fctx, github.OriginPRStatusPoller)
-			ids := p.pollState(fctx, v, session.PRSourceTick, byRef)
+			ids := p.pollState(fctx, v, domain.PRSourceTick, byRef)
 			mu.Lock()
 			terminal = append(terminal, ids...)
 			mu.Unlock()
@@ -218,7 +217,7 @@ func (p *PRStatusPoller) instancesByRef() map[domain.PRRef][]*instance.Instance 
 }
 
 // pollState fetches one PR and records the outcome. No lock is held across the request.
-func (p *PRStatusPoller) pollState(ctx context.Context, v domain.PRView, src session.PRObservationSource, byRef map[domain.PRRef][]*instance.Instance) []int {
+func (p *PRStatusPoller) pollState(ctx context.Context, v domain.PRView, src domain.PRObservationSource, byRef map[domain.PRRef][]*instance.Instance) []int {
 	observedAt := p.nowTime()
 	ref, err := instance.PRRepoRef(v.Ref)
 	if err != nil {
@@ -244,12 +243,12 @@ func (p *PRStatusPoller) pollState(ctx context.Context, v domain.PRView, src ses
 
 // recordUnchanged clears stale failure bookkeeping after a 304; with nothing to
 // clear it writes nothing.
-func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v domain.PRView, src session.PRObservationSource, at time.Time) {
+func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v domain.PRView, src domain.PRObservationSource, at time.Time) {
 	if v.PollFailCount == 0 && v.PollError == "" || v.State == domain.PRStateUnknown {
 		return
 	}
-	obs := session.PRObservation{
-		Source: src, Kind: session.PRObservationFetch, ObservedAt: at, State: v.State, IsDraft: v.IsDraft,
+	obs := domain.PRObservation{
+		Source: src, Kind: domain.PRObservationFetch, ObservedAt: at, State: v.State, IsDraft: v.IsDraft,
 		CheckConclusion: v.CheckConclusion, ApprovedCount: v.ApprovedCount, ChangesRequestedCount: v.ChangesRequestedCount,
 		URL: v.URL, Title: v.Title, HeadBranch: v.HeadBranch, BaseBranch: v.BaseBranch,
 	}
@@ -258,13 +257,13 @@ func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v domain.PRView, s
 	}
 }
 
-func observationFromInfo(info *github.PRInfo, src session.PRObservationSource, at time.Time) (session.PRObservation, bool) {
+func observationFromInfo(info *github.PRInfo, src domain.PRObservationSource, at time.Time) (domain.PRObservation, bool) {
 	st, err := domain.ParsePRState(strings.ToLower(info.State))
 	if err != nil || st == domain.PRStateUnknown {
-		return session.PRObservation{}, false
+		return domain.PRObservation{}, false
 	}
-	obs := session.PRObservation{
-		Source: src, Kind: session.PRObservationFetch, ObservedAt: at, State: st, IsDraft: info.IsDraft,
+	obs := domain.PRObservation{
+		Source: src, Kind: domain.PRObservationFetch, ObservedAt: at, State: st, IsDraft: info.IsDraft,
 		CheckConclusion: info.CheckConclusion, ApprovedCount: info.ApprovedCount,
 		ChangesRequestedCount: info.ChangesRequestedCount, URL: info.HTMLURL, Title: info.Title,
 		HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, OpenedAt: info.CreatedAt,
@@ -285,7 +284,7 @@ func observationFromInfo(info *github.PRInfo, src session.PRObservationSource, a
 // mirror reconciler (T1.5.2) repairs; each session persist is serialized per
 // session so an older snapshot cannot land after a newer one. It returns the ids
 // of states that just went terminal and calls nothing else (T5.4.3 adds the listener).
-func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v domain.PRView, info *github.PRInfo, src session.PRObservationSource, at time.Time, byRef map[domain.PRRef][]*instance.Instance) []int {
+func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v domain.PRView, info *github.PRInfo, src domain.PRObservationSource, at time.Time, byRef map[domain.PRRef][]*instance.Instance) []int {
 	obs, ok := observationFromInfo(info, src, at)
 	if !ok {
 		log.Warn("PR status poller: unusable PR state", "pr", v.Ref, "state", info.State)
@@ -313,7 +312,7 @@ func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v domain.PRView
 
 // mirrorToSession copies an applied observation into one session's PR set and
 // persists its derived terminal flag when that changed.
-func (p *PRStatusPoller) mirrorToSession(inst *instance.Instance, ref domain.PRRef, obs session.PRObservation, info *github.PRInfo, changed bool) {
+func (p *PRStatusPoller) mirrorToSession(inst *instance.Instance, ref domain.PRRef, obs domain.PRObservation, info *github.PRInfo, changed bool) {
 	priority := string(github.DerivePRPriority(info))
 	before := inst.Snapshot().GitHub.GitHubPRStatusTerminal
 	inst.ApplyPRUpdate(ref, instance.PRStatusUpdate{
@@ -350,9 +349,9 @@ func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v domain.PRView
 	}
 	f := classifyPollError(err, v.Ref.Host(), at, p.hostHealth, probe)
 	instance.RecordPRPollFailure(f.Metric)
-	obs := session.PRObservation{Source: session.PRSourceTick, Kind: session.PRObservationErrorNote, ObservedAt: at, PollError: f.PollError}
+	obs := domain.PRObservation{Source: domain.PRSourceTick, Kind: domain.PRObservationErrorNote, ObservedAt: at, PollError: f.PollError}
 	if f.Counted() {
-		obs.Kind = session.PRObservationCountedFailure
+		obs.Kind = domain.PRObservationCountedFailure
 	} else {
 		p.noteNonCountedFailure(v.StateID, at)
 	}
@@ -537,7 +536,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *instance.In
 // Refresh fetches one PR through the poll core and returns once the observation
 // was applied, dropped or failed, bounded by refreshTimeout. It never writes a
 // row itself. A PR with no state row is an error.
-func (p *PRStatusPoller) Refresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) error {
+func (p *PRStatusPoller) Refresh(ctx context.Context, ref domain.PRRef, src domain.PRObservationSource) error {
 	if p.storage == nil {
 		return domain.ErrNotFound
 	}

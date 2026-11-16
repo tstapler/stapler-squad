@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -43,7 +42,7 @@ func (a *PollerInvalidationAdapter) InvalidateForEvent(ctx context.Context, repo
 	if a.PRPoller != nil {
 		// Host unknown at this call site (the webhook's repoFullName carries none): github.com.
 		if ref, err := domain.NewPRRef("", owner, repo, prNumber); err == nil {
-			a.PRPoller.InvalidateAndRefresh(ctx, ref, session.PRSourceWebhook)
+			a.PRPoller.InvalidateAndRefresh(ctx, ref, domain.PRSourceWebhook)
 		}
 	}
 	if a.WorktreePoller != nil {
@@ -59,6 +58,6 @@ func (a *PollerInvalidationAdapter) InvalidateForReopened(ctx context.Context, r
 		return
 	}
 	if ref, err := domain.NewPRRef("", owner, repo, prNumber); err == nil {
-		a.PRPoller.InvalidateAndRefresh(ctx, ref, session.PRSourceWebhookReopened)
+		a.PRPoller.InvalidateAndRefresh(ctx, ref, domain.PRSourceWebhookReopened)
 	}
 }

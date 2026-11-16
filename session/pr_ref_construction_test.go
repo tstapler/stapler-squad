@@ -24,25 +24,25 @@ func TestRepositoryEntryPoints_ShouldResolveOnePullRequestState_WhenCaseDiffers(
 
 	for i, sp := range spellings {
 		ref := fixturetest.MustPRRef(t, "", sp[0], sp[1], 12)
-		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual})
+		_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u1"), ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual})
 		require.NoError(t, err, "spelling %d", i)
 		_, err = repo.EnsureState(ctx, ref, domain.PRInitial{})
 		require.NoError(t, err)
-		_, err = repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), ref, domain.PRLink{Source: domain.AttachSourceReportPRCreated})
+		_, err = repo.UpsertSessionPR(ctx, domain.ItemPROwner("item-1"), ref, domain.PRLink{Source: domain.AttachSourceReportPRCreated})
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, countStates(t, repo))
 	assert.Equal(t, 2, countLinks(t, repo), "one session link and one item link")
 
 	// A tombstone written through one spelling blocks every other spelling.
-	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "Acme", "App", 12))
+	_, err := repo.DeleteSessionPR(ctx, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	for _, sp := range spellings {
 		ref := fixturetest.MustPRRef(t, "", sp[0], sp[1], 12)
-		tombstoned, err := repo.IsTombstoned(ctx, SessionPROwner("u1"), ref)
+		tombstoned, err := repo.IsTombstoned(ctx, domain.SessionPROwner("u1"), ref)
 		require.NoError(t, err)
 		assert.True(t, tombstoned, "spelling %v", sp)
-		res, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, domain.PRLink{Source: domain.AttachSourceBranchDiscovery})
+		res, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u1"), ref, domain.PRLink{Source: domain.AttachSourceBranchDiscovery})
 		require.NoError(t, err)
 		assert.True(t, res.Tombstoned, "spelling %v", sp)
 	}
@@ -54,7 +54,7 @@ func TestRepositoryEntryPoints_ShouldReturnErrZeroPRRefAndWriteNothing_WhenRefIs
 	repo := newPRRepo(t)
 	ctx := context.Background()
 	zero := domain.PRRef{}
-	session := SessionPROwner("u1")
+	session := domain.SessionPROwner("u1")
 
 	calls := map[string]func() error{
 		"EnsureState": func() error { _, err := repo.EnsureState(ctx, zero, domain.PRInitial{}); return err },
@@ -67,7 +67,7 @@ func TestRepositoryEntryPoints_ShouldReturnErrZeroPRRefAndWriteNothing_WhenRefIs
 		"DeleteSessionPR": func() error { _, err := repo.DeleteSessionPR(ctx, session, zero); return err },
 		"SetPinned":       func() error { return repo.SetPinned(ctx, session, zero, true) },
 		"UpdatePullRequestState": func() error {
-			_, err := repo.UpdatePullRequestState(ctx, zero, fetchObs(PRSourceTick, domain.PRStateOpen, prRepoT0))
+			_, err := repo.UpdatePullRequestState(ctx, zero, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0))
 			return err
 		},
 	}

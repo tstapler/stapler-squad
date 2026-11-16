@@ -14,7 +14,7 @@ import (
 type sweepPRSource interface {
 	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
 	ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error)
-	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]session.ItemGuardView, error)
+	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error)
 }
 
 // sweepPRData is one cycle's PR evidence, keyed by session uuid and item id.
@@ -23,7 +23,7 @@ type sweepPRSource interface {
 type sweepPRData struct {
 	views   map[string][]domain.PRView
 	itemIDs map[string][]string
-	guards  map[string]session.ItemGuardView
+	guards  map[string]domain.ItemGuardView
 }
 
 // loadSweepPRData reads the evidence for the candidate sessions. An error means

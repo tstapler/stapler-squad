@@ -19,7 +19,7 @@ import (
 func liveWorkListener(t *testing.T, probe instance.LiveWorkProbe, clock *time.Time, reader bool) (*BacklogLifecycleListener, *itemPRFixture, *sessiontest.FakeNotifier) {
 	t.Helper()
 	f := newItemPRFixture(t, 21)
-	f.link(session.ItemPROwner(f.itemID), 21, domain.PRStateMerged)
+	f.link(domain.ItemPROwner(f.itemID), 21, domain.PRStateMerged)
 	newTrackedWorkSession(t, f.storage, f.itemID, "/tmp/fake-repo", "backlog/live-work", "")
 	l := NewBacklogLifecycleListener(f.storage)
 	l.backlogReaderOverride = func() bool { return reader }
@@ -83,7 +83,7 @@ func TestReconcilePRPending_ShouldTrustRowsNotTheCheckerObservation_WhenAnotherP
 	t.Parallel()
 	now := prTestEpoch
 	l, f, _ := liveWorkListener(t, &stubLiveAll{}, &now, true)
-	f.link(session.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
+	f.link(domain.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 
 	l.ReconcilePRPending(context.Background(), f.repo)
 	assert.Equal(t, string(domain.BacklogStatusPRPending), statusOf(t, f), "verdict is Open while #22 is open")
@@ -93,7 +93,7 @@ func TestReconcilePRPending_ShouldRefreshRowBeforeReadingVerdict_WhenRefresherWi
 	t.Parallel()
 	now := prTestEpoch
 	f := newItemPRFixture(t, 21)
-	f.link(session.ItemPROwner(f.itemID), 21, domain.PRStateOpen) // row lags GitHub
+	f.link(domain.ItemPROwner(f.itemID), 21, domain.PRStateOpen) // row lags GitHub
 	newTrackedWorkSession(t, f.storage, f.itemID, "/tmp/fake-repo", "backlog/live-work", "")
 	l := NewBacklogLifecycleListener(f.storage)
 	l.backlogReaderOverride = func() bool { return true }
@@ -101,10 +101,10 @@ func TestReconcilePRPending_ShouldRefreshRowBeforeReadingVerdict_WhenRefresherWi
 	overridePRPendingChecker(t, l, &fakePRPendingChecker{merged: true})
 	stubMatchingPRByNumberFinder(l, "backlog/live-work")
 	var refreshed atomic.Int32
-	l.SetPRRowRefresher(refresherFunc(func(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) error {
+	l.SetPRRowRefresher(refresherFunc(func(ctx context.Context, ref domain.PRRef, src domain.PRObservationSource) error {
 		refreshed.Add(1)
-		assert.Equal(t, session.PRSourceReconcilerRefresh, src)
-		_, err := f.repo.UpdatePullRequestState(ctx, ref, session.PRObservation{Source: src, Kind: session.PRObservationFetch, ObservedAt: now, Now: now, State: domain.PRStateMerged, MergedAt: now})
+		assert.Equal(t, domain.PRSourceReconcilerRefresh, src)
+		_, err := f.repo.UpdatePullRequestState(ctx, ref, domain.PRObservation{Source: src, Kind: domain.PRObservationFetch, ObservedAt: now, Now: now, State: domain.PRStateMerged, MergedAt: now})
 		return err
 	}))
 
@@ -161,8 +161,8 @@ type stubLiveAll struct {
 
 func (s *stubLiveAll) IsLive(context.Context, string, time.Time) (bool, error) { return s.live, s.err }
 
-type refresherFunc func(context.Context, domain.PRRef, session.PRObservationSource) error
+type refresherFunc func(context.Context, domain.PRRef, domain.PRObservationSource) error
 
-func (f refresherFunc) Refresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) error {
+func (f refresherFunc) Refresh(ctx context.Context, ref domain.PRRef, src domain.PRObservationSource) error {
 	return f(ctx, ref, src)
 }

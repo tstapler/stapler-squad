@@ -681,7 +681,7 @@ func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref d
 	if sessionUUID == "" {
 		return domain.ErrNoSessionUUID
 	}
-	_, err := s.Repo.DeleteSessionPR(ctx, SessionPROwner(sessionUUID), ref)
+	_, err := s.Repo.DeleteSessionPR(ctx, domain.SessionPROwner(sessionUUID), ref)
 	if err == nil {
 		s.saved.reset()
 	}
@@ -692,9 +692,9 @@ func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref d
 // tombstoned PR is not attached (PRLinkResult.Tombstoned).
 func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	if itemID == "" {
-		return domain.PRLinkResult{}, ErrInvalidPROwner
+		return domain.PRLinkResult{}, domain.ErrInvalidPROwner
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, link)
+	res, err := s.Repo.UpsertSessionPR(ctx, domain.ItemPROwner(itemID), ref, link)
 	if err == nil {
 		s.saved.reset()
 	}
@@ -706,9 +706,9 @@ func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref domain.PR
 // are untouched.
 func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref domain.PRRef) (bool, error) {
 	if itemID == "" {
-		return false, ErrInvalidPROwner
+		return false, domain.ErrInvalidPROwner
 	}
-	found, err := s.Repo.DeleteSessionPR(ctx, ItemPROwner(itemID), ref)
+	found, err := s.Repo.DeleteSessionPR(ctx, domain.ItemPROwner(itemID), ref)
 	if err == nil {
 		s.saved.reset()
 	}
@@ -720,7 +720,7 @@ func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, re
 	if sessionUUID == "" {
 		return domain.ErrNoSessionUUID
 	}
-	err := s.Repo.SetPinned(ctx, SessionPROwner(sessionUUID), ref, pinned)
+	err := s.Repo.SetPinned(ctx, domain.SessionPROwner(sessionUUID), ref, pinned)
 	if err == nil {
 		s.saved.reset()
 	}
@@ -732,7 +732,7 @@ func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID strin
 	if sessionUUID == "" {
 		return domain.ErrNoSessionUUID
 	}
-	return s.Repo.ClearTombstone(ctx, SessionPROwner(sessionUUID), ref)
+	return s.Repo.ClearTombstone(ctx, domain.SessionPROwner(sessionUUID), ref)
 }
 
 // ListPRMirrors returns the stored legacy PR columns by session uuid.
@@ -742,7 +742,7 @@ func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]instance.PRMirr
 
 // UpdatePullRequestState applies one poll observation to a PR state row. Invariant I1:
 // the PR status poller is its only production caller.
-func (s *Storage) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs PRObservation) (PRObservationResult, error) {
+func (s *Storage) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs domain.PRObservation) (domain.PRObservationResult, error) {
 	return s.Repo.UpdatePullRequestState(ctx, ref, obs)
 }
 
@@ -1266,7 +1266,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 
 // SetItemPRFieldsWithLink writes pr_url/pr_number and the item-direct link atomically.
 func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source domain.AttachSource) error {
-	return s.Repo.SetItemPRFieldsWithLink(ctx, itemID, prURL, prNumber, source)
+	return setItemPRFieldsWithLink(ctx, s.Repo.Client, s.Repo.afterPRLinkHook, itemID, prURL, prNumber, source)
 }
 
 // attachAdditivePR records pr as a follow-up PR of an item already in pr_pending: it
@@ -1283,7 +1283,7 @@ func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.Bac
 	if src == "" {
 		src = domain.AttachSourceReportPRCreated
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, domain.PRLink{
+	res, err := s.Repo.UpsertSessionPR(ctx, domain.ItemPROwner(observed.ID), ref, domain.PRLink{
 		Role: domain.PRRoleFollowup, Source: src, Initial: domain.PRInitial{State: domain.PRStateOpen, URL: pr.URL},
 	})
 	if err != nil {
@@ -1467,7 +1467,7 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 	if err != nil {
 		return false, fmt.Errorf("attach item pr link: list links: %w", err)
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, domain.PRLink{
+	res, err := s.Repo.UpsertSessionPR(ctx, domain.ItemPROwner(itemID), ref, domain.PRLink{
 		Role: domain.AssignRole(existing, ""), Source: source,
 		Initial: domain.PRInitial{State: domain.PRStateOpen, URL: strings.TrimSpace(prURL)},
 	})
@@ -1484,7 +1484,7 @@ func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]domain.PRView, 
 
 // ListItemGuardViewsByItemIDs serves the retention sweeper and the cleanup gate
 // from one data path; see ItemGuardView.
-func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error) {
+func (s *Storage) ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error) {
 	return s.Repo.ListItemGuardViews(ctx, itemIDs)
 }
 
