@@ -805,6 +805,7 @@ func InitializeForTests(fileLevel LogLevel, consoleLevel LogLevel) {
 	cfg.LogsDir = testLogDir
 
 	initializeWithConfig(false, cfg)
+	warmLogFileMill()
 
 	// Print prominent log location message
 	logPath := GetGlobalLogPath()
@@ -815,6 +816,17 @@ func InitializeForTests(fileLevel LogLevel, consoleLevel LogLevel) {
 	fmt.Fprintf(os.Stderr, "   Console: stderr (level: %s)\n", consoleLevel.String())
 	fmt.Fprintf(os.Stderr, "═══════════════════════════════════════════════════════════════\n")
 	fmt.Fprintf(os.Stderr, "\n")
+}
+
+// warmLogFileMill starts the current file logger's mill goroutine (per-Logger:
+// startMill is a sync.Once on each *lumberjack.Logger; it has no stop hook and
+// otherwise starts lazily on first write) so it is already in every
+// goleak.IgnoreCurrent baseline. A zero-byte write opens the file and starts it.
+// A file logger re-initialised later needs warming again.
+func warmLogFileMill() {
+	if lj, ok := globalLogFile.(*lumberjack.Logger); ok {
+		_, _ = lj.Write(nil)
+	}
 }
 
 // ConfigToLogConfig converts an external config to our internal LogConfig
