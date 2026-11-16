@@ -48,6 +48,9 @@ async function openReady(page: import('@playwright/test').Page, term: TerminalPa
   // The layer attaches once the renderer has loaded; a tap before that has nothing to focus.
   await expect(term.layerTextarea()).toBeAttached({ timeout: 20_000 });
   await expect.poll(() => term.promptLine(), { message: 'bash prompt', timeout: 20_000 }).toMatch(/[$#]\s*$/);
+  // The default prompt (user@host:path$) wraps at phone width and leaves only the tail of typed text on the last line.
+  await term.useShortPrompt();
+  await expect.poll(() => term.promptLine()).toBe('$');
 }
 
 for (const renderer of ['xterm', 'ghostty'] as RendererKind[]) {

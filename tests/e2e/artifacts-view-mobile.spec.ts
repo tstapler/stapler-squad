@@ -16,10 +16,13 @@ const BASE_URL = baseUrl();
 let consoleErrors: string[];
 let artifacts: ArtifactsPage;
 
+// Relative to now: the page shows "N ago" only within 7 days, then a calendar date.
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+
 const ROWS: MockRow[] = [
-  { sessionId: "s1", sessionTitle: "refactor-auth-with-a-long-title-that-must-wrap-instead-of-pushing-the-page-sideways", kind: "pr", value: 12, state: "open", source: "session_pr", at: "2026-11-05T10:00:00Z" },
-  { sessionId: "s1", sessionTitle: "refactor-auth", kind: "commit", value: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", at: "2026-11-05T09:00:00Z" },
-  { sessionId: "s2", sessionTitle: "other-repo-work", kind: "branch", value: "feat/a-branch-name-long-enough-to-need-wrapping-on-a-phone", at: "2026-11-03T10:00:00Z" },
+  { sessionId: "s1", sessionTitle: "refactor-auth-with-a-long-title-that-must-wrap-instead-of-pushing-the-page-sideways", kind: "pr", value: 12, state: "open", source: "session_pr", at: hoursAgo(2) },
+  { sessionId: "s1", sessionTitle: "refactor-auth", kind: "commit", value: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", at: hoursAgo(3) },
+  { sessionId: "s2", sessionTitle: "other-repo-work", kind: "branch", value: "feat/a-branch-name-long-enough-to-need-wrapping-on-a-phone", at: hoursAgo(30) },
 ];
 
 test.describe("artifacts-view-mobile", () => {
