@@ -20,7 +20,8 @@ func New(client *ent.Client) *Backlog {
 	return &Backlog{client: client}
 }
 
-// Hooks returns the late-bound publisher/callback/chain ports.
+// Hooks returns the late-bound publisher/callback/chain ports. A bare
+// &EntRepository{} has a nil *Backlog (only initStores builds it), so hook paths panic on it.
 func (b *Backlog) Hooks() *BacklogHooks { return &b.hooks }
 
 // SetItemChangePublisher wires the item-change publisher (see BacklogHooks).
