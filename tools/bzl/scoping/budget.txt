@@ -41,11 +41,11 @@ server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
 server/services/wsconn files=23 loc=9895 imports=24
-server/services/backlogsvc files=35 loc=15546 imports=32
+server/services/backlogsvc files=35 loc=15547 imports=32
 server/services/internal/svctest files=36 loc=1459 imports=19
 server/services/sessionbundle files=4 loc=862 imports=8
 server/services/devtools files=4 loc=501 imports=4
 server/services/antigravityexport files=2 loc=400 imports=3
 server/services/backlogflow files=4 loc=748 imports=8
-session/domain/backlogdto files=10 loc=1268 imports=2
+session/domain/backlogdto files=13 loc=1344 imports=2
 server/services/featureflags files=5 loc=190 imports=2

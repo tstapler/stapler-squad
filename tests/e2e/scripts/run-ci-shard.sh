@@ -12,11 +12,21 @@
 # assert-e2e-report.mjs on both JSON reports.
 # PR runs may set E2E_SPEC_SELECTION (newline-separated spec paths from scripts/select-specs.ts): only those files are
 # planned across the shards, and the stress pass runs only the selected terminal-stress specs, on shard 1. Unset = full suite.
+# PR runs set E2E_SKIP_BASELINE_FAIL=1: tests the baseline records as class "fail" are excluded via --grep-invert
+# (scripts/baseline-skip.ts) from the plan and both passes; the skipped set is printed and appended to the step summary.
+# Spec files in E2E_KEEP_SPECS (the PR's own changed specs) are never skipped.
+# main, nightly and workflow_dispatch leave it unset and run everything.
 #   usage: run-ci-shard.sh <shard> <total>
 set -u
 cd "$(dirname "$0")/.." || exit 1
 shard=$1 total=$2
 projects=(--project=chromium --project=chromium-dom --project=mobile-chromium)
+skip_args=()
+if [ "${E2E_SKIP_BASELINE_FAIL:-}" = 1 ]; then
+  command -v bun >/dev/null 2>&1 || { echo "::error::run-ci-shard: bun is not on PATH" >&2; exit 2; }
+  skip_re=$(bun scripts/baseline-skip.ts grep-invert) || { echo "::error::run-ci-shard: baseline-skip failed" >&2; exit 2; }
+  skip_args=("--grep-invert=$skip_re")
+fi
 start=$SECONDS
 budget_s=${E2E_SHARD_BUDGET_S:-2280}          # 38 min: inside the workflow's 40 min `timeout`
 stress_reserve_s=${E2E_STRESS_RESERVE_S:-240}
@@ -29,8 +39,21 @@ fail_plan() { echo "::error::run-ci-shard: cannot build the balanced shard plan:
 [ -f shard-timings.json ] || fail_plan "tests/e2e/shard-timings.json is missing"
 command -v bun >/dev/null 2>&1 || fail_plan "bun is not on PATH"
 list_err=$(mktemp)
-list_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${projects[@]}" 2>"$list_err") \
+list_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${projects[@]}" ${skip_args[@]+"${skip_args[@]}"} 2>"$list_err") \
   || { cat "$list_err" >&2; fail_plan "playwright --list failed"; }
+if [ "${E2E_SKIP_BASELINE_FAIL:-}" = 1 ]; then
+  # Count what the regex really removes (parallel-pass list, stress specs excluded), not the baseline row count.
+  all_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${projects[@]}" 2>"$list_err") \
+    || { cat "$list_err" >&2; fail_plan "playwright --list (unfiltered) failed"; }
+  printf '%s' "$all_json" > "$list_err"; n_all=$(bun scripts/baseline-skip.ts count "$list_err" || true)
+  printf '%s' "$list_json" > "$list_err"; n_kept=$(bun scripts/baseline-skip.ts count "$list_err" || true)
+  removed_args=()
+  case "$n_all$n_kept" in ''|*[!0-9]*) ;; *) [ "$n_kept" -le "$n_all" ] && removed_args=(--removed $(( n_all - n_kept ))) ;; esac
+  [ "${#removed_args[@]}" -eq 0 ] && echo "run-ci-shard: could not count removed tests; reporting the count as unavailable" >&2
+  skip_summary=$(bun scripts/baseline-skip.ts summary ${removed_args[@]+"${removed_args[@]}"}) || fail_plan "baseline-skip summary failed"
+  printf '%s\n' "$skip_summary"
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$skip_summary" >> "$GITHUB_STEP_SUMMARY"
+fi
 files=$(printf '%s' "$list_json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const r=JSON.parse(d);const s=new Set();const w=x=>{(x.specs||[]).forEach(p=>s.add(p.file));(x.suites||[]).forEach(w)};(r.suites||[]).forEach(w);console.log([...s].join("\n"))})') \
   || fail_plan "could not read the spec list from playwright --list"
 [ -n "$files" ] || fail_plan "playwright --list returned no spec files"
@@ -58,7 +81,7 @@ if [ "${#shard_args[@]}" -eq 0 ]; then
   : > shard-pass1-empty
 else
   E2E_SKIP_STRESS=1 PLAYWRIGHT_JSON_OUTPUT_NAME="$PWD/shard-report.json" \
-    npx playwright test --reporter=list,blob,json "--global-timeout=$(( pass1_limit_s * 1000 ))" "${shard_args[@]}" "${projects[@]}"
+    npx playwright test --reporter=list,blob,json "--global-timeout=$(( pass1_limit_s * 1000 ))" "${shard_args[@]}" "${projects[@]}" ${skip_args[@]+"${skip_args[@]}"}
   parallel_rc=$?
 fi
 remaining_s=$(( budget_s - (SECONDS - start) ))
@@ -80,7 +103,7 @@ fi
 # The blob reporter empties blob-report/ at start unless told not to; keep pass 1's zip.
 E2E_STRESS_ONLY=1 E2E_WORKERS=1 PWTEST_BLOB_DO_NOT_REMOVE=1 \
   PLAYWRIGHT_BLOB_OUTPUT_NAME="report-stress-$shard.zip" PLAYWRIGHT_JSON_OUTPUT_NAME="$PWD/shard-report-stress.json" \
-  npx playwright test --reporter=list,blob,json "--global-timeout=$(( remaining_s * 1000 ))" "${stress_args[@]}" --project=chromium --project=chromium-dom
+  npx playwright test --reporter=list,blob,json "--global-timeout=$(( remaining_s * 1000 ))" "${stress_args[@]}" --project=chromium --project=chromium-dom ${skip_args[@]+"${skip_args[@]}"}
 stress_rc=$?
 
 echo "run-ci-shard: parallel pass exit=$parallel_rc, stress pass exit=$stress_rc"

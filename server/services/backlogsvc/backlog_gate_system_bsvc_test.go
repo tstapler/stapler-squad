@@ -14,7 +14,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -137,7 +136,7 @@ func TestForceResetItem_should_ReDecideAgainstTheTrueStatus_When_ItemLeftReviewA
 
 	_, err = svc.forceResetItem(context.Background(), stale, instance.TriggeredByUser)
 
-	require.ErrorIs(t, err, session.ErrTransitionNotAllowed, "the unconditional retry re-reads archived and finds no archived->in_progress edge")
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed, "the unconditional retry re-reads archived and finds no archived->in_progress edge")
 	assert.Equal(t, "archived", itemStatus(t, svc, stale.ID))
 }
 

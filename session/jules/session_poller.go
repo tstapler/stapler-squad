@@ -12,7 +12,6 @@ import (
 
 	julesapi "github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -521,7 +520,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 		return nil
 	}
 
-	prNumber, err := session.ParsePRNumberFromURL(prURL)
+	prNumber, err := backlogdto.ParsePRNumberFromURL(prURL)
 	if err != nil {
 		return fmt.Errorf("parse PR number from %q: %w", prURL, err)
 	}
@@ -618,7 +617,7 @@ func isValidGitHubPRURL(rawURL string) bool {
 	if err != nil || u.Scheme != "https" || u.Host != "github.com" {
 		return false
 	}
-	_, err = session.ParsePRNumberFromURL(rawURL)
+	_, err = backlogdto.ParsePRNumberFromURL(rawURL)
 	return err == nil
 }
 

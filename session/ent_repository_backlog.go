@@ -1178,7 +1178,7 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		return nil, fmt.Errorf("failed to update backlog item %s: %w", id, err)
 	}
 	for _, c := range clearedWaivers {
-		if err := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+		if err := r.createAcAuditEvent(ctx, tx.AcAuditEvent, backlogdto.AcAuditEventData{
 			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: c.Index,
 			PreviousStatus: string(domain.AcStatusWaived), Reason: c.WaiverReason,
 			Outcome: "waiver_cleared:criterion_removed_or_text_changed",
@@ -1212,7 +1212,7 @@ func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, curre
 	existing, _ := domain.ParseAcCriteria(domain.AcCriteriaJSON(current.AcceptanceCriteria)) // an unreadable stored list pins nothing
 	merged, cleared, err := reconcileAcWaivers(existing, incoming)
 	if err != nil {
-		if auditErr := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+		if auditErr := r.createAcAuditEvent(ctx, tx.AcAuditEvent, backlogdto.AcAuditEventData{
 			ItemID: current.ID.String(), ItemPublicID: current.PublicID, NewStatus: string(domain.AcStatusWaived),
 			Outcome: "rejected:" + backlogdto.ErrAcWaiverViaUpdate.Error(),
 		}); auditErr != nil {

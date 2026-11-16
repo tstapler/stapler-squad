@@ -1565,7 +1565,7 @@ func (s *BacklogService) SetReviewSpawnGuard(g *session.ReviewSpawnGuard) {
 	s.reviewGuard = g
 }
 
-func workflowSuggestionsToProto(in []session.WorkflowSuggestionData) []*sessionv1.WorkflowSuggestion {
+func workflowSuggestionsToProto(in []backlogdto.WorkflowSuggestionData) []*sessionv1.WorkflowSuggestion {
 	if len(in) == 0 {
 		return nil
 	}

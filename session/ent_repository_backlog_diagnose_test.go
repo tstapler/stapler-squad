@@ -64,20 +64,20 @@ func TestAppendWorkflowSuggestion_CapAndDuplicate(t *testing.T) {
 	t.Parallel()
 	repo, itemID := newSuggestionItem(t)
 	ctx := context.Background()
-	first, err := repo.AppendWorkflowSuggestion(ctx, itemID, WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "dup"})
+	first, err := repo.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "dup"})
 	require.NoError(t, err)
 
-	_, err = repo.AppendWorkflowSuggestion(ctx, itemID, WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "dup"})
-	require.ErrorIs(t, err, ErrDuplicateWorkflowSuggestion)
+	_, err = repo.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "dup"})
+	require.ErrorIs(t, err, backlogdto.ErrDuplicateWorkflowSuggestion)
 
 	// A dismissed duplicate no longer blocks, and no longer counts toward the cap.
 	require.NoError(t, repo.DismissWorkflowSuggestion(ctx, itemID, first))
-	for i := 0; i < MaxActiveWorkflowSuggestions; i++ {
-		_, err = repo.AppendWorkflowSuggestion(ctx, itemID, WorkflowSuggestionData{ActionType: "operator_note", Recommendation: fmt.Sprintf("r%d", i)})
+	for i := 0; i < backlogdto.MaxActiveWorkflowSuggestions; i++ {
+		_, err = repo.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{ActionType: "operator_note", Recommendation: fmt.Sprintf("r%d", i)})
 		require.NoError(t, err)
 	}
-	_, err = repo.AppendWorkflowSuggestion(ctx, itemID, WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "over"})
-	require.ErrorIs(t, err, ErrTooManyWorkflowSuggestions)
+	_, err = repo.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "over"})
+	require.ErrorIs(t, err, backlogdto.ErrTooManyWorkflowSuggestions)
 }
 
 func TestAppendWorkflowSuggestion_ParallelAppendsPersist(t *testing.T) {
@@ -91,7 +91,7 @@ func TestAppendWorkflowSuggestion_ParallelAppendsPersist(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = repo.AppendWorkflowSuggestion(ctx, itemID, WorkflowSuggestionData{ActionType: "operator_note", Recommendation: fmt.Sprintf("p%d", i)})
+			_, errs[i] = repo.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{ActionType: "operator_note", Recommendation: fmt.Sprintf("p%d", i)})
 		}()
 	}
 	wg.Wait()

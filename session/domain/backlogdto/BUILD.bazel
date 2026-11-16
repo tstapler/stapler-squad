@@ -4,8 +4,11 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "backlogdto",
     srcs = [
+        "backlog_ac_audit_event_data.go",
         "backlog_item.go",
         "backlog_item_id.go",
+        "backlog_pr_number_url.go",
+        "backlog_workflow_suggestion_data.go",
         "errors.go",
         "history.go",
         "open_stuck_state.go",

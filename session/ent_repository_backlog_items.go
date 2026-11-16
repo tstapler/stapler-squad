@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,10 +24,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
-
-// ErrTransitionNotAllowed re-exports the domain sentinel next to the other
-// session.Err* transition errors so callers can errors.Is against it.
-var ErrTransitionNotAllowed = domain.ErrTransitionNotAllowed
 
 // resolveBacklogItemLookup resolves a caller-supplied BacklogItem identifier
 // — either a legacy raw UUID string or a bl_-prefixed public id
@@ -1119,24 +1114,6 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 	return items, nil
 }
 
-// prNumberFromURLRe extracts the trailing PR number from a GitHub PR URL,
-// e.g. "https://github.com/owner/repo/pull/148" -> 148.
-var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
-
-// ParsePRNumberFromURL extracts the trailing PR number from a GitHub PR URL,
-// sharing the regex BackfillMissingPRNumbers uses so both parses agree.
-func ParsePRNumberFromURL(prURL string) (int, error) {
-	m := prNumberFromURLRe.FindStringSubmatch(prURL)
-	if m == nil {
-		return 0, fmt.Errorf("no PR number found in %q", prURL)
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		return 0, fmt.Errorf("parsing PR number from %q: %w", prURL, err)
-	}
-	return n, nil
-}
-
 // BackfillMissingPRNumbers finds pr_pending items with a pr_url but no
 // pr_number (pr_number == 0) and parses the number out of the URL. Such items
 // are otherwise permanently invisible to FindPRPendingItems' PrNumberGT(0)
@@ -1159,7 +1136,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 
 	backfilled := 0
 	for _, item := range items {
-		m := prNumberFromURLRe.FindStringSubmatch(item.PrURL)
+		m := backlogdto.PrNumberFromURLRe.FindStringSubmatch(item.PrURL)
 		if m == nil {
 			continue
 		}
@@ -1443,7 +1420,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	}
 
 	audit := func(prev, outcome string) error {
-		return r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+		return r.createAcAuditEvent(ctx, tx.AcAuditEvent, backlogdto.AcAuditEventData{
 			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: criterionIndex, PreviousStatus: prev,
 			NewStatus: change.newStatus, Reason: change.reason, Outcome: outcome,
 		})
@@ -1616,5 +1593,5 @@ func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID strin
 }
 
 // Jules-specific queries (ListOpenJulesItemSessions, CountJulesItemSessionsSince,
-// TouchItemSessionProgress) live in storage_backlog_jules.go, split out to
+// TouchItemSessionProgress) live in ent_repository_backlog_jules.go, split out to
 // keep this file under the file-length-limit gate.

@@ -10,7 +10,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -38,7 +37,7 @@ func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSepar
 	denied := func(caller domain.TransitionCaller) {
 		t.Helper()
 		_, gateErr := svc.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: caller, ItemID: item.ID, To: domain.BacklogStatusReview}) // ready->review has no edge
-		require.ErrorIs(t, gateErr, session.ErrTransitionNotAllowed)
+		require.ErrorIs(t, gateErr, domain.ErrTransitionNotAllowed)
 	}
 	note := func(caller domain.TransitionCaller) string {
 		return fmt.Sprintf("automatic %s denied: from=ready to=review reason=config_graph", caller)
@@ -63,7 +62,7 @@ func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSepar
 	assert.Equal(t, 1, countDeniedNotifications(ch))
 
 	_, err = svc.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusReview})
-	require.ErrorIs(t, err, session.ErrTransitionNotAllowed)
+	require.ErrorIs(t, err, domain.ErrTransitionNotAllowed)
 	assert.Equal(t, 0, countDeniedNotes(t, svc, item.ID, note(domain.CallerOperatorTransitionRPC)), "an operator denial returns the error only")
 	assert.Equal(t, 0, countDeniedNotifications(ch))
 }

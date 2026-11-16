@@ -87,25 +87,6 @@ func (a AcActor) Label() string {
 	}
 }
 
-// AcAuditEventData is the domain DTO of one AcAuditEvent row.
-type AcAuditEventData struct {
-	ID               string
-	ItemID           string
-	ItemPublicID     string
-	CriterionIndex   int
-	PreviousStatus   string
-	NewStatus        string
-	Reason           string
-	Outcome          string
-	ActorClass       string
-	ActorSessionUUID string
-	SessionVerified  bool
-	Source           string
-	RemoteAddr       string
-	UserAgent        string
-	CreatedAt        time.Time
-}
-
 func capString(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -115,7 +96,7 @@ func capString(s string, n int) string {
 
 // createAcAuditEvent appends one row and, for a refused attempt, trims the item's refusals to
 // MaxAcAuditRefusalsPerItem (oldest first). It runs on the caller's transaction (or client) so the row commits with the change.
-func (r *EntRepository) createAcAuditEvent(ctx context.Context, client *ent.AcAuditEventClient, d AcAuditEventData) error {
+func (r *EntRepository) createAcAuditEvent(ctx context.Context, client *ent.AcAuditEventClient, d backlogdto.AcAuditEventData) error {
 	itemID, err := uuid.Parse(d.ItemID)
 	if err != nil {
 		return fmt.Errorf("ac audit: invalid item id %q: %w", d.ItemID, err)
@@ -187,7 +168,7 @@ func (r *EntRepository) PruneAcAuditOlderThan(ctx context.Context, cutoff time.T
 
 // RecordAcAudit appends an audit row for an attempt refused before it reached the criterion
 // (for example a denied caller), using the actor attached to ctx.
-func (r *EntRepository) RecordAcAudit(ctx context.Context, d AcAuditEventData) error {
+func (r *EntRepository) RecordAcAudit(ctx context.Context, d backlogdto.AcAuditEventData) error {
 	if d.ItemPublicID == "" {
 		if id, err := uuid.Parse(d.ItemID); err == nil {
 			if it, err := r.Client.BacklogItem.Get(ctx, id); err == nil {
@@ -201,7 +182,7 @@ func (r *EntRepository) RecordAcAudit(ctx context.Context, d AcAuditEventData) e
 // ListAcAudit returns an item's audit rows oldest first. It stays readable after the item is
 // deleted: a UUID is queried directly and a bl_ id through the stored item_public_id. It returns
 // ErrNotFound only when the item is gone and no rows remain.
-func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]AcAuditEventData, error) {
+func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]backlogdto.AcAuditEventData, error) {
 	var where predicate.AcAuditEvent
 	if backlogdto.IsBacklogItemIDShape(itemID) {
 		where = acauditevent.ItemPublicID(itemID)
@@ -220,9 +201,9 @@ func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]AcAud
 			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 	}
-	out := make([]AcAuditEventData, len(rows))
+	out := make([]backlogdto.AcAuditEventData, len(rows))
 	for i, e := range rows {
-		out[i] = AcAuditEventData{
+		out[i] = backlogdto.AcAuditEventData{
 			ID: e.ID.String(), ItemID: e.ItemID.String(), ItemPublicID: e.ItemPublicID,
 			CriterionIndex: e.CriterionIndex,
 			PreviousStatus: e.PreviousStatus, NewStatus: e.NewStatus, Reason: e.Reason, Outcome: e.Outcome,
