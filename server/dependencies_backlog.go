@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
@@ -25,12 +26,12 @@ import (
 // each is nil when storage is not ent-backed.
 type backlogEngines struct {
 	pipelineEngine       pipeline.PipelineEngine
-	pipelineModeRepo     session.PipelineModeRepository
+	pipelineModeRepo     stagecfg.PipelineModeRepository
 	livenessRepo         liveness.LivenessRepository
 	livenessEngine       liveness.LivenessEngine
-	stageCRUDRepo        session.StageCRUDRepository
+	stageCRUDRepo        stagecfg.StageCRUDRepository
 	stageConfigEngine    *session.ConfiguredWorkflowEngine
-	gateSatisfactionRepo session.GateSatisfactionRepository
+	gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 }
 
 // buildBacklogEngines constructs the engines and repositories BacklogService and the
@@ -55,7 +56,7 @@ func buildBacklogEngines(storage *session.Storage) backlogEngines {
 	// (Epic 2.2) needs the same repository instance to back its PipelineMode CRUD
 	// RPCs, independent of whether pipelineEngine construction itself succeeded.
 	var pipelineEngine pipeline.PipelineEngine
-	var pipelineModeRepo session.PipelineModeRepository
+	var pipelineModeRepo stagecfg.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
 		// stage_transitions rows) so ConfiguredWorkflowEngine (Epic 2.3) has
@@ -67,7 +68,7 @@ func buildBacklogEngines(storage *session.Storage) backlogEngines {
 		if seedErr := session.EnsureBuiltInWorkflowStages(context.Background(), entClient); seedErr != nil {
 			log.Warn("failed to seed built-in workflow stages, continuing without them", "err", seedErr)
 		}
-		pipelineModeRepo = session.NewEntPipelineModeRepository(entClient)
+		pipelineModeRepo = stagecfg.NewEntPipelineModeRepository(entClient)
 		// Seed the "sdd" pipeline mode before the engine's first cache Load
 		// below, so that Load already sees the seeded row in one pass rather
 		// than needing a follow-up InvalidateCache. Create-if-missing only —
@@ -121,13 +122,13 @@ func buildBacklogEngines(storage *session.Storage) backlogEngines {
 	// switching runtime transition/gate evaluation over to
 	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
 	// posture as pipelineEngine/livenessEngine above.
-	var stageCRUDRepo session.StageCRUDRepository
+	var stageCRUDRepo stagecfg.StageCRUDRepository
 	var stageConfigEngine *session.ConfiguredWorkflowEngine
-	var gateSatisfactionRepo session.GateSatisfactionRepository
+	var gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
-		entStageRepo := session.NewEntStageConfigRepository(entClient)
+		entStageRepo := stagecfg.NewEntStageConfigRepository(entClient)
 		stageCRUDRepo = entStageRepo
-		entGateSatisfactionRepo := session.NewEntGateSatisfactionRepository(entClient)
+		entGateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(entClient)
 		gateSatisfactionRepo = entGateSatisfactionRepo
 		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)

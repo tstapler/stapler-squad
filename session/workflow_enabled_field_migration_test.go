@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	_ "modernc.org/sqlite"
 )
 
@@ -54,18 +55,18 @@ func TestRunWorkflowEnabledFieldBackfill_should_CorrectLegacyDisabledRowsOnly(t 
 	defer cleanup()
 	ctx := context.Background()
 
-	wfRepo := NewEntWorkflowRepository(repo.GetEntClient())
+	wfRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 
 	// Simulates a pre-migration row: cron_enabled=false meant "disabled" under the old
 	// semantics, but ent's auto-migration backfilled enabled to its schema default
 	// (true) uniformly.
-	legacyDisabled, err := wfRepo.Create(ctx, WorkflowCreateInput{
+	legacyDisabled, err := wfRepo.Create(ctx, stagecfg.WorkflowCreateInput{
 		Slug: "legacy-disabled", Name: "Legacy Disabled", Command: "cmd", TargetDirectory: "/tmp/test",
 		CronEnabled: false, Enabled: boolPtr(true),
 	})
 	require.NoError(t, err)
 
-	legacyEnabled, err := wfRepo.Create(ctx, WorkflowCreateInput{
+	legacyEnabled, err := wfRepo.Create(ctx, stagecfg.WorkflowCreateInput{
 		Slug: "legacy-enabled", Name: "Legacy Enabled", Command: "cmd", TargetDirectory: "/tmp/test",
 		CronEnabled: true, Enabled: boolPtr(true),
 	})
@@ -101,8 +102,8 @@ func TestNewEntRepository_should_NotReDisableLegitimatelyEnabledTrigger_When_Reo
 	first, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
 
-	wfRepo := NewEntWorkflowRepository(first.GetEntClient())
-	created, err := wfRepo.Create(context.Background(), WorkflowCreateInput{
+	wfRepo := stagecfg.NewEntWorkflowRepository(first.GetEntClient())
+	created, err := wfRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug: "legit-enabled-webhook", Name: "Legit Enabled", Command: "cmd", TargetDirectory: "/tmp/test",
 		TriggerType: "webhook", WebhookSlug: "legit-enabled-webhook",
 		CronEnabled: false,         // vestigial for a webhook trigger — the real gate is Enabled
@@ -119,7 +120,7 @@ func TestNewEntRepository_should_NotReDisableLegitimatelyEnabledTrigger_When_Reo
 	require.NoError(t, err)
 	defer second.Client.Close()
 
-	reloaded, err := NewEntWorkflowRepository(second.GetEntClient()).GetByID(context.Background(), created.ID)
+	reloaded, err := stagecfg.NewEntWorkflowRepository(second.GetEntClient()).GetByID(context.Background(), created.ID)
 	require.NoError(t, err)
 	assert.True(t, reloaded.Enabled,
 		"a legitimately-enabled trigger must survive a restart — the enabled backfill must not re-run once the column already exists")

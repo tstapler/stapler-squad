@@ -13,15 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // newGenericWebhookWorkflow creates an enabled webhook-type Workflow at slug, with
 // secret encrypted under infra's key.
 func newGenericWebhookWorkflow(t *testing.T, infra *webhookTestInfra, slug, secret, eventFilter, labelFilter, promptTemplate string) *ent.Workflow {
 	t.Helper()
-	wf, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := infra.workflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:                   slug,
 		Name:                   "Generic Webhook Trigger",
 		Command:                "base instructions",
@@ -173,7 +173,7 @@ func TestGenericWebhookHandler_should_Return404_When_SlugIsUnknown(t *testing.T)
 // longer means anything for this trigger type) but Enabled=false must not fire.
 func TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEnabledTrue(t *testing.T) {
 	infra := newWebhookTestInfra(t)
-	wf, err := infra.workflowRepo.Create(context.Background(), session.WorkflowCreateInput{
+	wf, err := infra.workflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:                   "jira-ticket-disabled",
 		Name:                   "Generic Webhook Trigger",
 		Command:                "base instructions",

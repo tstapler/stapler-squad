@@ -78,7 +78,7 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 		require.NoError(t, err)
 		require.Len(t, sessions, 1, "reservation row must exist before the billed CreateSession call")
 		assert.Equal(t, instance.SessionRoleJulesWork, sessions[0].Role)
-		assert.True(t, strings.HasPrefix(sessions[0].SessionUUID, julesPendingUUIDPrefix),
+		assert.True(t, strings.HasPrefix(sessions[0].SessionUUID, domain.JulesPendingUUIDPrefix),
 			"reservation SessionUUID must carry the pending prefix before CreateSession returns, got %q", sessions[0].SessionUUID)
 	}
 	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })

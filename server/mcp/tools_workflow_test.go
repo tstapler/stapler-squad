@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // newTestWorkflowHandlers wires a real *services.SessionService with a
@@ -25,7 +26,7 @@ func newTestWorkflowHandlers(t *testing.T) *workflowHandlers {
 
 	repo := session.NewTestEntRepository(t)
 
-	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 	workflowSvc := services.NewWorkflowService(workflowRepo, nil, storage)
 
 	sessSvc := services.NewSessionService(storage, events.NewEventBus(100))

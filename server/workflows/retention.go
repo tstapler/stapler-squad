@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // StartRetentionEnforcer starts a background goroutine that periodically archives
@@ -30,7 +30,7 @@ import (
 func StartRetentionEnforcer(
 	ctx context.Context,
 	entClient *ent.Client,
-	workflowRepo session.WorkflowRepository,
+	workflowRepo stagecfg.WorkflowRepository,
 	interval time.Duration,
 	wg *sync.WaitGroup,
 ) {
@@ -57,7 +57,7 @@ func StartRetentionEnforcer(
 }
 
 // RunRetentionSweep performs a single retention sweep. Exported for use in tests.
-func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo session.WorkflowRepository) {
+func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
 	runRetentionSweep(ctx, entClient, workflowRepo)
 }
 
@@ -82,7 +82,7 @@ func archiveExcessSessions(ctx context.Context, entClient *ent.Client, excess []
 		Save(ctx)
 }
 
-func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo session.WorkflowRepository) {
+func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
 	workflows, err := workflowRepo.ListAll(ctx)
 	if err != nil {
 		log.Warn("[workflows/retention] failed to list workflows", "err", err)

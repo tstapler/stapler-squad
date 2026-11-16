@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string) {
@@ -182,7 +183,7 @@ func newGateHarness(t *testing.T, mode session.EngineMode) *gateHarness {
 	repo := session.NewTestEntRepository(t)
 	ctx := context.Background()
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, repo.Client))
-	cfg, err := session.NewConfiguredWorkflowEngine(session.NewEntStageConfigRepository(repo.Client), session.NewEntGateSatisfactionRepository(repo.Client), nil)
+	cfg, err := session.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
 	require.NoError(t, err)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)

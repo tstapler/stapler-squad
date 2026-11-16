@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -964,16 +965,16 @@ func TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCusto
 	ctx := t.Context()
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
-	stageRepo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	stageRepo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
-	fromStage, err := stageRepo.CreateStage(ctx, session.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
+	fromStage, err := stageRepo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
 	require.NoError(t, err)
-	toStage, err := stageRepo.CreateStage(ctx, session.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
+	toStage, err := stageRepo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
 	require.NoError(t, err)
-	_, err = stageRepo.CreateTransition(ctx, session.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
+	_, err = stageRepo.CreateTransition(ctx, stagecfg.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
 	require.NoError(t, err)
 	require.NoError(t, engine.InvalidateCache(ctx))
 
@@ -3480,13 +3481,13 @@ func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewS
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:    "strong-review",
 		Name:    "Strong Review",
 		Enabled: true,
-		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
-			session.StageRoleReview: {Model: "family:opus"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleReview: {Model: "family:opus"},
 		},
 	})
 	require.NoError(t, err)

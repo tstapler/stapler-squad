@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // BenchmarkGatedTransitionDecision measures the gate's engine decision (caller
@@ -17,7 +18,7 @@ func BenchmarkGatedTransitionDecision(b *testing.B) {
 	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
 		b.Fatal(err)
 	}
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
+	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
 	if err != nil {
 		b.Fatal(err)
 	}

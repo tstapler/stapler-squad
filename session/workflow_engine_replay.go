@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // ErrReplayLiveDatabase is returned for a path inside a live state directory.
@@ -165,7 +166,7 @@ func (replayEnforceAll) ModeFor(domain.CallerClass) EngineMode { return ModeEnfo
 // replayGateOverlay adds one unsatisfied human_approval gate to the from->to
 // transition on every read; nothing is written.
 type replayGateOverlay struct {
-	StageConfigRepository
+	stagecfg.StageConfigRepository
 	edge domain.SystemEdge
 }
 
@@ -191,7 +192,7 @@ func (o replayGateOverlay) ListEnabledTransitions(ctx context.Context) ([]*ent.S
 	return out, nil
 }
 
-func newReplaySelector(repo StageConfigRepository) (*SwitchableWorkflowEngine, error) {
+func newReplaySelector(repo stagecfg.StageConfigRepository) (*SwitchableWorkflowEngine, error) {
 	cfg, err := NewConfiguredWorkflowEngine(repo, nil, nil)
 	if err != nil {
 		return nil, err
@@ -236,7 +237,7 @@ const replayDeniedPrefix = "denied:"
 // replayRun holds the selectors one replay builds: the stored configuration and
 // one overlay per system-required edge that gets a synthetic gate.
 type replayRun struct {
-	repo           StageConfigRepository
+	repo           stagecfg.StageConfigRepository
 	live           *SwitchableWorkflowEngine
 	systemRequired map[domain.SystemEdge]bool
 	synthetic      map[domain.SystemEdge]*SwitchableWorkflowEngine
@@ -249,7 +250,7 @@ type replayRun struct {
 // gate can attach to it, so configuration cannot change its answer.
 const replayNoStoredTransition = "n/a:no_stored_transition"
 
-func replayStoredEdges(ctx context.Context, repo StageConfigRepository) (map[domain.SystemEdge]bool, error) {
+func replayStoredEdges(ctx context.Context, repo stagecfg.StageConfigRepository) (map[domain.SystemEdge]bool, error) {
 	transitions, err := repo.ListEnabledTransitions(ctx)
 	if err != nil {
 		return nil, err
@@ -306,7 +307,7 @@ func (d ReplayDecision) failure() (string, bool) {
 // StageRepoFactory builds the stage-configuration repository the replay reads
 // from a database client; the composition owner supplies the concrete one so
 // the engine never names the ent constructor.
-type StageRepoFactory func(client *ent.Client) StageConfigRepository
+type StageRepoFactory func(client *ent.Client) stagecfg.StageConfigRepository
 
 // BuildWorkflowEngineReplay evaluates the registry against the stage
 // configuration and items in client. It only reads.
@@ -346,7 +347,7 @@ func BuildWorkflowEngineReplay(ctx context.Context, client *ent.Client, newRepo 
 	return run.report, replayStranded(ctx, client, repo, run.report)
 }
 
-func replayStranded(ctx context.Context, client *ent.Client, repo StageConfigRepository, report *ReplayReport) error {
+func replayStranded(ctx context.Context, client *ent.Client, repo stagecfg.StageConfigRepository, report *ReplayReport) error {
 	cfg, err := NewConfiguredWorkflowEngine(repo, nil, nil)
 	if err != nil {
 		return err

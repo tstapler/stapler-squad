@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 	if err := EnsureBuiltInWorkflowStages(context.Background(), repo.Client); err != nil {
 		b.Fatal(err)
 	}
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), nil, nil)
+	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), nil, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 const (
@@ -35,7 +35,7 @@ func bkfAddEdge(t *testing.T, svc *BacklogService, from, to domain.BacklogStatus
 }
 
 // bkfStageID returns the id of a seeded stage.
-func bkfStageID(t *testing.T, repo *session.EntStageConfigRepository, slug domain.BacklogStatus) string {
+func bkfStageID(t *testing.T, repo *stagecfg.EntStageConfigRepository, slug domain.BacklogStatus) string {
 	t.Helper()
 	stage, err := repo.GetStageBySlug(t.Context(), string(slug))
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func bkfStageID(t *testing.T, repo *session.EntStageConfigRepository, slug domai
 
 // bkfOperatorCanMove reports whether the operator transition handler lets an
 // item at `from` move to `to` after configure edited the stage config.
-func bkfOperatorCanMove(t *testing.T, from, to domain.BacklogStatus, configure func(*BacklogService, *session.EntStageConfigRepository)) bool {
+func bkfOperatorCanMove(t *testing.T, from, to domain.BacklogStatus, configure func(*BacklogService, *stagecfg.EntStageConfigRepository)) bool {
 	t.Helper()
 	return enfBuiltTransition(t, from, to, configure)
 }
@@ -52,7 +52,7 @@ func bkfOperatorCanMove(t *testing.T, from, to domain.BacklogStatus, configure f
 // bkfUnrelatedEdgeAccepted reports whether the graph validator that
 // CreateStageTransition runs accepts an unrelated edge, after configure edited
 // the stage config.
-func bkfUnrelatedEdgeAccepted(t *testing.T, configure func(*BacklogService, *session.EntStageConfigRepository)) bool {
+func bkfUnrelatedEdgeAccepted(t *testing.T, configure func(*BacklogService, *stagecfg.EntStageConfigRepository)) bool {
 	t.Helper()
 	svc, _, repo, _ := enfService(t)
 	configure(svc, repo)
@@ -61,8 +61,8 @@ func bkfUnrelatedEdgeAccepted(t *testing.T, configure func(*BacklogService, *ses
 
 func TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer(t *testing.T) {
 	ready := domain.BacklogStatusReady
-	createWithEdge := func(slug domain.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
-		return func(svc *BacklogService, _ *session.EntStageConfigRepository) {
+	createWithEdge := func(slug domain.BacklogStatus, enabled bool) func(*BacklogService, *stagecfg.EntStageConfigRepository) {
+		return func(svc *BacklogService, _ *stagecfg.EntStageConfigRepository) {
 			bkfCreateStage(t, svc, &sessionv1.CreateStageRequest{Slug: string(slug), Name: bkfStageName, IsEntry: true, IsTerminal: true, Enabled: enabled})
 			require.NoError(t, bkfAddEdge(t, svc, slug, ready, true))
 		}
@@ -79,12 +79,12 @@ func TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer(t *testing.T) {
 
 func TestConfigSurfaceProof_CreateStage_IsEntryAndIsTerminal_ChangeGraphValidation(t *testing.T) {
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
+		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *stagecfg.EntStageConfigRepository) {
 			bkfCreateStage(t, svc, &sessionv1.CreateStageRequest{Slug: string(bkfCustomStage), Name: bkfStageName, IsEntry: setting.(bool), IsTerminal: true, Enabled: true})
 		})
 	}, false, true) // is_entry: an unreachable stage fails validation
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
+		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *stagecfg.EntStageConfigRepository) {
 			bkfCreateStage(t, svc, &sessionv1.CreateStageRequest{Slug: string(bkfCustomStage), Name: bkfStageName, IsEntry: true, IsTerminal: setting.(bool), Enabled: true})
 		})
 	}, false, true) // is_terminal: a non-terminal stage with no way out fails validation
@@ -92,8 +92,8 @@ func TestConfigSurfaceProof_CreateStage_IsEntryAndIsTerminal_ChangeGraphValidati
 
 func TestConfigSurfaceProof_UpdateStage_ChangesHandlerAnswer(t *testing.T) {
 	done, refining, review := domain.BacklogStatusDone, domain.BacklogStatusRefining, domain.BacklogStatusReview
-	disable := func(slug domain.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
-		return func(svc *BacklogService, repo *session.EntStageConfigRepository) {
+	disable := func(slug domain.BacklogStatus, enabled bool) func(*BacklogService, *stagecfg.EntStageConfigRepository) {
+		return func(svc *BacklogService, repo *stagecfg.EntStageConfigRepository) {
 			_, err := svc.UpdateStage(t.Context(), connect.NewRequest(&sessionv1.UpdateStageRequest{Id: bkfStageID(t, repo, slug), Enabled: &enabled}))
 			require.NoError(t, err)
 		}
@@ -114,13 +114,13 @@ func TestConfigSurfaceProof_UpdateStage_IsEntryAndIsTerminal_ChangeGraphValidati
 		require.NoError(t, err)
 	}
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
+		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *stagecfg.EntStageConfigRepository) {
 			v := setting.(bool)
 			update(svc, &v, nil)
 		})
 	}, false, true) // is_entry
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *session.EntStageConfigRepository) {
+		return bkfUnrelatedEdgeAccepted(t, func(svc *BacklogService, _ *stagecfg.EntStageConfigRepository) {
 			v := setting.(bool)
 			update(svc, nil, &v)
 		})
@@ -129,8 +129,8 @@ func TestConfigSurfaceProof_UpdateStage_IsEntryAndIsTerminal_ChangeGraphValidati
 
 func TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer(t *testing.T) {
 	queued, refining, review, idea := domain.BacklogStatusQueued, domain.BacklogStatusRefining, domain.BacklogStatusReview, domain.BacklogStatusIdea
-	create := func(from, to domain.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
-		return func(svc *BacklogService, _ *session.EntStageConfigRepository) {
+	create := func(from, to domain.BacklogStatus, enabled bool) func(*BacklogService, *stagecfg.EntStageConfigRepository) {
+		return func(svc *BacklogService, _ *stagecfg.EntStageConfigRepository) {
 			require.NoError(t, bkfAddEdge(t, svc, from, to, enabled))
 		}
 	}

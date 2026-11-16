@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // Twins of the session/backlog test fixtures of the same names; copied, not
@@ -23,8 +24,8 @@ func newSeededConfiguredWorkflowEngine(t *testing.T) (*session.ConfiguredWorkflo
 
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(client)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 	return engine, client

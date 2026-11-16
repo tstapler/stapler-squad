@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -60,7 +61,7 @@ type triggerRateLimiterGate interface {
 // Scheduler manages cron-based workflow execution.
 type Scheduler struct {
 	c          *cron.Cron
-	repo       session.WorkflowRepository
+	repo       stagecfg.WorkflowRepository
 	sessionSvc SessionServiceInterface
 	eventBus   *events.EventBus
 	mu         sync.Mutex
@@ -85,7 +86,7 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a new WorkflowScheduler.
-func NewScheduler(repo session.WorkflowRepository, sessionSvc SessionServiceInterface, eventBus *events.EventBus) *Scheduler {
+func NewScheduler(repo stagecfg.WorkflowRepository, sessionSvc SessionServiceInterface, eventBus *events.EventBus) *Scheduler {
 	return &Scheduler{
 		c: cron.New(
 			cron.WithParser(cron.NewParser(
@@ -557,7 +558,7 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p firePar
 	// propagated — it must never turn an otherwise-successful fire into an error.
 	if s.repo != nil {
 		now := time.Now()
-		if _, updErr := s.repo.Update(ctx, wf.ID, session.WorkflowUpdateInput{LastFiredAt: &now}); updErr != nil {
+		if _, updErr := s.repo.Update(ctx, wf.ID, stagecfg.WorkflowUpdateInput{LastFiredAt: &now}); updErr != nil {
 			log.Warn("[WorkflowScheduler] failed to update last_fired_at", "slug", wf.Slug, "err", updErr)
 		}
 	}

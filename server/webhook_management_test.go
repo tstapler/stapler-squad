@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 const (
@@ -129,7 +130,7 @@ func TestRegisterWebhookManagement_should_ProduceRegistrationsTheReceiverCanVeri
 	h := newWiringHarness(t, map[string]bool{config.FeatureWebhookManagement: true, "webhook_triggers": true})
 	require.Empty(t, h.cfg.MachineEncryptionKey, "precondition: no key yet, as on a fresh instance")
 	fireEvents := session.NewEntTriggerFireEventRepository(h.repo.GetEntClient())
-	receiver := services.NewGenericWebhookHandler(session.NewEntWorkflowRepository(h.repo.GetEntClient()), nil, fireEvents, h.cfg)
+	receiver := services.NewGenericWebhookHandler(stagecfg.NewEntWorkflowRepository(h.repo.GetEntClient()), nil, fireEvents, h.cfg)
 	receiver.RegisterRoutes(h.srv.mux) // the receiver holds h.cfg, exactly as server.go wires it
 	registerWebhookManagement(h.srv, h.deps, h.cfg)
 

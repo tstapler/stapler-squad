@@ -24,10 +24,11 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // stageToProto converts a session.StageData to its proto representation.
-func stageToProto(sd *session.StageData) *sessionv1.BacklogStage {
+func stageToProto(sd *stagecfg.StageData) *sessionv1.BacklogStage {
 	return &sessionv1.BacklogStage{
 		Id:          sd.ID.String(),
 		Slug:        sd.Slug,
@@ -51,7 +52,7 @@ func (s *BacklogService) CreateStage(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("stage storage not available"))
 	}
 
-	stage, err := s.stageCRUDRepo.CreateStage(ctx, session.StageCreateInput{
+	stage, err := s.stageCRUDRepo.CreateStage(ctx, stagecfg.StageCreateInput{
 		Slug:        req.Msg.Slug,
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
@@ -95,7 +96,7 @@ func (s *BacklogService) UpdateStage(
 		}
 	}
 
-	stage, err := s.stageCRUDRepo.UpdateStage(ctx, id, session.StageUpdateInput{
+	stage, err := s.stageCRUDRepo.UpdateStage(ctx, id, stagecfg.StageUpdateInput{
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
 		IsEntry:     req.Msg.IsEntry,
@@ -182,12 +183,12 @@ func (s *BacklogService) rejectStageRemovalStranding(ctx context.Context, id uui
 	if err != nil {
 		return fmt.Errorf("get stage: %w", err)
 	}
-	return s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
+	return s.stageCRUDRepo.WithTx(ctx, func(tx stagecfg.TransitionTxRepository) error {
 		_, transitions, err := tx.ListGraphForValidation(ctx)
 		if err != nil {
 			return fmt.Errorf("load graph for validation: %w", err)
 		}
-		candidate := make([]session.TransitionDefinition, 0, len(transitions))
+		candidate := make([]stagecfg.TransitionDefinition, 0, len(transitions))
 		for _, t := range transitions {
 			if t.FromSlug != stage.Slug && t.ToSlug != stage.Slug {
 				candidate = append(candidate, t)
