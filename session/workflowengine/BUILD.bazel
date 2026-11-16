@@ -52,6 +52,7 @@ go_test(
     srcs = [
         "configured_workflow_engine_test.go",
         "engine_helpers_test.go",
+        "main_test.go",
         "stateful_latch_test.go",
         "transition_callers_test.go",
         "workflow_engine_equivalence_test.go",

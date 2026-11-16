@@ -72,3 +72,23 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 		}
 	}
 }
+
+func TestClearLatches_RemovesStatefulLatch_SoRegressedGateFailsAgain(t *testing.T) {
+	t.Parallel()
+	entClient := entdbtest.NewClient(t)
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), entClient))
+	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(entClient), stagecfg.NewEntGateSatisfactionRepository(entClient), nil)
+	require.NoError(t, err)
+	from, to := newCustomTransitionWithGates(t, entClient, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{true})
+	itemID := uuid.NewString()
+	satisfied := domain.BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACDone}
+	regressed := domain.BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACPending}
+
+	cfg.RecordLatchesAfterCommit(satisfied, to)
+	require.NoError(t, cfg.ValidateGates(regressed, to, nil), "latched")
+
+	cfg.ClearLatches(itemID, from, to)
+
+	require.Error(t, cfg.ValidateGates(regressed, to, nil), "cleared latch no longer answers satisfied")
+	require.NoError(t, cfg.ValidateGates(satisfied, to, nil), "the live check still passes")
+}

@@ -2,6 +2,7 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "gatefixturetest",
+    testonly = True,
     srcs = ["gatefixturetest.go"],
     importpath = "github.com/tstapler/stapler-squad/session/internal/gatefixturetest",
     visibility = ["//session:__subpackages__"],
