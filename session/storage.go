@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // InstanceStore is the minimal interface the server layer needs for session persistence.
@@ -999,7 +1000,7 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data backlogdto.Backlog
 func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	created, err := s.CreateBacklogItem(ctx, data)
 	if err == nil {
-		RecordEngineBypass(backlogdto.CallerDebugCreate)
+		workflowengine.RecordEngineBypass(backlogdto.CallerDebugCreate)
 	}
 	return created, err
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // fakeSyncPlugin lets tests control exactly what Fetch returns and inspect the
@@ -1493,7 +1494,7 @@ func TestSyncOne_should_CreateItem_When_NoForeignClaimLookupWired(t *testing.T) 
 func TestTransitionBackward_GateOutcomes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	sl := &SyncLoop{storage: h.storage}
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusIdea, domain.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, domain.BacklogStatusIdea)
@@ -1513,7 +1514,7 @@ func TestTransitionBackward_GateOutcomes(t *testing.T) {
 func TestTransitionBackward_StaleFromLosesCAS_ItemNotArchived(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeOff)
+	h := newGateHarness(t, workflowengine.ModeOff)
 	sl := &SyncLoop{storage: h.storage}
 	item := h.newItem(t, domain.BacklogStatusReady)
 	h.moveRaw(t, item.ID, domain.BacklogStatusInProgress)
@@ -1525,7 +1526,7 @@ func TestTransitionBackward_StaleFromLosesCAS_ItemNotArchived(t *testing.T) {
 func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusIdea, domain.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	plugin := &fakeSyncPlugin{id: "fake", items: []ExternalItem{{ExternalID: "ext-1", Title: "Issue", State: "closed", IssueUpdatedAt: time.Now()}}}
 	registry := NewPluginRegistry()

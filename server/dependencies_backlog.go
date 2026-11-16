@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // backlogEngines are the ent-backed pipeline, liveness and stage-config collaborators;
@@ -30,7 +31,7 @@ type backlogEngines struct {
 	livenessRepo         liveness.LivenessRepository
 	livenessEngine       liveness.LivenessEngine
 	stageCRUDRepo        stagecfg.StageCRUDRepository
-	stageConfigEngine    *session.ConfiguredWorkflowEngine
+	stageConfigEngine    *workflowengine.ConfiguredWorkflowEngine
 	gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 }
 
@@ -65,7 +66,7 @@ func buildBacklogEngines(storage *session.Storage) backlogEngines {
 		// never aborts boot on failure, matching the "sdd" pipeline mode seed's
 		// posture immediately below (project_plans/backlog-custom-workflow-stages/
 		// implementation/plan.md Epic 2.2).
-		if seedErr := session.EnsureBuiltInWorkflowStages(context.Background(), entClient); seedErr != nil {
+		if seedErr := workflowengine.EnsureBuiltInWorkflowStages(context.Background(), entClient); seedErr != nil {
 			log.Warn("failed to seed built-in workflow stages, continuing without them", "err", seedErr)
 		}
 		pipelineModeRepo = stagecfg.NewEntPipelineModeRepository(entClient)
@@ -123,14 +124,14 @@ func buildBacklogEngines(storage *session.Storage) backlogEngines {
 	// ConfiguredWorkflowEngine is a later epic's job. Same non-fatal-fallback
 	// posture as pipelineEngine/livenessEngine above.
 	var stageCRUDRepo stagecfg.StageCRUDRepository
-	var stageConfigEngine *session.ConfiguredWorkflowEngine
+	var stageConfigEngine *workflowengine.ConfiguredWorkflowEngine
 	var gateSatisfactionRepo stagecfg.GateSatisfactionRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		entStageRepo := stagecfg.NewEntStageConfigRepository(entClient)
 		stageCRUDRepo = entStageRepo
 		entGateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(entClient)
 		gateSatisfactionRepo = entGateSatisfactionRepo
-		if engine, err := session.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
+		if engine, err := workflowengine.NewConfiguredWorkflowEngine(entStageRepo, entGateSatisfactionRepo, pipelineModeRepo); err != nil {
 			log.Warn("stageConfigEngine construction failed; stage/transition/gate CRUD writes will not invalidate a cache", "err", err)
 		} else {
 			stageConfigEngine = engine

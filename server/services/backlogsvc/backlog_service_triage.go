@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // initialPromptFor returns s.pipelineEngine.InitialPromptFor(...) when pipelineEngine
@@ -687,7 +688,7 @@ func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogd
 	// guard and stays the sole authority for the write. No Observed item: the gate
 	// would pin updated_at, which callers that edited the item first (queue
 	// metadata) have already moved.
-	if session.NewDefaultWorkflowEngine().CanTransition(from, to, nil) {
+	if workflowengine.NewDefaultWorkflowEngine().CanTransition(from, to, nil) {
 		if guardErr := domain.TransitionGuard(guardInput, to); guardErr != nil {
 			return nil, guardErr
 		}

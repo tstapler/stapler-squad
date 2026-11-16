@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/flowstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func TestEntFlowReader_should_ReturnResolvedAndOpenRows_When_StuckIntervals(t *testing.T) {
@@ -83,7 +84,7 @@ func TestEntFlowReader_should_ReturnBuiltInStagesInPipelineOrder_When_DefaultEng
 	t.Parallel()
 	got, err := newFlowReader(nil).Stages(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, BuiltInStageOrder, got)
+	require.Equal(t, workflowengine.BuiltInStageOrder, got)
 	require.Contains(t, got, domain.BacklogStatusRefining)
 }
 

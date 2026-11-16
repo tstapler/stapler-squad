@@ -17,6 +17,7 @@ go_library(
         "//session",
         "//session/flow",
         "//session/flowstore",
+        "//session/workflowengine",
         "//telemetry",
         "@com_connectrpc_connect//:connect",
         "@io_opentelemetry_go_otel//attribute",

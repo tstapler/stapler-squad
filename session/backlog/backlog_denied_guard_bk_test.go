@@ -8,14 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func TestSelfHealStuck_should_ResolveATransitionDeniedRowOnlyOnceTheItemLeftItsFromStatus(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
@@ -38,7 +38,7 @@ func TestReconcileOrphanedTriageItems_should_NotMarkOrphaned_When_IdeaHasAnOpenD
 	}{{"open denial", true, 0}, {"no denial", false, 1}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := newGateHarness(t, session.ModeEnforce)
+			h := newGateHarness(t, workflowengine.ModeEnforce)
 			ctx := context.Background()
 			denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 			item := newEndedTriageTestItem(t, h.storage, h.repo)
@@ -55,7 +55,7 @@ func TestReconcileOrphanedTriageItems_should_NotMarkOrphaned_When_IdeaHasAnOpenD
 
 func TestReconcileOrphanedTriageRemediation_should_SpendNoAttempt_When_IdeaHasAnOpenDenial(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item := newEndedTriageTestItem(t, h.storage, h.repo)
@@ -79,7 +79,7 @@ func TestReconcileOrphanedAgentPRs_should_SkipTheGitHubLookup_When_ReviewHasAnOp
 	}{{"open denial", true, 0}, {"no denial", false, 1}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := newGateHarness(t, session.ModeEnforce)
+			h := newGateHarness(t, workflowengine.ModeEnforce)
 			denBlock(t, h, domain.BacklogStatusReview, domain.BacklogStatusPRPending)
 			item := newOrphanedAgentPRTestItem(t, h.storage, "backlog/den-orphan")
 			if tc.denied {
@@ -101,7 +101,7 @@ func TestReconcileOrphanedAgentPRs_should_SkipTheGitHubLookup_When_ReviewHasAnOp
 
 func TestReconcilePushFailedItems_should_SpendNoAttempt_When_ReviewHasAnOpenDenial(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusReview, domain.BacklogStatusPRPending)
 	item := h.newItem(t, domain.BacklogStatusReview)
@@ -125,7 +125,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_NotApplyTheVerdict_When_Revie
 	}{{"open denial", true, domain.BacklogStatusReview}, {"no denial", false, domain.BacklogStatusDone}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := newGateHarness(t, session.ModeEnforce)
+			h := newGateHarness(t, workflowengine.ModeEnforce)
 			ctx := context.Background()
 			item := newStuckReviewTestItem(t, h.storage, domain.ReviewVerdictPass, false, true)
 			if tc.denied {
@@ -144,7 +144,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_NotApplyTheVerdict_When_Revie
 
 func TestReconcileMultiReasonEscalation_should_TreatALoneTransitionDeniedRowAsNonEscalating(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, session.ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item := h.newItem(t, domain.BacklogStatusIdea)

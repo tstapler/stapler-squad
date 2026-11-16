@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string) {
@@ -173,23 +174,23 @@ func (r *recordingReporter) snapshot() []reportedDenial {
 type gateHarness struct {
 	storage *session.Storage
 	repo    *session.EntRepository
-	cfg     *session.ConfiguredWorkflowEngine
-	sel     *session.SwitchableWorkflowEngine
+	cfg     *workflowengine.ConfiguredWorkflowEngine
+	sel     *workflowengine.SwitchableWorkflowEngine
 	rep     *recordingReporter
 }
 
-func newGateHarness(t *testing.T, mode session.EngineMode) *gateHarness {
+func newGateHarness(t *testing.T, mode workflowengine.EngineMode) *gateHarness {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, repo.Client))
-	cfg, err := session.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, repo.Client))
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), stagecfg.NewEntGateSatisfactionRepository(repo.Client), nil)
 	require.NoError(t, err)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), cfg, allClasses(mode),
-		session.WithSelectorLoggers(func(string, ...any) {}, func(string, ...any) {}))
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, allClasses(mode),
+		workflowengine.WithSelectorLoggers(func(string, ...any) {}, func(string, ...any) {}))
 	rep := &recordingReporter{storage: storage}
 	require.NoError(t, storage.SetTransitionGate(sel, rep))
 	return &gateHarness{storage: storage, repo: repo, cfg: cfg, sel: sel, rep: rep}
@@ -216,7 +217,7 @@ func (h *gateHarness) moveRaw(t *testing.T, id string, to domain.BacklogStatus) 
 	require.NoError(t, err)
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().
@@ -225,7 +226,7 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
 		).Only(ctx)
 	require.NoError(t, err)
-	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(session.IsStatefulGateKind(kind)).SetEnabled(true)
+	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(workflowengine.IsStatefulGateKind(kind)).SetEnabled(true)
 	if config != nil {
 		c = c.SetConfig(config)
 	}
@@ -234,12 +235,12 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-type classModes map[domain.CallerClass]session.EngineMode
+type classModes map[domain.CallerClass]workflowengine.EngineMode
 
-func (c classModes) Mode() session.EngineMode { return c[domain.ClassOperator] }
+func (c classModes) Mode() workflowengine.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k domain.CallerClass) session.EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) workflowengine.EngineMode { return c[k] }
 
-func allClasses(m session.EngineMode) classModes {
+func allClasses(m workflowengine.EngineMode) classModes {
 	return classModes{domain.ClassOperator: m, domain.ClassAgent: m, domain.ClassSystem: m, "bogus": m}
 }

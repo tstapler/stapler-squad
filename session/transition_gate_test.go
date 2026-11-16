@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // --- fixtures --------------------------------------------------------------
@@ -35,7 +36,7 @@ func lastEvent(t *testing.T, h *gateHarness, id string) backlogdto.BacklogStatus
 
 func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionFailedNotDenial(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 
 	item := h.newItem(t, domain.BacklogStatusReady)
@@ -59,22 +60,22 @@ func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionF
 
 func TestGatedTransition_CallerExpectedStatusMismatch_FailsWithoutEngineCall(t *testing.T) {
 	// Not parallel: GateCallsTotal is process-wide, so a parallel test using the same caller would bump it between the two reads.
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusReady)
 
-	before := GateCallsTotal(domain.ClassSystem, domain.CallerQueueBacklogItem, ModeEnforce)
+	before := GateCallsTotal(domain.ClassSystem, domain.CallerQueueBacklogItem, workflowengine.ModeEnforce)
 	_, err := h.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
 		Caller: domain.CallerQueueBacklogItem, ItemID: item.ID, To: domain.BacklogStatusQueued,
 		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusIdea)},
 	})
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
-	require.Equal(t, before, GateCallsTotal(domain.ClassSystem, domain.CallerQueueBacklogItem, ModeEnforce), "the engine was not consulted")
+	require.Equal(t, before, GateCallsTotal(domain.ClassSystem, domain.CallerQueueBacklogItem, workflowengine.ModeEnforce), "the engine was not consulted")
 	require.Equal(t, string(domain.BacklogStatusReady), h.status(t, item.ID))
 }
 
 func TestGatedTransition_PassesWholePreconditionThrough_AndRecordsNoteAndTriggeredBy(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusReady)
 
@@ -101,7 +102,7 @@ func TestGatedTransition_PassesWholePreconditionThrough_AndRecordsNoteAndTrigger
 
 func TestGatedTransition_PinsUpdatedAtOnlyWhenGuardInputAndObservedSupplied(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 
 	run := func(t *testing.T, caller domain.TransitionCaller, withGuard bool) error {
@@ -135,7 +136,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 
 	t.Run("second attempt decides on the fresh status and succeeds", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusReady)
 		observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 		require.NoError(t, err)
@@ -149,7 +150,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 
 	t.Run("at most two attempts", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusReady)
 		observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 		require.NoError(t, err)
@@ -171,7 +172,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 
 	t.Run("without Unconditional there is one attempt", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusReady)
 		observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 		require.NoError(t, err)
@@ -188,7 +189,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 
 	t.Run("Unconditional cannot carry ExpectedUpdatedAt", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusReady)
 		now := time.Now()
 		_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
@@ -207,7 +208,7 @@ func TestGatedTransition_BeforeCommit_RunsAfterDecisionAndBeforeCAS(t *testing.T
 
 	t.Run("runs between the engine and the write", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusIdea)
 		var statusInHook string
 		_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
@@ -221,7 +222,7 @@ func TestGatedTransition_BeforeCommit_RunsAfterDecisionAndBeforeCAS(t *testing.T
 
 	t.Run("an error aborts the write", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusIdea)
 		boom := errors.New("push failed")
 		_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
@@ -234,7 +235,7 @@ func TestGatedTransition_BeforeCommit_RunsAfterDecisionAndBeforeCAS(t *testing.T
 
 	t.Run("does not run for a denial", func(t *testing.T) {
 		t.Parallel()
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		item := h.newItem(t, domain.BacklogStatusIdea)
 		_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusDone,
@@ -296,7 +297,7 @@ func TestGatedTransition_EveryAgentOrSystemDenial_ReachesReporter(t *testing.T) 
 			require.True(t, ok)
 			t.Run(rig.source+"/"+string(spec.Class), func(t *testing.T) {
 				t.Parallel()
-				h := newGateHarness(t, ModeEnforce)
+				h := newGateHarness(t, workflowengine.ModeEnforce)
 				item, to := rig.setup(t, h)
 				fromStatus := h.status(t, item.ID)
 
@@ -325,7 +326,7 @@ func TestGatedTransition_EveryAgentOrSystemDenial_ReachesReporter(t *testing.T) 
 
 func TestGatedTransition_SameEdgeDeniedForDifferentCallers_ReportsSeparately(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	// Two system callers share the idea->ready edge; an operator gate denies both.
 	for _, caller := range []domain.TransitionCaller{domain.CallerAutonomousComplete, domain.CallerMaybeTriggerTriage} {
@@ -345,7 +346,7 @@ func TestGatedTransition_SameEdgeDeniedForDifferentCallers_ReportsSeparately(t *
 
 func TestGatedTransition_ReporterPanicNeverChangesTheDenial(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	h.rep.panics = true
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	_, err := h.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{Caller: domain.CallerMCPResumeWork, ItemID: item.ID, To: domain.BacklogStatusDone})
@@ -359,7 +360,7 @@ func TestGatedTransition_OverrideReason_BypassesOperatorGatesForOperatorsOnly(t 
 	t.Parallel()
 	ctx := context.Background()
 	run := func(t *testing.T, caller domain.TransitionCaller, reason string) error {
-		h := newGateHarness(t, ModeEnforce)
+		h := newGateHarness(t, workflowengine.ModeEnforce)
 		addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusIdea, domain.BacklogStatusRefining, domain.GateKindHumanApproval, nil)
 		item := h.newItem(t, domain.BacklogStatusIdea)
 		_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: caller, ItemID: item.ID, To: domain.BacklogStatusRefining, OverrideReason: reason})
@@ -377,9 +378,9 @@ func TestGatedTransition_UncheckedCallerIsAllowedInOffAndShadow_DeniedInEnforce(
 	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
-		mode    EngineMode
+		mode    workflowengine.EngineMode
 		allowed bool
-	}{{ModeOff, true}, {ModeShadow, true}, {ModeEnforce, false}} {
+	}{{workflowengine.ModeOff, true}, {workflowengine.ModeShadow, true}, {workflowengine.ModeEnforce, false}} {
 		h := newGateHarness(t, tc.mode)
 		item := h.newItem(t, domain.BacklogStatusIdea)
 		// mcp_resume_work is an Unchecked agent caller: today a bare storage write.
@@ -420,7 +421,7 @@ func TestGatedTransition_Unwired_BehavesAsOff_AndCountsUnwired(t *testing.T) {
 
 func TestSetTransitionGate_RequiresEngineAndReporter(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeOff)
+	h := newGateHarness(t, workflowengine.ModeOff)
 	require.ErrorIs(t, h.storage.SetTransitionGate(nil, h.rep), backlogdto.ErrInvalidTransitionRequest)
 	require.ErrorIs(t, h.storage.SetTransitionGate(h.sel, nil), backlogdto.ErrInvalidTransitionRequest)
 	require.True(t, h.storage.TransitionGateWired(), "a rejected injection leaves the gate as it was")
@@ -429,7 +430,7 @@ func TestSetTransitionGate_RequiresEngineAndReporter(t *testing.T) {
 
 func TestGatedTransition_RejectsUnregisteredCallerAndMalformedRequests(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	ctx := context.Background()
 
@@ -445,19 +446,19 @@ func TestGatedTransition_RejectsUnregisteredCallerAndMalformedRequests(t *testin
 
 func TestGatedTransition_RecordsGateCallsPerClassCallerAndMode(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeShadow)
+	h := newGateHarness(t, workflowengine.ModeShadow)
 	item := h.newItem(t, domain.BacklogStatusIdea)
-	before := GateCallsTotal(domain.ClassOperator, domain.CallerOperatorTransitionRPC, ModeShadow)
+	before := GateCallsTotal(domain.ClassOperator, domain.CallerOperatorTransitionRPC, workflowengine.ModeShadow)
 	_, err := h.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusRefining})
 	require.NoError(t, err)
-	require.Equal(t, before+1, GateCallsTotal(domain.ClassOperator, domain.CallerOperatorTransitionRPC, ModeShadow))
+	require.Equal(t, before+1, GateCallsTotal(domain.ClassOperator, domain.CallerOperatorTransitionRPC, workflowengine.ModeShadow))
 }
 
 // --- exempt entry points ---------------------------------------------------
 
 func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
 	// Not parallel: EngineBypassCount is process-wide, so a parallel test using the same caller would bump it between the two reads.
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusQueued)
 
@@ -466,24 +467,24 @@ func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
 	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{}, instance.TriggeredBySystem)
 	require.ErrorIs(t, err, backlogdto.ErrInvalidTransitionRequest)
 
-	before := EngineBypassCount(backlogdto.CallerRollback)
+	before := workflowengine.EngineBypassCount(backlogdto.CallerRollback)
 	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}, instance.TriggeredBySystem)
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
-	require.Equal(t, before, EngineBypassCount(backlogdto.CallerRollback), "a lost CAS is not a bypass write")
+	require.Equal(t, before, workflowengine.EngineBypassCount(backlogdto.CallerRollback), "a lost CAS is not a bypass write")
 
 	_, err = h.storage.Rollback(ctx, item.ID, domain.BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusQueued)}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusReady), h.status(t, item.ID))
-	require.Equal(t, before+1, EngineBypassCount(backlogdto.CallerRollback))
+	require.Equal(t, before+1, workflowengine.EngineBypassCount(backlogdto.CallerRollback))
 }
 
 func TestDebugForce_WritesAnyStatusUnchecked_AndCountsBypass(t *testing.T) {
 	// Not parallel: EngineBypassCount is process-wide, so a parallel test using the same caller would bump it between the two reads.
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusIdea)
 
-	before := EngineBypassCount(backlogdto.CallerDebug)
+	before := workflowengine.EngineBypassCount(backlogdto.CallerDebug)
 	_, err := h.storage.DebugForce(ctx, item.ID, domain.BacklogStatusDone, instance.TriggeredByUser) // idea->done has no edge
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusDone), h.status(t, item.ID))
@@ -493,7 +494,7 @@ func TestDebugForce_WritesAnyStatusUnchecked_AndCountsBypass(t *testing.T) {
 	archived, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	require.NotNil(t, archived.ArchivedAt, "archive goes through the archive writer")
-	require.Equal(t, before+2, EngineBypassCount(backlogdto.CallerDebug))
+	require.Equal(t, before+2, workflowengine.EngineBypassCount(backlogdto.CallerDebug))
 }
 
 // --- GatedArchive, GatedUnarchive, GatedSetPRAndTransition -------------------
@@ -501,7 +502,7 @@ func TestDebugForce_WritesAnyStatusUnchecked_AndCountsBypass(t *testing.T) {
 func TestGatedArchive_ArchivesFromAnyStatus_AndBeforeCommitRunsFirst(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for _, mode := range []EngineMode{ModeOff, ModeShadow, ModeEnforce} {
+	for _, mode := range []workflowengine.EngineMode{workflowengine.ModeOff, workflowengine.ModeShadow, workflowengine.ModeEnforce} {
 		h := newGateHarness(t, mode)
 		item := h.newItem(t, domain.BacklogStatusInProgress)
 		var statusInHook string
@@ -524,7 +525,7 @@ func TestGatedArchive_ArchivesFromAnyStatus_AndBeforeCommitRunsFirst(t *testing.
 func TestGatedArchive_AlreadyArchived_DecidesOnSystemRequiredEdgeAndRewrites(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for _, mode := range []EngineMode{ModeOff, ModeShadow, ModeEnforce} {
+	for _, mode := range []workflowengine.EngineMode{workflowengine.ModeOff, workflowengine.ModeShadow, workflowengine.ModeEnforce} {
 		h := newGateHarness(t, mode)
 		item := h.newItem(t, domain.BacklogStatusReady)
 		_, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: instance.TriggeredByUser})
@@ -540,7 +541,7 @@ func TestGatedArchive_AlreadyArchived_DecidesOnSystemRequiredEdgeAndRewrites(t *
 func TestGatedArchive_BeforeCommitErrorAbortsAndWrongTargetIsRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusReady)
 	boom := errors.New("push failed")
 	_, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
@@ -557,7 +558,7 @@ func TestGatedArchive_BeforeCommitErrorAbortsAndWrongTargetIsRejected(t *testing
 func TestGatedUnarchive_RestoresToIdea_AndRejectsRequestsTheRawWriterCannotHonor(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusReady)
 	_, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID})
 	require.NoError(t, err)
@@ -576,7 +577,7 @@ func TestGatedUnarchive_RestoresToIdea_AndRejectsRequestsTheRawWriterCannotHonor
 func TestGatedSetPRAndTransition_RecordsPRInOneWrite_IsIdempotent_AndGuardsReassignment(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusReview)
 	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -608,7 +609,7 @@ func TestGatedSetPRAndTransition_RecordsPRInOneWrite_IsIdempotent_AndGuardsReass
 func TestGatedSetPRAndTransition_DeniedByOperatorGate_WritesNothingAndReportsAgentCaller(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, domain.BacklogStatusReview)
 	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
@@ -630,7 +631,7 @@ func TestGatedSetPRAndTransition_DeniedByOperatorGate_WritesNothingAndReportsAge
 
 func TestGatedSetPRAndTransition_RejectsMissingObservedAndPrecondition(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusReview)
 	pr := backlogdto.PRAssociation{URL: "u", Number: 1}
@@ -669,7 +670,7 @@ func (p *countingPublisher) forItem(id string) []BacklogItemChange {
 func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	pub := &countingPublisher{}
 	h.storage.SetItemChangePublisher(pub)
 
@@ -677,10 +678,10 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	approved := h.newStuckInProgressItem(t)
 	gated := h.newStuckInProgressItem(t)
 
-	edge, ok := h.cfg.cache.Get(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
+	ids, ok := h.cfg.CachedGateIDs(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	require.True(t, ok)
-	require.Len(t, edge.Gates, 1)
-	_, err := RecordGateApproval(ctx, stagecfg.NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), edge.Gates[0].ID, "operator", true)
+	require.Len(t, ids, 1)
+	_, err := RecordGateApproval(ctx, stagecfg.NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), ids[0], "operator", true)
 	require.NoError(t, err)
 
 	moved, err := h.storage.GatedReconcileStuck(ctx)
@@ -711,7 +712,7 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenIdle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 
 	moved, err := h.storage.GatedReconcileStuck(ctx)
 	require.NoError(t, err)
@@ -729,19 +730,19 @@ func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenId
 
 func TestCreateBacklogItemForDebug_CreatesAtAnyStatus_AndCountsDebugCreate(t *testing.T) {
 	// Not parallel: EngineBypassCount is process-wide, so a parallel test using the same caller would bump it between the two reads.
-	h := newGateHarness(t, ModeEnforce)
-	before := EngineBypassCount(backlogdto.CallerDebugCreate)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
+	before := workflowengine.EngineBypassCount(backlogdto.CallerDebugCreate)
 
 	item, err := h.storage.CreateBacklogItemForDebug(context.Background(), backlogdto.BacklogItemData{Title: "seeded", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	require.Equal(t, string(domain.BacklogStatusReview), h.status(t, item.ID))
-	require.Equal(t, before+1, EngineBypassCount(backlogdto.CallerDebugCreate))
+	require.Equal(t, before+1, workflowengine.EngineBypassCount(backlogdto.CallerDebugCreate))
 }
 
 func TestGatedUnarchive_StaleObservedLosesCAS_AndNeverArchivedIsRejected(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, ModeOff)
+	h := newGateHarness(t, workflowengine.ModeOff)
 	item := h.newItem(t, domain.BacklogStatusReady)
 	_, err := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorArchiveRPC, ItemID: item.ID})
 	require.NoError(t, err)

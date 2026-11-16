@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // remediationBackoffSchedule is the gap BEFORE each numbered attempt after
@@ -528,7 +529,7 @@ func (s *Storage) resolveLiftedDenial(ctx context.Context, itemID string) {
 func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (backlogdto.GateVerdict, bool) {
 	g := s.gate.Load()
 	spec, known := domain.LookupTransitionCaller(domain.TransitionCaller(d.Caller))
-	if g == nil || !known || g.engine.ModeFor(spec.Class) != ModeEnforce {
+	if g == nil || !known || g.engine.ModeFor(spec.Class) != workflowengine.ModeEnforce {
 		return backlogdto.GateVerdict{}, false
 	}
 	item, err := s.GetBacklogItem(ctx, itemID)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Task 1.5.1c: the archive (and off-graph recovery) edges join the system-required
@@ -14,7 +15,7 @@ import (
 func TestSystemRequiredEdges_ArchiveAndRecoveryGroupsStayOutOfTableSeedAndAllowedList(t *testing.T) {
 	t.Parallel()
 	valid := domain.ValidTransitions()
-	h := newSeededSelectorHarness(t, ModeEnforce)
+	h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 
 	for _, from := range []domain.BacklogStatus{domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
 		require.Falsef(t, valid[from][domain.BacklogStatusArchived], "validTransitions must not gain %s->archived", from)
@@ -29,7 +30,7 @@ func TestSystemRequiredEdges_ArchiveAndRecoveryGroupsStayOutOfTableSeedAndAllowe
 	for _, from := range []domain.BacklogStatus{domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
 		require.NotContainsf(t, h.sel.AllowedTransitions(from, nil), domain.BacklogStatusArchived, "%s allowed list", from)
 	}
-	for _, e := range systemRequiredOffGraph {
+	for _, e := range workflowengine.SystemRequiredOffGraph {
 		require.Falsef(t, valid[e.From][e.To], "%s->%s is off-graph by definition", e.From, e.To)
 		require.Truef(t, h.sel.CanTransition(e.From, e.To, nil), "stale seed: %s->%s", e.From, e.To)
 		require.NotContainsf(t, h.sel.AllowedTransitions(e.From, nil), e.To, "%s allowed list", e.From)

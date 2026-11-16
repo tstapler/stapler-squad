@@ -42,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Delays before the startup transcript backfill begins (live file changes are
@@ -799,7 +800,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// WorkflowEngine governs backlog state transitions; constructed once and shared
 	// by the service layer.
-	defaultWorkflowEngine := session.NewDefaultWorkflowEngine()
+	defaultWorkflowEngine := workflowengine.NewDefaultWorkflowEngine()
 
 	engines := buildBacklogEngines(storage)
 

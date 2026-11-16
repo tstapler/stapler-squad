@@ -76,7 +76,7 @@ The RPC (and so the banner) returns `not_found: feature "backlog" is not enabled
 
 ### Soak parameters
 
-The service holds these values as constants (`session/workflow_engine_soak.go`), so a verdict cannot be tuned to pass. The owner approved them on 2026-10-17.
+The service holds these values as constants (`session/workflowengine/workflow_engine_soak.go`), so a verdict cannot be tuned to pass. The owner approved them on 2026-10-17.
 
 | Parameter | Value |
 |---|---|

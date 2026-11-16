@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 // workflow_engine_bypass.go implements workflow_engine_bypass_total{caller}
 // (ADR-007 D9): a count of status writes made through an exempt entry point

@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func TestForkPressureHealthStatus(t *testing.T) {
@@ -149,7 +150,7 @@ func TestHandleActuatorDB_ReportsEntPool(t *testing.T) {
 
 func TestHandleActuatorMetrics_ShowsEngineBypassCounter(t *testing.T) {
 	const caller = domain.TransitionCaller("actuator_test_caller")
-	session.RecordEngineBypass(caller)
+	workflowengine.RecordEngineBypass(caller)
 
 	rec := httptest.NewRecorder()
 	handleActuatorMetrics(rec, httptest.NewRequest(http.MethodGet, "/actuator/metrics", nil))
@@ -192,24 +193,24 @@ func TestWriteGitBackendSoak_JSONAndText(t *testing.T) {
 
 var soakTestNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
-func soakReadyLedger() session.ShadowLedger {
-	cl := &session.ClassLedger{
+func soakReadyLedger() workflowengine.ShadowLedger {
+	cl := &workflowengine.ClassLedger{
 		Calls: map[string]int64{"CanTransition|transition": 300}, Divergence: map[string]int64{},
-		NotCompared: map[string]int64{}, ConfigSeen: map[string]int64{session.ConfigSeeded: 300},
-		Edges: map[string]session.EdgeStats{}, FirstSampleAt: soakTestNow.Add(-8 * 24 * time.Hour),
+		NotCompared: map[string]int64{}, ConfigSeen: map[string]int64{workflowengine.ConfigSeeded: 300},
+		Edges: map[string]workflowengine.EdgeStats{}, FirstSampleAt: soakTestNow.Add(-8 * 24 * time.Hour),
 	}
-	for _, edge := range session.ExpectedEdgesForClass(domain.ClassOperator) {
-		cl.Edges[session.EdgeKey(edge.From, edge.To)] = session.EdgeStats{TransitionSamples: 25}
+	for _, edge := range workflowengine.ExpectedEdgesForClass(domain.ClassOperator) {
+		cl.Edges[workflowengine.EdgeKey(edge.From, edge.To)] = workflowengine.EdgeStats{TransitionSamples: 25}
 	}
-	return session.ShadowLedger{
+	return workflowengine.ShadowLedger{
 		Version: 1, BinaryStarts: []time.Time{soakTestNow.Add(-8 * 24 * time.Hour)},
-		Classes: map[string]*session.ClassLedger{string(domain.ClassOperator): cl},
+		Classes: map[string]*workflowengine.ClassLedger{string(domain.ClassOperator): cl},
 	}
 }
 
-func soakTestSource(l session.ShadowLedger, err error) *WorkflowEngineSoakSource {
+func soakTestSource(l workflowengine.ShadowLedger, err error) *WorkflowEngineSoakSource {
 	return &WorkflowEngineSoakSource{
-		Ledger: func() (session.ShadowLedger, error) { return l, err },
+		Ledger: func() (workflowengine.ShadowLedger, error) { return l, err },
 		Now:    func() time.Time { return soakTestNow }, ReproPath: "/cfg/ledger.json",
 	}
 }
@@ -227,9 +228,9 @@ func soakExit(rec *httptest.ResponseRecorder) string {
 
 func TestSoakStatus_ExitsOne_WhenZeroShadowCalls_NoEvidence(t *testing.T) {
 	t.Parallel()
-	for name, l := range map[string]session.ShadowLedger{
-		"fresh ledger":   {Version: 1, Classes: map[string]*session.ClassLedger{}},
-		"shadow was off": {Version: 1, BinaryStarts: []time.Time{soakTestNow.Add(-30 * 24 * time.Hour)}, Classes: map[string]*session.ClassLedger{}},
+	for name, l := range map[string]workflowengine.ShadowLedger{
+		"fresh ledger":   {Version: 1, Classes: map[string]*workflowengine.ClassLedger{}},
+		"shadow was off": {Version: 1, BinaryStarts: []time.Time{soakTestNow.Add(-30 * 24 * time.Hour)}, Classes: map[string]*workflowengine.ClassLedger{}},
 	} {
 		rec := getSoak(t, soakTestSource(l, nil), "format=text&class=operator")
 		if soakExit(rec) != "1" || !strings.Contains(rec.Body.String(), "no evidence") {
@@ -253,18 +254,18 @@ func TestSoakStatus_ExitCodes_ReadyNotReadyUnreachable(t *testing.T) {
 	}
 
 	edited := soakReadyLedger()
-	edited.Classes["operator"].ConfigSeen[session.ConfigEdited] = 3
+	edited.Classes["operator"].ConfigSeen[workflowengine.ConfigEdited] = 3
 	var got workflowEngineReport
 	rec = getSoak(t, soakTestSource(edited, nil), "class=operator")
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Verdicts[0].ConfigWindow != session.ConfigEdited {
+	if got.Verdicts[0].ConfigWindow != workflowengine.ConfigEdited {
 		t.Errorf("a window spanning an edit must be labeled edited, got %q", got.Verdicts[0].ConfigWindow)
 	}
 
 	stateful := soakReadyLedger()
-	stateful.Classes["operator"].Edges["review->done"] = session.EdgeStats{TransitionSamples: 50, StatefulSkips: 50}
+	stateful.Classes["operator"].Edges["review->done"] = workflowengine.EdgeStats{TransitionSamples: 50, StatefulSkips: 50}
 	rec = getSoak(t, soakTestSource(stateful, nil), "format=text&class=operator")
 	if soakExit(rec) != "1" || !strings.Contains(rec.Body.String(), "review->done UNVERIFIED in shadow") {
 		t.Errorf("stateful edges must be listed UNVERIFIED and block READY, got exit=%q body=%s", soakExit(rec), rec.Body.String())
@@ -273,7 +274,7 @@ func TestSoakStatus_ExitCodes_ReadyNotReadyUnreachable(t *testing.T) {
 	if rec := getSoak(t, nil, "class=operator"); rec.Code != http.StatusServiceUnavailable || soakExit(rec) != "2" {
 		t.Errorf("an unwired actuator must read as unreachable (503, exit 2), got %d exit=%q", rec.Code, soakExit(rec))
 	}
-	if rec := getSoak(t, soakTestSource(session.ShadowLedger{}, errors.New("ledger read failed")), "class=operator"); soakExit(rec) != "2" {
+	if rec := getSoak(t, soakTestSource(workflowengine.ShadowLedger{}, errors.New("ledger read failed")), "class=operator"); soakExit(rec) != "2" {
 		t.Errorf("a ledger error is UNAVAILABLE (exit 2), never READY, got %q", soakExit(rec))
 	}
 }
@@ -282,16 +283,18 @@ func TestSoakStatus_ExitsOne_WhenFloorSpanOrExpectedEdgeUnmet(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name    string
-		mutate  func(*session.ClassLedger, *session.ShadowLedger)
+		mutate  func(*workflowengine.ClassLedger, *workflowengine.ShadowLedger)
 		failure string
 	}{
-		{"below floor", func(c *session.ClassLedger, _ *session.ShadowLedger) { c.Calls["CanTransition|transition"] = 99 }, "floor is 100"},
-		{"span shorter than W", func(c *session.ClassLedger, l *session.ShadowLedger) {
+		{"below floor", func(c *workflowengine.ClassLedger, _ *workflowengine.ShadowLedger) {
+			c.Calls["CanTransition|transition"] = 99
+		}, "floor is 100"},
+		{"span shorter than W", func(c *workflowengine.ClassLedger, l *workflowengine.ShadowLedger) {
 			c.FirstSampleAt = soakTestNow.Add(-24 * time.Hour)
 			l.BinaryStarts = []time.Time{soakTestNow.Add(-24 * time.Hour)}
 		}, "window W is 168h"},
-		{"expected edge below N", func(c *session.ClassLedger, _ *session.ShadowLedger) {
-			c.Edges["ready->queued"] = session.EdgeStats{TransitionSamples: 19}
+		{"expected edge below N", func(c *workflowengine.ClassLedger, _ *workflowengine.ShadowLedger) {
+			c.Edges["ready->queued"] = workflowengine.EdgeStats{TransitionSamples: 19}
 		}, "expected edge ready->queued has 19 of 20"},
 	}
 	for _, tc := range cases {
@@ -304,9 +307,9 @@ func TestSoakStatus_ExitsOne_WhenFloorSpanOrExpectedEdgeUnmet(t *testing.T) {
 	}
 
 	l := soakReadyLedger()
-	l.Classes["operator"].Edges["ready->queued"] = session.EdgeStats{TransitionSamples: 19}
+	l.Classes["operator"].Edges["ready->queued"] = workflowengine.EdgeStats{TransitionSamples: 19}
 	src := soakTestSource(l, nil)
-	src.Acks = func() session.SoakAcks { return session.SoakAcks{Edges: []string{"ready->queued"}} }
+	src.Acks = func() workflowengine.SoakAcks { return workflowengine.SoakAcks{Edges: []string{"ready->queued"}} }
 	if rec := getSoak(t, src, "format=text&class=operator"); soakExit(rec) != "0" {
 		t.Errorf("the same edge, acknowledged by the owner, must pass; exit=%q body=%s", soakExit(rec), rec.Body.String())
 	}
@@ -340,12 +343,12 @@ func TestSoakStatusTarget_ReportsReviewLine_FromRealLedgerThroughActuator(t *tes
 	t.Parallel()
 	dir := t.TempDir()
 	rec := shadowledger.NewShadowLedgerRecorder(dir, shadowledger.WithShadowClock(fixedClock{soakTestNow.Add(-20 * 24 * time.Hour)}))
-	rec.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
+	rec.RecordShadowCall(workflowengine.MethodCanTransition, workflowengine.PathTransition)
 	if err := rec.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	src := &WorkflowEngineSoakSource{
-		Ledger: func() (session.ShadowLedger, error) {
+		Ledger: func() (workflowengine.ShadowLedger, error) {
 			return shadowledger.ReadShadowLedgerFile(shadowledger.ShadowLedgerPath(dir))
 		},
 		Now:       func() time.Time { return soakTestNow },
@@ -365,22 +368,22 @@ type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
 
-func newConfigDiffFixture(t *testing.T) (*ent.Client, *session.ConfiguredWorkflowEngine) {
+func newConfigDiffFixture(t *testing.T) (*ent.Client, *workflowengine.ConfiguredWorkflowEngine) {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
 	client := repo.GetEntClient()
 	ctx := context.Background()
-	if err := session.EnsureBuiltInWorkflowStages(ctx, client); err != nil {
+	if err := workflowengine.EnsureBuiltInWorkflowStages(ctx, client); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := session.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(client), stagecfg.NewEntGateSatisfactionRepository(client), nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(client), stagecfg.NewEntGateSatisfactionRepository(client), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client, cfg
 }
 
-func setEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to string, enabled bool) {
+func setEdge(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to string, enabled bool) {
 	t.Helper()
 	n, err := client.StageTransition.Update().Where(
 		stagetransition.HasFromStageWith(backlogstage.Slug(from)), stagetransition.HasToStageWith(backlogstage.Slug(to)),
@@ -458,7 +461,7 @@ func TestConfigDiff_ListsStrandedItems_WhenOutgoingEdgesDisabled(t *testing.T) {
 		t.Fatalf("stranded items = %+v, want exactly the refining item", got.StrandedItems)
 	}
 	s := got.StrandedItems[0]
-	if s.ItemHash != session.HashItemID(item.ID.String()) || s.Status != "refining" || len(s.LostEdges) != 1 || s.LostEdges[0] != "refining->ready" {
+	if s.ItemHash != workflowengine.HashItemID(item.ID.String()) || s.Status != "refining" || len(s.LostEdges) != 1 || s.LostEdges[0] != "refining->ready" {
 		t.Errorf("stranded item = %+v", s)
 	}
 	if strings.Contains(rec.Body.String(), "secret title") || strings.Contains(rec.Body.String(), item.ID.String()) || strings.Contains(rec.Body.String(), intact.ID.String()) {
@@ -506,17 +509,17 @@ func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNew
 	t.Parallel()
 	dir := t.TempDir()
 	rec := shadowledger.NewShadowLedgerRecorder(dir, shadowledger.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
-	rec.RecordShadowCallFor(domain.ClassAgent, session.MethodValidateGates, session.PathTransition)
-	rec.RecordDivergenceFor(domain.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
-	rec.RecordObservation(session.ShadowObservation{
-		Method: session.MethodValidateGates, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusInProgress,
-		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: domain.ClassAgent, Caller: domain.CallerMCPResumeWork,
+	rec.RecordShadowCallFor(domain.ClassAgent, workflowengine.MethodValidateGates, workflowengine.PathTransition)
+	rec.RecordDivergenceFor(domain.ClassAgent, workflowengine.MethodValidateGates, workflowengine.ClassGuardNew, workflowengine.ConfigSeeded, workflowengine.PathTransition)
+	rec.RecordObservation(workflowengine.ShadowObservation{
+		Method: workflowengine.MethodValidateGates, Path: workflowengine.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusInProgress,
+		Class: workflowengine.ClassGuardNew, Config: workflowengine.ConfigSeeded, CallerClass: domain.ClassAgent, Caller: domain.CallerMCPResumeWork,
 	})
 	if err := rec.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	src := &WorkflowEngineSoakSource{
-		Ledger: func() (session.ShadowLedger, error) {
+		Ledger: func() (workflowengine.ShadowLedger, error) {
 			return shadowledger.ReadShadowLedgerFile(shadowledger.ShadowLedgerPath(dir))
 		},
 		Now: func() time.Time { return soakTestNow },

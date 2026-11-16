@@ -9,9 +9,9 @@ go_library(
     deps = [
         "//config",
         "//log",
-        "//session",
         "//session/domain",
         "//session/hostclaim",
+        "//session/workflowengine",
     ],
 )
 
@@ -34,6 +34,7 @@ go_test(
         "//session/domain",
         "//session/internal/sessiontest",
         "//session/stagecfg",
+        "//session/workflowengine",
         "//tools/bzl/ent",
         "//tools/bzl/ent:backlogstage",
         "//tools/bzl/ent:stagetransition",
