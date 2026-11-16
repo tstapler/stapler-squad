@@ -16,6 +16,7 @@ import (
 	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -1401,7 +1402,7 @@ func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*backlogdto
 	if err != nil {
 		return nil, err
 	}
-	data := itemSourceToData(src)
+	data := backlogstore.ItemSourceToData(src)
 	return &data, nil
 }
 

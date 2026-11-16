@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -45,13 +46,14 @@ import (
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers), Markers (flow markers) and PRStore (pull requests) methods are
+	// Store (webhooks), Repo (guidance requests) and Triggers (wake triggers), Markers (flow markers), PRStore (pull requests) and Backlog (item sources) methods are
 	// promoted; see initStores.
 	*webhookstore.Store
 	*guidancestore.Repo
 	*wakestore.Triggers
 	*markerstore.Markers
 	*sessionpr.PRStore
+	*backlogstore.Backlog
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -67,10 +69,6 @@ type EntRepository struct {
 
 	// migrations overrides DefaultStartupMigrations (nil = use the default); set via WithMigrations.
 	migrations []Migration
-
-	// backlogHooks holds the late-bound, nil-safe publisher/callback/chain ports
-	// the backlog mutations call after commit (see BacklogHooks).
-	backlogHooks BacklogHooks
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
@@ -276,6 +274,7 @@ func (r *EntRepository) initStores() {
 	r.Triggers = wakestore.New(r.Client)
 	r.Markers = markerstore.New(r.Client)
 	r.PRStore = sessionpr.New(r.Client)
+	r.Backlog = backlogstore.New(r.Client)
 	r.SetDriver(r.driver)
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
 		item := BacklogItemToData(row)

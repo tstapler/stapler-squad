@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"sync/atomic"
@@ -99,39 +99,5 @@ func (h *BacklogHooks) DispatchChainFire(item *backlogdto.BacklogItemData) {
 	(*f).Dispatch(item)
 }
 
-// SetItemChangePublisher wires the item-change publisher (see BacklogHooks).
-func (r *EntRepository) SetItemChangePublisher(p backlogdto.ItemChangePublisher) {
-	r.backlogHooks.SetItemChangePublisher(p)
-}
-
-// SetCallbackDispatcher wires the outbound-callback dispatcher (see BacklogHooks).
-func (r *EntRepository) SetCallbackDispatcher(d backlogdto.CallbackDispatcher) {
-	r.backlogHooks.SetCallbackDispatcher(d)
-}
-
-// SetChainFirer wires the pipeline-chain firer (see BacklogHooks).
-func (r *EntRepository) SetChainFirer(f backlogdto.ChainDispatcher) {
-	r.backlogHooks.SetChainFirer(f)
-}
-
-// ChainDispatcher returns the wired chain firer, or nil.
-func (r *EntRepository) ChainDispatcher() backlogdto.ChainDispatcher {
-	return r.backlogHooks.ChainDispatcher()
-}
-
-// DispatchCallback fires an outbound callback; used by TransitionBacklogItemStatus
-// and BacklogLifecycleListener.reconcileStaleWorkSessions.
-func (r *EntRepository) DispatchCallback(eventType string, payload any) {
-	r.backlogHooks.DispatchCallback(eventType, payload)
-}
-
-// publishItemChangedSnapshot publishes item as-is, without eager-loading its
-// sessions: DeleteBacklogItem must snapshot before deleting, and AppendActivityNote's
-// event never carries a full item (see publishItemChanged for the eager-loading path).
-func (r *EntRepository) publishItemChangedSnapshot(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
-	r.backlogHooks.PublishItemChanged(item, change)
-}
-
-func (r *EntRepository) dispatchChainFire(item *backlogdto.BacklogItemData) {
-	r.backlogHooks.DispatchChainFire(item)
-}
+// PublisherBound reports whether an item-change publisher is wired.
+func (h *BacklogHooks) PublisherBound() bool { return h.publisher.Load() != nil }
