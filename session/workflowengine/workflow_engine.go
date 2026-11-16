@@ -1,10 +1,9 @@
-package session
+package workflowengine
 
 import (
 	"sort"
 
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // DefaultWorkflowEngine implements WorkflowEngine using the hardcoded
@@ -14,17 +13,9 @@ type DefaultWorkflowEngine struct {
 }
 
 // NewDefaultWorkflowEngine constructs an engine backed by the static
-// validTransitions map. The map is deep-copied to avoid shared mutable state.
+// validTransitions map; domain.ValidTransitions returns a deep copy.
 func NewDefaultWorkflowEngine() *DefaultWorkflowEngine {
-	t := make(map[domain.BacklogStatus]map[domain.BacklogStatus]bool, len(instance.ValidTransitions))
-	for from, targets := range instance.ValidTransitions {
-		inner := make(map[domain.BacklogStatus]bool, len(targets))
-		for to, v := range targets {
-			inner[to] = v
-		}
-		t[from] = inner
-	}
-	return &DefaultWorkflowEngine{transitions: t}
+	return &DefaultWorkflowEngine{transitions: domain.ValidTransitions()}
 }
 
 // CanTransition implements WorkflowEngine. fallback is unused: the built-in

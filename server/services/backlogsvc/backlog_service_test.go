@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -891,7 +892,7 @@ func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMod
 		PipelineMode: "quick",
 	}
 
-	p := backlogItemToProto(item, session.NewDefaultWorkflowEngine(), nil)
+	p := backlogItemToProto(item, workflowengine.NewDefaultWorkflowEngine(), nil)
 
 	require.NotNil(t, p.PipelineMode)
 	assert.Equal(t, "quick", *p.PipelineMode)
@@ -927,7 +928,7 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 		},
 	}
 
-	p := backlogItemToProto(item, session.NewDefaultWorkflowEngine(), nil)
+	p := backlogItemToProto(item, workflowengine.NewDefaultWorkflowEngine(), nil)
 
 	require.Len(t, p.StatusEvents, 2)
 	require.NotNil(t, p.StatusEvents[0].Note)
@@ -963,11 +964,11 @@ func TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCusto
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
 	stageRepo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
 	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
 	fromStage, err := stageRepo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
@@ -1092,7 +1093,7 @@ func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyS
 
 	for _, status := range statuses {
 		t.Run(string(status), func(t *testing.T) {
-			engine := session.NewDefaultWorkflowEngine()
+			engine := workflowengine.NewDefaultWorkflowEngine()
 			summary := &backlogdto.BacklogItemSummary{ID: "item-1", Status: status}
 			summaryProto := backlogItemSummaryToProto(summary, engine, nil)
 
@@ -1128,7 +1129,7 @@ func TestBacklogItemSummaryToProto_should_SetPlanGatingFields(t *testing.T) {
 		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
 		PlanRejectionReason: "needs more detail",
 	}
-	engine := session.NewDefaultWorkflowEngine()
+	engine := workflowengine.NewDefaultWorkflowEngine()
 	summaryProto := backlogItemSummaryToProto(summary, engine, nil)
 
 	full := &backlogdto.BacklogItemData{

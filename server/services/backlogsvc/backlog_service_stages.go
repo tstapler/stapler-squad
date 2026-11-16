@@ -21,10 +21,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // stageToProto converts a session.StageData to its proto representation.
@@ -220,7 +220,7 @@ func (s *BacklogService) stageHostsSystemRequiredEdge(ctx context.Context, slug 
 	}
 	for _, t := range all {
 		if (t.FromStageSlug == slug || t.ToStageSlug == slug) &&
-			session.IsSystemRequired(domain.BacklogStatus(t.FromStageSlug), domain.BacklogStatus(t.ToStageSlug)) {
+			workflowengine.IsSystemRequired(domain.BacklogStatus(t.FromStageSlug), domain.BacklogStatus(t.ToStageSlug)) {
 			return true
 		}
 	}

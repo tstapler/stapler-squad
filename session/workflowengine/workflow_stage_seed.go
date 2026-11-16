@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 // workflow_stage_seed.go — boot-time, idempotent seed of the built-in 9-stage
 // workflow graph (BacklogStage + StageTransition rows). Mirrors

@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func TestGetPendingGates_should_ReturnNotFound_When_ItemDoesNotExist(t *testing.T) {
@@ -37,11 +38,11 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
 	repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
 	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	engine, err := session.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
 	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
@@ -65,15 +66,15 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 // can add a custom stage/transition/gate directly, mirroring
 // newStageCRUDTestService's shape but wiring the engine into svc.engine (not
 // just svc.stageConfigEngine), which is what GetPendingGates actually reads.
-func newGatesTestService(t *testing.T) (*BacklogService, stagecfg.StageCRUDRepository, *session.ConfiguredWorkflowEngine, *session.Storage) {
+func newGatesTestService(t *testing.T) (*BacklogService, stagecfg.StageCRUDRepository, *workflowengine.ConfiguredWorkflowEngine, *session.Storage) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
 	repo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
 	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	engine, err := session.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(repo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
 	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)

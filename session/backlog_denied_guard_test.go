@@ -22,6 +22,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // --- fixtures ----------------------------------------------------------------
@@ -39,7 +40,7 @@ func denLiftGates(t *testing.T, h *gateHarness) {
 
 func TestHasOpenTransitionDenied_should_MatchOnlyARowWhoseFromIsTheCurrentStatus(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusIdea)
 
@@ -59,7 +60,7 @@ func TestHasOpenTransitionDenied_should_MatchOnlyARowWhoseFromIsTheCurrentStatus
 
 func TestHasOpenTransitionDenied_should_IgnoreADefaultGuardDenial(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	item := h.newItem(t, domain.BacklogStatusReady)
 	denOpenDenial(t, h, item.ID, domain.CallerAttachSessionToItem, domain.BacklogStatusReady, domain.BacklogStatusInProgress, backlogdto.DeniedDefaultGuard)
 
@@ -71,7 +72,7 @@ func TestHasOpenTransitionDenied_should_IgnoreADefaultGuardDenial(t *testing.T) 
 
 func TestHasOpenTransitionDenied_should_IgnoreASnoozedRow(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
@@ -88,7 +89,7 @@ func TestHasOpenTransitionDenied_should_IgnoreASnoozedRow(t *testing.T) {
 
 func TestTransitionDenialHolds_should_HoldWhileDeniedAndResolveTheRowOnceLifted(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item := h.newItem(t, domain.BacklogStatusIdea)
@@ -104,21 +105,21 @@ func TestTransitionDenialHolds_should_HoldWhileDeniedAndResolveTheRowOnceLifted(
 
 func TestTransitionDenialHolds_should_Release_When_TheClassIsNoLongerEnforced(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item := h.newItem(t, domain.BacklogStatusIdea)
 	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
 	require.True(t, h.storage.TransitionDenialHolds(ctx, item))
 
-	h.sel.Modes = allClasses(ModeShadow)
+	h.sel.Modes = allClasses(workflowengine.ModeShadow)
 
 	assert.False(t, h.storage.TransitionDenialHolds(ctx, item), "rolling the flag back to Shadow frees the item")
 }
 
 func TestRedriveTransitionDenials_should_MoveTheItemThroughTheGate_When_TheGateIsSatisfied(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item := h.newItem(t, domain.BacklogStatusIdea)
@@ -140,7 +141,7 @@ func TestRedriveTransitionDenials_should_MoveTheItemThroughTheGate_When_TheGateI
 
 func TestRedriveTransitionDenials_should_OnlyResolveTheRow_When_TheCallerIsNotAPureStatusWrite(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	denBlock(t, h, domain.BacklogStatusQueued, domain.BacklogStatusInProgress)
 	item := h.newItem(t, domain.BacklogStatusQueued)
@@ -155,7 +156,7 @@ func TestRedriveTransitionDenials_should_OnlyResolveTheRow_When_TheCallerIsNotAP
 
 func TestRedriveTransitionDenials_should_ReReportWithTheNewReason_When_TheTargetStageWasDeleted(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
 	ctx := context.Background()
 	rigs := denialRigs()
 	item, to := rigs[len(rigs)-1].setup(t, h) // the target-stage-removed rig

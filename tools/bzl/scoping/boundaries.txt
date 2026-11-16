@@ -46,3 +46,5 @@ session/markerstore !server
 session/markerstore !github
 session/stagecfg !server
 session/stagecfg !github
+session/workflowengine !server
+session/workflowengine !github

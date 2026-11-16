@@ -8,11 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // denyAllEngine answers every transition question with "no"; it proves the
 // SyncLoop consults the engine it was given rather than a private default.
-type denyAllEngine struct{ DefaultWorkflowEngine }
+type denyAllEngine struct {
+	workflowengine.DefaultWorkflowEngine
+}
 
 func (denyAllEngine) CanTransition(domain.BacklogStatus, domain.BacklogStatus, *domain.StageConfigSnapshot) bool {
 	return false

@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
@@ -560,7 +561,7 @@ func (s *BacklogService) SetEventBus(b *events.EventBus) {
 // manager is unavailable.
 func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine domain.WorkflowEngine, pipelineEngine pipeline.PipelineEngine, pipelineModeRepo stagecfg.PipelineModeRepository) *BacklogService {
 	if engine == nil {
-		engine = session.NewDefaultWorkflowEngine()
+		engine = workflowengine.NewDefaultWorkflowEngine()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BacklogService{

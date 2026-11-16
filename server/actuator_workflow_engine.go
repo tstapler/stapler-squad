@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // WorkflowEngineSoakSource is everything /actuator/workflow-engine reads. Wire
@@ -21,11 +21,11 @@ import (
 // available" rather than a guess.
 type WorkflowEngineSoakSource struct {
 	// Ledger returns the merged shadow ledger (live counts plus the persisted window).
-	Ledger func() (session.ShadowLedger, error)
+	Ledger func() (workflowengine.ShadowLedger, error)
 	// ConfigDiff returns the live-versus-seed diff and the stranded-item preview.
-	ConfigDiff func(ctx context.Context) (session.ConfigDiff, []session.StrandedItem, error)
+	ConfigDiff func(ctx context.Context) (workflowengine.ConfigDiff, []workflowengine.StrandedItem, error)
 	// Acks returns the owner acknowledgements recorded in the runbook.
-	Acks func() session.SoakAcks
+	Acks func() workflowengine.SoakAcks
 	// AnyClassEnforced reports whether any class's enforce flag is on.
 	AnyClassEnforced func() bool
 	// ReproPath is where the redacted repro records live; printed on alarm.
@@ -56,16 +56,16 @@ type soakSeries struct {
 }
 
 type workflowEngineReport struct {
-	GeneratedAt       time.Time              `json:"generated_at"`
-	BinaryStartedAt   []time.Time            `json:"binary_started_at"`
-	ExitCode          int                    `json:"exit_code"`
-	Verdicts          []session.Verdict      `json:"verdicts"`
-	ShadowCalls       []soakSeries           `json:"shadow_calls_total"`
-	DivergenceTotal   []soakSeries           `json:"divergence_total"`
-	NotComparedTotal  map[string]int64       `json:"not_compared_total"`
-	ConfigDiff        *session.ConfigDiff    `json:"config_diff,omitempty"`
-	StrandedItems     []session.StrandedItem `json:"stranded_items,omitempty"`
-	ConfigDiffMessage string                 `json:"config_diff_error,omitempty"`
+	GeneratedAt       time.Time                     `json:"generated_at"`
+	BinaryStartedAt   []time.Time                   `json:"binary_started_at"`
+	ExitCode          int                           `json:"exit_code"`
+	Verdicts          []workflowengine.Verdict      `json:"verdicts"`
+	ShadowCalls       []soakSeries                  `json:"shadow_calls_total"`
+	DivergenceTotal   []soakSeries                  `json:"divergence_total"`
+	NotComparedTotal  map[string]int64              `json:"not_compared_total"`
+	ConfigDiff        *workflowengine.ConfigDiff    `json:"config_diff,omitempty"`
+	StrandedItems     []workflowengine.StrandedItem `json:"stranded_items,omitempty"`
+	ConfigDiffMessage string                        `json:"config_diff_error,omitempty"`
 }
 
 func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *WorkflowEngineSoakSource) {
@@ -91,7 +91,7 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 	ledger, ledgerErr := src.Ledger()
 	rep := workflowEngineReport{GeneratedAt: now.UTC(), BinaryStartedAt: ledger.BinaryStarts}
 	for _, c := range classes {
-		p := session.DefaultSoakParams(c, now)
+		p := workflowengine.DefaultSoakParams(c, now)
 		p.ReproPath = src.ReproPath
 		if src.Acks != nil {
 			p.Acks = src.Acks()
@@ -100,9 +100,9 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 		if src.AnyClassEnforced != nil {
 			p.AnyClassEnforced = src.AnyClassEnforced()
 		}
-		rep.Verdicts = append(rep.Verdicts, session.EvaluateSoakFromSource(c, func() (session.ShadowLedger, error) { return ledger, ledgerErr }, p))
+		rep.Verdicts = append(rep.Verdicts, workflowengine.EvaluateSoakFromSource(c, func() (workflowengine.ShadowLedger, error) { return ledger, ledgerErr }, p))
 	}
-	rep.ExitCode = session.OverallSoakExit(rep.Verdicts)
+	rep.ExitCode = workflowengine.OverallSoakExit(rep.Verdicts)
 	rep.ShadowCalls, rep.DivergenceTotal, rep.NotComparedTotal = soakSeriesFrom(ledger)
 	if r.URL.Query().Get("config_diff") != "" {
 		fillConfigDiff(r.Context(), src, &rep)
@@ -125,15 +125,15 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 const maxSoakAckBytes = 64 << 10
 
 // readSoakAckBody parses the --ack-file a POST carries; a GET has none.
-func readSoakAckBody(w http.ResponseWriter, r *http.Request) (session.SoakAckFile, error) {
+func readSoakAckBody(w http.ResponseWriter, r *http.Request) (workflowengine.SoakAckFile, error) {
 	if r.Method != http.MethodPost {
-		return session.SoakAckFile{}, nil
+		return workflowengine.SoakAckFile{}, nil
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSoakAckBytes))
 	if err != nil {
-		return session.SoakAckFile{}, fmt.Errorf("ack file unreadable: %w", err)
+		return workflowengine.SoakAckFile{}, fmt.Errorf("ack file unreadable: %w", err)
 	}
-	return session.ParseSoakAckFile(data)
+	return workflowengine.ParseSoakAckFile(data)
 }
 
 func fillConfigDiff(ctx context.Context, src *WorkflowEngineSoakSource, rep *workflowEngineReport) {
@@ -149,7 +149,7 @@ func fillConfigDiff(ctx context.Context, src *WorkflowEngineSoakSource, rep *wor
 	rep.ConfigDiff, rep.StrandedItems = &d, stranded
 }
 
-func soakSeriesFrom(l session.ShadowLedger) (calls, divergences []soakSeries, notCompared map[string]int64) {
+func soakSeriesFrom(l workflowengine.ShadowLedger) (calls, divergences []soakSeries, notCompared map[string]int64) {
 	notCompared = map[string]int64{}
 	classNames := make([]string, 0, len(l.Classes))
 	for c := range l.Classes {
@@ -198,12 +198,12 @@ func (r workflowEngineReport) text() string {
 	return b.String()
 }
 
-func configDiffText(d session.ConfigDiff, stranded []session.StrandedItem) string {
+func configDiffText(d workflowengine.ConfigDiff, stranded []workflowengine.StrandedItem) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "live config: %s (vs built-in seed)\n", d.Label)
 	for _, sec := range []struct {
 		name string
-		diff session.SectionDiff
+		diff workflowengine.SectionDiff
 	}{{"stages", d.Stages}, {"edges", d.Edges}, {"gates", d.Gates}, {"liveness", d.Liveness}} {
 		for _, l := range sec.diff.Added {
 			fmt.Fprintf(&b, "  + %s: %s\n", sec.name, l)
@@ -226,16 +226,16 @@ func configDiffText(d session.ConfigDiff, stranded []session.StrandedItem) strin
 // NewWorkflowEngineConfigDiff builds the ConfigDiff func of a
 // WorkflowEngineSoakSource: the live stage configuration versus the seed, plus
 // the stranded-item preview under the enforce composition. Read-only.
-func NewWorkflowEngineConfigDiff(client *ent.Client, cfg *session.ConfiguredWorkflowEngine) func(ctx context.Context) (session.ConfigDiff, []session.StrandedItem, error) {
-	return func(ctx context.Context) (session.ConfigDiff, []session.StrandedItem, error) {
-		diff, err := session.StageConfigDiff(ctx, client)
+func NewWorkflowEngineConfigDiff(client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine) func(ctx context.Context) (workflowengine.ConfigDiff, []workflowengine.StrandedItem, error) {
+	return func(ctx context.Context) (workflowengine.ConfigDiff, []workflowengine.StrandedItem, error) {
+		diff, err := workflowengine.StageConfigDiff(ctx, client)
 		if err != nil {
-			return session.ConfigDiff{}, nil, err
+			return workflowengine.ConfigDiff{}, nil, err
 		}
-		items, disabled, err := session.ListItemStatusRefs(ctx, client)
+		items, disabled, err := workflowengine.ListItemStatusRefs(ctx, client)
 		if err != nil {
-			return session.ConfigDiff{}, nil, err
+			return workflowengine.ConfigDiff{}, nil, err
 		}
-		return diff, session.StrandedItemPreview(session.NewDefaultWorkflowEngine(), cfg, items, disabled), nil
+		return diff, workflowengine.StrandedItemPreview(workflowengine.NewDefaultWorkflowEngine(), cfg, items, disabled), nil
 	}
 }

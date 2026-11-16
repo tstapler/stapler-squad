@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestReviewGateRunner_SkipReviewGate verifies that Run returns immediately
@@ -1786,7 +1787,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	// PendingGates must report the SAME outcome for this transition, replacing
 	// evaluateGate's pre-follow-up unconditional Satisfied:false placeholder.
 	stageRepo := stagecfg.NewEntStageConfigRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, repo, nil)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, repo, nil)
 	require.NoError(t, err)
 
 	statuses, pgErr := engine.PendingGates(domain.BacklogItemTransitionInput{ItemID: item.ID, Status: domain.BacklogStatus(fromStage.Slug)}, domain.BacklogStatus(toStage.Slug), nil)

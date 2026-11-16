@@ -19,8 +19,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // --- Task 1.5.9c: the four mode flags, read by the production class reader -------
@@ -40,7 +40,7 @@ var clsModeProbes = []clsModeProbe{
 
 // clsSelector builds a selector over the production per-class reader after the
 // flags in `set` were written through the production flag RPC.
-func clsSelector(t *testing.T, set map[string]bool, opts ...session.SelectorOption) *session.SwitchableWorkflowEngine {
+func clsSelector(t *testing.T, set map[string]bool, opts ...workflowengine.SelectorOption) *workflowengine.SwitchableWorkflowEngine {
 	t.Helper()
 	svc := NewFeatureFlagService()
 	for _, flag := range []string{
@@ -54,14 +54,14 @@ func clsSelector(t *testing.T, set map[string]bool, opts ...session.SelectorOpti
 		require.NoError(t, flagUpdate(svc, flag, want))
 	}
 	clock := &modeTestClock{now: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
-	return session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock), opts...)
+	return workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock), opts...)
 }
 
 // clsEnforced reports whether the class's own answer is the enforced one: the
 // operator class asks the engine today, so enforcement adds the system-required
 // archived->archived edge; an unchecked agent or system caller is allowed an
 // edge-less idea->done until its class enforces.
-func clsEnforced(t *testing.T, sel *session.SwitchableWorkflowEngine, p clsModeProbe) bool {
+func clsEnforced(t *testing.T, sel *workflowengine.SwitchableWorkflowEngine, p clsModeProbe) bool {
 	t.Helper()
 	spec, ok := domain.LookupTransitionCaller(p.caller)
 	require.True(t, ok)
@@ -77,7 +77,7 @@ func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryC
 	for _, p := range clsModeProbes {
 		svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 			rec := &countingShadow{}
-			sel := clsSelector(t, map[string]bool{config.WorkflowEngineShadowFeatureFlag: setting.(bool)}, session.WithShadowRecorder(rec))
+			sel := clsSelector(t, map[string]bool{config.WorkflowEngineShadowFeatureFlag: setting.(bool)}, workflowengine.WithShadowRecorder(rec))
 			spec, ok := domain.LookupTransitionCaller(p.caller)
 			require.True(t, ok)
 			sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)

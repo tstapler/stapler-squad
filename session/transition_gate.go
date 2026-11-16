@@ -22,17 +22,18 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 type transitionGate struct {
-	engine   *SwitchableWorkflowEngine
+	engine   *workflowengine.SwitchableWorkflowEngine
 	reporter backlogdto.TransitionDeniedReporter
 }
 
 // SetTransitionGate injects the selector and the denial reporter together, so
 // the gate can never exist without its reporter (ADR-007 D8).
-func (s *Storage) SetTransitionGate(engine *SwitchableWorkflowEngine, reporter backlogdto.TransitionDeniedReporter) error {
+func (s *Storage) SetTransitionGate(engine *workflowengine.SwitchableWorkflowEngine, reporter backlogdto.TransitionDeniedReporter) error {
 	if engine == nil || reporter == nil {
 		return fmt.Errorf("%w: the transition gate needs an engine and a reporter", backlogdto.ErrInvalidTransitionRequest)
 	}
@@ -41,7 +42,7 @@ func (s *Storage) SetTransitionGate(engine *SwitchableWorkflowEngine, reporter b
 }
 
 // TransitionGateEngine returns the injected selector, or nil while unwired.
-func (s *Storage) TransitionGateEngine() *SwitchableWorkflowEngine {
+func (s *Storage) TransitionGateEngine() *workflowengine.SwitchableWorkflowEngine {
 	if g := s.gate.Load(); g != nil {
 		return g.engine
 	}
@@ -53,7 +54,7 @@ func (s *Storage) TransitionGateWired() bool { return s.gate.Load() != nil }
 
 // unwiredEngine answers every call in Off mode (the legacy answer) when no gate
 // is injected.
-var unwiredEngine = NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), nil, nil)
+var unwiredEngine = workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, nil)
 
 // GatedTransition decides req with the engine and, when allowed, writes the new
 // status with a compare-and-swap derived from the observed "from". A denial for
@@ -205,7 +206,7 @@ func (s *Storage) gated(ctx context.Context, req backlogdto.TransitionRequest, w
 type gateCall struct {
 	req      backlogdto.TransitionRequest
 	spec     domain.TransitionCallerSpec
-	engine   *SwitchableWorkflowEngine
+	engine   *workflowengine.SwitchableWorkflowEngine
 	reporter backlogdto.TransitionDeniedReporter
 	write    gateWriter
 }
@@ -238,7 +239,7 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *backlogdt
 	}
 	updated, err = c.write(ctx, req, c.spec, item)
 	if err == nil {
-		notifyTransitionCommitted(view, backlogdto.GuardInputFor(req, item, domain.BacklogStatus(item.Status)), req.To)
+		workflowengine.NotifyTransitionCommitted(view, backlogdto.GuardInputFor(req, item, domain.BacklogStatus(item.Status)), req.To)
 	}
 	return updated, errors.Is(err, domain.ErrPreconditionFailed), err
 }
@@ -272,7 +273,7 @@ func (s *Storage) Rollback(ctx context.Context, itemID string, to domain.Backlog
 	}
 	updated, err := s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
 	if err == nil {
-		RecordEngineBypass(backlogdto.CallerRollback)
+		workflowengine.RecordEngineBypass(backlogdto.CallerRollback)
 		if g := s.gate.Load(); g != nil {
 			g.engine.ClearLatches(itemID, to, domain.BacklogStatus(precondition.ExpectedStatus))
 		}
@@ -293,7 +294,7 @@ func (s *Storage) DebugForce(ctx context.Context, itemID string, to domain.Backl
 		updated, err = s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
 	}
 	if err == nil {
-		RecordEngineBypass(backlogdto.CallerDebug)
+		workflowengine.RecordEngineBypass(backlogdto.CallerDebug)
 	}
 	return updated, err
 }
@@ -326,18 +327,18 @@ func mustGateCounter(name, desc string) metric.Int64Counter {
 	return c
 }
 
-func modeLabel(m EngineMode) string {
+func modeLabel(m workflowengine.EngineMode) string {
 	switch m {
-	case ModeShadow:
+	case workflowengine.ModeShadow:
 		return "shadow"
-	case ModeEnforce:
+	case workflowengine.ModeEnforce:
 		return "enforce"
 	default:
 		return "off"
 	}
 }
 
-func noteGateCall(class domain.CallerClass, caller domain.TransitionCaller, mode EngineMode) {
+func noteGateCall(class domain.CallerClass, caller domain.TransitionCaller, mode workflowengine.EngineMode) {
 	label := modeLabel(mode)
 	gateMu.Lock()
 	gateCallCounts[gateCallKey{class, caller, label}]++
@@ -347,7 +348,7 @@ func noteGateCall(class domain.CallerClass, caller domain.TransitionCaller, mode
 }
 
 // GateCallsTotal is the in-process workflow_engine_gate_calls_total{class,caller,mode}.
-func GateCallsTotal(class domain.CallerClass, caller domain.TransitionCaller, mode EngineMode) int64 {
+func GateCallsTotal(class domain.CallerClass, caller domain.TransitionCaller, mode workflowengine.EngineMode) int64 {
 	gateMu.Lock()
 	defer gateMu.Unlock()
 	return gateCallCounts[gateCallKey{class, caller, modeLabel(mode)}]

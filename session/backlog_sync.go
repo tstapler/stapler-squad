@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // defaultSyncInterval is the time between sync ticks.
@@ -69,7 +70,7 @@ func NewSyncLoop(storage *Storage, registry *PluginRegistry) *SyncLoop {
 		interval:       defaultSyncInterval,
 		stopCh:         make(chan struct{}),
 		keyFunc:        nil,
-		workflowEngine: NewDefaultWorkflowEngine(),
+		workflowEngine: workflowengine.NewDefaultWorkflowEngine(),
 	}
 }
 
@@ -81,7 +82,7 @@ func NewSyncLoopWithKeyProvider(storage *Storage, registry *PluginRegistry, keyF
 		interval:       defaultSyncInterval,
 		stopCh:         make(chan struct{}),
 		keyFunc:        keyFunc,
-		workflowEngine: NewDefaultWorkflowEngine(),
+		workflowEngine: workflowengine.NewDefaultWorkflowEngine(),
 	}
 }
 
@@ -334,10 +335,10 @@ func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from,
 // the write runs as, so a denial there would skip the gate and its
 // transition_denied row; the gate is the authority, so it decides instead.
 func (sl *SyncLoop) backwardPrecheckAllows(in domain.BacklogItemTransitionInput, target domain.BacklogStatus) bool {
-	if _, selector := sl.workflowEngine.(*SwitchableWorkflowEngine); selector {
+	if _, selector := sl.workflowEngine.(*workflowengine.SwitchableWorkflowEngine); selector {
 		return true
 	}
-	return GuardedTransitionAllowed(sl.workflowEngine, in, target)
+	return workflowengine.GuardedTransitionAllowed(sl.workflowEngine, in, target)
 }
 
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls

@@ -15,17 +15,20 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // --- fakes ---------------------------------------------------------------
 
 func newRecordingShadow() *recordingShadow {
-	return &recordingShadow{calls: map[callKey]int{}, divergences: map[divergenceKey]int{}, notCompared: map[NotComparedReason]int{}}
+	return &recordingShadow{calls: map[callKey]int{}, divergences: map[divergenceKey]int{}, notCompared: map[workflowengine.NotComparedReason]int{}}
 }
 
 type panickingShadow struct{ discardRecorder }
 
-func (panickingShadow) RecordShadowCall(EngineMethod, CallPath) { panic("recorder boom") }
+func (panickingShadow) RecordShadowCall(workflowengine.EngineMethod, workflowengine.CallPath) {
+	panic("recorder boom")
+}
 
 // failIfCalledGateRepo is a GateSatisfactionRepository that fails the test on
 // any read; the embedded nil interface panics on every other method.
@@ -49,21 +52,21 @@ func (failingStageRepo) ListEnabledStages(context.Context) ([]*ent.BacklogStage,
 
 // --- builders ------------------------------------------------------------
 
-func newSelectorHarness(t *testing.T, mode EngineMode, cfg *ConfiguredWorkflowEngine, opts ...SelectorOption) *selectorHarness {
+func newSelectorHarness(t *testing.T, mode workflowengine.EngineMode, cfg *workflowengine.ConfiguredWorkflowEngine, opts ...workflowengine.SelectorOption) *selectorHarness {
 	t.Helper()
 	h := &selectorHarness{cfg: cfg, recorder: newRecordingShadow(), warns: &lineSink{}, infos: &lineSink{}, clock: sessiontest.NewSelectorClock()}
-	base := make([]SelectorOption, 0, 4+len(opts))
+	base := make([]workflowengine.SelectorOption, 0, 4+len(opts))
 	base = append(base,
-		WithShadowRecorder(h.recorder),
-		WithSelectorClock(h.clock),
-		WithSelectorLoggers(h.warns.logf, h.infos.logf),
-		WithConfigLabeler(func() string { return "edited" }),
+		workflowengine.WithShadowRecorder(h.recorder),
+		workflowengine.WithSelectorClock(h.clock),
+		workflowengine.WithSelectorLoggers(h.warns.logf, h.infos.logf),
+		workflowengine.WithConfigLabeler(func() string { return "edited" }),
 	)
-	h.sel = NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, fixedMode{mode}, append(base, opts...)...)
+	h.sel = workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, fixedMode{mode}, append(base, opts...)...)
 	return h
 }
 
-func newSeededSelectorHarness(t *testing.T, mode EngineMode, opts ...SelectorOption) *selectorHarness {
+func newSeededSelectorHarness(t *testing.T, mode workflowengine.EngineMode, opts ...workflowengine.SelectorOption) *selectorHarness {
 	t.Helper()
 	cfg, client := newSeededConfiguredWorkflowEngine(t)
 	h := newSelectorHarness(t, mode, cfg, opts...)
@@ -75,7 +78,7 @@ func newSeededSelectorHarness(t *testing.T, mode EngineMode, opts ...SelectorOpt
 
 func TestSwitchableWorkflowEngine_ReturnsDefaultAnswer_WhenModeOffOrShadow(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []EngineMode{ModeOff, ModeShadow} {
+	for _, mode := range []workflowengine.EngineMode{workflowengine.ModeOff, workflowengine.ModeShadow} {
 		h := newSeededSelectorHarness(t, mode)
 		setEdgeEnabled(t, h.client, h.cfg, domain.BacklogStatusDone, domain.BacklogStatusRefining, false)
 
@@ -83,17 +86,17 @@ func TestSwitchableWorkflowEngine_ReturnsDefaultAnswer_WhenModeOffOrShadow(t *te
 		require.Contains(t, h.sel.AllowedTransitions(domain.BacklogStatusDone, nil), domain.BacklogStatusRefining)
 
 		want := 0
-		if mode == ModeShadow {
+		if mode == workflowengine.ModeShadow {
 			want = 1
 		}
-		key := divergenceKey{MethodCanTransition, ClassGraph, "edited", PathTransition}
+		key := divergenceKey{workflowengine.MethodCanTransition, workflowengine.ClassGraph, "edited", workflowengine.PathTransition}
 		require.Equal(t, want, h.recorder.divergences[key], "mode %d", mode)
 	}
 }
 
 func TestSwitchableWorkflowEngine_EnforceHonorsOperatorEdit_WithoutRestart(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeEnforce)
+	h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 	require.True(t, h.sel.CanTransition(domain.BacklogStatusDone, domain.BacklogStatusRefining, nil))
 
 	setEdgeEnabled(t, h.client, h.cfg, domain.BacklogStatusDone, domain.BacklogStatusRefining, false)
@@ -105,7 +108,7 @@ func TestSwitchableWorkflowEngine_EnforceHonorsOperatorEdit_WithoutRestart(t *te
 
 func TestSwitchableWorkflowEngine_EnforceKeepsBuiltInGuards_WhenSeededConfigHasNoGateRows(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeEnforce)
+	h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 	idea := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 
 	require.ErrorIs(t, h.sel.ValidateGates(idea, domain.BacklogStatusReady, nil), domain.ErrACRequired)
@@ -117,26 +120,26 @@ func TestSwitchableWorkflowEngine_EnforceKeepsBuiltInGuards_WhenSeededConfigHasN
 
 func TestSwitchableWorkflowEngine_ShadowNeverDivergesOnOrdinaryGuardDenial_WhenSeeded(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeShadow)
+	h := newSeededSelectorHarness(t, workflowengine.ModeShadow)
 	idea := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 
 	require.ErrorIs(t, h.sel.ValidateGates(idea, domain.BacklogStatusReady, nil), domain.ErrACRequired)
 
 	require.Zero(t, h.recorder.totalDivergences())
-	require.Equal(t, 1, h.recorder.calls[callKey{MethodValidateGates, PathTransition}])
+	require.Equal(t, 1, h.recorder.calls[callKey{workflowengine.MethodValidateGates, workflowengine.PathTransition}])
 }
 
 func TestSwitchableWorkflowEngine_ShadowCountsGateExtra_WhenOperatorAddsStructuralGate(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeShadow)
+	h := newSeededSelectorHarness(t, workflowengine.ModeShadow)
 	addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReady, domain.BacklogStatusInProgress, domain.GateKindStructural,
 		map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 	item := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"}
-	require.NoError(t, NewDefaultWorkflowEngine().ValidateGates(item, domain.BacklogStatusInProgress, nil), "fixture: Default must pass")
+	require.NoError(t, workflowengine.NewDefaultWorkflowEngine().ValidateGates(item, domain.BacklogStatusInProgress, nil), "fixture: Default must pass")
 
 	require.NoError(t, h.sel.ValidateGates(item, domain.BacklogStatusInProgress, nil), "shadow returns the Default answer")
 
-	require.Equal(t, 1, h.recorder.divergences[divergenceKey{MethodValidateGates, ClassGateExtra, "edited", PathTransition}])
+	require.Equal(t, 1, h.recorder.divergences[divergenceKey{workflowengine.MethodValidateGates, workflowengine.ClassGateExtra, "edited", workflowengine.PathTransition}])
 }
 
 // --- fallback --------------------------------------------------------------
@@ -144,24 +147,24 @@ func TestSwitchableWorkflowEngine_ShadowCountsGateExtra_WhenOperatorAddsStructur
 func TestSwitchableWorkflowEngine_FallsBackToDefaultGraph_WhenConfiguredCacheEmptyOrNil(t *testing.T) {
 	t.Parallel()
 	emptyRepo := NewTestEntRepository(t)
-	emptyCfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(emptyRepo.Client), nil, nil)
+	emptyCfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(emptyRepo.Client), nil, nil)
 	require.NoError(t, err)
-	loadErrCfg, err := NewConfiguredWorkflowEngine(failingStageRepo{}, nil, nil)
+	loadErrCfg, err := workflowengine.NewConfiguredWorkflowEngine(failingStageRepo{}, nil, nil)
 	require.NoError(t, err)
 
 	cases := []struct {
 		name   string
-		cfg    *ConfiguredWorkflowEngine
-		reason FallbackReason
+		cfg    *workflowengine.ConfiguredWorkflowEngine
+		reason workflowengine.FallbackReason
 	}{
-		{"cache_empty", emptyCfg, FallbackCacheEmpty},
-		{"cfg_nil", nil, FallbackCfgNil},
-		{"load_error", loadErrCfg, FallbackLoadError},
+		{"cache_empty", emptyCfg, workflowengine.FallbackCacheEmpty},
+		{"cfg_nil", nil, workflowengine.FallbackCfgNil},
+		{"load_error", loadErrCfg, workflowengine.FallbackLoadError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := newSelectorHarness(t, ModeEnforce, tc.cfg)
+			h := newSelectorHarness(t, workflowengine.ModeEnforce, tc.cfg)
 			calls := 0
 
 			require.True(t, h.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil))
@@ -186,18 +189,18 @@ func TestSwitchableWorkflowEngine_FallsBackToDefaultGraph_WhenConfiguredCacheEmp
 
 func TestSwitchableWorkflowEngine_UnionsSystemRequiredEdges_WhenLegacyDbDisablesInProgressReview(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeEnforce)
+	h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 	setEdgeEnabled(t, h.client, h.cfg, domain.BacklogStatusInProgress, domain.BacklogStatusReview, false)
 
 	require.True(t, h.sel.CanTransition(domain.BacklogStatusInProgress, domain.BacklogStatusReview, nil))
 	require.Contains(t, h.sel.AllowedTransitions(domain.BacklogStatusInProgress, nil), domain.BacklogStatusReview)
-	require.Zero(t, h.sel.FallbackTotal(FallbackCacheEmpty), "configured graph in use, not the fallback")
+	require.Zero(t, h.sel.FallbackTotal(workflowengine.FallbackCacheEmpty), "configured graph in use, not the fallback")
 }
 
 func TestSwitchableWorkflowEngine_TypedNilConfigured_AnswersFromDefault_WithoutPanic(t *testing.T) {
 	t.Parallel()
-	var cfg *ConfiguredWorkflowEngine
-	h := newSelectorHarness(t, ModeEnforce, cfg)
+	var cfg *workflowengine.ConfiguredWorkflowEngine
+	h := newSelectorHarness(t, workflowengine.ModeEnforce, cfg)
 	item := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 
 	require.NotPanics(t, func() {
@@ -206,7 +209,7 @@ func TestSwitchableWorkflowEngine_TypedNilConfigured_AnswersFromDefault_WithoutP
 		_, _ = h.sel.PendingGates(item, domain.BacklogStatusReady, nil)
 		require.ErrorIs(t, h.sel.ValidateGates(item, domain.BacklogStatusReady, nil), domain.ErrACRequired)
 	})
-	require.EqualValues(t, 4, h.sel.FallbackTotal(FallbackCfgNil))
+	require.EqualValues(t, 4, h.sel.FallbackTotal(workflowengine.FallbackCfgNil))
 }
 
 // --- override_reason -------------------------------------------------------
@@ -216,7 +219,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 
 	t.Run("operator gate is bypassed by override but blocks without it", func(t *testing.T) {
 		t.Parallel()
-		h := newSeededSelectorHarness(t, ModeEnforce)
+		h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 		addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 
 		item := passingReviewItem()
@@ -227,7 +230,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 
 	t.Run("synthetic deleted-stage gate is bypassed by override", func(t *testing.T) {
 		t.Parallel()
-		h := newSeededSelectorHarness(t, ModeEnforce)
+		h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 		snap := &domain.StageConfigSnapshot{StageName: "Gone", AllowedTransitions: []domain.BacklogStatus{domain.BacklogStatusReady}}
 		item := domain.BacklogItemTransitionInput{Status: "gone-stage"}
 
@@ -239,7 +242,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 
 	t.Run("Default guards that ignore override still deny", func(t *testing.T) {
 		t.Parallel()
-		h := newSeededSelectorHarness(t, ModeEnforce)
+		h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 		const reason = "please"
 		cases := []struct {
 			name string
@@ -261,8 +264,8 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 
 	t.Run("review to done without PASS succeeds under override exactly as under Default", func(t *testing.T) {
 		t.Parallel()
-		h := newSeededSelectorHarness(t, ModeEnforce)
-		def := NewDefaultWorkflowEngine()
+		h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
+		def := workflowengine.NewDefaultWorkflowEngine()
 		item := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview}
 
 		require.ErrorIs(t, h.sel.ValidateGates(item, domain.BacklogStatusDone, nil), domain.ErrVerdictRequired)
@@ -273,7 +276,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 
 	t.Run("override never bypasses the graph", func(t *testing.T) {
 		t.Parallel()
-		h := newSeededSelectorHarness(t, ModeEnforce)
+		h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 		require.False(t, h.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil))
 		setEdgeEnabled(t, h.client, h.cfg, domain.BacklogStatusDone, domain.BacklogStatusRefining, false)
 		require.False(t, h.sel.CanTransition(domain.BacklogStatusDone, domain.BacklogStatusRefining, nil))
@@ -284,7 +287,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 
 func TestSwitchableWorkflowEngine_LogsFromToReason_WhenTransitionDeniedByGraphOperatorGateOrDefaultGuard(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeEnforce)
+	h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 	addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReady, domain.BacklogStatusQueued, domain.GateKindHumanApproval, nil)
 
 	require.False(t, h.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil))
@@ -295,9 +298,9 @@ func TestSwitchableWorkflowEngine_LogsFromToReason_WhenTransitionDeniedByGraphOp
 	require.Contains(t, lines, "from=idea to=done reason=config_graph")
 	require.Contains(t, lines, "from=ready to=queued reason=operator_gate")
 	require.Contains(t, lines, "from=review to=done reason=default_guard")
-	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(DenialConfigGraph))
-	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(DenialOperatorGate))
-	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(DenialDefaultGuard))
+	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(workflowengine.DenialConfigGraph))
+	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(workflowengine.DenialOperatorGate))
+	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(workflowengine.DenialDefaultGuard))
 }
 
 // --- shadow safety ---------------------------------------------------------
@@ -305,25 +308,25 @@ func TestSwitchableWorkflowEngine_LogsFromToReason_WhenTransitionDeniedByGraphOp
 func TestSwitchableWorkflowEngine_ShadowDoesNoStatefulGateIo_WhenStatefulGateOnEdge(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &failIfCalledGateRepo{t: t}
-	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	from, to := newCustomTransitionWithGates(t, repo.Client, cfg,
 		[]domain.GateKind{domain.GateKindHumanApproval, domain.GateKindAutomatedReview, domain.GateKindCustom}, []bool{true, true, true})
-	h := newSelectorHarness(t, ModeShadow, cfg)
+	h := newSelectorHarness(t, workflowengine.ModeShadow, cfg)
 	item := domain.BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
 
 	require.NoError(t, h.sel.ValidateGates(item, to, nil), "Default has no gate on a custom edge")
 
-	require.Equal(t, 1, h.recorder.notCompared[NotComparedStatefulGate])
+	require.Equal(t, 1, h.recorder.notCompared[workflowengine.NotComparedStatefulGate])
 	require.Zero(t, gateRepo.calls.Load())
 	require.Zero(t, h.recorder.totalDivergences(), "skipped gates are not a divergence")
 }
 
 func TestShadow_ReturnsDefaultAnswerAndCountsError_WhenRecorderPanics(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(panickingShadow{}))
+	h := newSeededSelectorHarness(t, workflowengine.ModeShadow, workflowengine.WithShadowRecorder(panickingShadow{}))
 
 	require.True(t, h.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil))
 
@@ -335,8 +338,8 @@ func TestShadow_ReturnsDefaultAnswerAndCountsError_WhenRecorderPanics(t *testing
 
 func TestShadow_ReturnsDefaultAnswer_WhenConfiguredHasNilSnapshot(t *testing.T) {
 	t.Parallel()
-	zero := &ConfiguredWorkflowEngine{cache: &stageConfigCache{}}
-	h := newSelectorHarness(t, ModeShadow, zero)
+	zero := workflowengine.NewConfiguredWorkflowEngineEmptyCache()
+	h := newSelectorHarness(t, workflowengine.ModeShadow, zero)
 
 	require.NotPanics(t, func() {
 		require.True(t, h.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil))
@@ -347,15 +350,15 @@ func TestShadow_ReturnsDefaultAnswer_WhenConfiguredHasNilSnapshot(t *testing.T) 
 
 func TestShadow_SamplesReadPathOneInTen_AndEvaluatesEveryTransition(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeShadow)
+	h := newSeededSelectorHarness(t, workflowengine.ModeShadow)
 
 	for i := 0; i < 1000; i++ {
 		h.sel.AllowedTransitions(domain.BacklogStatusIdea, nil)
 		h.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 	}
 
-	require.Equal(t, 100, h.recorder.calls[callKey{MethodAllowedTransitions, PathRead}])
-	require.Equal(t, 1000, h.recorder.calls[callKey{MethodCanTransition, PathTransition}])
+	require.Equal(t, 100, h.recorder.calls[callKey{workflowengine.MethodAllowedTransitions, workflowengine.PathRead}])
+	require.Equal(t, 1000, h.recorder.calls[callKey{workflowengine.MethodCanTransition, workflowengine.PathTransition}])
 }
 
 // --- mode caching ----------------------------------------------------------
@@ -374,13 +377,13 @@ func TestSwitchableWorkflowEngine_ReadsModeFromTtlCache_NotConfigFileEveryCall(t
 	t.Parallel()
 	var loads atomic.Int64
 	clock := sessiontest.NewSelectorClock()
-	modes := NewCachedModeSource(func() EngineMode { loads.Add(1); return ModeShadow }, time.Second, clock)
+	modes := workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { loads.Add(1); return workflowengine.ModeShadow }, time.Second, clock)
 	gateRepo := &countingGateRepo{}
 	repo := NewTestEntRepository(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
-	cfg, err := NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
+	cfg, err := workflowengine.NewConfiguredWorkflowEngine(stagecfg.NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
-	sel := NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, modes, WithSelectorClock(clock))
+	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), cfg, modes, workflowengine.WithSelectorClock(clock))
 
 	for i := 0; i < 50; i++ {
 		sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
@@ -397,10 +400,10 @@ func TestSwitchableWorkflowEngine_ReadsModeFromTtlCache_NotConfigFileEveryCall(t
 
 func TestSwitchableWorkflowEngine_ModeOffEqualsDefaultEngine_ForAllEightyOnePairsAndGateCorpus(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeOff)
+	h := newSeededSelectorHarness(t, workflowengine.ModeOff)
 	setEdgeEnabled(t, h.client, h.cfg, domain.BacklogStatusDone, domain.BacklogStatusRefining, false)
 
-	require.Equal(t, engineDiff{}, diffEngines(t, NewDefaultWorkflowEngine(), h.sel, gateFixtureCorpus()))
+	require.Equal(t, engineDiff{}, diffEngines(t, workflowengine.NewDefaultWorkflowEngine(), h.sel, gateFixtureCorpus()))
 }
 
 // The only graph difference between Default and the composed engine on a
@@ -408,15 +411,15 @@ func TestSwitchableWorkflowEngine_ModeOffEqualsDefaultEngine_ForAllEightyOnePair
 // reaches AllowedTransitions.
 func TestEnforceAnswer_MatchesDefaultOn81PairsAndGateCorpus_ExceptSystemArchiveEdges(t *testing.T) {
 	t.Parallel()
-	h := newSeededSelectorHarness(t, ModeEnforce)
+	h := newSeededSelectorHarness(t, workflowengine.ModeEnforce)
 
-	diff := diffEngines(t, NewDefaultWorkflowEngine(), h.sel, gateFixtureCorpus())
+	diff := diffEngines(t, workflowengine.NewDefaultWorkflowEngine(), h.sel, gateFixtureCorpus())
 
 	want := make([]string, 0, 4)
 	for _, from := range []domain.BacklogStatus{domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.BacklogStatusArchived} {
 		want = append(want, fmt.Sprintf("CanTransition(%s,archived): reference=false underTest=true", from))
 	}
-	for _, e := range systemRequiredOffGraph { // added by the Story 1.5.1 edge audit
+	for _, e := range workflowengine.SystemRequiredOffGraph { // added by the Story 1.5.1 edge audit
 		want = append(want, fmt.Sprintf("CanTransition(%s,%s): reference=false underTest=true", e.From, e.To))
 	}
 	require.ElementsMatch(t, want, diff.Edges)
@@ -426,11 +429,11 @@ func TestEnforceAnswer_MatchesDefaultOn81PairsAndGateCorpus_ExceptSystemArchiveE
 // --- Story 1.5.2: class-aware selector -----------------------------------------
 
 func enforceAll(h *selectorHarness) *selectorHarness {
-	h.sel.Modes = allClasses(ModeEnforce)
+	h.sel.Modes = allClasses(workflowengine.ModeEnforce)
 	return h
 }
 func shadowAll(h *selectorHarness) *selectorHarness {
-	h.sel.Modes = allClasses(ModeShadow)
+	h.sel.Modes = allClasses(workflowengine.ModeShadow)
 	return h
 }
 func viewFor(h *selectorHarness, class domain.CallerClass, g domain.GuardPolicy) domain.WorkflowEngine {
@@ -439,22 +442,22 @@ func viewFor(h *selectorHarness, class domain.CallerClass, g domain.GuardPolicy)
 
 type classedShadow struct {
 	recordingShadow
-	obs []ShadowObservation
+	obs []workflowengine.ShadowObservation
 }
 
 func newClassedShadow() *classedShadow {
 	return &classedShadow{recordingShadow: *newRecordingShadow()}
 }
-func (c *classedShadow) RecordShadowCallFor(_ domain.CallerClass, m EngineMethod, p CallPath) {
+func (c *classedShadow) RecordShadowCallFor(_ domain.CallerClass, m workflowengine.EngineMethod, p workflowengine.CallPath) {
 	c.RecordShadowCall(m, p)
 }
-func (c *classedShadow) RecordDivergenceFor(_ domain.CallerClass, m EngineMethod, d DivergenceClass, cfg string, p CallPath) {
+func (c *classedShadow) RecordDivergenceFor(_ domain.CallerClass, m workflowengine.EngineMethod, d workflowengine.DivergenceClass, cfg string, p workflowengine.CallPath) {
 	c.RecordDivergence(m, d, cfg, p)
 }
-func (c *classedShadow) RecordNotComparedFor(_ domain.CallerClass, r NotComparedReason) {
+func (c *classedShadow) RecordNotComparedFor(_ domain.CallerClass, r workflowengine.NotComparedReason) {
 	c.RecordNotCompared(r)
 }
-func (c *classedShadow) RecordObservation(o ShadowObservation) {
+func (c *classedShadow) RecordObservation(o workflowengine.ShadowObservation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.obs = append(c.obs, o)
@@ -487,7 +490,7 @@ func TestEnforceAnswerPolicy_OverrideTruthTable_PerClassAndGuardPolicy(t *testin
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+			h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 			if tc.gated {
 				addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 			}
@@ -503,7 +506,7 @@ func TestEnforceAnswerPolicy_OverrideTruthTable_PerClassAndGuardPolicy(t *testin
 
 func TestEnforceAnswerPolicy_OverrideNeverFreesACPlanOrBlockerDenials_ForOperatorAndAgent(t *testing.T) {
 	t.Parallel()
-	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+	h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 	cases := []struct {
 		name string
 		item domain.BacklogItemTransitionInput
@@ -526,7 +529,7 @@ func TestEnforceAnswerPolicy_OverrideNeverFreesACPlanOrBlockerDenials_ForOperato
 
 func TestEnforceAnswerPolicy_AgentOverrideFreesOnlyReviewAndPRPendingToReadyAndDone(t *testing.T) {
 	t.Parallel()
-	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+	h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 	agent := viewFor(h, domain.ClassAgent, domain.GuardsBuiltIn)
 	for _, from := range []domain.BacklogStatus{domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
 		for _, to := range []domain.BacklogStatus{domain.BacklogStatusReady, domain.BacklogStatusDone} {
@@ -543,7 +546,7 @@ func TestEnforceAnswerPolicy_AgentOverrideFreesOnlyReviewAndPRPendingToReadyAndD
 
 func TestEnforceAnswerPolicy_PendingGatesOmitConfiguredGatesOnlyForOperatorOverride(t *testing.T) {
 	t.Parallel()
-	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+	h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 	addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := passingReviewItem()
 	item.OverrideReason = "owner approved"
@@ -566,13 +569,13 @@ func TestEnforceAnswerPolicy_PendingGatesOmitConfiguredGatesOnlyForOperatorOverr
 	statuses, err := viewFor(h, domain.ClassSystem, domain.GuardsNone).PendingGates(item, domain.BacklogStatusDone, nil)
 	require.NoError(t, err)
 	for _, s := range statuses {
-		require.False(t, strings.HasPrefix(s.GateID, builtInGateIDPrefix), "GuardsNone lists no Default guard status")
+		require.False(t, strings.HasPrefix(s.GateID, workflowengine.BuiltInGateIDPrefix), "GuardsNone lists no Default guard status")
 	}
 }
 
 func TestForCaller_ForwardingUsesGraphWithoutSystemRequiredUnion(t *testing.T) {
 	t.Parallel()
-	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+	h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 	setEdgeEnabled(t, h.client, h.cfg, domain.BacklogStatusInProgress, domain.BacklogStatusReview, false)
 
 	delegate, ok := domain.LookupTransitionCaller(domain.CallerMCPTransitionDelegate)
@@ -591,14 +594,14 @@ func TestForCaller_UncheckedCallerIsAllowedInOffAndShadow_AndEnforcesInEnforce(t
 	require.Equal(t, domain.LegacyUnchecked, spec.Legacy)
 	noPlan := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady}
 
-	for _, mode := range []EngineMode{ModeOff, ModeShadow} {
+	for _, mode := range []workflowengine.EngineMode{workflowengine.ModeOff, workflowengine.ModeShadow} {
 		h := newSeededSelectorHarness(t, mode)
 		h.sel.Modes = allClasses(mode)
 		v := h.sel.ForCaller(spec)
 		require.True(t, v.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil), "legacy answer is allow, mode %d", mode)
 		require.NoError(t, v.ValidateGates(noPlan, domain.BacklogStatusInProgress, nil), "mode %d", mode)
 	}
-	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+	h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 	v := h.sel.ForCaller(spec)
 	require.False(t, v.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil))
 	require.ErrorIs(t, v.ValidateGates(noPlan, domain.BacklogStatusInProgress, nil), domain.ErrPlanRequired)
@@ -607,14 +610,14 @@ func TestForCaller_UncheckedCallerIsAllowedInOffAndShadow_AndEnforcesInEnforce(t
 func TestShadow_UncheckedAgentGuardDenial_IsGuardNewLabelledWithClassAndCaller(t *testing.T) {
 	t.Parallel()
 	rec := newClassedShadow()
-	h := shadowAll(newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(rec)))
+	h := shadowAll(newSeededSelectorHarness(t, workflowengine.ModeShadow, workflowengine.WithShadowRecorder(rec)))
 	spec, _ := domain.LookupTransitionCaller(domain.CallerMCPResumeWork)
 	v := h.sel.ForCaller(spec)
 
 	require.NoError(t, v.ValidateGates(domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady}, domain.BacklogStatusInProgress, nil))
-	require.Equal(t, 1, rec.divergences[divergenceKey{MethodValidateGates, ClassGuardNew, "edited", PathTransition}])
+	require.Equal(t, 1, rec.divergences[divergenceKey{workflowengine.MethodValidateGates, workflowengine.ClassGuardNew, "edited", workflowengine.PathTransition}])
 	require.Len(t, rec.obs, 1)
-	require.Equal(t, ClassGuardNew, rec.obs[0].Class)
+	require.Equal(t, workflowengine.ClassGuardNew, rec.obs[0].Class)
 	require.Equal(t, domain.ClassAgent, rec.obs[0].CallerClass)
 	require.Equal(t, domain.CallerMCPResumeWork, rec.obs[0].Caller)
 }
@@ -622,7 +625,7 @@ func TestShadow_UncheckedAgentGuardDenial_IsGuardNewLabelledWithClassAndCaller(t
 func TestShadow_UncheckedCallerOperatorGate_IsGateExtraNotGuardNew(t *testing.T) {
 	t.Parallel()
 	rec := newClassedShadow()
-	h := shadowAll(newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(rec)))
+	h := shadowAll(newSeededSelectorHarness(t, workflowengine.ModeShadow, workflowengine.WithShadowRecorder(rec)))
 	addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReady, domain.BacklogStatusInProgress, domain.GateKindStructural,
 		map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 	spec, _ := domain.LookupTransitionCaller(domain.CallerMCPResumeWork) // agent, unchecked, ready->in_progress, built-in guards
@@ -630,19 +633,19 @@ func TestShadow_UncheckedCallerOperatorGate_IsGateExtraNotGuardNew(t *testing.T)
 
 	item := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"} // Default guard passes
 	require.NoError(t, v.ValidateGates(item, domain.BacklogStatusInProgress, nil))
-	require.Equal(t, 1, rec.divergences[divergenceKey{MethodValidateGates, ClassGateExtra, "edited", PathTransition}])
-	require.Zero(t, rec.divergences[divergenceKey{MethodValidateGates, ClassGuardNew, "edited", PathTransition}])
+	require.Equal(t, 1, rec.divergences[divergenceKey{workflowengine.MethodValidateGates, workflowengine.ClassGateExtra, "edited", workflowengine.PathTransition}])
+	require.Zero(t, rec.divergences[divergenceKey{workflowengine.MethodValidateGates, workflowengine.ClassGuardNew, "edited", workflowengine.PathTransition}])
 }
 
 func TestShadow_UncheckedCallers_SeededConfig_ZeroDivergenceExceptGuardNewForBuiltInGuardCallers(t *testing.T) {
 	t.Parallel()
 	rec := newClassedShadow()
-	h := shadowAll(newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(rec)))
-	statuses := append([]domain.BacklogStatus(nil), BuiltInStageOrder...)
+	h := shadowAll(newSeededSelectorHarness(t, workflowengine.ModeShadow, workflowengine.WithShadowRecorder(rec)))
+	statuses := append([]domain.BacklogStatus(nil), workflowengine.BuiltInStageOrder...)
 
 	known := map[string]bool{}
 	for _, k := range domain.KnownOffGraphCallerEdges() {
-		known[string(k.Caller)+"|"+EdgeKey(k.Edge.From, k.Edge.To)] = true
+		known[string(k.Caller)+"|"+workflowengine.EdgeKey(k.Edge.From, k.Edge.To)] = true
 	}
 	calls := 0
 	for _, spec := range domain.TransitionCallers() {
@@ -656,7 +659,7 @@ func TestShadow_UncheckedCallers_SeededConfig_ZeroDivergenceExceptGuardNewForBui
 				froms = statuses
 			}
 			for _, from := range froms {
-				if known[string(spec.Name)+"|"+EdgeKey(from, e.To)] {
+				if known[string(spec.Name)+"|"+workflowengine.EdgeKey(from, e.To)] {
 					continue // a tolerated caller bug (Task 1.5.5c), reported as a graph divergence by design
 				}
 				calls++
@@ -670,31 +673,31 @@ func TestShadow_UncheckedCallers_SeededConfig_ZeroDivergenceExceptGuardNewForBui
 		if o.Class == "" {
 			continue
 		}
-		require.Equalf(t, ClassGuardNew, o.Class, "%s %s->%s: only guard_new is expected", o.Caller, o.From, o.To)
+		require.Equalf(t, workflowengine.ClassGuardNew, o.Class, "%s %s->%s: only guard_new is expected", o.Caller, o.From, o.To)
 		require.NotEqualf(t, domain.ClassSystem, o.CallerClass, "%s: system callers carry GuardsNone, so no guard_new", o.Caller)
 		t.Logf("guard_new for owner acknowledgement: class=%s caller=%s %s->%s", o.CallerClass, o.Caller, o.From, o.To)
 	}
 	for k, n := range rec.divergences {
-		require.Equalf(t, ClassGuardNew, k.Class, "%+v x%d", k, n)
+		require.Equalf(t, workflowengine.ClassGuardNew, k.Class, "%+v x%d", k, n)
 	}
 }
 
 func TestModeFor_FallsBackToOperatorModeAndCapsOtherClassesAtShadow_WhenSourceIsNotClassAware(t *testing.T) {
 	t.Parallel()
-	mk := func(m EngineMode) *SwitchableWorkflowEngine {
-		return NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), nil, fixedMode{m})
+	mk := func(m workflowengine.EngineMode) *workflowengine.SwitchableWorkflowEngine {
+		return workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, fixedMode{m})
 	}
-	require.Equal(t, ModeEnforce, mk(ModeEnforce).ModeFor(domain.ClassOperator))
-	require.Equal(t, ModeShadow, mk(ModeEnforce).ModeFor(domain.ClassAgent), "no enforce flag exists for agent")
-	require.Equal(t, ModeShadow, mk(ModeShadow).ModeFor(domain.ClassSystem))
-	require.Equal(t, ModeOff, mk(ModeOff).ModeFor(domain.ClassAgent))
-	require.Equal(t, ModeOff, NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), nil, nil).ModeFor(domain.ClassOperator))
-	require.Equal(t, ModeEnforce, NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), nil, classModes{domain.ClassAgent: ModeEnforce}).ModeFor(domain.ClassAgent))
+	require.Equal(t, workflowengine.ModeEnforce, mk(workflowengine.ModeEnforce).ModeFor(domain.ClassOperator))
+	require.Equal(t, workflowengine.ModeShadow, mk(workflowengine.ModeEnforce).ModeFor(domain.ClassAgent), "no enforce flag exists for agent")
+	require.Equal(t, workflowengine.ModeShadow, mk(workflowengine.ModeShadow).ModeFor(domain.ClassSystem))
+	require.Equal(t, workflowengine.ModeOff, mk(workflowengine.ModeOff).ModeFor(domain.ClassAgent))
+	require.Equal(t, workflowengine.ModeOff, workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, nil).ModeFor(domain.ClassOperator))
+	require.Equal(t, workflowengine.ModeEnforce, workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, classModes{domain.ClassAgent: workflowengine.ModeEnforce}).ModeFor(domain.ClassAgent))
 }
 
 func TestOperatorMethods_AreTheOperatorPolicyView(t *testing.T) {
 	t.Parallel()
-	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
+	h := enforceAll(newSeededSelectorHarness(t, workflowengine.ModeEnforce))
 	addGateToSeededEdge(t, h.client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := passingReviewItem()
 	item.OverrideReason = "owner approved"
@@ -702,3 +705,11 @@ func TestOperatorMethods_AreTheOperatorPolicyView(t *testing.T) {
 	require.NoError(t, viewFor(h, domain.ClassOperator, domain.GuardsBuiltIn).ValidateGates(item, domain.BacklogStatusDone, nil))
 	require.ErrorIs(t, viewFor(h, domain.ClassAgent, domain.GuardsBuiltIn).ValidateGates(item, domain.BacklogStatusDone, nil), domain.ErrGateNotSatisfied)
 }
+
+// discardRecorder is a no-op ShadowRecorder for tests that embed it and override one method.
+type discardRecorder struct{}
+
+func (discardRecorder) RecordShadowCall(workflowengine.EngineMethod, workflowengine.CallPath) {}
+func (discardRecorder) RecordDivergence(workflowengine.EngineMethod, workflowengine.DivergenceClass, string, workflowengine.CallPath) {
+}
+func (discardRecorder) RecordNotCompared(workflowengine.NotComparedReason) {}
