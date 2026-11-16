@@ -125,7 +125,7 @@ func TestRehearsal_ShouldRecordCountsAndBudgets_WhenProductionDBCopyProvided(t *
 	assert.Zero(t, emptyAfter, "every seeded row carries a synthesized or stored URL")
 
 	start := time.Now()
-	report, err := newPRBackfiller(repo).runPRBackfill(ctx, nil)
+	report, err := repo.RunBackfill(ctx, nil)
 	require.NoError(t, err)
 	rep.addDuration("maintenance_steady_state_pass_ms", time.Since(start))
 	rep.add("steady_state_created_session_links", report.CreatedSessionLinks)
@@ -243,7 +243,7 @@ func rehearseFaultedMaintenance(t *testing.T, repo *EntRepository) time.Duration
 	storage.prMaintenance.wg.Wait() // the ticker stops itself after its first success
 	elapsed := time.Since(start)
 	storage.StopPRMaintenance()
-	require.True(t, repo.prVerifyCountersTrusted.Load())
+	require.True(t, repo.VerifyCountersTrusted())
 	return elapsed
 }
 

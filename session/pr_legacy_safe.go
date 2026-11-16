@@ -1,6 +1,9 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/domain"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
+)
 
 // LegacyOnlyPRSafe is the one rule for a session whose only PR evidence is the
 // legacy scalar number: the persisted terminal flag, nothing else. The retention
@@ -10,7 +13,7 @@ func LegacyOnlyPRSafe(d domain.InstanceData) bool { return d.GitHubPRStatusTermi
 // LegacyNumberRepresented reports whether one of rows carries the repo and
 // number of d's legacy PR. An unbuildable legacy ref is never represented.
 func LegacyNumberRepresented(d domain.InstanceData, rows []domain.PRView) bool {
-	ref, err := sessionLegacyRef(d.GitHubOwner, d.GitHubRepo, d.GitHubHost, d.Path, d.GitHubPRNumber)
+	ref, err := sessionpr.SessionLegacyRef(d.GitHubOwner, d.GitHubRepo, d.GitHubHost, d.Path, d.GitHubPRNumber)
 	if err != nil {
 		return false
 	}

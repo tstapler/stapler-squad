@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -121,7 +123,7 @@ func TestSessionPRLinkGC_ShouldCollectOnlyOrphansOlderThanGrace(t *testing.T) {
 	// State 4 belongs to the young orphan; keep its row young.
 	backdate(t, repo, "pull_request_states", "created_at", "number <> ? AND ? = ?", old, 4, 1, 1)
 
-	res, err := RunSessionPRLinkGC(ctx, repo.Client, now)
+	res, err := sessionpr.RunSessionPRLinkGC(ctx, repo.Client, now)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, res.Links, "old orphan session link and old orphan item link")
@@ -147,7 +149,7 @@ func TestSessionPRLinkGC_ShouldKeepStateRow_WhenEnsureStateAndLinkInterleaveWith
 	// An attach has run EnsureState (young row, no link yet) when the GC fires.
 	_, err := repo.EnsureState(ctx, ref, domain.PRInitial{})
 	require.NoError(t, err)
-	res, err := RunSessionPRLinkGC(ctx, repo.Client, now)
+	res, err := sessionpr.RunSessionPRLinkGC(ctx, repo.Client, now)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.States, "a state younger than the grace is never collected")
 
@@ -158,7 +160,7 @@ func TestSessionPRLinkGC_ShouldKeepStateRow_WhenEnsureStateAndLinkInterleaveWith
 
 	// An OLD state row that gained a link in the meantime is not collected either.
 	backdate(t, repo, "pull_request_states", "created_at", "? = ?", now.Add(-72*time.Hour), 1, 1)
-	res, err = RunSessionPRLinkGC(ctx, repo.Client, now)
+	res, err = sessionpr.RunSessionPRLinkGC(ctx, repo.Client, now)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.States, "a state with a link survives regardless of age")
 }
@@ -170,10 +172,10 @@ func TestSessionPRLinkGC_ShouldCollectOnlyWhenFlagOn_AndStopOnCancel(t *testing.
 	backdate(t, repo, "session_prs", "attached_at", "session_uuid = ?", time.Now().Add(-48*time.Hour), "uuid-gone")
 
 	var on atomic.Bool
-	gc := NewSessionPRLinkGC(repo.Client, time.Hour)
-	gc.enabled = on.Load
+	gc := sessionpr.NewSessionPRLinkGC(repo.Client, time.Hour)
+	gc.SetEnabled(on.Load)
 
-	gc.runOnce(context.Background())
+	gc.RunOnce(context.Background())
 	assert.Equal(t, 1, countLinks(t, repo), "flag off: nothing collected")
 
 	on.Store(true)

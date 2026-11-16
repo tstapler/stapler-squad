@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -31,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // statusEventInput bundles recordStatusEvent's write fields — kept as one
@@ -1748,7 +1750,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 		}
 	}
 
-	if err := deleteOwnerPRRows(ctx, tx, domain.ItemPROwner(parsedID.String())); err != nil {
+	if err := sessionpr.DeleteOwnerPRRows(ctx, tx, domain.ItemPROwner(parsedID.String())); err != nil {
 		return fmt.Errorf("delete backlog item: %w", err)
 	}
 
@@ -2110,7 +2112,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 		}
 		return nil, fmt.Errorf("%w: updated_at mismatch", domain.ErrPreconditionFailed)
 	}
-	if err := link.writeTx(ctx, tx, parsedID.String(), r.afterPRLinkHook); err != nil {
+	if err := link.writeTx(ctx, tx, parsedID.String(), r.AfterLinkHook()); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

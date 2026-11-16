@@ -141,6 +141,7 @@ go_library(
         "//session/scanstate",
         "//session/scrollback",
         "//session/search",
+        "//session/sessionpr",
         "//session/sshremote",
         "//session/stagecfg",
         "//session/streamhub",

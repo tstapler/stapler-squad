@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -305,7 +306,7 @@ func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionD
 	s := f.session(instance.SessionRoleWork)
 	f.link(domain.SessionPROwner(s), 30, domain.PRStateOpen)
 	for run := 0; run < 2; run++ {
-		_, err := newPRBackfiller(f.repo).runPRBackfill(context.Background(), nil)
+		_, err := f.repo.RunBackfill(context.Background(), nil)
 		require.NoError(t, err)
 		direct, err := f.repo.ListByItem(context.Background(), f.itemID)
 		require.NoError(t, err)
@@ -380,7 +381,7 @@ func TestItemMirror_ShouldFollowCurrentRound_WhenLaterWorkSessionLinks(t *testin
 	s1 := f.session(instance.SessionRoleWork)
 	f.link(domain.SessionPROwner(s1), 30, domain.PRStateOpen)
 	for run := 0; run < 2; run++ {
-		_, err := newPRBackfiller(f.repo).runPRBackfill(ctx, nil)
+		_, err := f.repo.RunBackfill(ctx, nil)
 		require.NoError(t, err)
 	}
 	f.link(domain.SessionPROwner(f.session(instance.SessionRoleWork)), 31, domain.PRStateOpen)

@@ -36,6 +36,7 @@ go_library(
         "//session/hostclaim",
         "//session/instance",
         "//session/markerstore",
+        "//session/sessionpr",
         "//session/stagecfg",
         "//session/workflowengine",
         "//tools/bzl/ent",

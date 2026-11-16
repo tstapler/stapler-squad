@@ -1,4 +1,4 @@
-package session
+package sessionpr
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/pullrequeststate"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
 	"github.com/tstapler/stapler-squad/session/ent/sessionprtombstone"
 )
 
@@ -25,10 +25,10 @@ import (
 // attach racing the GC (EnsureState, then the link insert) never loses its state.
 const orphanGCGrace = 24 * time.Hour
 
-// deleteOwnerPRRows removes one owner's links and tombstones; used when the
+// DeleteOwnerPRRows removes one owner's links and tombstones; used when the
 // owner (a session or a backlog item) is deleted. State rows are left to the GC.
-func deleteOwnerPRRows(ctx context.Context, tx *ent.Tx, owner domain.PROwner) error {
-	if _, err := tx.SessionPR.Delete().Where(linkOwnerPredicates(owner)...).Exec(ctx); err != nil {
+func DeleteOwnerPRRows(ctx context.Context, tx *ent.Tx, owner domain.PROwner) error {
+	if _, err := tx.SessionPR.Delete().Where(LinkOwnerPredicates(owner)...).Exec(ctx); err != nil {
 		return fmt.Errorf("delete pr links: %w", err)
 	}
 	if _, err := tx.SessionPRTombstone.Delete().Where(
@@ -67,8 +67,8 @@ func RunSessionPRLinkGC(ctx context.Context, client *ent.Client, now time.Time) 
 		res.countFor(label, n)
 		return nil
 	}
-	sessionGone := predicate.SessionPR(ownerMissing(sessionpr.FieldSessionUUID, entsession.Table, entsession.FieldUUID))
-	itemGone := predicate.SessionPR(ownerMissing(sessionpr.FieldBacklogItemID, backlogitem.Table, backlogitem.FieldID))
+	sessionGone := predicate.SessionPR(ownerMissing(entsessionpr.FieldSessionUUID, entsession.Table, entsession.FieldUUID))
+	itemGone := predicate.SessionPR(ownerMissing(entsessionpr.FieldBacklogItemID, backlogitem.Table, backlogitem.FieldID))
 	tombSessionGone := predicate.SessionPRTombstone(ownerMissing(sessionprtombstone.FieldSessionUUID, entsession.Table, entsession.FieldUUID))
 	tombItemGone := predicate.SessionPRTombstone(ownerMissing(sessionprtombstone.FieldBacklogItemID, backlogitem.Table, backlogitem.FieldID))
 
@@ -77,10 +77,10 @@ func RunSessionPRLinkGC(ctx context.Context, client *ent.Client, now time.Time) 
 		fn    func() (int, error)
 	}{
 		{"links", func() (int, error) {
-			return client.SessionPR.Delete().Where(sessionpr.SessionUUIDNEQ(""), sessionpr.AttachedAtLT(cutoff), sessionGone).Exec(ctx)
+			return client.SessionPR.Delete().Where(entsessionpr.SessionUUIDNEQ(""), entsessionpr.AttachedAtLT(cutoff), sessionGone).Exec(ctx)
 		}},
 		{"links", func() (int, error) {
-			return client.SessionPR.Delete().Where(sessionpr.BacklogItemIDNEQ(""), sessionpr.AttachedAtLT(cutoff), itemGone).Exec(ctx)
+			return client.SessionPR.Delete().Where(entsessionpr.BacklogItemIDNEQ(""), entsessionpr.AttachedAtLT(cutoff), itemGone).Exec(ctx)
 		}},
 		{"tombstones", func() (int, error) {
 			return client.SessionPRTombstone.Delete().Where(sessionprtombstone.SessionUUIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombSessionGone).Exec(ctx)
@@ -134,15 +134,6 @@ func NewSessionPRLinkGC(client *ent.Client, interval time.Duration) *SessionPRLi
 	}
 }
 
-// NewSessionPRLinkGC returns the collector over this storage's repository, or
-// nil when the storage has none.
-func (s *Storage) NewSessionPRLinkGC(interval time.Duration) *SessionPRLinkGC {
-	if s == nil || s.Repo == nil {
-		return nil
-	}
-	return NewSessionPRLinkGC(s.Repo.Client, interval)
-}
-
 // Start runs the collector in the background until ctx ends. A second call is a no-op.
 func (g *SessionPRLinkGC) Start(ctx context.Context) {
 	if !g.started.CompareAndSwap(false, true) {
@@ -161,7 +152,7 @@ func (g *SessionPRLinkGC) Wait() { g.wg.Wait() }
 // interval. Errors are logged and the loop continues; the pass never revives or
 // starts anything.
 func (g *SessionPRLinkGC) Run(ctx context.Context) {
-	g.runOnce(ctx)
+	g.RunOnce(ctx)
 	ticker := time.NewTicker(g.interval)
 	defer ticker.Stop()
 	for {
@@ -169,12 +160,16 @@ func (g *SessionPRLinkGC) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			g.runOnce(ctx)
+			g.RunOnce(ctx)
 		}
 	}
 }
 
-func (g *SessionPRLinkGC) runOnce(ctx context.Context) {
+// SetEnabled overrides the live feature-flag read (tests).
+func (g *SessionPRLinkGC) SetEnabled(fn func() bool) { g.enabled = fn }
+
+// RunOnce performs one collection pass; it is a no-op while the feature flag is off.
+func (g *SessionPRLinkGC) RunOnce(ctx context.Context) {
 	if ctx.Err() != nil || !g.enabled() {
 		return
 	}

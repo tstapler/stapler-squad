@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // PRSetReader derives a backlog item's PR set at read time. The set is never
@@ -128,7 +129,7 @@ func subtractRefs(prs []domain.PRView, drop []domain.PRRef) []domain.PRView {
 	}
 	out := prs[:0:0]
 	for _, v := range prs {
-		if !containsRef(drop, v.Ref) {
+		if !sessionpr.ContainsRef(drop, v.Ref) {
 			out = append(out, v)
 		}
 	}
@@ -144,7 +145,7 @@ func appendLegacyFallback(ctx context.Context, src itemPRSource, set []domain.PR
 	if prNumber <= 0 {
 		return set, nil
 	}
-	ref, perr := ParseItemPRRef(prURL, prNumber)
+	ref, perr := sessionpr.ParseItemPRRef(prURL, prNumber)
 	if perr != nil {
 		return set, nil // unbuildable ref: the cleanup gate fails closed on it, not the set
 	}
@@ -175,8 +176,8 @@ type itemPRInputs struct {
 	itemTombs []domain.PRRef
 }
 
-func loadSessionCoverage(ctx context.Context, src itemPRSource, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) (ItemPRCoverage, error) {
-	cov := ItemPRCoverage{
+func loadSessionCoverage(ctx context.Context, src itemPRSource, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) (sessionpr.ItemPRCoverage, error) {
+	cov := sessionpr.ItemPRCoverage{
 		ItemTombstones: in.itemTombs,
 		SessionLinks:   map[string][]domain.PRRef{}, SessionTombstones: map[string][]domain.PRRef{},
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -126,7 +127,7 @@ func TestSetItemPRFieldsWithLink_ShouldWriteFieldsAndLinkAtomically_AndRollBackB
 	t.Parallel()
 	ctx := context.Background()
 	f := newItemPRFixture(t, 0)
-	f.repo.afterPRLinkHook = func() error { return errors.New("forced link failure") }
+	f.repo.SetAfterLinkHook(func() error { return errors.New("forced link failure") })
 
 	err := f.storage.SetItemPRFieldsWithLink(ctx, f.itemID, "https://github.com/acme/app/pull/30", 30, domain.AttachSourcePRCreationService)
 	require.Error(t, err)
@@ -134,7 +135,7 @@ func TestSetItemPRFieldsWithLink_ShouldWriteFieldsAndLinkAtomically_AndRollBackB
 	assert.Zero(t, got.PrNumber, "the fields were rolled back with the link")
 	assert.Empty(t, itemLinkNumbers(t, f))
 
-	f.repo.afterPRLinkHook = nil
+	f.repo.SetAfterLinkHook(nil)
 	require.NoError(t, f.storage.SetItemPRFieldsWithLink(ctx, f.itemID, "https://github.com/acme/app/pull/30", 30, domain.AttachSourcePRCreationService))
 	got, _ = f.storage.GetBacklogItem(ctx, f.itemID)
 	assert.Equal(t, 30, got.PrNumber)
@@ -148,7 +149,7 @@ func TestPushAndCreatePR_ShouldWriteFieldsAndLinkAtomically_AndKeepReviewOnFailu
 	ctx := context.Background()
 	f := newItemPRFixture(t, 0)
 	item := itemInStatus(t, f, domain.BacklogStatusReview)
-	f.repo.afterPRLinkHook = func() error { return errors.New("forced link failure") }
+	f.repo.SetAfterLinkHook(func() error { return errors.New("forced link failure") })
 
 	err := f.storage.setPRAndTransition(ctx, item, prAssoc(22, domain.AttachSourcePRCreationService))
 	require.Error(t, err)
@@ -159,7 +160,7 @@ func TestPushAndCreatePR_ShouldWriteFieldsAndLinkAtomically_AndKeepReviewOnFailu
 	assert.Zero(t, got.PrNumber, "pr_number was rolled back with the link")
 	assert.Empty(t, itemLinkNumbers(t, f))
 
-	f.repo.afterPRLinkHook = nil
+	f.repo.SetAfterLinkHook(nil)
 	stale := *item
 	stale.UpdatedAt = stale.UpdatedAt.Add(-1)
 	require.Error(t, f.storage.setPRAndTransition(ctx, &stale, prAssoc(23, domain.AttachSourcePRCreationService)), "a lost CAS writes nothing")
