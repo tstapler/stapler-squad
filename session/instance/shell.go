@@ -17,7 +17,7 @@ type ShellStatus string
 
 const (
 	// ShellStatusRunning means the shell process is alive and the PTY is open.
-	ShellStatusRunning ShellStatus = "running"
+	ShellStatusRunning ShellStatus = domain.ShellStatusRunning
 	// ShellStatusStopped means the shell exited cleanly (via exit command or StopShell).
 	ShellStatusStopped ShellStatus = "stopped"
 	// ShellStatusError means the shell exited with a non-zero status unexpectedly.

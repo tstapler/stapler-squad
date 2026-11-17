@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "rulestore",
+    srcs = ["rules.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/rulestore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:approvalrule",
+        "//tools/bzl/ent:taggingrule",
+        "//tools/bzl/ent:taggingrulefire",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":rulestore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "rulestore_test",
+    srcs = ["rules_test.go"],
+    embed = [":rulestore"],
+    deps = [
+        "//session/domain",
+        "//session/internal/entdbtest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session's and server/services' Bazel-sandboxed source scanners.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

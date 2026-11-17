@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // RuleSpec is the JSON-serializable form of a Rule.
@@ -119,7 +120,7 @@ func (s *RulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error
 	}
 
 	// Persist to SQLite first; only update in-memory state on success.
-	ruleData := session.ApprovalRuleData{
+	ruleData := domain.ApprovalRuleData{
 		ID:             spec.ID,
 		Name:           spec.Name,
 		ToolName:       spec.ToolName,
@@ -467,7 +468,7 @@ func (s *RulesStore) BulkUpsert(ctx context.Context, specs []RuleSpec, overwrite
 			spec.CreatedAt = time.Now()
 		}
 
-		ruleData := session.ApprovalRuleData{
+		ruleData := domain.ApprovalRuleData{
 			ID:                    spec.ID,
 			Name:                  spec.Name,
 			ToolName:              spec.ToolName,
