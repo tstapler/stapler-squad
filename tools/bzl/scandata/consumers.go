@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// Only absolute "//pkg:go_sources" literals in BUILD.bazel files are scanned. References from .bzl macros,
+// relative ":go_sources" and "@repo//" labels are not; the blocking full-graph analysis step in
+// bazel-guards (`bazel build --nobuild //...`) is the backstop for those.
+
+const consumerVisibilityHint = "(add the referrer to that filegroup's visibility)"
+
 // goSourcesRefRe matches an absolute go_sources label in a BUILD file.
 var goSourcesRefRe = regexp.MustCompile(`"//([^":]*):go_sources"`)
 
@@ -59,7 +65,7 @@ func checkRef(root, consumer, target string, visCache map[string][][]string) str
 		visCache[target] = vis
 	}
 	if msg := visibleTo(vis, consumer); msg != "" {
-		return fmt.Sprintf("%s: //%s:go_sources %s //%s (add it to that filegroup's visibility)", consumer, target, msg, consumer)
+		return fmt.Sprintf("%s: //%s:go_sources %s //%s %s", consumer, target, msg, consumer, consumerVisibilityHint)
 	}
 	return ""
 }
@@ -74,7 +80,14 @@ func goSourcesVisibility(root, pkg string) ([][]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return strRe.FindAllStringSubmatch(attr(fg, "visibility"), -1), true
+	expr := strings.TrimSpace(attr(fg, "visibility"))
+	switch {
+	case expr == "":
+		return [][]string{{"", "(no visibility attribute; package default_visibility is not resolved)"}}, true
+	case !strings.HasPrefix(expr, "["):
+		return [][]string{{"", expr}}, true
+	}
+	return strRe.FindAllStringSubmatch(expr, -1), true
 }
 
 // buildFiles lists module-relative package dirs ("." for the root) that hold a

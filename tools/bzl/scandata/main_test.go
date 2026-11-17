@@ -304,7 +304,20 @@ func TestCheck_ShouldFlagGoSourcesReference_WhenReferrerNotInVisibility(t *testi
 	t.Parallel()
 	got, err := check(consumerFixture(t, `["//server/services:__pkg__", "//session:__pkg__"]`))
 	require.NoError(t, err)
-	require.Equal(t, []string{"session/consumer: //session/leaf:go_sources not visible to //session/consumer (add it to that filegroup's visibility)"}, got)
+	require.Equal(t, []string{"session/consumer: //session/leaf:go_sources not visible to //session/consumer " + consumerVisibilityHint}, got)
+}
+
+func TestCheck_ShouldFlagGoSourcesReferenceAsUnsupported_WhenVisibilityIsVariableOrDefaulted(t *testing.T) {
+	t.Parallel()
+	variable, err := check(consumerFixture(t, "VIS"))
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(variable, "\n"), `session/consumer: //session/leaf:go_sources has unsupported visibility entry "VIS"`)
+
+	root := fixture(t, "filegroup(\n    name = \"go_sources\",\n    srcs = glob([\"*.go\"]),\n)\n", "        "+leafLabel+",", "")
+	write(t, root, "session/consumer/BUILD.bazel", "go_test(\n    name = \"consumer_test\",\n    data = [\n        "+leafLabel+",\n    ],\n)\n")
+	defaulted, err := check(root)
+	require.NoError(t, err)
+	require.Contains(t, strings.Join(defaulted, "\n"), "session/consumer: //session/leaf:go_sources has unsupported visibility entry \"(no visibility attribute")
 }
 
 func TestCheck_ShouldPassGoSourcesReference_WhenReferrerInVisibility(t *testing.T) {
