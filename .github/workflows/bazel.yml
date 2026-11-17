@@ -51,6 +51,7 @@ jobs:
           bash tools/bzl/check-make-help.sh
           bash tools/bzl/check-test-tags_test.sh
           bash tools/bzl/check-test-tags.sh
+          go run ./tools/bzl/scandata .
 
       # Agent-enablement and reviewability guards (Stories 11.1-11.8). Pure shell, no Bazel build.
       - name: Skill, docs and reviewability guards
