@@ -29,6 +29,7 @@ go_library(
         "//session/backlog/pipeline",
         "//session/backlog/reviewgate",
         "//session/backlog/stuck",
+        "//session/backlogstore",
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",

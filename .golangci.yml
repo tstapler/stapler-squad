@@ -241,8 +241,17 @@ linters:
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/domain/backlogdto
             - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/acauditevent
+            - github.com/tstapler/stapler-squad/session/ent/backlogactivitynote
             - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/backlogitemdependency
+            - github.com/tstapler/stapler-squad/session/ent/backlogprogressnote
+            - github.com/tstapler/stapler-squad/session/ent/backlogstatusevent
+            - github.com/tstapler/stapler-squad/session/ent/backlogstuckstate
+            - github.com/tstapler/stapler-squad/session/ent/itemsession
             - github.com/tstapler/stapler-squad/session/ent/itemsource
+            - github.com/tstapler/stapler-squad/session/ent/predicate
+            - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/sourcesyncevent
         # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
         # imports session, github or server.

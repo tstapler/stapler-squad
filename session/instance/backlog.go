@@ -17,10 +17,10 @@ func IsValidBacklogCategory(s string) bool {
 
 // Session role constants.
 const (
-	SessionRoleWork      = "work"
+	SessionRoleWork      = domain.SessionRoleWork
 	SessionRoleTriage    = "triage"
-	SessionRoleReview    = "review"
-	SessionRoleJulesWork = "jules_work"
+	SessionRoleReview    = domain.SessionRoleReview
+	SessionRoleJulesWork = domain.SessionRoleJulesWork
 	// SessionRoleDiagnose is the Diagnose & Nudge dispatched session's role
 	// (backlog item 68964304): a hidden, one-shot investigation agent, never
 	// a work/review/triage session. submit_diagnosis_result checks this role

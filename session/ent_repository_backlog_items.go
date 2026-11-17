@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -153,7 +154,7 @@ func (r *EntRepository) backlogItemForItemSession(ctx context.Context, itemSessi
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
 func (r *EntRepository) CreateItemSession(ctx context.Context, data backlogdto.ItemSessionData) (backlogdto.ItemSessionSummary, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, data.ItemID)
+	parsedItemID, err := r.ResolveBacklogItemLookup(ctx, data.ItemID)
 	if err != nil {
 		return backlogdto.ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", data.ItemID, err)
 	}
@@ -187,7 +188,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data backlogdto.I
 		return backlogdto.ItemSessionSummary{}, fmt.Errorf("failed to create item session: %w", err)
 	}
 	// BacklogItemID is not loaded via edge on create; set it directly from the input.
-	summary := ItemSessionToSummary(is)
+	summary := backlogstore.ItemSessionToSummary(is)
 	summary.BacklogItemID = data.ItemID
 
 	// Best-effort publish: never blocks or fails session creation itself.
@@ -238,7 +239,7 @@ func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []
 				continue
 			}
 			key := is.Edges.BacklogItem.ID.String()
-			summary := ItemSessionToSummary(is)
+			summary := backlogstore.ItemSessionToSummary(is)
 			summary.BacklogItemID = key
 			result[key] = append(result[key], summary)
 		}
@@ -706,7 +707,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 // ReviewVerdict in a single transaction. If the verdict write fails the ItemSession
 // is rolled back, preventing dangling sessions with no verdict.
 func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData backlogdto.ItemSessionData, verdict backlogdto.ReviewVerdictData) (backlogdto.ItemSessionSummary, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, isData.ItemID)
+	parsedItemID, err := r.ResolveBacklogItemLookup(ctx, isData.ItemID)
 	if err != nil {
 		return backlogdto.ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", isData.ItemID, err)
 	}
@@ -766,7 +767,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 
 	// Build summary with the verdict embedded.
 	is.Edges.ReviewVerdict = rv
-	summary := ItemSessionToSummary(is)
+	summary := backlogstore.ItemSessionToSummary(is)
 	summary.BacklogItemID = isData.ItemID
 
 	// Best-effort publish: never blocks or fails the create+verdict itself.
@@ -826,7 +827,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		// Best-effort publish: never blocks or fails the backfill itself. Found
 		// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 		// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
-		result := BacklogItemToData(updated)
+		result := backlogstore.BacklogItemToData(updated)
 		r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
 			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"prNumber"},
@@ -889,7 +890,7 @@ type acChange struct {
 // transaction. A mutation that reaches an existing item but is refused still
 // leaves an audit row (outcome "rejected:...").
 func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, change acChange, mutate func(*domain.AcCriterion) error) error {
-	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	parsedID, err := r.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
@@ -964,7 +965,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	}
 
 	// Best-effort publish so live viewers see AC progress without a full refresh.
-	result := BacklogItemToData(updated)
+	result := backlogstore.BacklogItemToData(updated)
 	r.publishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
 		Kind:          backlogdto.ChangeItemUpdated,
 		UpdatedFields: []string{"acceptanceCriteria"},

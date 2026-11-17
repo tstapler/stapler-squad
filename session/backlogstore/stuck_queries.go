@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -17,9 +17,9 @@ import (
 // OR snoozed_until is in the past), eager-loading the parent item so the
 // projection carries title/status/pr_number/pr_url for rendering without a
 // second round trip.
-func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]backlogdto.OpenStuckStateData, error) {
+func (b *Backlog) FindOpenStuckStates(ctx context.Context) ([]backlogdto.OpenStuckStateData, error) {
 	now := time.Now()
-	rows, err := r.Client.BacklogStuckState.Query().
+	rows, err := b.client.BacklogStuckState.Query().
 		Where(
 			backlogstuckstate.ResolvedAtIsNil(),
 			backlogstuckstate.Or(
@@ -64,8 +64,8 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]backlogdto.O
 // FindSnoozedStuckItemIDs returns the item IDs whose open row of reason is snoozed right
 // now. FindOpenStuckStates hides those rows, so a gate that must outlive a snooze reads
 // them here.
-func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason domain.StuckReason) ([]string, error) {
-	rows, err := r.Client.BacklogStuckState.Query().
+func (b *Backlog) FindSnoozedStuckItemIDs(ctx context.Context, reason domain.StuckReason) ([]string, error) {
+	rows, err := b.client.BacklogStuckState.Query().
 		Where(
 			backlogstuckstate.ResolvedAtIsNil(),
 			backlogstuckstate.Reason(string(reason)),
@@ -86,12 +86,12 @@ func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason doma
 // open or resolved, ordered oldest-first. Unlike FindOpenStuckStates this
 // applies no resolved_at/snoozed_until filter — it's a single-item history
 // read, not a sweep's work queue.
-func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID string) ([]backlogdto.StuckStateHistoryData, error) {
+func (b *Backlog) ListStuckStatesForItem(ctx context.Context, itemID string) ([]backlogdto.StuckStateHistoryData, error) {
 	id, err := uuid.Parse(itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id: %w", err)
 	}
-	rows, err := r.Client.BacklogStuckState.Query().
+	rows, err := b.client.BacklogStuckState.Query().
 		Where(backlogstuckstate.ItemIDEQ(id)).
 		Order(ent.Asc(backlogstuckstate.FieldFirstDetectedAt)).
 		All(ctx)

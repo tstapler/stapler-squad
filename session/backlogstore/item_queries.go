@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
-	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // FindDoneItemsOlderThan returns backlog items currently in "done" status
@@ -38,8 +37,8 @@ import (
 // eligible" — this should not happen in practice, since every transition
 // through TransitionBacklogItemStatus writes one, but guards a partially-
 // migrated or directly-seeded row against aging out on an unrelated basis.
-func (r *EntRepository) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]backlogdto.BacklogItemData, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]backlogdto.BacklogItemData, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(backlogitem.StatusEQ(string(domain.BacklogStatusDone))).
 		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
 			q.Order(ent.Desc(backlogstatusevent.FieldCreatedAt))
@@ -70,13 +69,13 @@ func (r *EntRepository) FindDoneItemsOlderThan(ctx context.Context, cutoff time.
 
 // ListProgressNotesForItem returns the full append-only history of report_progress
 // calls for a backlog item, ordered by created_at ascending (oldest first).
-func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID string) ([]backlogdto.ProgressNoteData, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) ListProgressNotesForItem(ctx context.Context, itemID string) ([]backlogdto.ProgressNoteData, error) {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	notes, err := r.Client.BacklogProgressNote.Query().
+	notes, err := b.client.BacklogProgressNote.Query().
 		Where(backlogprogressnote.HasItemWith(backlogitem.ID(parsedItemID))).
 		Order(ent.Asc(backlogprogressnote.FieldCreatedAt)).
 		All(ctx)
@@ -92,13 +91,13 @@ func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID str
 
 // ListActivityNotesForItem returns the full append-only activity-note history
 // for a backlog item, ordered by created_at ascending (oldest first).
-func (r *EntRepository) ListActivityNotesForItem(ctx context.Context, itemID string) ([]backlogdto.ActivityNoteData, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) ListActivityNotesForItem(ctx context.Context, itemID string) ([]backlogdto.ActivityNoteData, error) {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	notes, err := r.Client.BacklogActivityNote.Query().
+	notes, err := b.client.BacklogActivityNote.Query().
 		Where(backlogactivitynote.HasItemWith(backlogitem.ID(parsedItemID))).
 		Order(ent.Asc(backlogactivitynote.FieldCreatedAt)).
 		All(ctx)
@@ -107,7 +106,7 @@ func (r *EntRepository) ListActivityNotesForItem(ctx context.Context, itemID str
 	}
 	result := make([]backlogdto.ActivityNoteData, len(notes))
 	for i, n := range notes {
-		result[i] = activityNoteToData(n)
+		result[i] = ActivityNoteToData(n)
 	}
 	return result, nil
 }
@@ -120,8 +119,8 @@ func (r *EntRepository) ListActivityNotesForItem(ctx context.Context, itemID str
 // existed may already repeat one, so this uses First (oldest match) rather
 // than Only — which would hard-error on exactly the pre-existing-duplicate
 // data this lookup exists to stop compounding.
-func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*backlogdto.BacklogItemData, error) {
-	item, err := r.Client.BacklogItem.Query().
+func (b *Backlog) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*backlogdto.BacklogItemData, error) {
+	item, err := b.client.BacklogItem.Query().
 		Where(backlogitem.ExternalURL(externalURL)).
 		Order(ent.Asc(backlogitem.FieldCreatedAt)).
 		First(ctx)
@@ -141,9 +140,9 @@ func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externa
 // doc comment) so callers folding this into a map keyed by session UUID can deterministically
 // keep the first (most recent) role/status seen per UUID, rather than depending on undefined
 // ent iteration order (ADR-029).
-func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
+func (b *Backlog) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	//nolint:entfullscan feeds the Insights dashboard, which needs the full join across all item sessions.
-	sessions, err := r.Client.ItemSession.Query().
+	sessions, err := b.client.ItemSession.Query().
 		WithBacklogItem().
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
 		All(ctx)
@@ -176,9 +175,9 @@ func (r *EntRepository) GetAllItemSessionsWithBacklogInfo(ctx context.Context) (
 // hard-deleting an item's ItemSession rows (Story 3). Used by Insights to
 // keep a deleted item's cost attributed by conversation UUID after the item
 // itself is gone.
-func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]backlogdto.DeletedItemSessionCostEntry, error) {
+func (b *Backlog) GetDeletedItemSessionCostLedger(ctx context.Context) ([]backlogdto.DeletedItemSessionCostEntry, error) {
 	//nolint:entfullscan feeds the Insights dashboard, which needs the full ledger.
-	rows, err := r.Client.DeletedItemSessionCost.Query().All(ctx)
+	rows, err := b.client.DeletedItemSessionCost.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query deleted item session cost ledger: %w", err)
 	}
@@ -200,12 +199,12 @@ func (r *EntRepository) GetDeletedItemSessionCostLedger(ctx context.Context) ([]
 
 // ArchivedSessionUUIDs returns the subset of sessionUUIDs whose session row has
 // archived_at set.
-func (r *EntRepository) ArchivedSessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]bool, error) {
+func (b *Backlog) ArchivedSessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]bool, error) {
 	out := make(map[string]bool)
 	const chunkSize = 500
 	for start := 0; start < len(sessionUUIDs); start += chunkSize {
 		end := min(start+chunkSize, len(sessionUUIDs))
-		found, err := r.Client.Session.Query().
+		found, err := b.client.Session.Query().
 			Where(entSession.UUIDIn(sessionUUIDs[start:end]...), entSession.ArchivedAtNotNil()).
 			Select(entSession.FieldUUID).
 			Strings(ctx)
@@ -222,12 +221,12 @@ func (r *EntRepository) ArchivedSessionUUIDs(ctx context.Context, sessionUUIDs [
 // GetWorktreeDataBySessionUUIDs is GetWorktreeDataBySessionUUID for many
 // sessions in one query per 500 UUIDs. UUIDs with no session or no worktree are
 // absent from the result.
-func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]domain.GitWorktreeData, error) {
+func (b *Backlog) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]domain.GitWorktreeData, error) {
 	out := make(map[string]domain.GitWorktreeData, len(sessionUUIDs))
 	const chunkSize = 500
 	for start := 0; start < len(sessionUUIDs); start += chunkSize {
 		end := min(start+chunkSize, len(sessionUUIDs))
-		rows, err := r.Client.Session.Query().
+		rows, err := b.client.Session.Query().
 			Where(entSession.UUIDIn(sessionUUIDs[start:end]...)).
 			WithWorktree().
 			All(ctx)
@@ -252,8 +251,8 @@ func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessi
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns an empty GitWorktreeData (no error) if the session does
 // not exist or is a directory-mode session without a dedicated worktree.
-func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (domain.GitWorktreeData, error) {
-	sess, err := r.Client.Session.Query().
+func (b *Backlog) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (domain.GitWorktreeData, error) {
+	sess, err := b.client.Session.Query().
 		Where(entSession.UUID(sessionUUID)).
 		WithWorktree().
 		Only(ctx)
@@ -278,8 +277,8 @@ func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessio
 // FindStuckInProgressCandidates returns in_progress items that have at least one
 // item session and none still running. It only reads; Storage.GatedReconcileStuck
 // moves each one to review through the transition gate.
-func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]backlogdto.BacklogItemData, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindStuckInProgressCandidates(ctx context.Context) ([]backlogdto.BacklogItemData, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusInProgress)),
 			backlogitem.HasItemSessions(),
@@ -302,15 +301,15 @@ func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]ba
 // no review ItemSession. These are items where the review gate was never spawned
 // (e.g. the headless pool was unavailable at the time of the work session exit).
 // Each returned item has its ItemSessions edge loaded (work sessions only).
-func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.SkipReviewGate(false),
-			backlogitem.Not(backlogitem.HasItemSessionsWith(itemsession.SessionRole(instance.SessionRoleReview))),
+			backlogitem.Not(backlogitem.HasItemSessionsWith(itemsession.SessionRole(domain.SessionRoleReview))),
 		).
 		WithItemSessions(func(q *ent.ItemSessionQuery) {
-			q.Where(itemsession.SessionRole(instance.SessionRoleWork)).
+			q.Where(itemsession.SessionRole(domain.SessionRoleWork)).
 				Order(ent.Desc(itemsession.FieldCreatedAt)).
 				Limit(1)
 		}).
@@ -337,14 +336,14 @@ func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.
 // only scans "in_progress" items. Found via manual QA against a live-data item
 // stuck in review for 24+ hours with three UNVERIFIABLE re-review verdicts and
 // only ever one work session on record.
-func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindStuckReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
-			backlogitem.HasItemSessionsWith(itemsession.SessionRole(instance.SessionRoleReview)),
+			backlogitem.HasItemSessionsWith(itemsession.SessionRole(domain.SessionRoleReview)),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
-				itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork),
+				itemsession.SessionRoleIn(domain.SessionRoleReview, domain.SessionRoleWork),
 			)),
 		).
 		All(ctx)
@@ -356,8 +355,8 @@ func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.Backlo
 
 // FindPRPendingItems returns backlog items in "pr_pending" status that have a
 // PR number set. Used by ReconcilePRPending to poll for merged PRs.
-func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusPRPending)),
 			backlogitem.PrNumberGT(0),
@@ -392,8 +391,8 @@ func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogI
 // identical hasActiveWorkSession/hasActiveReviewSession guard. An item with a
 // genuinely active session will naturally reappear in this query once that
 // session ends without making further progress.
-func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.PrNumberGT(0),
 			backlogitem.PrURLNEQ(""),
@@ -404,7 +403,7 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 			),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
-				itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork),
+				itemsession.SessionRoleIn(domain.SessionRoleReview, domain.SessionRoleWork),
 			)),
 		).
 		All(ctx)
@@ -423,17 +422,17 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 // is active has actually gone away (a zombie: the DB row looks live, the
 // process is gone). Not every returned item is a zombie — the caller must
 // still check liveness per active session.
-func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindZombieReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
-				itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork),
+				itemsession.SessionRoleIn(domain.SessionRoleReview, domain.SessionRoleWork),
 			),
 		).
 		WithItemSessions(func(q *ent.ItemSessionQuery) {
-			q.Where(itemsession.EndedAtIsNil(), itemsession.SessionRoleIn(instance.SessionRoleReview, instance.SessionRoleWork))
+			q.Where(itemsession.EndedAtIsNil(), itemsession.SessionRoleIn(domain.SessionRoleReview, domain.SessionRoleWork))
 		}).
 		All(ctx)
 	if err != nil {
@@ -455,17 +454,17 @@ func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.Backl
 // crash-resilience fixes elsewhere in this package). Each returned item eager-loads
 // its review-role sessions (most recent first) with their ReviewVerdict, so the
 // caller can act on the newest one without a second round-trip.
-func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) FindReviewItemsWithUnprocessedVerdict(ctx context.Context) ([]*ent.BacklogItem, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
-				itemsession.SessionRole(instance.SessionRoleReview),
+				itemsession.SessionRole(domain.SessionRoleReview),
 				itemsession.HasReviewVerdict(),
 			),
 		).
 		WithItemSessions(func(q *ent.ItemSessionQuery) {
-			q.Where(itemsession.SessionRole(instance.SessionRoleReview)).
+			q.Where(itemsession.SessionRole(domain.SessionRoleReview)).
 				WithReviewVerdict().
 				Order(ent.Desc(itemsession.FieldCreatedAt))
 		}).
@@ -483,12 +482,12 @@ func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Contex
 // abandoned_review 15-minute grace check (abandonedReview pure fn) so a item
 // that JUST entered review isn't flagged before the reconciler has had a
 // chance to re-spawn a review gate.
-func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID string, toStatus domain.BacklogStatus) (time.Time, bool, error) {
-	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) GetMostRecentStatusEventAt(ctx context.Context, itemID string, toStatus domain.BacklogStatus) (time.Time, bool, error) {
+	parsedID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	ev, err := r.Client.BacklogStatusEvent.Query().
+	ev, err := b.client.BacklogStatusEvent.Query().
 		Where(
 			backlogstatusevent.ItemID(parsedID),
 			backlogstatusevent.ToStatus(string(toStatus)),
@@ -507,12 +506,12 @@ func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID s
 // CountReviewCyclesSince counts in_progress->review BacklogStatusEvent
 // transitions for itemID created at or after since — the "round trip" signal
 // the bouncing detector (isBouncing) keys off.
-func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID string, since time.Time) (int, error) {
-	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) CountReviewCyclesSince(ctx context.Context, itemID string, since time.Time) (int, error) {
+	parsedID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return 0, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	n, err := r.Client.BacklogStatusEvent.Query().
+	n, err := b.client.BacklogStatusEvent.Query().
 		Where(
 			backlogstatusevent.ItemID(parsedID),
 			backlogstatusevent.FromStatus(string(domain.BacklogStatusInProgress)),
@@ -529,7 +528,7 @@ func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID strin
 // ListAcAudit returns an item's audit rows oldest first. It stays readable after the item is
 // deleted: a UUID is queried directly and a bl_ id through the stored item_public_id. It returns
 // ErrNotFound only when the item is gone and no rows remain.
-func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]backlogdto.AcAuditEventData, error) {
+func (b *Backlog) ListAcAudit(ctx context.Context, itemID string) ([]backlogdto.AcAuditEventData, error) {
 	var where predicate.AcAuditEvent
 	if backlogdto.IsBacklogItemIDShape(itemID) {
 		where = acauditevent.ItemPublicID(itemID)
@@ -538,13 +537,13 @@ func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]backl
 	} else {
 		return nil, fmt.Errorf("%w: invalid item id %q", domain.ErrNotFound, itemID)
 	}
-	rows, err := r.Client.AcAuditEvent.Query().Where(where).
+	rows, err := b.client.AcAuditEvent.Query().Where(where).
 		Order(ent.Asc(acauditevent.FieldCreatedAt)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list ac audit events: %w", err)
 	}
 	if len(rows) == 0 {
-		if exists, lookupErr := r.backlogItemExists(ctx, itemID); lookupErr != nil || !exists {
+		if exists, lookupErr := b.backlogItemExists(ctx, itemID); lookupErr != nil || !exists {
 			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 	}

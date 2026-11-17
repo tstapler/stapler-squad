@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitemdependency"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
-	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // GetRepoPathAndLatestCompletedWorkSessionCommits returns itemID's RepoPath
@@ -25,13 +24,13 @@ import (
 // accumulated, rather than O(sessions_for_item) work on every review-verdict
 // save. baseSHA/headSHA are both "" (no error) when the item has no
 // completed work session yet.
-func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA, workSessionUUID string, err error) {
-	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA, workSessionUUID string, err error) {
+	parsedID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
-	item, err := r.Client.BacklogItem.Query().
+	item, err := b.client.BacklogItem.Query().
 		Where(backlogitem.ID(parsedID)).
 		Only(ctx)
 	if err != nil {
@@ -41,10 +40,10 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 		return "", "", "", "", fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
 	}
 
-	ws, err := r.Client.ItemSession.Query().
+	ws, err := b.client.ItemSession.Query().
 		Where(
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedID)),
-			itemsession.SessionRoleEQ(instance.SessionRoleWork),
+			itemsession.SessionRoleEQ(domain.SessionRoleWork),
 			itemsession.EndedAtNotNil(),
 		).
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
@@ -63,13 +62,13 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 // itemID). Resolved edges are included — callers decide from Status whether a
 // blocker is still unresolved. Results are ordered by edge creation time for a
 // stable display. Two queries total, each eager-loading the far end.
-func (r *EntRepository) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []backlogdto.BacklogItemDependencyRef, err error) {
-	parsed, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []backlogdto.BacklogItemDependencyRef, err error) {
+	parsed, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
-	inbound, err := r.Client.BacklogItemDependency.Query().
+	inbound, err := b.client.BacklogItemDependency.Query().
 		Where(backlogitemdependency.BlockedIDEQ(parsed)).
 		WithBlocker().
 		Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
@@ -77,7 +76,7 @@ func (r *EntRepository) ListBacklogItemDependencies(ctx context.Context, itemID 
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list blockers of %s: %w", itemID, err)
 	}
-	outbound, err := r.Client.BacklogItemDependency.Query().
+	outbound, err := b.client.BacklogItemDependency.Query().
 		Where(backlogitemdependency.BlockerIDEQ(parsed)).
 		WithBlocked().
 		Order(ent.Asc(backlogitemdependency.FieldCreatedAt)).
@@ -104,7 +103,7 @@ func (r *EntRepository) ListBacklogItemDependencies(ctx context.Context, itemID 
 // UnresolvedBlockerItemIDs), eager-loading each blocker's title/status in a
 // single query so list views avoid an N+1. Items with no unresolved blocker
 // are absent from the map.
-func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]backlogdto.BacklogItemDependencyRef, error) {
+func (b *Backlog) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]backlogdto.BacklogItemDependencyRef, error) {
 	result := make(map[string][]backlogdto.BacklogItemDependencyRef)
 	if len(itemIDs) == 0 {
 		return result, nil
@@ -112,7 +111,7 @@ func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs 
 	byUUID := make(map[uuid.UUID]string, len(itemIDs))
 	parsed := make([]uuid.UUID, 0, len(itemIDs))
 	for _, id := range itemIDs {
-		u, err := r.resolveBacklogItemLookup(ctx, id)
+		u, err := b.ResolveBacklogItemLookup(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 		}
@@ -124,7 +123,7 @@ func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs 
 	var rows []*ent.BacklogItemDependency
 	for start := 0; start < len(parsed); start += chunkSize {
 		end := min(start+chunkSize, len(parsed))
-		chunk, err := r.Client.BacklogItemDependency.Query().
+		chunk, err := b.client.BacklogItemDependency.Query().
 			Where(
 				backlogitemdependency.BlockedIDIn(parsed[start:end]...),
 				backlogitemdependency.HasBlockerWith(backlogitem.StatusNotIn(domain.TerminalStatusStrings()...)),
@@ -164,7 +163,7 @@ func dependencyRefFromItem(item *ent.BacklogItem) backlogdto.BacklogItemDependen
 // blocking would permanently strand its dependent. Batches the check into a
 // single query (rather than one per candidate) to avoid N+1 queries in
 // dequeue paths.
-func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
+func (b *Backlog) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []string) (map[string]bool, error) {
 	result := make(map[string]bool)
 	if len(itemIDs) == 0 {
 		return result, nil
@@ -173,7 +172,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 	parsedByString := make(map[uuid.UUID]string, len(itemIDs))
 	parsedIDs := make([]uuid.UUID, 0, len(itemIDs))
 	for _, id := range itemIDs {
-		parsed, err := r.resolveBacklogItemLookup(ctx, id)
+		parsed, err := b.ResolveBacklogItemLookup(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 		}
@@ -181,7 +180,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 		parsedIDs = append(parsedIDs, parsed)
 	}
 
-	rows, err := r.Client.BacklogItemDependency.Query().
+	rows, err := b.client.BacklogItemDependency.Query().
 		Where(
 			backlogitemdependency.BlockedIDIn(parsedIDs...),
 			backlogitemdependency.HasBlockerWith(
@@ -202,13 +201,13 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 // single blocked item, for building a human-readable stuck-reason message.
 // Unlike UnresolvedBlockerItemIDs (batched presence check across many
 // candidates), this returns which specific items are doing the blocking.
-func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
-	parsed, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
+	parsed, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
-	rows, err := r.Client.BacklogItemDependency.Query().
+	rows, err := b.client.BacklogItemDependency.Query().
 		Where(
 			backlogitemdependency.BlockedIDEQ(parsed),
 			backlogitemdependency.HasBlockerWith(

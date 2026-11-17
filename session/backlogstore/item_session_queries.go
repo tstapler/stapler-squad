@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -11,17 +11,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
-	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // GetItemSession retrieves an ItemSession by entity UUID string. Loads the BacklogItem edge.
-func (r *EntRepository) GetItemSession(ctx context.Context, id string) (backlogdto.ItemSessionSummary, error) {
+func (b *Backlog) GetItemSession(ctx context.Context, id string) (backlogdto.ItemSessionSummary, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return backlogdto.ItemSessionSummary{}, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
-	is, err := r.Client.ItemSession.Query().
+	is, err := b.client.ItemSession.Query().
 		Where(itemsession.ID(parsedID)).
 		WithBacklogItem().
 		Only(ctx)
@@ -35,13 +34,13 @@ func (r *EntRepository) GetItemSession(ctx context.Context, id string) (backlogd
 }
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
-func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error) {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	sessions, err := r.Client.ItemSession.Query().
+	sessions, err := b.client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID))).
 		WithReviewVerdict().
 		Order(ent.Asc(itemsession.FieldCreatedAt)).
@@ -68,8 +67,8 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 // being fixed meant the two fields held the same value on every legacy row; it
 // must NOT be extended to rows that have a base_commit_sha, since last_commit_sha
 // is now live-refreshed to the session's tip and would give a moving diff base.
-func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessionUUIDs []string) (map[string]string, error) {
-	rows, err := r.Client.ItemSession.Query().
+func (b *Backlog) GetBaseCommitSHAsForSessions(ctx context.Context, sessionUUIDs []string) (map[string]string, error) {
+	rows, err := b.client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
 		Select(itemsession.FieldSessionUUID, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha).
 		All(ctx)
@@ -92,8 +91,8 @@ func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessio
 // session_uuid is not unique across records (a session may be reused), so we order by
 // created_at descending and take the first match. Returns ErrNotFound if no record exists.
 // Loads the BacklogItem edge so BacklogItemID is populated in the returned summary.
-func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error) {
-	is, err := r.Client.ItemSession.Query().
+func (b *Backlog) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error) {
+	is, err := b.client.ItemSession.Query().
 		Where(itemsession.SessionUUID(sessionUUID)).
 		WithBacklogItem().
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
@@ -110,11 +109,11 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 // ListItemSessionsBySessionUUIDs returns the most recent ItemSession for each
 // of the given session UUIDs in a single query (UUIDs with no row are absent
 // from the map). The ReviewVerdict edge is loaded; the BacklogItem edge is not.
-func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]backlogdto.ItemSessionSummary, error) {
+func (b *Backlog) ListItemSessionsBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]backlogdto.ItemSessionSummary, error) {
 	if len(sessionUUIDs) == 0 {
 		return map[string]backlogdto.ItemSessionSummary{}, nil
 	}
-	rows, err := r.Client.ItemSession.Query().
+	rows, err := b.client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
 		WithReviewVerdict().
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
@@ -132,13 +131,13 @@ func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sess
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
-func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (backlogdto.ItemSessionSummary, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (backlogdto.ItemSessionSummary, error) {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return backlogdto.ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	is, err := r.Client.ItemSession.Query().
+	is, err := b.client.ItemSession.Query().
 		Where(
 			itemsession.SessionUUID(sessionUUID),
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
@@ -159,14 +158,14 @@ func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sess
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome from the
 // most recently created ReviewVerdict associated with any ItemSession for the
 // given BacklogItem UUID. Returns "" (not an error) when no verdict exists yet.
-func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (domain.ReviewOutcome, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (domain.ReviewOutcome, error) {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return "", fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
 	// Find the most recent ItemSession for this item that has a review verdict.
-	is, err := r.Client.ItemSession.Query().
+	is, err := b.client.ItemSession.Query().
 		Where(
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
 			itemsession.HasReviewVerdict(),
@@ -192,13 +191,13 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 // ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
 // Summary, and DiffHash are populated, since that's all callers
 // (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck/decisions.go) need.
-func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]backlogdto.ReviewVerdictSummary, error) {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]backlogdto.ReviewVerdictSummary, error) {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	sessions, err := r.Client.ItemSession.Query().
+	sessions, err := b.client.ItemSession.Query().
 		Where(
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
 			itemsession.HasReviewVerdict(),
@@ -235,10 +234,10 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 // (via the ItemSessionBacklogEntry shape already returned by
 // GetAllItemSessionsWithBacklogInfo) for the dispatcher/poller to act on it
 // without a second query.
-func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
-	sessions, err := r.Client.ItemSession.Query().
+func (b *Backlog) ListOpenJulesItemSessions(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
+	sessions, err := b.client.ItemSession.Query().
 		Where(
-			itemsession.SessionRole(instance.SessionRoleJulesWork),
+			itemsession.SessionRole(domain.SessionRoleJulesWork),
 			itemsession.EndedAtIsNil(),
 		).
 		WithBacklogItem().
@@ -269,10 +268,10 @@ func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlo
 // end_reason "dispatch_failed" (failed at CreateSession), so a bad key or a
 // Jules-side outage doesn't consume the day's cap on attempts nothing was
 // actually billed for (pre-mortem P2 #5).
-func (r *EntRepository) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
-	n, err := r.Client.ItemSession.Query().
+func (b *Backlog) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
+	n, err := b.client.ItemSession.Query().
 		Where(
-			itemsession.SessionRole(instance.SessionRoleJulesWork),
+			itemsession.SessionRole(domain.SessionRoleJulesWork),
 			itemsession.CreatedAtGTE(since),
 			itemsession.Not(itemsession.SessionUUIDHasPrefix(domain.JulesPendingUUIDPrefix)),
 			itemsession.EndReasonNEQ(domain.JulesDispatchFailedEndReason),

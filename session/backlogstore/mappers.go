@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"encoding/json"
@@ -95,8 +95,8 @@ func ItemSessionToSummary(is *ent.ItemSession) backlogdto.ItemSessionSummary {
 	}
 }
 
-// backlogStatusEventToData maps an *ent.BacklogStatusEvent to a BacklogStatusEventData DTO.
-func backlogStatusEventToData(e *ent.BacklogStatusEvent) backlogdto.BacklogStatusEventData {
+// BacklogStatusEventToData maps an *ent.BacklogStatusEvent to a BacklogStatusEventData DTO.
+func BacklogStatusEventToData(e *ent.BacklogStatusEvent) backlogdto.BacklogStatusEventData {
 	return backlogdto.BacklogStatusEventData{
 		ID:                         e.ID.String(),
 		FromStatus:                 e.FromStatus,
@@ -120,8 +120,8 @@ func progressNoteToData(n *ent.BacklogProgressNote) backlogdto.ProgressNoteData 
 	}
 }
 
-// activityNoteToData maps an *ent.BacklogActivityNote to an ActivityNoteData DTO.
-func activityNoteToData(n *ent.BacklogActivityNote) backlogdto.ActivityNoteData {
+// ActivityNoteToData maps an *ent.BacklogActivityNote to an ActivityNoteData DTO.
+func ActivityNoteToData(n *ent.BacklogActivityNote) backlogdto.ActivityNoteData {
 	return backlogdto.ActivityNoteData{
 		ID:                 n.ID.String(),
 		Message:            n.Message,
@@ -193,7 +193,7 @@ func BacklogItemToData(item *ent.BacklogItem) backlogdto.BacklogItemData {
 	if item.Edges.StatusEvents != nil {
 		data.StatusEvents = make([]backlogdto.BacklogStatusEventData, len(item.Edges.StatusEvents))
 		for i, ev := range item.Edges.StatusEvents {
-			data.StatusEvents[i] = backlogStatusEventToData(ev)
+			data.StatusEvents[i] = BacklogStatusEventToData(ev)
 		}
 	}
 	// Propagate eagerly-loaded progress notes when present (see StatusEvents above).
@@ -207,7 +207,7 @@ func BacklogItemToData(item *ent.BacklogItem) backlogdto.BacklogItemData {
 	if item.Edges.ActivityNotes != nil {
 		data.ActivityNotes = make([]backlogdto.ActivityNoteData, len(item.Edges.ActivityNotes))
 		for i, n := range item.Edges.ActivityNotes {
-			data.ActivityNotes[i] = activityNoteToData(n)
+			data.ActivityNotes[i] = ActivityNoteToData(n)
 		}
 	}
 	// Propagate eagerly-loaded item sessions when present. Note: the

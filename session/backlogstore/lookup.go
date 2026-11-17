@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -8,11 +8,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
 
-// resolveBacklogItemLookup resolves a caller-supplied BacklogItem identifier
+// ResolveBacklogItemLookup resolves a caller-supplied BacklogItem identifier
 // — either a legacy raw UUID string or a bl_-prefixed public id
 // (BacklogItemID, see session/backlog_item_id.go) — to the row's underlying
 // primary-key uuid.UUID. Every call site that touches a BacklogItem id
-// string replaces its bare uuid.Parse(id) with r.resolveBacklogItemLookup(ctx, id)
+// string replaces its bare uuid.Parse(id) with b.ResolveBacklogItemLookup(ctx, id)
 // and keeps its own subsequent error-wrapping line unchanged (Story 1.3,
 // project_plans/backlog-deep-linking/implementation/plan.md task 1): the
 // legacy-UUID branch below is exactly uuid.Parse, so every existing
@@ -36,11 +36,11 @@ import (
 // (server/mcp/tools_backlog.go), the deep-link resolver
 // (server/services/deep_link_resolver.go's resolveLocal), and the review/
 // triage/lifecycle update paths -- funnels through Storage.GetBacklogItem or
-// another EntRepository method that already calls resolveBacklogItemLookup,
+// another EntRepository method that already calls ResolveBacklogItemLookup,
 // so no other call site needs its own dual-ID branch.
-func (r *EntRepository) resolveBacklogItemLookup(ctx context.Context, id string) (uuid.UUID, error) {
+func (b *Backlog) ResolveBacklogItemLookup(ctx context.Context, id string) (uuid.UUID, error) {
 	if backlogdto.IsBacklogItemIDShape(id) {
-		item, err := r.Client.BacklogItem.Query().
+		item, err := b.client.BacklogItem.Query().
 			Where(backlogitem.PublicID(id)).
 			Only(ctx)
 		if err != nil {
@@ -52,10 +52,10 @@ func (r *EntRepository) resolveBacklogItemLookup(ctx context.Context, id string)
 	return uuid.Parse(id)
 }
 
-func (r *EntRepository) backlogItemExists(ctx context.Context, itemID string) (bool, error) {
-	id, err := r.resolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) backlogItemExists(ctx context.Context, itemID string) (bool, error) {
+	id, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return false, err
 	}
-	return r.Client.BacklogItem.Query().Where(backlogitem.ID(id)).Exist(ctx)
+	return b.client.BacklogItem.Query().Where(backlogitem.ID(id)).Exist(ctx)
 }

@@ -36,7 +36,7 @@ func TestResolveBacklogItemLookup_should_RouteToPublicIdBranch_When_BlPrefixedSt
 	wantID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
 
-	gotID, err := repo.resolveBacklogItemLookup(ctx, created.PublicIDRaw)
+	gotID, err := repo.ResolveBacklogItemLookup(ctx, created.PublicIDRaw)
 	require.NoError(t, err, "resolving a valid public id must not error")
 	assert.Equal(t, wantID, gotID, "resolveBacklogItemLookup(public_id) must return the row's real primary key")
 }
@@ -54,7 +54,7 @@ func TestResolveBacklogItemLookup_should_ReturnInvalidError_When_NeitherUUIDNorP
 	tests := []string{"not-a-uuid-or-bl-id", "", "12345"}
 	for _, in := range tests {
 		t.Run(in, func(t *testing.T) {
-			_, err := repo.resolveBacklogItemLookup(ctx, in)
+			_, err := repo.ResolveBacklogItemLookup(ctx, in)
 			require.Error(t, err, "resolveBacklogItemLookup(%q) must return an error, not a valid id", in)
 		})
 	}
@@ -75,7 +75,7 @@ func TestResolveBacklogItemLookup_should_NeverRoutePublicIdBranch_When_ValidUUID
 	ctx := context.Background()
 
 	want := uuid.New()
-	got, err := repo.resolveBacklogItemLookup(ctx, want.String())
+	got, err := repo.ResolveBacklogItemLookup(ctx, want.String())
 	require.NoError(t, err, "a syntactically valid UUID must resolve via the legacy branch even though no row exists with that id")
 	assert.Equal(t, want, got)
 }
