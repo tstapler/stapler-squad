@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func ParseDiagnoseResult(raw string) (backlogdto.DiagnoseResultData, bool) {
 }
 
 // UpdateItemSessionDiagnoseResult stores the structured diagnose outcome on an ItemSession.
-func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result backlogdto.DiagnoseResultData) error {
+func (b *Backlog) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result backlogdto.DiagnoseResultData) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
@@ -31,24 +31,24 @@ func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id 
 	if err != nil {
 		return fmt.Errorf("marshal diagnose_result: %w", err)
 	}
-	if _, err := r.Client.ItemSession.UpdateOneID(parsedID).SetDiagnoseResult(string(payload)).Save(ctx); err != nil {
+	if _, err := b.client.ItemSession.UpdateOneID(parsedID).SetDiagnoseResult(string(payload)).Save(ctx); err != nil {
 		return fmt.Errorf("failed to update diagnose_result on item session %s: %w", id, err)
 	}
-	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
+	if item, lookupErr := b.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
 		log.WarningLog().Printf("[EntRepository] UpdateItemSessionDiagnoseResult: owning item lookup for %s: %v", id, lookupErr)
 	} else {
-		r.publishItemChanged(ctx, item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"diagnoseResult"}})
+		b.PublishItemChanged(ctx, item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"diagnoseResult"}})
 	}
 	return nil
 }
 
 // AppendWorkflowSuggestion adds a suggestion to the item atomically and returns its id.
-func (r *EntRepository) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug backlogdto.WorkflowSuggestionData) (string, error) {
+func (b *Backlog) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug backlogdto.WorkflowSuggestionData) (string, error) {
 	sug.SuggestionID = uuid.NewString()
 	if sug.CreatedAt.IsZero() {
 		sug.CreatedAt = time.Now().UTC()
 	}
-	err := r.mutateWorkflowSuggestions(ctx, itemID, func(list []backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error) {
+	err := b.mutateWorkflowSuggestions(ctx, itemID, func(list []backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error) {
 		active := 0
 		for _, e := range list {
 			if e.Dismissed {
@@ -71,8 +71,8 @@ func (r *EntRepository) AppendWorkflowSuggestion(ctx context.Context, itemID str
 }
 
 // DismissWorkflowSuggestion marks a suggestion dismissed; ErrNotFound if the id is unknown.
-func (r *EntRepository) DismissWorkflowSuggestion(ctx context.Context, itemID, suggestionID string) error {
-	return r.mutateWorkflowSuggestions(ctx, itemID, func(list []backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error) {
+func (b *Backlog) DismissWorkflowSuggestion(ctx context.Context, itemID, suggestionID string) error {
+	return b.mutateWorkflowSuggestions(ctx, itemID, func(list []backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error) {
 		for i := range list {
 			if list[i].SuggestionID == suggestionID {
 				list[i].Dismissed = true
@@ -84,12 +84,12 @@ func (r *EntRepository) DismissWorkflowSuggestion(ctx context.Context, itemID, s
 }
 
 // mutateWorkflowSuggestions read-modify-writes the JSON column in one transaction.
-func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID string, mutate func([]backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error)) error {
-	parsedItemID, err := r.ResolveBacklogItemLookup(ctx, itemID)
+func (b *Backlog) mutateWorkflowSuggestions(ctx context.Context, itemID string, mutate func([]backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error)) error {
+	parsedItemID, err := b.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	tx, err := r.Client.Tx(ctx)
+	tx, err := b.client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin workflow-suggestion tx: %w", err)
 	}
@@ -115,8 +115,8 @@ func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID st
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit workflow_suggestions: %w", err)
 	}
-	if data, getErr := r.GetBacklogItem(ctx, parsedItemID.String()); getErr == nil {
-		r.publishItemChanged(ctx, data, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"workflowSuggestions"}})
+	if data, getErr := b.GetBacklogItem(ctx, parsedItemID.String()); getErr == nil {
+		b.PublishItemChanged(ctx, data, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"workflowSuggestions"}})
 	}
 	return nil
 }

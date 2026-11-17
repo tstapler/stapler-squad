@@ -216,7 +216,7 @@ func BacklogItemToData(item *ent.BacklogItem) backlogdto.BacklogItemData {
 	// gateVerdict/gateVerdictSummary/triageStatus — which the frontend derives
 	// entirely from ItemSessions (web-app/src/lib/hooks/useBacklogService.ts's
 	// mapBacklogItem) — to come through non-empty. Most callers that need this
-	// populated correctly go through attachItemSessionsForPublish instead of
+	// populated correctly go through AttachItemSessionsForPublish instead of
 	// relying on this edge being loaded on the entity passed in here.
 	if item.Edges.ItemSessions != nil {
 		data.ItemSessions = make([]backlogdto.ItemSessionSummary, len(item.Edges.ItemSessions))

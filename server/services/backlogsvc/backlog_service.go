@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
@@ -997,7 +998,7 @@ func itemSessionToProto(is backlogdto.ItemSessionSummary, costFor func(tmuxUUID 
 			}
 		}
 	}
-	if dr, ok := session.ParseDiagnoseResult(is.DiagnoseResult); ok {
+	if dr, ok := backlogstore.ParseDiagnoseResult(is.DiagnoseResult); ok {
 		p.DiagnoseResult = &sessionv1.DiagnoseResult{
 			Outcome: dr.Outcome, Summary: dr.Summary, FiledItemId: dr.FiledItemID,
 			DiagnosedAt: timestamppb.New(dr.DiagnosedAt),
@@ -1128,7 +1129,7 @@ func allowedTransitionStrings(engine domain.WorkflowEngine, from domain.BacklogS
 // engine must be the caller's s.engine — see allowedTransitionStrings.
 func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		WorkflowSuggestions: workflowSuggestionsToProto(session.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
+		WorkflowSuggestions: workflowSuggestionsToProto(backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
 		Id:                  item.ID,
 		Title:               item.Title,
 		Description:         item.Description,

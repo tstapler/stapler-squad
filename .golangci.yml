@@ -292,6 +292,7 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent/itemsession
             - github.com/tstapler/stapler-squad/session/ent/itemsource
             - github.com/tstapler/stapler-squad/session/ent/predicate
+            - github.com/tstapler/stapler-squad/session/ent/reviewverdict
             - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/sourcesyncevent
             - github.com/tstapler/stapler-squad/session/markerstore
