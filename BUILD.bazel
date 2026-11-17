@@ -254,3 +254,10 @@ forbidden_deps_test(
     target = ":stapler-squad_plain",
     why = "go-m1cpu's cgo init() segfaults at startup on some Apple Silicon machines (PR #129); gopsutil/v3 pulls it in (replaces deps_guard_test.go)",
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

@@ -38,3 +38,10 @@ go_test(
         "@com_github_go_git_go_git_v5//plumbing",
     ],
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
