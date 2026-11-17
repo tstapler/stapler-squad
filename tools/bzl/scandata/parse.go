@@ -89,20 +89,22 @@ func scan(src string, from int, fn func(i, depth int) bool) {
 	depth, inStr := 0, false
 	for i := from; i < len(src); i++ {
 		c := src[i]
-		switch {
-		case inStr:
-			if c == '\\' {
+		if inStr {
+			switch c {
+			case '\\':
 				i++
-			} else if c == '"' {
+			case '"':
 				inStr = false
 			}
 			continue
-		case c == '"':
+		}
+		switch c {
+		case '"':
 			inStr = true
 			continue
-		case c == '(' || c == '[' || c == '{':
+		case '(', '[', '{':
 			depth++
-		case c == ')' || c == ']' || c == '}':
+		case ')', ']', '}':
 			depth--
 		}
 		if fn(i, depth) {
