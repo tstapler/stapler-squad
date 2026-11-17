@@ -236,6 +236,7 @@ linters:
             - "!**/*_test.go"
           allow:
             - $gostd
+            - entgo.io/ent/dialect/sql
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/log
             - github.com/tstapler/stapler-squad/session/domain

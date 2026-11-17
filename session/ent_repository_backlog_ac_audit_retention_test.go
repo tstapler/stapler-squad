@@ -186,7 +186,8 @@ func TestCreateAcAuditEvent_should_RunOnCallersTransaction(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
 	id := liveItemUUID(t, repo)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	tx, err := repo.Client.Tx(ctx)
 	require.NoError(t, err)
