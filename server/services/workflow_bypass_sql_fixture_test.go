@@ -33,6 +33,9 @@ func TestBacklogItemStatusWriters_SQLHeuristicFlagsEveryWriteForm(t *testing.T) 
 		"UPDATE [backlog_items] SET [status] = 'x'",
 		"UPDATE backlog_items INDEXED BY idx_status SET status = 'x'",
 		"UPDATE backlog_items NOT INDEXED SET status = 'x'",
+		"UPDATE backlog_items SET main.status = 'x'",
+		"UPDATE backlog_items AS b SET b.status = 'x'",
+		"UPDATE backlog_items SET backlog_items.status = 'x'",
 	}
 	for _, q := range writes {
 		assert.True(t, clsSQLWritesBacklogStatus(q), q)
@@ -58,6 +61,10 @@ func TestBacklogItemStatusWriters_SQLHeuristicIgnoresNonWrites(t *testing.T) {
 		"UPDATE backlog_items SET a = 1 FROM t WHERE t.status = 'x'",
 		"UPDATE backlog_items SET title = CASE WHEN status = 'a' THEN 'x' END",
 		"REPLACE INTO backlog_items (id, title) VALUES (1, 'a')",
+		"UPDATE backlog_items SET t.status_reason = 'x'",
+		"UPDATE backlog_items SET x.statuses = 'x'",
+		"UPDATE backlog_items SET title = 'x' RETURNING id, status = 'x'",
+		"UPDATE backlog_items SET title = 'x' WHERE a = 1 OR b = 2, status = 'x'",
 	}
 	for _, q := range nonWrites {
 		assert.False(t, clsSQLWritesBacklogStatus(q), q)

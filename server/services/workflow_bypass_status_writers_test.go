@@ -23,7 +23,10 @@ import (
 //     workflow_bypass_sql_test.go): REPLACE INTO backlog_items (cols) with an
 //     explicit column list omitting status is not flagged (the row is
 //     re-inserted, so status resets to its default); a quote inside a
-//     double-quoted identifier can open a phantom string.
+//     double-quoted identifier can open a phantom string; a top-level
+//     FROM/WHERE/RETURNING-like keyword inside the SET list (SET t = x IS NOT
+//     DISTINCT FROM y, status = 'z') truncates it so a later status assignment
+//     is missed; an unterminated "(" drops the rest of the statement.
 //   - Entgo sql builder chains split across variables.
 
 // clsStatusWriterMethods are the generated BacklogItem builder methods that

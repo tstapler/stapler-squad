@@ -16,7 +16,7 @@ var (
 	clsSQLSetEnd    = regexp.MustCompile(`\b(where|returning|from)\b`)
 	clsSQLUpsertSet = regexp.MustCompile(`(?s)\bdo\s+update\s+set\s+(.*)$`)
 	clsSQLStatusCol = regexp.MustCompile(`\bstatus\b`)
-	clsSQLStatusSet = regexp.MustCompile(`^\s*status\s*=`)
+	clsSQLStatusSet = regexp.MustCompile(`^\s*(?:\w+\.)?status\s*=`)
 	clsSQLRowValue  = regexp.MustCompile(`\x00(\d+)\x00\s*=`)
 )
 
