@@ -66,3 +66,10 @@ forbidden_deps_test(
     target = ":jules",
     why = "jules/ must not import session/ or server/ so alpha-API churn stays confined (replaces the go list -deps test in client_test.go)",
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

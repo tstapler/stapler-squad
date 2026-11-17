@@ -68,5 +68,6 @@ filegroup(
     visibility = [
         "//session:__pkg__",
         "//session/unfinished:__subpackages__",
+        "//tools/bzl/scandata:__pkg__",
     ],
 )

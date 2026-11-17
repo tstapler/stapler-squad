@@ -79,3 +79,10 @@ go_test(
         "@org_uber_go_goleak//:goleak",
     ],
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

@@ -121,3 +121,10 @@ alias(
     actual = ":svctest",
     visibility = ["//server/services:__subpackages__"],
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
