@@ -85,7 +85,7 @@ func (r *EntRepository) DismissWorkflowSuggestion(ctx context.Context, itemID, s
 
 // mutateWorkflowSuggestions read-modify-writes the JSON column in one transaction.
 func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID string, mutate func([]backlogdto.WorkflowSuggestionData) ([]backlogdto.WorkflowSuggestionData, error)) error {
-	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
+	parsedItemID, err := r.ResolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}

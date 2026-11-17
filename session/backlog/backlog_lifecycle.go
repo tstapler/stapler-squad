@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -1348,14 +1349,14 @@ func (l *BacklogLifecycleListener) respawnReviewGatesWithoutGate(ctx context.Con
 	for _, item := range items {
 		var workSession *backlogdto.ItemSessionSummary
 		if len(item.Edges.ItemSessions) > 0 {
-			s := session.ItemSessionToSummary(item.Edges.ItemSessions[0])
+			s := backlogstore.ItemSessionToSummary(item.Edges.ItemSessions[0])
 			workSession = &s
 		}
 		if workSession == nil {
 			log.Debug("[BacklogLifecycle] ReconcileStuckReviewGates: item has no work session, skipping", "item", item.ID)
 			continue
 		}
-		itemData := session.BacklogItemToData(item)
+		itemData := backlogstore.BacklogItemToData(item)
 		if l.heldByTransitionDenial(ctx, &itemData, "ReconcileStuckReviewGates") {
 			continue
 		}
