@@ -19,6 +19,11 @@ import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
 import type { MobileInputHandle } from "@/lib/terminal/mobileInput/useMobileInput";
 import { useRendererMobileInput } from "@/lib/terminal/mobileInput/useRendererMobileInput";
+import { attachGhosttyTouch } from "@/lib/terminal/ghosttyTouch";
+import { copyToClipboard } from "@/lib/clipboard";
+import { openLinkInNewWindow } from "@/lib/terminal/terminalLinks";
+import { isTouchPrimary } from "@/lib/terminal/mobileInput/platform";
+import { TerminalLinkMenu } from "./TerminalLinkMenu";
 
 /** Adapts a ghostty-web terminal to what the wheel forwarder reads; `renderer` is private in its typings. */
 function ghosttyWheelTerminal(term: XtermWebTerminal | GhosttyWebTerminal): WheelTerminal {
@@ -45,7 +50,7 @@ const DEFAULT_FONT_SIZE = 14;
  *
  * The library is imported dynamically: its ~0.7 MB bundle (WASM inlined) stays out of the
  * initial chunk, and the module-level `init()` promise makes every instance share one WASM load.
- * Not ported from XtermTerminal: touch gestures, the WebGL slot budget, and the resize sampler
+ * Not ported from XtermTerminal: touch scrolling, the WebGL slot budget, and the resize sampler
  * (ghostty-web's FitAddon observes the container itself).
  */
 let ghosttyReady: Promise<typeof GhosttyModule> | null = null;
@@ -81,6 +86,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
   const searchStateRef = useRef<SearchState>({ term: "", row: -1, col: -1 });
   const layerRef = useRef<MobileInputHandle | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
+  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; uri: string } | null>(null);
   const { toast, show: showCopyToast } = useCopyToast();
   const [clipboard] = useState(() =>
     createClipboardActions(
@@ -120,6 +126,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     let disposed = false;
     let term: GhosttyWebTerminal | null = null;
     let disposeIme: (() => void) | undefined;
+    let disposeTouch: (() => void) | undefined;
     let detachRenderGate: (() => void) | null = null;
 
     void loadGhostty().then(({ Terminal, FitAddon }) => {
@@ -149,6 +156,8 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         createMouseWheelForwarder(ghosttyWheelTerminal(term), (data) => onDataRef.current?.(data)),
       );
       term.onResize(({ cols, rows }) => onResizeRef.current?.(cols, rows));
+      // Registered before GhosttyCopyPasteUi's contextmenu listener so a long-press selection can swallow the menu.
+      if (isTouchPrimary()) disposeTouch = attachGhosttyTouch(term, { onLink: (uri, x, y) => setLinkMenu({ uri, x, y }) });
       terminalRef.current = term;
       fitRef.current = fit;
       setTerminalReady(true);
@@ -167,6 +176,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     return () => {
       disposed = true;
       disposeIme?.();
+      disposeTouch?.();
       detachRenderGate?.();
       terminalRef.current = null;
       compatRef.current = null;
@@ -254,6 +264,16 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       <div ref={containerRef} className={styles.terminal} />
       {layer.layerActive && <div ref={layer.layerContainerRef} data-mobile-input-host />}
       <GhosttyCopyPasteUi terminal={terminalReady ? terminalRef.current : null} actions={clipboard} toast={toast} showToast={showCopyToast} />
+      {linkMenu && (
+        <TerminalLinkMenu
+          x={linkMenu.x}
+          y={linkMenu.y}
+          uri={linkMenu.uri}
+          onOpen={openLinkInNewWindow}
+          onCopy={(uri) => void copyToClipboard(uri).then((ok) => showCopyToast(ok))}
+          onDismiss={() => setLinkMenu(null)}
+        />
+      )}
     </div>
   );
 });
