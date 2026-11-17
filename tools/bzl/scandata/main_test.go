@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +18,22 @@ const goodGroup = `filegroup(
 )
 `
 
+const leafLabel = `"//session/leaf:go_sources"`
+
+func buildWith(testName, dataEntries, depsEntries string) string {
+	return `go_library(name = "x", deps = [` + depsEntries + `])
+
+go_test(
+    name = "` + testName + `",
+    data = glob(["*.go"]) + [
+        "//:go.mod",
+` + dataEntries + `
+    ],
+    deps = [` + depsEntries + `],
+)
+`
+}
+
 func write(t *testing.T, root, rel, body string) {
 	t.Helper()
 	p := filepath.Join(root, rel)
@@ -26,11 +41,12 @@ func write(t *testing.T, root, rel, body string) {
 	require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
 }
 
-func fixture(t *testing.T, leafBuild, data string) string {
+// fixture writes both scanner BUILD files (data, deps) and a leaf with the given BUILD content.
+func fixture(t *testing.T, leafBuild, data, deps string) string {
 	t.Helper()
 	root := t.TempDir()
-	write(t, root, "session/BUILD.bazel", data)
-	write(t, root, "server/services/BUILD.bazel", data)
+	write(t, root, "session/BUILD.bazel", buildWith("session_test", data, deps))
+	write(t, root, "server/services/BUILD.bazel", buildWith("services_test", data, deps))
 	write(t, root, "session/leaf/x.go", "package leaf\n")
 	write(t, root, "session/leaf/x_test.go", "package leaf\n")
 	write(t, root, "session/ent/gen.go", "package ent\n")
@@ -41,27 +57,59 @@ func fixture(t *testing.T, leafBuild, data string) string {
 	return root
 }
 
+func visGroup(vis string) string {
+	return "filegroup(\n    name = \"go_sources\",\n    srcs = glob([\"*.go\"]),\n    visibility = " + vis + ",\n)\n"
+}
+
 func TestCheck_ShouldPass_WhenLeafHasFilegroupAndIsInBothDataLists(t *testing.T) {
 	t.Parallel()
-	root := fixture(t, goodGroup, `data = ["//session/leaf:go_sources"]`)
-	got, err := check(root)
+	got, err := check(fixture(t, goodGroup, "        "+leafLabel+",", ""))
 	require.NoError(t, err)
 	require.Empty(t, got)
 }
 
 func TestCheck_ShouldFlagMissingFilegroup_WhenLeafHasGoSourcesButNoRule(t *testing.T) {
 	t.Parallel()
-	root := fixture(t, "# nothing\n", `data = ["//session/leaf:go_sources"]`)
-	got, err := check(root)
+	got, err := check(fixture(t, "# nothing\n", "        "+leafLabel+",", ""))
 	require.NoError(t, err)
 	require.Equal(t, []string{"session/leaf: no go_sources filegroup"}, got)
 }
 
-func TestCheck_ShouldFlagPrivateVisibility_WhenScannerCannotSeeFilegroup(t *testing.T) {
+func TestCheck_ShouldFlagMissingDataEntry_WhenScannerPackageDoesNotListLeaf(t *testing.T) {
 	t.Parallel()
-	private := strings.Replace(goodGroup, goodGroup[strings.Index(goodGroup, "    visibility"):strings.LastIndex(goodGroup, ")")], "    visibility = [\"//visibility:private\"],\n", 1)
-	root := fixture(t, private, `data = ["//session/leaf:go_sources"]`)
+	got, err := check(fixture(t, goodGroup, "", ""))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Contains(t, got[0], "server/services/BUILD.bazel go_test services_test data")
+}
+
+func TestCheck_ShouldFlagCommentedOutDataEntry(t *testing.T) {
+	t.Parallel()
+	got, err := check(fixture(t, goodGroup, "        # "+leafLabel+",", ""))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+}
+
+func TestCheck_ShouldFlagLabelOnlyInDeps_WhenNotInData(t *testing.T) {
+	t.Parallel()
+	got, err := check(fixture(t, goodGroup, "", leafLabel))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+}
+
+func TestCheck_ShouldFlagLabelInOtherTargetData_WhenNotInScannerTest(t *testing.T) {
+	t.Parallel()
+	root := fixture(t, goodGroup, "        "+leafLabel+",", "")
+	other := buildWith("other_test", "        "+leafLabel+",", "")
+	write(t, root, "session/BUILD.bazel", buildWith("session_test", "", "")+other)
 	got, err := check(root)
+	require.NoError(t, err)
+	require.Equal(t, []string{"session/leaf: go_sources not in session/BUILD.bazel go_test session_test data"}, got)
+}
+
+func TestCheck_ShouldFlagPrivateVisibility(t *testing.T) {
+	t.Parallel()
+	got, err := check(fixture(t, visGroup(`["//visibility:private"]`), "        "+leafLabel+",", ""))
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"session/leaf: go_sources not visible to //server/services",
@@ -69,13 +117,19 @@ func TestCheck_ShouldFlagPrivateVisibility_WhenScannerCannotSeeFilegroup(t *test
 	}, got)
 }
 
-func TestCheck_ShouldFlagMissingDataEntry_WhenScannerPackageDoesNotListLeaf(t *testing.T) {
+func TestCheck_ShouldAcceptPublicAndSubpackagesVisibility(t *testing.T) {
 	t.Parallel()
-	root := fixture(t, goodGroup, `data = []`)
-	got, err := check(root)
+	for _, vis := range []string{`["//visibility:public"]`, `["//:__subpackages__"]`, `["//session:__subpackages__", "//server:__subpackages__"]`} {
+		got, err := check(fixture(t, visGroup(vis), "        "+leafLabel+",", ""))
+		require.NoError(t, err)
+		require.Empty(t, got, vis)
+	}
+}
+
+func TestCheck_ShouldNameUnsupportedVisibility_WhenPackageGroupUsed(t *testing.T) {
+	t.Parallel()
+	got, err := check(fixture(t, visGroup(`[":scanners"]`), "        "+leafLabel+",", ""))
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"session/leaf: go_sources not in server/services/BUILD.bazel data",
-		"session/leaf: go_sources not in session/BUILD.bazel data",
-	}, got)
+	require.Len(t, got, 2)
+	require.Contains(t, got[0], `unsupported visibility entry ":scanners"`)
 }

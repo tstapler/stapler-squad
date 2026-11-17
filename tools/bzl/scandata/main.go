@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -26,8 +25,6 @@ const scanRoot = "session"
 
 // notScanned are session subtrees the scanners skip.
 var notScanned = map[string]bool{"session/ent": true}
-
-var goSourcesRe = regexp.MustCompile(`(?s)filegroup\(\s*name = "go_sources",.*?\n\)`)
 
 func main() {
 	root := "."
@@ -56,13 +53,17 @@ func check(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	data := map[string]string{}
+	data := map[string]map[string]bool{}
 	for _, s := range scanners {
 		b, rerr := os.ReadFile(filepath.Join(root, s, "BUILD.bazel"))
 		if rerr != nil {
 			return nil, rerr
 		}
-		data[s] = string(b)
+		call, ok := findCall(stripComments(string(b)), "go_test", scannerTests[s])
+		if !ok {
+			return nil, fmt.Errorf("%s/BUILD.bazel: no go_test named %q", s, scannerTests[s])
+		}
+		data[s] = stringSet(attr(call, "data"))
 	}
 	var out []string
 	for _, leaf := range leaves {
@@ -72,26 +73,27 @@ func check(root string) ([]string, error) {
 	return out, nil
 }
 
-func checkLeaf(root, leaf string, data map[string]string) []string {
+func checkLeaf(root, leaf string, data map[string]map[string]bool) []string {
 	build, err := os.ReadFile(filepath.Join(root, leaf, "BUILD.bazel"))
 	if err != nil {
 		return []string{leaf + ": no BUILD.bazel"}
 	}
 	var out []string
-	block := goSourcesRe.FindString(string(build))
-	if block == "" {
+	fg, ok := findCall(stripComments(string(build)), "filegroup", "go_sources")
+	if !ok {
 		out = append(out, leaf+": no go_sources filegroup")
 	} else {
+		vis := strRe.FindAllStringSubmatch(attr(fg, "visibility"), -1)
 		for _, s := range scanners {
-			if !strings.Contains(block, "//visibility:public") && !strings.Contains(block, `"//`+s+`:__pkg__"`) {
-				out = append(out, fmt.Sprintf("%s: go_sources not visible to //%s", leaf, s))
+			if msg := visibleTo(vis, s); msg != "" {
+				out = append(out, fmt.Sprintf("%s: go_sources %s //%s", leaf, msg, s))
 			}
 		}
 	}
-	label := `"//` + leaf + `:go_sources"`
+	label := "//" + leaf + ":go_sources"
 	for _, s := range scanners {
-		if !strings.Contains(data[s], label) {
-			out = append(out, fmt.Sprintf("%s: go_sources not in %s/BUILD.bazel data", leaf, s))
+		if !data[s][label] {
+			out = append(out, fmt.Sprintf("%s: go_sources not in %s/BUILD.bazel go_test %s data", leaf, s, scannerTests[s]))
 		}
 	}
 	return out
