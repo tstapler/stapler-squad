@@ -24,7 +24,8 @@ type Guidance interface {
 type OwnerPRRowsDeleter func(ctx context.Context, tx *ent.Tx, owner domain.PROwner) error
 
 // Ports are the consumer-side dependencies New requires, all non-nil: a nil
-// port panics on first use, as the nil embedded stores did before the ports existed.
+// Guidance or DeleteOwnerPRRows panics on first use, as the nil embedded stores
+// did before the ports existed. New has one caller, session.EntRepository.initStores.
 type Ports struct {
 	Guidance          Guidance
 	DeleteOwnerPRRows OwnerPRRowsDeleter

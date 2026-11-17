@@ -186,5 +186,5 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 // --- Bouncing (non-converging cycle) detection ---
 
 // Jules-specific queries (ListOpenJulesItemSessions, CountJulesItemSessionsSince,
-// TouchItemSessionProgress) live in ent_repository_backlog_jules.go, split out to
+// TouchItemSessionProgress) live in backlogstore/item_session_progress.go, split out to
 // keep this file under the file-length-limit gate.

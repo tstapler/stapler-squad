@@ -52,7 +52,7 @@ func (b *Backlog) AttachItemSessionsForPublish(ctx context.Context, data *backlo
 	}
 	sessions, err := b.ListItemSessions(ctx, data.ID)
 	if err != nil {
-		log.WarningLog().Printf("[EntRepository] AttachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
+		log.WarningLog().Printf("[EntRepository] attachItemSessionsForPublish: failed to load item sessions for item %s: %v", data.ID, err)
 		return
 	}
 	data.ItemSessions = sessions

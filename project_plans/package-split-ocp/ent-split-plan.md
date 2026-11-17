@@ -30,7 +30,7 @@ Per cluster (cluster = file-name grouping used throughout this plan):
 
 | Cluster | Prod files / LOC | Test files / LOC | Files |
 |---|---|---|---|
-| backlog | 2 / 3,445 | 3 / 1,900 | `ent_repository_backlog.go`, `ent_repository_backlog_source.go` |
+| backlog | 2 / 3,445 | 3 / 1,900 | `ent_repository_backlog.go`, `backlogstore/source_filter.go` (was `ent_repository_backlog_source.go`) |
 | entcore | 6 / 2,826 | 8 / 1,443 | `ent_repository.go` (2,436), `ent_client_instrumented.go`, `ent_repository_conversation.go`, `ent_repository_integration_credential.go`, `ent_repository_migrations.go`, `ent_repository_seed.go` |
 | flow | 8 / 1,095 | 8 / 1,512 | `ent_repository_flow*.go` (reader 790 + markers 221), `ent_repository_stuck_episode.go` (84) |
 | guidance | 4 / 950 | 4 / 1,226 | `ent_repository_guidance*.go` |
@@ -91,7 +91,7 @@ In-module imports of every prod file other than `session/ent/*` (VERIFIED, `grep
 | `ent_repository_flow.go` | 49 | `domain` | 0 |
 | `ent_repository_conversation.go` | 34 | none | 0 |
 | `ent_repository_guidance_purge.go` | 30 | none | 0 |
-| `ent_repository_backlog_source.go` | 25 | none | 0 |
+| `backlogstore/source_filter.go` (was `ent_repository_backlog_source.go`) | 25 | none | 0 |
 
 No ent_* file imports `server`, `session/tmux`, `session/git*`, or `session/backlog`. The only module import that could leak a heavy closure is `github` from `ent_repository_migrations.go`, and that file stays (it is the shell's constructor glue). The roadmap's claim that `pr_set.go` drags `github` into the PR store is stale: the PR records now live in `session/domain` (`pr_link.go`, `pr_set.go`) and `ent_repository_session_pr.go` imports only `domain`, `instance` and `log`.
 

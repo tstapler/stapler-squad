@@ -328,6 +328,7 @@ go_test(
         "ent_repository_backlog_diagnose_test.go",
         "ent_repository_backlog_hooks_test.go",
         "ent_repository_backlog_items_test.go",
+        "ent_repository_backlog_moved_guards_test.go",
         "ent_repository_backlog_moved_writers_test.go",
         "ent_repository_backlog_read_queries_test.go",
         "ent_repository_backlog_stuck_test.go",
