@@ -15,7 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -31,9 +30,9 @@ const maxAuditUserAgent = 200
 // it presented (cookie or bearer token; either may derive from the local API token). Everything
 // else is "unverified": on the local loopback surface an agent's curl and the operator's own CLI
 // look identical, so the absence of an agent header must never be read as "operator".
-func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) session.AcActor {
-	actor := session.AcActor{
-		Class:      session.AcActorUnverified,
+func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) domain.AcActor {
+	actor := domain.AcActor{
+		Class:      domain.AcActorUnverified,
 		Source:     "api",
 		RemoteAddr: truncateAuditField(peerAddr, 100),
 		UserAgent:  truncateAuditField(h.Get("User-Agent"), maxAuditUserAgent),
@@ -44,7 +43,7 @@ func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) ses
 	sid, proof := strings.TrimSpace(h.Get("X-Stapler-Session-UUID")), h.Get(instance.MCPProofHeader)
 	switch {
 	case sid != "" || proof != "":
-		actor.Class = session.AcActorAgentSession
+		actor.Class = domain.AcActorAgentSession
 		if _, err := uuid.Parse(sid); err == nil {
 			actor.SessionUUID = sid
 			if p := services.DefaultMcpProofs(); p != nil && proof != "" {
@@ -54,9 +53,9 @@ func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) ses
 			actor.SessionUUID = "(invalid id)" // never echo attacker-controlled text into the trail
 		}
 	case middleware.AuthCredentialKind(ctx) == middleware.CredentialCookie:
-		actor.Class = session.AcActorAuthenticatedSession
+		actor.Class = domain.AcActorAuthenticatedSession
 	case middleware.AuthCredentialKind(ctx) == middleware.CredentialBearer:
-		actor.Class = session.AcActorAuthenticatedBearer
+		actor.Class = domain.AcActorAuthenticatedBearer
 	}
 	return actor
 }

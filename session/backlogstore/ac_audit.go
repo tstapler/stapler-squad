@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -9,26 +9,12 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/acauditevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
-)
-
-// AcActorClass says how a caller identified itself. None of these prove the caller is "the owner":
-// authenticated classes only show a credential was presented, an agent class is a claim unless
-// SessionVerified, and Unverified means no identity signal at all (on the local loopback surface
-// an agent's curl and the operator's own CLI look identical).
-type AcActorClass string
-
-const (
-	AcActorAuthenticatedSession AcActorClass = "authenticated_session_cookie"
-	AcActorAuthenticatedBearer  AcActorClass = "authenticated_bearer_token"
-	AcActorAgentSession         AcActorClass = "agent_session"
-	AcActorMCPSession           AcActorClass = "mcp_session"
-	AcActorSystem               AcActorClass = "system"
-	AcActorUnverified           AcActorClass = "unverified"
 )
 
 // Audit field bounds and per-item retention.
@@ -41,51 +27,6 @@ const (
 	MaxAcAuditRefusalsPerItem = 100
 )
 
-// AcActor is the best-available caller identity recorded with an AC mutation.
-type AcActor struct {
-	Class           AcActorClass
-	SessionUUID     string
-	SessionVerified bool
-	Source          string // ui, api or mcp
-	RemoteAddr      string
-	UserAgent       string
-}
-
-type acActorKey struct{}
-
-// WithAcActor attaches the caller identity the AC audit trail will record.
-func WithAcActor(ctx context.Context, a AcActor) context.Context {
-	return context.WithValue(ctx, acActorKey{}, a)
-}
-
-// AcActorFrom returns the attached actor. Request handlers always attach one; a context without
-// an actor belongs to a non-request writer (lifecycle, sync, verdict application), recorded as system.
-func AcActorFrom(ctx context.Context) AcActor {
-	if a, ok := ctx.Value(acActorKey{}).(AcActor); ok {
-		return a
-	}
-	return AcActor{Class: AcActorSystem, Source: "system"}
-}
-
-// Label is the human-readable "who" shown next to a waiver.
-func (a AcActor) Label() string {
-	switch a.Class {
-	case AcActorAuthenticatedSession:
-		return "session cookie credential"
-	case AcActorAuthenticatedBearer:
-		return "authenticated bearer token"
-	case AcActorSystem:
-		return "system (automated)"
-	case AcActorAgentSession, AcActorMCPSession:
-		if a.SessionVerified {
-			return fmt.Sprintf("agent session %s (verified)", a.SessionUUID)
-		}
-		return fmt.Sprintf("claimed agent session %s (unverified claim)", a.SessionUUID)
-	default:
-		return "unverified caller"
-	}
-}
-
 func capString(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -93,14 +34,14 @@ func capString(s string, n int) string {
 	return strings.ToValidUTF8(s[:n], "")
 }
 
-// createAcAuditEvent appends one row and, for a refused attempt, trims the item's refusals to
+// CreateAcAuditEvent appends one row and, for a refused attempt, trims the item's refusals to
 // MaxAcAuditRefusalsPerItem (oldest first). It runs on the caller's transaction (or client) so the row commits with the change.
-func (r *EntRepository) createAcAuditEvent(ctx context.Context, client *ent.AcAuditEventClient, d backlogdto.AcAuditEventData) error {
+func (*Backlog) CreateAcAuditEvent(ctx context.Context, client *ent.AcAuditEventClient, d backlogdto.AcAuditEventData) error {
 	itemID, err := uuid.Parse(d.ItemID)
 	if err != nil {
 		return fmt.Errorf("ac audit: invalid item id %q: %w", d.ItemID, err)
 	}
-	a := AcActorFrom(ctx)
+	a := domain.AcActorFrom(ctx)
 	if _, err := client.Create().SetItemID(itemID).
 		SetItemPublicID(d.ItemPublicID).
 		SetCriterionIndex(d.CriterionIndex).
@@ -150,13 +91,13 @@ func pruneAcAuditRefusals(ctx context.Context, client *ent.AcAuditEventClient, i
 // PruneAcAuditOlderThan applies age retention and returns how many rows were removed: refused
 // attempts older than cutoff go for every item, but rows recording a real change are removed only
 // once their item no longer exists, so a live item's waiver keeps its provenance.
-func (r *EntRepository) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
-	refused, err := r.Client.AcAuditEvent.Delete().
+func (b *Backlog) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	refused, err := b.client.AcAuditEvent.Delete().
 		Where(acauditevent.CreatedAtLT(cutoff), acAuditRefusalPredicate()).Exec(ctx)
 	if err != nil {
 		return refused, err
 	}
-	orphaned, err := r.Client.AcAuditEvent.Delete().Where(
+	orphaned, err := b.client.AcAuditEvent.Delete().Where(
 		acauditevent.CreatedAtLT(cutoff),
 		func(s *sql.Selector) {
 			s.Where(sql.NotIn(s.C(acauditevent.FieldItemID), sql.Select(backlogitem.FieldID).From(sql.Table(backlogitem.Table))))
@@ -167,13 +108,13 @@ func (r *EntRepository) PruneAcAuditOlderThan(ctx context.Context, cutoff time.T
 
 // RecordAcAudit appends an audit row for an attempt refused before it reached the criterion
 // (for example a denied caller), using the actor attached to ctx.
-func (r *EntRepository) RecordAcAudit(ctx context.Context, d backlogdto.AcAuditEventData) error {
+func (b *Backlog) RecordAcAudit(ctx context.Context, d backlogdto.AcAuditEventData) error {
 	if d.ItemPublicID == "" {
 		if id, err := uuid.Parse(d.ItemID); err == nil {
-			if it, err := r.Client.BacklogItem.Get(ctx, id); err == nil {
+			if it, err := b.client.BacklogItem.Get(ctx, id); err == nil {
 				d.ItemPublicID = it.PublicID
 			}
 		}
 	}
-	return r.createAcAuditEvent(ctx, r.Client.AcAuditEvent, d)
+	return b.CreateAcAuditEvent(ctx, b.client.AcAuditEvent, d)
 }

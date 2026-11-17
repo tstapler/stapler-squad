@@ -641,7 +641,7 @@ func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, cri
 	if reason == "" {
 		return backlogdto.ErrWaiverReasonRequired
 	}
-	actor := AcActorFrom(ctx)
+	actor := domain.AcActorFrom(ctx)
 	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(domain.AcStatusWaived), reason: reason}, func(c *domain.AcCriterion) error {
 		switch c.Status {
 		case domain.AcStatusDone:
@@ -696,7 +696,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	}
 
 	audit := func(prev, outcome string) error {
-		return r.createAcAuditEvent(ctx, tx.AcAuditEvent, backlogdto.AcAuditEventData{
+		return r.CreateAcAuditEvent(ctx, tx.AcAuditEvent, backlogdto.AcAuditEventData{
 			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: criterionIndex, PreviousStatus: prev,
 			NewStatus: change.newStatus, Reason: change.reason, Outcome: outcome,
 		})

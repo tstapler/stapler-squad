@@ -298,7 +298,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
 	}
 
-	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	ctx = domain.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
 	if err = checkNoNewWaivers(acJSON, existing.AcceptanceCriteria); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
@@ -639,7 +639,7 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 	m := req.Msg
-	ctx = session.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
+	ctx = domain.WithAcActor(ctx, acActorFromRequest(ctx, req.Header(), req.Peer().Addr))
 	idx := int(m.CriterionIndex)
 
 	current, err := s.storage.GetBacklogItem(ctx, m.ItemId)
@@ -654,7 +654,7 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 		return nil, connect.NewError(code, cause)
 	}
 	switch {
-	case session.AcActorFrom(ctx).Class == session.AcActorAgentSession:
+	case domain.AcActorFrom(ctx).Class == domain.AcActorAgentSession:
 		return deny(connect.CodePermissionDenied, "denied:agent_session",
 			errors.New("acceptance criteria cannot be waived from a request carrying an agent-session identity"))
 	case current.ArchivedAt != nil || current.Status == string(domain.BacklogStatusDone) || current.Status == string(domain.BacklogStatusArchived):

@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -130,9 +129,9 @@ func (s *GuidanceRequestService) applyOwnerActionWaiver(ctx context.Context, dat
 		return
 	}
 	itemID := data.ItemID.String()
-	actor := session.AcActor{Class: session.AcActorSystem, Source: "owner_action_answer"}
+	actor := domain.AcActor{Class: domain.AcActorSystem, Source: "owner_action_answer"}
 	reason := fmt.Sprintf("owner chose %q on owner-action request %s: %s", data.Answer, data.ID, data.QuestionText)
-	err := s.storage.WaiveAcCriterion(session.WithAcActor(ctx, actor), itemID, idx, reason)
+	err := s.storage.WaiveAcCriterion(domain.WithAcActor(ctx, actor), itemID, idx, reason)
 	note := fmt.Sprintf("Owner waived acceptance criterion %d via owner-action request %s", idx, data.ID)
 	if err != nil {
 		log.WarningLog().Printf("[GuidanceRequestService] applyOwnerActionWaiver item=%s criterion=%d: %v", itemID, idx, err)
