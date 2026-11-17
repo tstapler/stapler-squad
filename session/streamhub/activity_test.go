@@ -41,7 +41,13 @@ func (r *activityRig) hub(name string, extra ...streamhub.HubOption) *streamhub.
 	opts := make([]streamhub.HubOption, 0, 4+len(extra))
 	opts = append(opts,
 		streamhub.WithClock(r.clock), streamhub.WithQoSTracker(r.qos),
-		streamhub.WithActivitySink(func(a qos.Activity) error { r.got <- a; return r.sinkErr() }),
+		streamhub.WithActivitySink(func(a qos.Activity) error {
+			// Decide the outcome before publishing: a test that sets fails after next() must not
+			// have it consumed by the send it just observed.
+			err := r.sinkErr()
+			r.got <- a
+			return err
+		}),
 		streamhub.WithTeardownGrace(time.Hour),
 	)
 	return streamhub.NewStreamHub(name, newFakeSessionController(), append(opts, extra...)...)

@@ -44,6 +44,8 @@ session/wakestore !server
 session/wakestore !github
 session/markerstore !server
 session/markerstore !github
+session/backlogstore !server
+session/backlogstore !github
 session/sessionpr !server
 session/stagecfg !server
 session/stagecfg !github

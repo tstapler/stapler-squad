@@ -227,6 +227,23 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent/sessionpr
             - github.com/tstapler/stapler-squad/session/ent/sessionprtombstone
             - github.com/tstapler/stapler-squad/session/instance
+        # session/backlogstore persists backlog item sources, sync events and (as E10 proceeds) backlog items; it is
+        # embedded by session.EntRepository and never imports session, github or server.
+        isolate_backlogstore:
+          list-mode: strict
+          files:
+            - "**/session/backlogstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/itemsource
+            - github.com/tstapler/stapler-squad/session/ent/sourcesyncevent
         # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
         # imports session, github or server.
         isolate_stagecfg:

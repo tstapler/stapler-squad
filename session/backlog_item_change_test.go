@@ -58,7 +58,7 @@ func TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil(t *testi
 	defer cleanup()
 	ctx := context.Background()
 
-	require.Nil(t, repo.backlogHooks.publisher.Load(), "test setup: no publisher should be wired by default")
+	require.False(t, repo.Backlog.Hooks().PublisherBound(), "test setup: no publisher should be wired by default")
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item with no publisher wired",

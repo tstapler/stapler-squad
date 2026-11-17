@@ -808,6 +808,7 @@ go_test(
         "//session/backlog/reviewgate:go_sources",
         "//session/backlog/shadowledger:go_sources",
         "//session/backlog/stuck:go_sources",
+        "//session/backlogstore:go_sources",
         "//session/cdp:go_sources",
         "//session/claudectl:go_sources",
         "//session/claudectl/claudectltest:go_sources",
