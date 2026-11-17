@@ -32,13 +32,7 @@ import (
 // OOM-restart bursts per the design doc's revised (2026-07-20) schedule —
 // bigger than a typical single-service-outage backoff because a sustained
 // memory-pressure episode on this machine can span many restart cycles.
-var remediationBackoffSchedule = []time.Duration{
-	30 * time.Minute,
-	2 * time.Hour,
-	8 * time.Hour,
-	24 * time.Hour,
-	72 * time.Hour,
-}
+var remediationBackoffSchedule = domain.RemediationBackoffSchedule
 
 // MaxRemediationAttempts is the hard cap on automated FAST remediation
 // attempts per open BacklogStuckState row before it "parks" (see
@@ -52,7 +46,7 @@ var remediationBackoffSchedule = []time.Duration{
 // remediationColdRetryInterval below (BUG-083). It means the fast
 // 30m/2h/8h/24h/72h backoff is exhausted and the row falls back to a much
 // slower heartbeat, still fully automatic.
-var MaxRemediationAttempts = int32(len(remediationBackoffSchedule))
+var MaxRemediationAttempts = domain.MaxRemediationAttempts
 
 // remediationColdRetryInterval is the heartbeat period for a "parked" row
 // (remediation_attempts >= MaxRemediationAttempts): once parked, the row is
