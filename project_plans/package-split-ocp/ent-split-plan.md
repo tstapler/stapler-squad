@@ -355,6 +355,20 @@ Wall-clock blockers (the only place calendar time belongs): full CI per PR (incl
 
 Overrun checkpoint: if spend on completed PRs exceeds the table by more than 25%, pause and report the cause (informational).
 
+### E10 sequence (measured 2026-11-16)
+
+A Go leaf cannot hold `func (r *EntRepository)` bodies, so each moved method becomes a method of `backlogstore.Backlog` (embedded in `EntRepository`, promoted), and a method can only move once everything it calls has moved or sits behind a port. A trial move of all seven `ent_repository_backlog*.go` files (receiver rewritten) leaves only these core symbols undefined in the leaf: `nilIfEmpty`/`nilIfEmptyJSON`, `TerminalStatusStrings`, `reconcileAcWaivers`, `itemPRLinkWrite`, `MaxRemediationAttempts`, `AfterLinkHook`, `DbPath`, and four guidance calls (`AttachPendingGuidance`, `ApplyPendingGuidanceToData`/`ToSummaries`, `InvalidatePendingGuidance`). Method bodies by call-graph class (108 methods left after PR A, from a throwaway AST pass):
+
+| PR | Cluster | Size | Needs first |
+|---|---|---|---|
+| A (done) | `BacklogHooks` plus item-source CRUD and sync-event methods | 518 LOC leaf; `session` 32,216 to 31,741 LOC | none; `Backlog` skeleton, `initStores` wiring |
+| B | 71 methods that touch only `Client` (Find*, Get*, List*, remediation and diagnose-nudge counters, simple item-session updates, AC audit record/prune) plus `resolveBacklogItemLookup`, `backlogItemExists`, and the mappers | about 1,620 lines of methods | lower `nilIfEmpty*` and `TerminalStatusStrings` into a shared package; split the two big files in place first so whole files `git mv` |
+| C | 32 mutators that publish or call guidance (`CreateItemSession*`, `UpdateItemSession*`, `UpdateBacklogItem`, `DeleteBacklogItem`, `mutate*`, `SaveReviewVerdict`) | about 1,230 lines | a guidance port on `Backlog` (4 calls), `BacklogItemToData` in the leaf, `reconcileAcWaivers` lowered |
+| D | status transitions: `rawTransitionBacklogItemStatus*`, `rawArchive`/`rawUnarchive`, `RawTransitionBacklogItemStatus` | about 390 lines | re-key `workflow_bypass_inventory_test.go` (about line 121) and `workflow_bypass_strict_test.go` (about line 56) from `session/ent_repository_backlog.go` to the new leaf file, proving a planted `SetStatus` fails; `AfterLinkHook`, `itemPRLinkWrite`, `MaxRemediationAttempts` lowered |
+| E | backfill/migration helpers and the 14 staying test files that touch unexported moved symbols | about 100 lines plus test edits | `DbPath` on `Backlog`; exported test seams |
+
+The two path-keyed guards need no change until D; the `SetStatus` ratchet in `server/services/workflow_bypass_strict_test.go` is module-wide, so a write in the leaf is already flagged (proved in PR A with a planted file).
+
 ## 7. Self-review log
 
 Checked before opening the PR:

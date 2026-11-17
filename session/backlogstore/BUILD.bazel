@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backlogstore",
+    srcs = [
+        "hooks.go",
+        "sources.go",
+        "store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/backlogstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:itemsource",
+        "//tools/bzl/ent:sourcesyncevent",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backlogstore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backlogstore_test",
+    srcs = ["hooks_test.go"],
+    embed = [":backlogstore"],
+    deps = [
+        "//session/domain/backlogdto",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
+
+# Read by session's legacy item-PR reader scan and server/services' workflow-bypass scanners.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

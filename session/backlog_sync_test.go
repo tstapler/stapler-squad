@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -134,7 +135,7 @@ func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
 }
 
 // TestListSourceSyncEvents_ReportsTruncatedWhenOverCap verifies that querying more
-// than maxSourceSyncEventsHistory rows returns truncated=true and caps the slice at
+// than backlogstore.MaxSourceSyncEventsHistory rows returns truncated=true and caps the slice at
 // the limit, while a source at or under the cap reports truncated=false — so the
 // UI can show a "history not fully shown" indicator instead of silently hiding rows.
 func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
@@ -152,18 +153,18 @@ func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
 	require.NoError(t, err)
 
 	start := time.Now()
-	for i := 0; i < maxSourceSyncEventsHistory+1; i++ {
+	for i := 0; i < backlogstore.MaxSourceSyncEventsHistory+1; i++ {
 		require.NoError(t, er.CreateSourceSyncEvent(ctx, src.ID, "", 1, 0, 0, 0, "", start, start))
 	}
 
 	events, truncated, err := er.ListSourceSyncEvents(ctx, src.ID)
 	require.NoError(t, err)
 	require.True(t, truncated, "expected truncated=true when more rows exist than the cap")
-	require.Len(t, events, maxSourceSyncEventsHistory)
+	require.Len(t, events, backlogstore.MaxSourceSyncEventsHistory)
 }
 
 // TestListSourceSyncEvents_NotTruncatedAtOrUnderCap guards against the off-by-one
-// edge case where a source with exactly maxSourceSyncEventsHistory rows would be
+// edge case where a source with exactly backlogstore.MaxSourceSyncEventsHistory rows would be
 // misreported as truncated.
 func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
 	t.Parallel()
@@ -180,14 +181,14 @@ func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
 	require.NoError(t, err)
 
 	start := time.Now()
-	for i := 0; i < maxSourceSyncEventsHistory; i++ {
+	for i := 0; i < backlogstore.MaxSourceSyncEventsHistory; i++ {
 		require.NoError(t, er.CreateSourceSyncEvent(ctx, src.ID, "", 1, 0, 0, 0, "", start, start))
 	}
 
 	events, truncated, err := er.ListSourceSyncEvents(ctx, src.ID)
 	require.NoError(t, err)
 	require.False(t, truncated, "exactly at the cap must not be reported as truncated")
-	require.Len(t, events, maxSourceSyncEventsHistory)
+	require.Len(t, events, backlogstore.MaxSourceSyncEventsHistory)
 }
 
 func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {

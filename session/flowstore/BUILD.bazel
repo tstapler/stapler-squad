@@ -39,5 +39,8 @@ alias(
 filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
-    visibility = ["//session:__pkg__"],
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
 )
