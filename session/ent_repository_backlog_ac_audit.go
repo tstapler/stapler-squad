@@ -9,7 +9,6 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
-	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/acauditevent"
@@ -177,47 +176,4 @@ func (r *EntRepository) RecordAcAudit(ctx context.Context, d backlogdto.AcAuditE
 		}
 	}
 	return r.createAcAuditEvent(ctx, r.Client.AcAuditEvent, d)
-}
-
-// ListAcAudit returns an item's audit rows oldest first. It stays readable after the item is
-// deleted: a UUID is queried directly and a bl_ id through the stored item_public_id. It returns
-// ErrNotFound only when the item is gone and no rows remain.
-func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]backlogdto.AcAuditEventData, error) {
-	var where predicate.AcAuditEvent
-	if backlogdto.IsBacklogItemIDShape(itemID) {
-		where = acauditevent.ItemPublicID(itemID)
-	} else if parsed, err := uuid.Parse(itemID); err == nil {
-		where = acauditevent.ItemID(parsed)
-	} else {
-		return nil, fmt.Errorf("%w: invalid item id %q", domain.ErrNotFound, itemID)
-	}
-	rows, err := r.Client.AcAuditEvent.Query().Where(where).
-		Order(ent.Asc(acauditevent.FieldCreatedAt)).All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list ac audit events: %w", err)
-	}
-	if len(rows) == 0 {
-		if exists, lookupErr := r.backlogItemExists(ctx, itemID); lookupErr != nil || !exists {
-			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
-		}
-	}
-	out := make([]backlogdto.AcAuditEventData, len(rows))
-	for i, e := range rows {
-		out[i] = backlogdto.AcAuditEventData{
-			ID: e.ID.String(), ItemID: e.ItemID.String(), ItemPublicID: e.ItemPublicID,
-			CriterionIndex: e.CriterionIndex,
-			PreviousStatus: e.PreviousStatus, NewStatus: e.NewStatus, Reason: e.Reason, Outcome: e.Outcome,
-			ActorClass: e.ActorClass, ActorSessionUUID: e.ActorSessionUUID, SessionVerified: e.SessionVerified,
-			Source: e.Source, RemoteAddr: e.RemoteAddr, UserAgent: e.UserAgent, CreatedAt: e.CreatedAt,
-		}
-	}
-	return out, nil
-}
-
-func (r *EntRepository) backlogItemExists(ctx context.Context, itemID string) (bool, error) {
-	id, err := r.resolveBacklogItemLookup(ctx, itemID)
-	if err != nil {
-		return false, err
-	}
-	return r.Client.BacklogItem.Query().Where(backlogitem.ID(id)).Exist(ctx)
 }

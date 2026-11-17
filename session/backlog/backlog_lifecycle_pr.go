@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -1097,7 +1098,7 @@ func (l *BacklogLifecycleListener) reconcileDriftedPRItems(ctx context.Context, 
 		return
 	}
 	for _, item := range items {
-		itemData := session.BacklogItemToData(item)
+		itemData := backlogstore.BacklogItemToData(item)
 		l.recoverDriftedPRItem(ctx, &itemData, "reconcileDriftedPRItems")
 	}
 }
@@ -1736,7 +1737,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			snapshotPRStatus = nil
 		}
 
-		itemData := session.BacklogItemToData(item)
+		itemData := backlogstore.BacklogItemToData(item)
 
 		var lastWork *backlogdto.ItemSessionSummary
 		if sessions, sessErr := l.storage.ListItemSessions(ctx, item.ID.String()); sessErr != nil {
@@ -1869,7 +1870,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		// work that's already shipped — exactly the waste BUG-032 fixed for
 		// the CI-failing/blocked/conflicting branch below, but missed for
 		// this sibling "closed" branch. See BUG-036.
-		supersededItemData := session.BacklogItemToData(item)
+		supersededItemData := backlogstore.BacklogItemToData(item)
 		if superseded := l.closeIfSupersededByMain(ctx, g, &supersededItemData); superseded {
 			return
 		}
@@ -2008,7 +2009,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 	// caught it). Reuses the same IsCommitOnMain trust boundary
 	// GetBacklogItemShipStatus already relies on elsewhere in this codebase for
 	// "did this item's code actually ship" — not a new, less-verified standard.
-	supersededItemData := session.BacklogItemToData(item)
+	supersededItemData := backlogstore.BacklogItemToData(item)
 	if superseded := l.closeIfSupersededByMain(ctx, g, &supersededItemData); superseded {
 		return
 	}
@@ -2436,7 +2437,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	// non-empty value. BaseCommitSha reads "" both for ItemSession rows written
 	// before BaseCommitSha/LastCommitSha were split into separate fields, and
 	// for any session that spawned and died/was retried before its base commit
-	// was ever seeded — GetBaseCommitSHAsForSessions (ent_repository_backlog_items.go)
+	// was ever seeded — GetBaseCommitSHAsForSessions (backlogstore/item_session_queries.go)
 	// already documents and works around this exact legacy-row shape. When
 	// BaseCommitSha is unknown, fall back to this session's own bookkeeping of
 	// whether it ever authored anything: CommitCountSinceSpawn is written

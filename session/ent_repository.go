@@ -277,7 +277,7 @@ func (r *EntRepository) initStores() {
 	r.Backlog = backlogstore.New(r.Client)
 	r.SetDriver(r.driver)
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
-		item := BacklogItemToData(row)
+		item := backlogstore.BacklogItemToData(row)
 		r.publishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
 	})
 }

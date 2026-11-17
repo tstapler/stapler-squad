@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -849,8 +850,8 @@ func TestEntRepositoryBacklog_should_EnforceUniqueConstraint_When_DuplicatePubli
 	unsetB, err := repo.Client.BacklogItem.Create().SetTitle("unset b").Save(ctx)
 	require.NoError(t, err, "a second row with public_id unset must also succeed — NULL != NULL for uniqueness")
 
-	dataA := BacklogItemToData(unsetA)
-	dataB := BacklogItemToData(unsetB)
+	dataA := backlogstore.BacklogItemToData(unsetA)
+	dataB := backlogstore.BacklogItemToData(unsetB)
 	if _, ok := dataA.PublicID(); ok {
 		t.Fatalf("PublicID() reported present for row %s created without public_id", unsetA.ID)
 	}
@@ -1133,7 +1134,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	itemID, err := repo.resolveBacklogItemLookup(ctx, created.ID)
+	itemID, err := repo.ResolveBacklogItemLookup(ctx, created.ID)
 	require.NoError(t, err)
 
 	const totalEvents = maxPublishedStatusEvents + 10
