@@ -35,6 +35,7 @@ go_library(
         "review_state.go",
         "session_type.go",
         "status.go",
+        "terminal_status.go",
         "transition_callers.go",
         "uuid.go",
         "wake_trigger.go",

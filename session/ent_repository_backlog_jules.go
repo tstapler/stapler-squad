@@ -14,65 +14,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
-	"github.com/tstapler/stapler-squad/session/ent/itemsession"
-	"github.com/tstapler/stapler-squad/session/instance"
 )
-
-// ListOpenJulesItemSessions returns every not-yet-ended jules_work ItemSession
-// across all backlog items, joined with enough of its parent item's metadata
-// (via the ItemSessionBacklogEntry shape already returned by
-// GetAllItemSessionsWithBacklogInfo) for the dispatcher/poller to act on it
-// without a second query.
-func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
-	sessions, err := r.Client.ItemSession.Query().
-		Where(
-			itemsession.SessionRole(instance.SessionRoleJulesWork),
-			itemsession.EndedAtIsNil(),
-		).
-		WithBacklogItem().
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list open jules item sessions: %w", err)
-	}
-	results := make([]backlogdto.ItemSessionBacklogEntry, 0, len(sessions))
-	for _, is := range sessions {
-		if is.Edges.BacklogItem == nil {
-			continue
-		}
-		results = append(results, backlogdto.ItemSessionBacklogEntry{
-			SessionUUID: is.SessionUUID,
-			SessionRole: is.SessionRole,
-			ItemID:      is.Edges.BacklogItem.ID.String(),
-			ItemTitle:   is.Edges.BacklogItem.Title,
-			ItemStatus:  is.Edges.BacklogItem.Status,
-		})
-	}
-	return results, nil
-}
-
-// CountJulesItemSessionsSince counts jules_work ItemSessions created since since
-// that reached a confirmed, billed Jules session — feeds MaxJulesSessionsPerDay
-// (Story 2.2.2), the daily cloud-spend cap. Excludes rows still carrying the
-// domain.JulesPendingUUIDPrefix reservation (never confirmed) and rows that ended with
-// end_reason "dispatch_failed" (failed at CreateSession), so a bad key or a
-// Jules-side outage doesn't consume the day's cap on attempts nothing was
-// actually billed for (pre-mortem P2 #5).
-func (r *EntRepository) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
-	n, err := r.Client.ItemSession.Query().
-		Where(
-			itemsession.SessionRole(instance.SessionRoleJulesWork),
-			itemsession.CreatedAtGTE(since),
-			itemsession.Not(itemsession.SessionUUIDHasPrefix(domain.JulesPendingUUIDPrefix)),
-			itemsession.EndReasonNEQ(domain.JulesDispatchFailedEndReason),
-		).
-		Count(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to count jules item sessions since %s: %w", since, err)
-	}
-	return n, nil
-}
 
 // TouchItemSessionProgress updates only last_progress_at on an ItemSession —
 // used by the Jules poller on every non-terminal state observation. Deliberately
