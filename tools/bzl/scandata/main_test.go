@@ -267,7 +267,7 @@ func TestCheck_ShouldFlagGoDirWithoutBuild_WhenNotListedInNoBuildFile(t *testing
 
 func TestCheck_ShouldPass_WhenGoDirWithoutBuildIsListed(t *testing.T) {
 	t.Parallel()
-	got, err := check(noBuildFixture(t, "spikes/s1  # a spike\n# comment\n\ngen/proto/x  # generated, absent here\n"))
+	got, err := check(noBuildFixture(t, "spikes/s1  # a spike\n# comment\n\ngen/proto/x  # generated, absent here\nsession/ent/x  # generated\n"))
 	require.NoError(t, err)
 	require.Empty(t, got)
 }
@@ -278,8 +278,8 @@ func TestCheck_ShouldFlagStaleNoBuildEntry_WhenDirGoneOrNowHasBuild(t *testing.T
 	got, err := check(root)
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"server/adapters: stale " + noBuildFile + " entry, directory now has a BUILD.bazel",
-		"spikes/gone: stale " + noBuildFile + " entry, directory does not exist",
+		"server/adapters: stale " + noBuildFile + " entry, directory now has a BUILD.bazel: remove it from " + noBuildFile,
+		"spikes/gone: stale " + noBuildFile + " entry, directory does not exist: remove it from " + noBuildFile,
 	}, got)
 }
 

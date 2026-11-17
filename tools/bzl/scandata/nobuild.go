@@ -66,9 +66,9 @@ func checkNoBuild(root string, noBuild []string) ([]string, error) {
 			continue
 		}
 		if st, serr := os.Stat(filepath.Join(root, d)); serr != nil || !st.IsDir() {
-			out = append(out, fmt.Sprintf("%s: stale %s entry, directory does not exist", d, noBuildFile))
+			out = append(out, fmt.Sprintf("%s: stale %s entry, directory does not exist: remove it from %[2]s", d, noBuildFile))
 		} else if _, berr := os.Stat(filepath.Join(root, d, "BUILD.bazel")); berr == nil {
-			out = append(out, fmt.Sprintf("%s: stale %s entry, directory now has a BUILD.bazel", d, noBuildFile))
+			out = append(out, fmt.Sprintf("%s: stale %s entry, directory now has a BUILD.bazel: remove it from %[2]s", d, noBuildFile))
 		}
 	}
 	return out, nil
