@@ -20,8 +20,11 @@ import (
 //   - SQL built at runtime (fmt.Sprintf, concatenation), SQL in package-level
 //     const/var (the walker visits function bodies only), SQL in non-Go files.
 //   - SQL dialect forms the heuristic does not enumerate (see
-//     workflow_bypass_sql_test.go), and entgo sql builder chains split across
-//     variables.
+//     workflow_bypass_sql_test.go): REPLACE INTO backlog_items (cols) with an
+//     explicit column list omitting status is not flagged (the row is
+//     re-inserted, so status resets to its default); a quote inside a
+//     double-quoted identifier can open a phantom string.
+//   - Entgo sql builder chains split across variables.
 
 // clsStatusWriterMethods are the generated BacklogItem builder methods that
 // can write the status column: SetStatus and SetNillableStatus on

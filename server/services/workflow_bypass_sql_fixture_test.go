@@ -28,6 +28,11 @@ func TestBacklogItemStatusWriters_SQLHeuristicFlagsEveryWriteForm(t *testing.T) 
 		"INSERT INTO main.backlog_items (status) VALUES ('x')",
 		"INSERT INTO backlog_items (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET status = excluded.status",
 		"UPDATE backlog_items SET title = 'it''s', status = 'x'",
+		"INSERT OR IGNORE INTO backlog_items (id, status) VALUES (1, 'x')",
+		"UPDATE backlog_items SET title = CASE WHEN status = 'a' THEN 'x' END, status = 'y'",
+		"UPDATE [backlog_items] SET [status] = 'x'",
+		"UPDATE backlog_items INDEXED BY idx_status SET status = 'x'",
+		"UPDATE backlog_items NOT INDEXED SET status = 'x'",
 	}
 	for _, q := range writes {
 		assert.True(t, clsSQLWritesBacklogStatus(q), q)
@@ -50,6 +55,9 @@ func TestBacklogItemStatusWriters_SQLHeuristicIgnoresNonWrites(t *testing.T) {
 		"DELETE FROM backlog_items WHERE status = 'done'",
 		"ALTER TABLE backlog_items ADD COLUMN status_extra TEXT",
 		"UPDATE sessions SET status = 1",
+		"UPDATE backlog_items SET a = 1 FROM t WHERE t.status = 'x'",
+		"UPDATE backlog_items SET title = CASE WHEN status = 'a' THEN 'x' END",
+		"REPLACE INTO backlog_items (id, title) VALUES (1, 'a')",
 	}
 	for _, q := range nonWrites {
 		assert.False(t, clsSQLWritesBacklogStatus(q), q)

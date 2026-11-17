@@ -11,12 +11,12 @@ import (
 // does not enumerate.
 
 var (
-	clsSQLUpdate    = regexp.MustCompile(`(?s)\bupdate\s+(?:or\s+\w+\s+)?(?:\w+\.)?backlog_items\b(?:\s+(?:as\s+)?\w+)?\s+set\s+(.*)$`)
+	clsSQLUpdate    = regexp.MustCompile(`(?s)\bupdate\s+(?:or\s+\w+\s+)?(?:\w+\.)?backlog_items\b(?:\s+(?:as\s+)?\w+)?(?:\s+not\s+indexed|\s+indexed\s+by\s+\w+)?\s+set\s+(.*)$`)
 	clsSQLInsert    = regexp.MustCompile(`(?s)\b(?:insert\s+(?:or\s+\w+\s+)?into|replace\s+into)\s+(?:\w+\.)?backlog_items\b\s*(\(([^)]*)\))?(.*)$`)
 	clsSQLSetEnd    = regexp.MustCompile(`\b(where|returning|from)\b`)
 	clsSQLUpsertSet = regexp.MustCompile(`(?s)\bdo\s+update\s+set\s+(.*)$`)
 	clsSQLStatusCol = regexp.MustCompile(`\bstatus\b`)
-	clsSQLStatusSet = regexp.MustCompile(`\bstatus\s*=`)
+	clsSQLStatusSet = regexp.MustCompile(`^\s*status\s*=`)
 	clsSQLRowValue  = regexp.MustCompile(`\x00(\d+)\x00\s*=`)
 )
 
@@ -44,7 +44,7 @@ func clsNormalizeSQL(s string) string {
 			}
 			i += end
 			b.WriteByte(' ')
-		case s[i] == '"' || s[i] == '`':
+		case s[i] == '"' || s[i] == '`' || s[i] == '[' || s[i] == ']':
 		default:
 			b.WriteByte(s[i])
 		}
@@ -53,7 +53,7 @@ func clsNormalizeSQL(s string) string {
 }
 
 // clsSkipSQLString returns the index of the closing quote of the '...' literal
-// opening at s[i] (” is an escaped quote), or len(s) if unterminated.
+// opening at s[i] (two quotes in a row are an escaped quote), or len(s) if unterminated.
 func clsSkipSQLString(s string, i int) int {
 	for i++; i < len(s); i++ {
 		if s[i] != '\'' {
@@ -102,8 +102,10 @@ func clsSQLSetListWritesStatus(rest string) bool {
 	if loc := clsSQLSetEnd.FindStringIndex(top); loc != nil {
 		top = top[:loc[0]]
 	}
-	if clsSQLStatusSet.MatchString(top) {
-		return true
+	for _, assignment := range strings.Split(top, ",") {
+		if clsSQLStatusSet.MatchString(assignment) {
+			return true
+		}
 	}
 	for _, m := range clsSQLRowValue.FindAllStringSubmatch(top, -1) {
 		if n, err := strconv.Atoi(m[1]); err == nil && clsSQLStatusCol.MatchString(groups[n]) {
