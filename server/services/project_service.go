@@ -7,6 +7,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -23,7 +24,7 @@ func NewProjectService(storage *session.Storage) *ProjectService {
 	return &ProjectService{storage: storage}
 }
 
-func projectDataToProto(p session.ProjectData) *sessionv1.Project {
+func projectDataToProto(p domain.ProjectData) *sessionv1.Project {
 	return &sessionv1.Project{
 		Id:          p.Name,
 		Name:        p.Name,
@@ -45,7 +46,7 @@ func (s *ProjectService) CreateProject(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name is required"))
 	}
 	now := time.Now()
-	data := session.ProjectData{
+	data := domain.ProjectData{
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
 		CreatedAt:   now,
@@ -89,7 +90,7 @@ func (s *ProjectService) UpdateProject(
 	if s.storage == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
-	data := session.ProjectData{
+	data := domain.ProjectData{
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
 		UpdatedAt:   time.Now(),

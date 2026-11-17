@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ErrTaggingRuleNotFound is returned by Delete when no rule with the given ID exists,
@@ -127,7 +128,7 @@ func (s *TaggingRulesStore) Upsert(ctx context.Context, spec TaggingRuleSpec) (T
 		spec.CreatedAt = time.Now()
 	}
 
-	ruleData := session.TaggingRuleData{
+	ruleData := domain.TaggingRuleData{
 		RuleID:         spec.ID,
 		Name:           spec.Name,
 		NamePattern:    spec.NamePattern,

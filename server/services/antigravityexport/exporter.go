@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // antigravityManagedStateFile records the permissions.allow entries this exporter added,
@@ -25,7 +26,7 @@ var permissionsFileMu sync.Mutex
 // RulesToAntigravityPermissions converts auto-allow rules to Antigravity command(...)
 // entries. A rule that can't be expressed without matching more than it should is
 // skipped and logged, never approximated.
-func RulesToAntigravityPermissions(rules []session.ApprovalRuleData) []string {
+func RulesToAntigravityPermissions(rules []domain.ApprovalRuleData) []string {
 	var result []string
 	seen := make(map[string]bool)
 
@@ -50,7 +51,7 @@ func RulesToAntigravityPermissions(rules []session.ApprovalRuleData) []string {
 
 // ruleEntries returns the entries for one auto-allow rule, or a skip reason when the
 // rule's constraints can't be preserved by a flat command(...) entry.
-func ruleEntries(r session.ApprovalRuleData) ([]string, string) {
+func ruleEntries(r domain.ApprovalRuleData) ([]string, string) {
 	if reason := narrowingReason(r); reason != "" {
 		return nil, reason
 	}
@@ -88,7 +89,7 @@ func ruleEntries(r session.ApprovalRuleData) ([]string, string) {
 
 // narrowingReason names a constraint that a flat command(...) entry cannot express.
 // Exporting such a rule without it would allow more than the rule does.
-func narrowingReason(r session.ApprovalRuleData) string {
+func narrowingReason(r domain.ApprovalRuleData) string {
 	switch {
 	case r.RequireCIPassing:
 		return "require_ci_passing has no static equivalent"
@@ -145,13 +146,13 @@ func programEntries(programs, subcommands []string) []string {
 // ExportRulesToAntigravitySettings merges the rules' permissions into the settings file at
 // settingsPath. It adds only entries that are absent, and removes only entries it added in
 // an earlier export that no current rule produces.
-func ExportRulesToAntigravitySettings(settingsPath string, rules []session.ApprovalRuleData) error {
+func ExportRulesToAntigravitySettings(settingsPath string, rules []domain.ApprovalRuleData) error {
 	permissionsFileMu.Lock()
 	defer permissionsFileMu.Unlock()
 	return exportRulesLocked(settingsPath, rules)
 }
 
-func exportRulesLocked(settingsPath string, rules []session.ApprovalRuleData) error {
+func exportRulesLocked(settingsPath string, rules []domain.ApprovalRuleData) error {
 	desired := RulesToAntigravityPermissions(rules)
 	statePath := filepath.Join(filepath.Dir(settingsPath), antigravityManagedStateFile)
 	previouslyManaged := readManagedState(statePath)

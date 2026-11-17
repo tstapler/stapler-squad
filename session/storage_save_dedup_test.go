@@ -205,7 +205,7 @@ func TestAssignSessionsToProject_Should_ForceResave(t *testing.T) {
 	inst := newTestInstance("dedup-project")
 	require.NoError(t, storage.AddInstance(inst))
 	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
-	_, err := storage.CreateProject(context.Background(), ProjectData{ID: "proj-dedup", Name: "proj-dedup"})
+	_, err := storage.CreateProject(context.Background(), domain.ProjectData{ID: "proj-dedup", Name: "proj-dedup"})
 	require.NoError(t, err)
 	require.NoError(t, storage.AssignSessionsToProject(context.Background(), "proj-dedup", []string{inst.Title}))
 	updates := countSessionUpdates(t, storage)

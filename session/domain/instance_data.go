@@ -23,6 +23,9 @@ func WorkspaceKey(githubOwner, githubRepo, mainRepoPath, path string) string {
 	return ""
 }
 
+// ShellStatusRunning is the persisted status of a live shell; session/instance.ShellStatusRunning aliases it.
+const ShellStatusRunning = "running"
+
 // ShellData carries the input fields for creating a new shell.
 type ShellData struct {
 	// ID is the UUID for the shell. If empty, the caller must populate it.

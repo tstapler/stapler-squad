@@ -51,3 +51,9 @@ session/stagecfg !server
 session/stagecfg !github
 session/workflowengine !server
 session/workflowengine !github
+session/shellstore !server
+session/shellstore !github
+session/projectstore !server
+session/projectstore !github
+session/rulestore !server
+session/rulestore !github
