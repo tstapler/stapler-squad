@@ -15,13 +15,14 @@ type Backlog struct {
 	guidance Guidance
 	// deleteOwnerPRRows removes an owner's PR rows inside DeleteBacklogItem's transaction.
 	deleteOwnerPRRows OwnerPRRowsDeleter
+	afterLinkHook     func() func() error
 	hooks             BacklogHooks
 }
 
 // New returns a Backlog over client, which must already hold the migrated schema.
 // ports.Guidance must be the guidance store over the same client.
 func New(client *ent.Client, ports Ports) *Backlog {
-	return &Backlog{client: client, guidance: ports.Guidance, deleteOwnerPRRows: ports.DeleteOwnerPRRows}
+	return &Backlog{client: client, guidance: ports.Guidance, deleteOwnerPRRows: ports.DeleteOwnerPRRows, afterLinkHook: ports.AfterLinkHook}
 }
 
 // Hooks returns the late-bound publisher/callback/chain ports. A bare

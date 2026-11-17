@@ -53,7 +53,7 @@ var clsLegacyWriterNames = func() map[string]bool {
 var clsLegacyAllowedFiles = map[string]bool{
 	"session/storage.go":                       true,
 	"session/transition_gate.go":               true,
-	"session/ent_repository_backlog.go":        true,
+	"session/backlogstore/status_writers.go":   true,
 	"server/mcp/tools_backlog_dependencies.go": true,
 }
 
@@ -397,16 +397,16 @@ func TestWorkflowBypassStrict_UnusedCallerRuleFlagsAnEntryWithNoPath(t *testing.
 
 // --- rule (d): BacklogItem builder SetStatus ------------------------------------
 
-const clsEntBacklogFile = "session/ent_repository_backlog.go"
+const clsBacklogStatusWritersFile = "session/backlogstore/status_writers.go"
 
-// clsSetStatusAllowed are the only functions in package session that may call
-// SetStatus on a BacklogItem create/update/upsert builder.
+// clsSetStatusAllowed are the only functions in the module that may call
+// SetStatus on a BacklogItem create/update/upsert builder (all in session/backlogstore).
 var clsSetStatusAllowed = map[string]string{
-	clsEntBacklogFile + " EntRepository.CreateBacklogItem":                          "create: items are created at idea or with no status (Task 1.5.4g)",
-	clsEntBacklogFile + " EntRepository.rawArchiveBacklogItem":                      "raw writer behind GatedArchive",
-	clsEntBacklogFile + " EntRepository.rawUnarchiveBacklogItem":                    "raw writer behind GatedUnarchive",
-	clsEntBacklogFile + " EntRepository.rawTransitionBacklogItemStatusWithNote":     "raw writer behind GatedTransition and GatedReconcileStuck",
-	clsEntBacklogFile + " EntRepository.rawTransitionBacklogItemStatusWithPRFields": "raw writer behind GatedSetPRAndTransition",
+	clsBacklogStatusWritersFile + " Backlog.CreateBacklogItem":                          "create: items are created at idea or with no status (Task 1.5.4g)",
+	clsBacklogStatusWritersFile + " Backlog.RawArchiveBacklogItem":                      "raw writer behind GatedArchive",
+	clsBacklogStatusWritersFile + " Backlog.RawUnarchiveBacklogItem":                    "raw writer behind GatedUnarchive",
+	clsBacklogStatusWritersFile + " Backlog.RawTransitionBacklogItemStatusWithNote":     "raw writer behind GatedTransition and GatedReconcileStuck",
+	clsBacklogStatusWritersFile + " Backlog.RawTransitionBacklogItemStatusWithPRFields": "raw writer behind GatedSetPRAndTransition",
 }
 
 // clsMentionsBacklogItemBuilder reports whether e is, or was assigned from, an

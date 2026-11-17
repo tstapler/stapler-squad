@@ -118,7 +118,7 @@ var bypassInventory = []bypassSite{
 	exempt("session/storage.go", "Storage.RawUnarchiveBacklogItem", 1, wrapperReason),
 	exempt("session/storage.go", "Storage.setPRAndTransition", 1, "single-UPDATE PR write shared by RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; its call is rawTransitionBacklogItemStatusWithPRFields"),
 	exempt("session/transition_gate.go", "Storage.writeGated", 1, gateReason+": the write after the engine allowed"),
-	exempt("session/ent_repository_backlog.go", "EntRepository.RawTransitionBacklogItemStatus", 1, "the raw writer delegating to its note-appending variant; both are unexported and reachable only through the gate and the Raw* wrappers"),
+	exempt("session/backlogstore/status_writers.go", "Backlog.RawTransitionBacklogItemStatus", 1, "the raw writer delegating to its note-appending variant; the raw writers are exported from the leaf but legacy-name rule (a) confines every call to the allow-listed files"),
 	exempt("session/transition_gate.go", "Storage.writeGatedArchive", 1, gateReason+": the archive write after the engine allowed"),
 	exempt("session/transition_gate.go", "Storage.writeGatedUnarchive", 1, gateReason+": the unarchive write after the engine allowed"),
 	exempt("session/transition_gate.go", "Storage.writeGatedReconcile", 1, gateReason+": the reconcile write after the engine allowed, appending the [auto] note in the same UPDATE"),

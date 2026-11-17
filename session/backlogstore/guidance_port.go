@@ -23,10 +23,21 @@ type Guidance interface {
 // because that would pull the github package into this leaf.
 type OwnerPRRowsDeleter func(ctx context.Context, tx *ent.Tx, owner domain.PROwner) error
 
+// ItemLinkWriter writes an item PR's item-direct link inside the status
+// writer's transaction (session's itemPRLinkWrite: it needs the github-aware
+// sessionpr package this leaf cannot import). A nil interface is a no-op.
+type ItemLinkWriter interface {
+	WriteTx(ctx context.Context, tx *ent.Tx, itemID string, afterLink func() error) error
+}
+
 // Ports are the consumer-side dependencies New requires, all non-nil: a nil
-// Guidance or DeleteOwnerPRRows panics on first use, as the nil embedded stores
-// did before the ports existed. New has one caller, session.EntRepository.initStores.
+// Guidance, DeleteOwnerPRRows or AfterLinkHook panics on first use, as the nil
+// embedded stores did before the ports existed. New has one caller,
+// session.EntRepository.initStores.
 type Ports struct {
 	Guidance          Guidance
 	DeleteOwnerPRRows OwnerPRRowsDeleter
+	// AfterLinkHook returns the test hook (sessionpr.PRStore.AfterLinkHook), or nil,
+	// read at call time because tests install it after construction.
+	AfterLinkHook func() func() error
 }
