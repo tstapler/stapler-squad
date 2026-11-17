@@ -517,15 +517,15 @@ func (v engineView) compareGateStatuses(legacy, enf []domain.GateStatus) Diverge
 func classifyExtraGates(legacy, enf []domain.GateStatus) DivergenceClass {
 	d := unsatisfiedKeys(legacy)
 	for _, g := range enf {
-		if !g.Satisfied && !d[fmt.Sprintf("%s/%s", g.GateID, g.Kind)] && !strings.HasPrefix(g.GateID, BuiltInGateIDPrefix) {
+		if !g.Satisfied && !d[fmt.Sprintf("%s/%s", g.GateID, g.Kind)] && !strings.HasPrefix(g.GateID, builtInGateIDPrefix) {
 			return ClassGateExtra
 		}
 	}
 	return ClassGuardNew
 }
 
-// BuiltInGateIDPrefix marks a Default TransitionGuard gate (builtInGuardGate).
-const BuiltInGateIDPrefix = "builtin:"
+// builtInGateIDPrefix marks a Default TransitionGuard gate (builtInGuardGate).
+const builtInGateIDPrefix = "builtin:"
 
 func (v engineView) noteSkipped(skipped bool) {
 	if skipped {

@@ -1,13 +1,14 @@
 package workflowengine
 
 import (
-	"github.com/tstapler/stapler-squad/session/domain"
 	"sort"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// SystemRequiredCore lists the non-archive edges (ADR-002 §3): engine-checked
+// systemRequiredCore lists the non-archive edges (ADR-002 §3): engine-checked
 // automation callers first, then storage-direct writers kept for UI honesty.
-var SystemRequiredCore = []domain.SystemEdge{
+var systemRequiredCore = []domain.SystemEdge{
 	// Group 1: engine-checked automation.
 	{From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued},
 	{From: domain.BacklogStatusQueued, To: domain.BacklogStatusInProgress},
@@ -31,11 +32,11 @@ var SystemRequiredCore = []domain.SystemEdge{
 	{From: domain.BacklogStatusQueued, To: domain.BacklogStatusIdea},
 }
 
-// SystemRequiredOffGraph lists registered edges that validTransitions lacks
+// systemRequiredOffGraph lists registered edges that validTransitions lacks
 // but real callers write (Task 1.5.1b audit, ADR-007 D7): SkipReviewGate
 // completion, the pushAndCreatePR fallback, and drift recovery to pr_pending.
 // Like the archive group they never reach the UI-facing allowed list.
-var SystemRequiredOffGraph = []domain.SystemEdge{
+var systemRequiredOffGraph = []domain.SystemEdge{
 	{From: domain.BacklogStatusInProgress, To: domain.BacklogStatusDone},
 	{From: domain.BacklogStatusReady, To: domain.BacklogStatusDone},
 	{From: domain.BacklogStatusIdea, To: domain.BacklogStatusPRPending},
@@ -51,9 +52,9 @@ var SystemRequiredOffGraph = []domain.SystemEdge{
 // custom-stage archive edges; use IsSystemRequired for those. validTransitions
 // is deliberately unchanged, so Off and Shadow keep answering exactly as before.
 func SystemRequiredEdges() []domain.SystemEdge {
-	edges := make([]domain.SystemEdge, 0, len(SystemRequiredCore)+len(SystemRequiredOffGraph)+len(BuiltInStageOrder))
-	edges = append(edges, SystemRequiredCore...)
-	edges = append(edges, SystemRequiredOffGraph...)
+	edges := make([]domain.SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(BuiltInStageOrder))
+	edges = append(edges, systemRequiredCore...)
+	edges = append(edges, systemRequiredOffGraph...)
 	for _, from := range BuiltInStageOrder {
 		edges = append(edges, domain.SystemEdge{From: from, To: domain.BacklogStatusArchived})
 	}
@@ -73,7 +74,7 @@ func IsSystemRequired(from, to domain.BacklogStatus) bool {
 	if to == domain.BacklogStatusArchived {
 		return true
 	}
-	for _, group := range [][]domain.SystemEdge{SystemRequiredCore, SystemRequiredOffGraph} {
+	for _, group := range [][]domain.SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
 		for _, e := range group {
 			if e.From == from && e.To == to {
 				return true
@@ -88,7 +89,7 @@ func IsSystemRequired(from, to domain.BacklogStatus) bool {
 // offers archive via the engine (Story 1.5.1 AC 3).
 func SystemRequiredTargets(from domain.BacklogStatus) []domain.BacklogStatus {
 	var out []domain.BacklogStatus
-	for _, e := range SystemRequiredCore {
+	for _, e := range systemRequiredCore {
 		if e.From == from {
 			out = append(out, e.To)
 		}

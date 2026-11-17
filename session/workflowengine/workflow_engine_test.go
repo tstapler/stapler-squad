@@ -1,8 +1,9 @@
 package workflowengine
 
 import (
-	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestGuardedTransitionAllowed(t *testing.T) {

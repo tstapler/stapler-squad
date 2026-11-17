@@ -10,7 +10,7 @@ session/guidancestore files=8 loc=1112 imports=9
 session/flowstore files=8 loc=918 imports=11
 session/wakestore files=5 loc=615 imports=4
 session/stagecfg files=11 loc=1832 imports=11
-session/workflowengine files=15 loc=3874 imports=12
+session/workflowengine files=14 loc=3842 imports=12
 session/markerstore files=6 loc=451 imports=6
 session/sessionpr files=6 loc=1900 imports=14
 session/backlogstore files=4 loc=518 imports=8

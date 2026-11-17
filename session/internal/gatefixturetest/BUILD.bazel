@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gatefixturetest",
+    testonly = True,
+    srcs = ["gatefixturetest.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/internal/gatefixturetest",
+    visibility = ["//session:__subpackages__"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gatefixturetest",
+    visibility = ["//session:__subpackages__"],
+)

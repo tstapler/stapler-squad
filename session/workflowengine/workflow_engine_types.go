@@ -3,9 +3,10 @@ package workflowengine
 // Workflow-engine types and the shadow ledger that the session core uses and the backlog lifecycle code builds on.
 
 import (
-	"github.com/tstapler/stapler-squad/session/domain"
 	"sort"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Config labels of the `config` series.

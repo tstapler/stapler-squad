@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/gatefixturetest"
 )
 
 // threeCriteriaOneIncomplete builds a 3-criterion domain.AcCriteriaJSON fixture with
@@ -30,7 +31,7 @@ func threeCriteriaOneIncomplete(t *testing.T) domain.AcCriteriaJSON {
 // domain.AcStatusDone.
 func TestStructuralGate_should_ReportSatisfied_When_AcCompleteAllCriteriaChecked(t *testing.T) {
 	t.Parallel()
-	item := domain.BacklogItemTransitionInput{AcCriteria: acCriteriaAllDone(t)}
+	item := domain.BacklogItemTransitionInput{AcCriteria: gatefixturetest.ACCriteriaAllDone(t)}
 
 	result := domain.EvaluateStructuralCheck(domain.StructuralCheckACComplete, item)
 
