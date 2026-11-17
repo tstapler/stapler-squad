@@ -13,12 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const autoAllow = 0
 
 func TestRulesToAntigravityPermissions_should_SkipRules_When_ConstraintCannotBeExpressed(t *testing.T) {
-	cases := map[string]session.ApprovalRuleData{
+	cases := map[string]domain.ApprovalRuleData{
 		"python_mode_restriction": {Programs: []string{"python3"}, PythonModes: []string{"inline"}, SafePythonImportsOnly: true},
 		"forbidden_flags":         {Programs: []string{"git"}, Subcommands: []string{"reset"}, ForbiddenFlags: []string{"--hard"}},
 		"required_flags":          {Programs: []string{"git"}, Subcommands: []string{"reset"}, RequiredFlags: []string{"--hard"}},
@@ -38,27 +39,27 @@ func TestRulesToAntigravityPermissions_should_SkipRules_When_ConstraintCannotBeE
 	for name, rule := range cases {
 		t.Run(name, func(t *testing.T) {
 			rule.ID, rule.Enabled, rule.Decision = name, true, autoAllow
-			assert.Empty(t, RulesToAntigravityPermissions([]session.ApprovalRuleData{rule}))
+			assert.Empty(t, RulesToAntigravityPermissions([]domain.ApprovalRuleData{rule}))
 		})
 	}
 }
 
 func TestRulesToAntigravityPermissions_should_ExportExpressibleRules(t *testing.T) {
 	cases := map[string]struct {
-		rule session.ApprovalRuleData
+		rule domain.ApprovalRuleData
 		want string
 	}{
-		"programs_and_subcommands": {session.ApprovalRuleData{Programs: []string{"git"}, Subcommands: []string{"status"}}, "command(git status)"},
-		"bare_program":             {session.ApprovalRuleData{Programs: []string{"pwd"}}, "command(pwd)"},
-		"anchored_literal_prefix":  {session.ApprovalRuleData{ToolName: "Bash", CommandPattern: "^git status"}, "command(git status)"},
-		"non_bash_tool":            {session.ApprovalRuleData{ToolName: "Read"}, "command(Read)"},
-		"anchored_tool_pattern":    {session.ApprovalRuleData{ToolPattern: "^mcp__brave"}, "command(mcp__brave)"},
+		"programs_and_subcommands": {domain.ApprovalRuleData{Programs: []string{"git"}, Subcommands: []string{"status"}}, "command(git status)"},
+		"bare_program":             {domain.ApprovalRuleData{Programs: []string{"pwd"}}, "command(pwd)"},
+		"anchored_literal_prefix":  {domain.ApprovalRuleData{ToolName: "Bash", CommandPattern: "^git status"}, "command(git status)"},
+		"non_bash_tool":            {domain.ApprovalRuleData{ToolName: "Read"}, "command(Read)"},
+		"anchored_tool_pattern":    {domain.ApprovalRuleData{ToolPattern: "^mcp__brave"}, "command(mcp__brave)"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			rule := tc.rule
 			rule.ID, rule.Enabled, rule.Decision = name, true, autoAllow
-			assert.Equal(t, []string{tc.want}, RulesToAntigravityPermissions([]session.ApprovalRuleData{rule}))
+			assert.Equal(t, []string{tc.want}, RulesToAntigravityPermissions([]domain.ApprovalRuleData{rule}))
 		})
 	}
 }
@@ -68,8 +69,8 @@ func TestExportRulesToAntigravitySettings_should_RemoveStaleEntry_When_RuleDelet
 	settingsPath := filepath.Join(dir, "settings.json")
 	writeSettingsFixture(t, settingsPath, []string{"command(ls)"})
 
-	git := autoAllowRule("git-status", session.ApprovalRuleData{Programs: []string{"git"}, Subcommands: []string{"status"}})
-	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, []session.ApprovalRuleData{git}))
+	git := autoAllowRule("git-status", domain.ApprovalRuleData{Programs: []string{"git"}, Subcommands: []string{"status"}})
+	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, []domain.ApprovalRuleData{git}))
 	assert.Contains(t, readAllow(t, settingsPath), "command(git status)")
 
 	// Rule deleted: the entry this exporter added goes; the hand-added one stays.
@@ -84,8 +85,8 @@ func TestExportRulesToAntigravitySettings_should_NotClaimHandAddedEntry(t *testi
 	settingsPath := filepath.Join(dir, "settings.json")
 	writeSettingsFixture(t, settingsPath, []string{"command(pwd)"})
 
-	pwd := autoAllowRule("pwd", session.ApprovalRuleData{Programs: []string{"pwd"}})
-	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, []session.ApprovalRuleData{pwd}))
+	pwd := autoAllowRule("pwd", domain.ApprovalRuleData{Programs: []string{"pwd"}})
+	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, []domain.ApprovalRuleData{pwd}))
 	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, nil))
 
 	assert.Contains(t, readAllow(t, settingsPath), "command(pwd)", "a hand-added entry must survive rule deletion")
@@ -94,8 +95,8 @@ func TestExportRulesToAntigravitySettings_should_NotClaimHandAddedEntry(t *testi
 func TestExportRulesToAntigravitySettings_should_WriteOwnerOnlyFile(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	pwd := autoAllowRule("pwd", session.ApprovalRuleData{Programs: []string{"pwd"}})
-	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, []session.ApprovalRuleData{pwd}))
+	pwd := autoAllowRule("pwd", domain.ApprovalRuleData{Programs: []string{"pwd"}})
+	require.NoError(t, ExportRulesToAntigravitySettings(settingsPath, []domain.ApprovalRuleData{pwd}))
 
 	info, err := os.Stat(settingsPath)
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestExportAntigravityRulesFromDB_should_NotResurrectDeletedRule_When_Export
 	const n = 20
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
-		rule := autoAllowRule(fmt.Sprintf("r%d", i), session.ApprovalRuleData{Programs: []string{fmt.Sprintf("tool%d", i)}})
+		rule := autoAllowRule(fmt.Sprintf("r%d", i), domain.ApprovalRuleData{Programs: []string{fmt.Sprintf("tool%d", i)}})
 		require.NoError(t, storage.UpsertRule(ctx, rule))
 		wg.Add(1)
 		go func() {
@@ -147,7 +148,7 @@ func TestExportAntigravityRulesFromDB_should_NotResurrectDeletedRule_When_Export
 	}
 }
 
-func autoAllowRule(id string, r session.ApprovalRuleData) session.ApprovalRuleData {
+func autoAllowRule(id string, r domain.ApprovalRuleData) domain.ApprovalRuleData {
 	r.ID, r.Name, r.Enabled, r.Decision = id, id, true, autoAllow
 	return r
 }

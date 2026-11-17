@@ -20,7 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"gopkg.in/yaml.v3"
 )
@@ -1001,7 +1001,7 @@ func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
 	// Insert non-user rules directly via storage (bypassing Upsert guard) so we
 	// can prove that ExportRules filters them out.
 	for i, src := range []string{"seed", "claude-settings"} {
-		err := svc.rulesStore.storage.UpsertRule(context.Background(), session.ApprovalRuleData{
+		err := svc.rulesStore.storage.UpsertRule(context.Background(), domain.ApprovalRuleData{
 			ID:       fmt.Sprintf("%s-rule-%d", src, i),
 			Name:     fmt.Sprintf("%s Rule %d", src, i),
 			Decision: 1, // auto_allow
@@ -1221,7 +1221,7 @@ func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
 		"MinSessionIdleMinutes should survive proto->RuleSpec->ent->RuleSpec->proto in the upsert response")
 
 	// Hop 2: re-open a fresh RulesStore against the same ent storage to force a
-	// read from the DB row (session.ApprovalRuleData) rather than the in-memory
+	// read from the DB row (domain.ApprovalRuleData) rather than the in-memory
 	// cache, proving the ent read/write hop in session/ent_repository.go didn't
 	// drop the field.
 	reloaded, err := NewRulesStore(svc.rulesStore.storage)

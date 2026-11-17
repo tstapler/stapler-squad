@@ -9,6 +9,7 @@ go_library(
     deps = [
         "//log",
         "//session",
+        "//session/domain",
     ],
 )
 
@@ -28,6 +29,7 @@ go_test(
     deps = [
         "//server/services/internal/svctest",
         "//session",
+        "//session/domain",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

@@ -830,12 +830,12 @@ func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID str
 // --- Permissions & Analytics --------------------------------------------------
 
 // AllRules returns all auto-approval rules from the repository.
-func (s *Storage) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
+func (s *Storage) AllRules(ctx context.Context) ([]domain.ApprovalRuleData, error) {
 	return s.Repo.AllRules(ctx)
 }
 
 // UpsertRule creates or updates an auto-approval rule in the repository.
-func (s *Storage) UpsertRule(ctx context.Context, rule ApprovalRuleData) error {
+func (s *Storage) UpsertRule(ctx context.Context, rule domain.ApprovalRuleData) error {
 	return s.Repo.UpsertRule(ctx, rule)
 }
 
@@ -845,12 +845,12 @@ func (s *Storage) DeleteRule(ctx context.Context, id string) error {
 }
 
 // AllTaggingRules returns all tagging rules from the repository.
-func (s *Storage) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
+func (s *Storage) AllTaggingRules(ctx context.Context) ([]domain.TaggingRuleData, error) {
 	return s.Repo.AllTaggingRules(ctx)
 }
 
 // UpsertTaggingRule creates or updates a tagging rule in the repository.
-func (s *Storage) UpsertTaggingRule(ctx context.Context, rule TaggingRuleData) error {
+func (s *Storage) UpsertTaggingRule(ctx context.Context, rule domain.TaggingRuleData) error {
 	return s.Repo.UpsertTaggingRule(ctx, rule)
 }
 
@@ -924,17 +924,17 @@ func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand st
 // --- Projects ---
 
 // CreateProject inserts a new project into storage.
-func (s *Storage) CreateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
+func (s *Storage) CreateProject(ctx context.Context, data domain.ProjectData) (*domain.ProjectData, error) {
 	return s.Repo.CreateProject(ctx, data)
 }
 
 // ListProjects returns all projects from storage.
-func (s *Storage) ListProjects(ctx context.Context) ([]ProjectData, error) {
+func (s *Storage) ListProjects(ctx context.Context) ([]domain.ProjectData, error) {
 	return s.Repo.ListProjects(ctx)
 }
 
 // UpdateProject modifies an existing project in storage.
-func (s *Storage) UpdateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
+func (s *Storage) UpdateProject(ctx context.Context, data domain.ProjectData) (*domain.ProjectData, error) {
 	return s.Repo.UpdateProject(ctx, data)
 }
 
