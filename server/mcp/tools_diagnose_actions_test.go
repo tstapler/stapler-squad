@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -35,7 +35,7 @@ func TestSubmitDiagnosisResult_should_PopulateItemSessionDiagnoseResult(t *testi
 	sessions, err := storage.ListItemSessions(context.Background(), itemID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
-	dr, ok := session.ParseDiagnoseResult(sessions[0].DiagnoseResult)
+	dr, ok := backlogstore.ParseDiagnoseResult(sessions[0].DiagnoseResult)
 	require.True(t, ok)
 	assert.Equal(t, "BUG_FILED", dr.Outcome)
 	assert.Equal(t, "found it", dr.Summary)
@@ -58,7 +58,7 @@ func TestSuggestWorkflowAction_should_PersistSuggestion_ThenDismiss(t *testing.T
 
 	item, err := storage.GetBacklogItem(context.Background(), itemID)
 	require.NoError(t, err)
-	sugs := session.ParseWorkflowSuggestions(item.WorkflowSuggestions)
+	sugs := backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions)
 	require.Len(t, sugs, 1)
 	assert.Equal(t, "Move back to ready", sugs[0].Recommendation)
 	assert.Equal(t, sessUUID, sugs[0].SessionUUID)
@@ -67,7 +67,7 @@ func TestSuggestWorkflowAction_should_PersistSuggestion_ThenDismiss(t *testing.T
 	require.NoError(t, storage.DismissWorkflowSuggestion(context.Background(), itemID, sugs[0].SuggestionID))
 	item, err = storage.GetBacklogItem(context.Background(), itemID)
 	require.NoError(t, err)
-	assert.True(t, session.ParseWorkflowSuggestions(item.WorkflowSuggestions)[0].Dismissed)
+	assert.True(t, backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions)[0].Dismissed)
 
 	err = storage.DismissWorkflowSuggestion(context.Background(), itemID, "missing")
 	require.ErrorIs(t, err, domain.ErrNotFound)
@@ -90,7 +90,7 @@ func TestSuggestWorkflowAction_should_RejectNonDiagnoseCaller(t *testing.T) {
 
 	item, err := storage.GetBacklogItem(context.Background(), itemID)
 	require.NoError(t, err)
-	assert.Empty(t, session.ParseWorkflowSuggestions(item.WorkflowSuggestions))
+	assert.Empty(t, backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions))
 }
 
 func TestSuggestWorkflowAction_should_RejectInvalidActionType(t *testing.T) {

@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -786,36 +785,6 @@ func TestGetBacklogItem_should_ReturnActivityNotes_When_ItemHasThem(t *testing.T
 	assert.Equal(t, "second", fetched.ActivityNotes[1].Message)
 }
 
-// TestMapAppendActivityNoteCreateError_should_ReturnErrNotFound_When_ErrIsConstraintViolation
-// and its sibling below unit-test mapAppendActivityNoteCreateError directly
-// (Epic 8.2, Task 8.2.1e / validation.md Gap 1) instead of trying to
-// reproduce the delete-between-steps race the FK-violation branch actually
-// guards against, which is real but impractical to trigger deterministically.
-func TestMapAppendActivityNoteCreateError_should_ReturnErrNotFound_When_ErrIsConstraintViolation(t *testing.T) {
-	t.Parallel()
-	// *ent.ConstraintError's fields are all unexported, but a zero-value
-	// composite literal is still constructible from another package — its
-	// Error() string ("ent: constraint failed: ") is irrelevant here, only
-	// its type matters to ent.IsConstraintError's errors.As check.
-	constraintErr := fmt.Errorf("create failed: %w", &ent.ConstraintError{})
-
-	got := mapAppendActivityNoteCreateError(constraintErr, "item-1")
-
-	require.Error(t, got)
-	assert.True(t, errors.Is(got, domain.ErrNotFound), "a constraint-violation error must map to ErrNotFound")
-}
-
-func TestMapAppendActivityNoteCreateError_should_WrapPlainError_When_ErrIsNotConstraintViolation(t *testing.T) {
-	t.Parallel()
-	plain := errors.New("boom")
-
-	got := mapAppendActivityNoteCreateError(plain, "item-1")
-
-	require.Error(t, got)
-	assert.False(t, errors.Is(got, domain.ErrNotFound), "a non-constraint error must not be misclassified as ErrNotFound")
-	assert.True(t, errors.Is(got, plain), "the original error must remain unwrappable")
-}
-
 // Note: the "AppendActivityNote publishes ChangeActivityNoteAdded" and
 // "...populates Status/RepoPath on the published snapshot" behaviors (Epic
 // 8.2, Tasks 8.2.1b/8.2.1c) are tested in the external session_test package
@@ -1121,7 +1090,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 // publish -- an O(N) cost per transition that compounded into unbounded live
 // heap growth (confirmed via pprof: 93% of a 7.6GB live heap after ~80
 // minutes of one stuck item's retry storm). Verifies the attached slice is
-// capped at maxPublishedStatusEvents and keeps only the *most recent* rows,
+// capped at backlogstore.MaxPublishedStatusEvents and keeps only the *most recent* rows,
 // still in ascending (oldest-first) order.
 func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.T) {
 	t.Parallel()
@@ -1137,7 +1106,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 	itemID, err := repo.ResolveBacklogItemLookup(ctx, created.ID)
 	require.NoError(t, err)
 
-	const totalEvents = maxPublishedStatusEvents + 10
+	const totalEvents = backlogstore.MaxPublishedStatusEvents + 10
 	for i := 0; i < totalEvents; i++ {
 		recordStatusEvent(ctx, statusEventInput{
 			evClient:    repo.Client.BacklogStatusEvent,
@@ -1149,11 +1118,13 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 		})
 	}
 
-	data := &backlogdto.BacklogItemData{ID: created.ID}
-	repo.attachStatusEventsForPublish(ctx, data)
+	var data *backlogdto.BacklogItemData
+	repo.SetItemChangePublisher(hookPublisher{func(i *backlogdto.BacklogItemData, _ backlogdto.BacklogItemChange) { data = i }})
+	repo.PublishItemChanged(ctx, &backlogdto.BacklogItemData{ID: created.ID}, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated})
+	require.NotNil(t, data, "the publisher must have received the item")
 
-	require.Len(t, data.StatusEvents, maxPublishedStatusEvents,
-		"attached slice must be capped at maxPublishedStatusEvents even when far more rows exist")
+	require.Len(t, data.StatusEvents, backlogstore.MaxPublishedStatusEvents,
+		"attached slice must be capped at backlogstore.MaxPublishedStatusEvents even when far more rows exist")
 	// Oldest-first order preserved: the last attached event must be the very
 	// last one recorded (note field carries the retry index).
 	last := data.StatusEvents[len(data.StatusEvents)-1].Note
@@ -1162,8 +1133,8 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 		"cap must keep the most recent events, not the oldest")
 	first := data.StatusEvents[0].Note
 	require.NotNil(t, first)
-	assert.Equal(t, fmt.Sprintf("retry #%d", totalEvents-maxPublishedStatusEvents), *first,
-		"first retained event must be exactly maxPublishedStatusEvents back from the most recent")
+	assert.Equal(t, fmt.Sprintf("retry #%d", totalEvents-backlogstore.MaxPublishedStatusEvents), *first,
+		"first retained event must be exactly backlogstore.MaxPublishedStatusEvents back from the most recent")
 }
 
 // newTestItemSessionForCost creates a backlog item and an ItemSession for it,

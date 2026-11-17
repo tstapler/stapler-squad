@@ -276,15 +276,17 @@ func (r *EntRepository) initStores() {
 	r.Triggers = wakestore.New(r.Client)
 	r.Markers = markerstore.New(r.Client)
 	r.PRStore = sessionpr.New(r.Client)
-	r.Backlog = backlogstore.New(r.Client)
 	r.Shells = shellstore.New(r.Client)
 	r.Projects = projectstore.New(r.Client)
 	r.Rules = rulestore.New(r.Client)
 	r.SetDriver(r.driver)
+	// Built before Backlog, which takes it as its guidance port; the callback resolves r.Backlog
+	// at call time, so it publishes through the Backlog built on the next line.
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
 		item := backlogstore.BacklogItemToData(row)
-		r.publishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+		r.PublishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
 	})
+	r.Backlog = backlogstore.New(r.Client, backlogstore.Ports{Guidance: r.Repo, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)

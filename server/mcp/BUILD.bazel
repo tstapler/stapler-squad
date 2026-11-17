@@ -171,6 +171,7 @@ go_test(
         "//server/services/backlogsvc",
         "//server/wakes",
         "//session",
+        "//session/backlogstore",
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/flow",
