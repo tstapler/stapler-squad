@@ -63,7 +63,11 @@ func check(root string) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s/BUILD.bazel: no go_test named %q", s, scannerTests[s])
 		}
-		data[s] = stringSet(attr(call, "data"))
+		expr := attr(call, "data")
+		if u := unsafeData(expr); u != "" {
+			return nil, fmt.Errorf("%s/BUILD.bazel: go_test %s data uses %q; scandata can only verify plain lists and glob([...]) + [...]", s, scannerTests[s], u)
+		}
+		data[s] = stringSet(expr)
 	}
 	var out []string
 	for _, leaf := range leaves {
@@ -83,6 +87,9 @@ func checkLeaf(root, leaf string, data map[string]map[string]bool) []string {
 	if !ok {
 		out = append(out, leaf+": no go_sources filegroup")
 	} else {
+		if !globsGoFiles(attr(fg, "srcs")) {
+			out = append(out, leaf+`: go_sources srcs must be glob(["*.go"])`)
+		}
 		vis := strRe.FindAllStringSubmatch(attr(fg, "visibility"), -1)
 		for _, s := range scanners {
 			if msg := visibleTo(vis, s); msg != "" {

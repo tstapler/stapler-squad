@@ -148,6 +148,18 @@ func attr(body, key string) string {
 	return val
 }
 
+var unsafeDataRe = regexp.MustCompile(`\b(select|exclude|for)\b`)
+
+// unsafeData returns the construct that makes a data expression's string literals unreliable, or "".
+func unsafeData(expr string) string {
+	return unsafeDataRe.FindString(strRe.ReplaceAllString(expr, `""`))
+}
+
+// globsGoFiles reports whether srcs is exactly glob(["*.go"]).
+func globsGoFiles(srcs string) bool {
+	return strings.Join(strings.Fields(srcs), "") == `glob(["*.go"])`
+}
+
 func stringSet(expr string) map[string]bool {
 	out := map[string]bool{}
 	for _, m := range strRe.FindAllStringSubmatch(expr, -1) {

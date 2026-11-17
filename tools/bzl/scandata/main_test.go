@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -124,6 +125,27 @@ func TestCheck_ShouldAcceptPublicAndSubpackagesVisibility(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, got, vis)
 	}
+}
+
+func TestCheck_ShouldErr_WhenDataUsesSelectExcludeOrComprehension(t *testing.T) {
+	t.Parallel()
+	for name, data := range map[string]string{
+		"exclude":       `        ` + leafLabel + `,` + "\n    ] + glob([\"*\"], exclude = [\"//a:go_sources\"]) + [",
+		"select":        `    ] + select({"//conditions:default": [` + leafLabel + `]}) + [`,
+		"comprehension": `    ] + [x for x in [` + leafLabel + `]] + [`,
+	} {
+		_, err := check(fixture(t, goodGroup, data, ""))
+		require.Error(t, err, name)
+		require.Contains(t, err.Error(), map[string]string{"exclude": `"exclude"`, "select": `"select"`, "comprehension": `"for"`}[name], name)
+	}
+}
+
+func TestCheck_ShouldFlagFilegroupThatDoesNotGlobGoFiles(t *testing.T) {
+	t.Parallel()
+	empty := strings.Replace(goodGroup, `glob(["*.go"])`, `[]`, 1)
+	got, err := check(fixture(t, empty, "        "+leafLabel+",", ""))
+	require.NoError(t, err)
+	require.Equal(t, []string{`session/leaf: go_sources srcs must be glob(["*.go"])`}, got)
 }
 
 func TestCheck_ShouldNameUnsupportedVisibility_WhenPackageGroupUsed(t *testing.T) {
