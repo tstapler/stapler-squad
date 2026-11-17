@@ -3,7 +3,6 @@ package services
 import (
 	"go/ast"
 	"go/token"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -12,19 +11,17 @@ import (
 // the five allow-listed raw writers; archived_at and other columns are written
 // alongside status inside those writers and are not gated here.
 //
-// Accepted blind spots (nothing else covers them; there are no DB-level
+// This is a BEST-EFFORT static heuristic over Go AST call expressions and Go
+// string literals, not a guarantee. Known uncovered (there are no DB-level
 // triggers on backlog_items, so review and the Gated* tests are the backstop):
-//   - a builder aliased or passed to a helper (setIt(u)): the walk is per
-//     function and resolves receivers only through local assignments/params.
-//   - a method value (f := u.SetStatus; f("x")): only call expressions match.
-//   - SetField on an untyped ent.Mutation in a global hook: no BacklogItem
-//     type is nameable there.
-//   - reflection.
-//   - SQL built with fmt.Sprintf or concatenation: only whole literals match.
-//   - package-level const/var SQL: the walker visits function bodies only.
-//   - SQL in non-Go files (migrations).
-//   - builder chains split across variables for the entgo sql builder
-//     (sql.Update("backlog_items") assigned, then .Set later).
+//   - a builder aliased or passed to a helper (setIt(u)), or a method value
+//     (f := u.SetStatus): only direct call expressions are matched.
+//   - SetField on an untyped ent.Mutation in a global hook, and reflection.
+//   - SQL built at runtime (fmt.Sprintf, concatenation), SQL in package-level
+//     const/var (the walker visits function bodies only), SQL in non-Go files.
+//   - SQL dialect forms the heuristic does not enumerate (see
+//     workflow_bypass_sql_test.go), and entgo sql builder chains split across
+//     variables.
 
 // clsStatusWriterMethods are the generated BacklogItem builder methods that
 // can write the status column: SetStatus and SetNillableStatus on
@@ -36,41 +33,6 @@ var clsStatusWriterMethods = map[string]bool{
 	"SetNillableStatus": true,
 	"UpdateStatus":      true,
 	"UpdateNewValues":   true,
-}
-
-var (
-	clsSQLStmtUpdate = regexp.MustCompile("(?s)^\\s*update\\s+(?:or\\s+\\w+\\s+)?[`\"]?backlog_items[`\"]?\\s+set\\s+(.*)$")
-	clsSQLStmtInsert = regexp.MustCompile("(?s)^\\s*(?:insert\\s+(?:or\\s+\\w+\\s+)?into|replace\\s+into)\\s+[`\"]?backlog_items[`\"]?\\s*\\(([^)]*)\\)(.*)$")
-	clsSQLSetEnd     = regexp.MustCompile(`\b(where|returning|from)\b`)
-	clsSQLUpsertSet  = regexp.MustCompile(`(?s)\bdo\s+update\s+set\s+(.*)$`)
-	clsSQLStatusCol  = regexp.MustCompile(`\bstatus\b`)
-	clsSQLStatusSet  = regexp.MustCompile("[`\"]?\\bstatus[`\"]?\\s*=")
-)
-
-// clsSQLWritesBacklogStatus reports whether sql contains a statement that writes
-// backlog_items.status: status in an UPDATE's SET list (before WHERE, RETURNING
-// or FROM), in an INSERT/REPLACE column list, or in an upsert's DO UPDATE SET.
-func clsSQLWritesBacklogStatus(sql string) bool {
-	for _, stmt := range strings.Split(strings.ToLower(sql), ";") {
-		if m := clsSQLStmtUpdate.FindStringSubmatch(stmt); m != nil {
-			set := m[1]
-			if loc := clsSQLSetEnd.FindStringIndex(set); loc != nil {
-				set = set[:loc[0]]
-			}
-			if clsSQLStatusSet.MatchString(set) {
-				return true
-			}
-		}
-		if m := clsSQLStmtInsert.FindStringSubmatch(stmt); m != nil {
-			if clsSQLStatusCol.MatchString(m[1]) {
-				return true
-			}
-			if u := clsSQLUpsertSet.FindStringSubmatch(m[2]); u != nil && clsSQLStatusSet.MatchString(u[1]) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // clsStatusWriterName returns the status-writing method a call invokes on a

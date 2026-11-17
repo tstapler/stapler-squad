@@ -774,6 +774,8 @@ go_test(
         "window_debug_test.go",
         "workflow_attachments_test.go",
         "workflow_bypass_inventory_test.go",
+        "workflow_bypass_sql_fixture_test.go",
+        "workflow_bypass_sql_test.go",
         "workflow_bypass_status_writers_fixture_test.go",
         "workflow_bypass_status_writers_test.go",
         "workflow_bypass_strict_test.go",
