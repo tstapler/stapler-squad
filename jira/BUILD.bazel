@@ -28,3 +28,10 @@ go_test(
     embed = [":jira"],
     deps = ["@com_github_zalando_go_keyring//:go-keyring"],
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

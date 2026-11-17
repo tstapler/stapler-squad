@@ -210,5 +210,6 @@ filegroup(
         "//server/services:__pkg__",
         "//session:__pkg__",
         "//session/markerstore:__pkg__",
+        "//tools/bzl/scandata:__pkg__",
     ],
 )

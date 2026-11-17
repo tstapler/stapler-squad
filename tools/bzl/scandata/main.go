@@ -1,11 +1,20 @@
-// Command scandata checks that every Go leaf under session/ is visible to the
-// source-scanning guard tests when they run under Bazel.
+// Command scandata checks that every Go package the source-scanning guard
+// tests walk is visible to them when they run under Bazel.
 //
 // The scanners (session's legacy_*_readers/pr_state_writer_guard tests and
 // server/services' workflow_bypass_* tests) walk the whole module. Bazel
-// sandboxes only declared inputs, so a leaf without a go_sources filegroup, or
-// one missing from either scanner package's go_test data, is silently skipped
-// and a planted violation there goes unseen. Usage: scandata [repo-root].
+// sandboxes only declared inputs, so a package without a go_sources filegroup,
+// or one missing from the scanners' go_test data, is silently skipped and a
+// planted violation there goes unseen. session/ leaves are listed one by one
+// in both go_test data lists; every other package goes through the
+// //tools/bzl/scandata:module_go_sources aggregator. Every dir under the module
+// is in scope (no depguard allow-list bounds which packages may import
+// session/ent, and the legacy-field scan is a name grep), except hidden dirs,
+// node_modules, vendor, web-app, gen, session/ent, testdata and dirs with no
+// BUILD.bazel (listed in tools/bzl/no-build-packages.txt).
+//
+// Usage: scandata [-fix] [repo-root]. -fix appends missing go_sources
+// filegroups and regenerates the aggregator.
 package main
 
 import (
@@ -27,9 +36,20 @@ const scanRoot = "session"
 var notScanned = map[string]bool{"session/ent": true}
 
 func main() {
+	args := os.Args[1:]
+	doFix := len(args) > 0 && args[0] == "-fix"
+	if doFix {
+		args = args[1:]
+	}
 	root := "."
-	if len(os.Args) > 1 {
-		root = os.Args[1]
+	if len(args) > 0 {
+		root = args[0]
+	}
+	if doFix {
+		if err := fix(root); err != nil {
+			fmt.Fprintln(os.Stderr, "scandata:", err)
+			os.Exit(2)
+		}
 	}
 	problems, err := check(root)
 	if err != nil {
@@ -40,9 +60,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, p)
 	}
 	if len(problems) > 0 {
-		fmt.Fprintf(os.Stderr, "scandata: %d problem(s). Add to each leaf BUILD.bazel (hand-maintained, like session/markerstore):\n"+
-			"  filegroup(name = \"go_sources\", srcs = glob([\"*.go\"]), visibility = [\"//server/services:__pkg__\", \"//session:__pkg__\"])\n"+
-			"and list \"//<leaf>:go_sources\" in the go_test data of session/BUILD.bazel and server/services/BUILD.bazel.\n", len(problems))
+		fmt.Fprintf(os.Stderr, "scandata: %d problem(s). Run `go run ./tools/bzl/scandata -fix .` to add missing go_sources filegroups and\n"+
+			"regenerate the aggregator (a session/ leaf also needs its label in the go_test data of session/BUILD.bazel\n"+
+			"and server/services/BUILD.bazel).\n", len(problems))
 		os.Exit(1)
 	}
 }
@@ -73,6 +93,11 @@ func check(root string) ([]string, error) {
 	for _, leaf := range leaves {
 		out = append(out, checkLeaf(root, leaf, data)...)
 	}
+	more, err := checkModule(root, data)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, more...)
 	sort.Strings(out)
 	return out, nil
 }

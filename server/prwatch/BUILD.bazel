@@ -107,3 +107,10 @@ forbidden_deps_test(
     target = ":prwatch",
     why = "prwatch direct imports only: adapters in server/ own the bridging (replaces deps_test.go)",
 )
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
