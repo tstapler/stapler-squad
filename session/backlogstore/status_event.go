@@ -79,6 +79,8 @@ func recordStatusEvent(ctx context.Context, in statusEventInput) {
 // already inside a transaction can pass tx.BacklogStage/tx.StageTransition —
 // the same "standalone client or tx client" seam recordStatusEvent's evClient
 // parameter uses (see its doc comment).
+//
+// Exported only so session's tests can call it; production callers are in this package.
 func ResolveStageSnapshotFields(ctx context.Context, stageClient *ent.BacklogStageClient, transitionClient *ent.StageTransitionClient, toStatus domain.BacklogStatus) (name string, allowedSlugs []string) {
 	stage, err := stageClient.Query().Where(backlogstage.Slug(string(toStatus))).Only(ctx)
 	if err != nil {

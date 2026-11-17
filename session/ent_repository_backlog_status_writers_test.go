@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -283,6 +284,109 @@ func TestRawTransitionBacklogItemStatusWithPRFields_should_PublishStatusTransiti
 	assert.Equal(t, backlogdto.ChangeStatusTransition, got[0].change.Kind)
 	assert.Equal(t, string(domain.BacklogStatusReview), got[0].change.OldStatus)
 	assert.Equal(t, string(domain.BacklogStatusPRPending), got[0].change.NewStatus)
+}
+
+func TestResolveStageSnapshotFields_should_ExcludeDisabledDestinationStage_When_EdgeItselfIsEnabled(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	c := repo.Client
+	from, err := c.BacklogStage.Create().SetSlug("snap-from").SetName("From").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	on, err := c.BacklogStage.Create().SetSlug("snap-on").SetName("On").SetEnabled(true).Save(ctx)
+	require.NoError(t, err)
+	off, err := c.BacklogStage.Create().SetSlug("snap-off").SetName("Off").SetEnabled(false).Save(ctx)
+	require.NoError(t, err)
+	for _, to := range []*ent.BacklogStage{on, off} {
+		_, err = c.StageTransition.Create().SetFromStageID(from.ID).SetToStageID(to.ID).SetEnabled(true).Save(ctx)
+		require.NoError(t, err)
+	}
+
+	name, slugs := backlogstore.ResolveStageSnapshotFields(ctx, c.BacklogStage, c.StageTransition, domain.BacklogStatus("snap-from"))
+
+	assert.Equal(t, "From", name)
+	assert.Equal(t, []string{"snap-on"}, slugs, "an enabled edge to a disabled stage is not an allowed transition")
+}
+
+func TestCreateBacklogItem_should_DefaultPriorityToThree_AndKeepExplicitPriority(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	def, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "default priority"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, def.Priority)
+	assert.Equal(t, string(domain.BacklogStatusIdea), def.Status, "an empty status defaults to idea")
+
+	explicit, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "explicit priority", Priority: 1})
+	require.NoError(t, err)
+	assert.Equal(t, 1, explicit.Priority)
+	got, err := repo.GetBacklogItem(ctx, explicit.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Priority)
+}
+
+func TestCreateBacklogItem_should_PersistClaimingHostID(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "claimed", ClaimingHostID: "host-a"})
+	require.NoError(t, err)
+	got, err := repo.GetBacklogItem(ctx, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "host-a", got.ClaimingHostID)
+}
+
+func TestRawTransitionBacklogItemStatus_should_LeaveNotesUnchanged_AndWithNoteShouldAppendExactlyOnce(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "notes", Status: string(domain.BacklogStatusInProgress), Notes: "orig"})
+	require.NoError(t, err)
+
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, domain.TriggeredBySystem)
+	require.NoError(t, err)
+	plain, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "orig", plain.Notes, "the plain wrapper appends no note")
+
+	_, err = repo.RawTransitionBacklogItemStatusWithNote(ctx, item.ID, domain.BacklogStatusPRPending, nil, domain.TriggeredBySystem, "[auto] moved")
+	require.NoError(t, err)
+	withNote, err := repo.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "orig\n[auto] moved", withNote.Notes)
+}
+
+// The audit from_status is the precondition's ExpectedStatus, which is what the
+// row atomically held when the CAS landed, not the earlier non-atomic read: here
+// the status becomes the expected one between the read and the write.
+func TestRawTransitionBacklogItemStatusWithNote_should_RecordExpectedStatusAsFrom_When_StatusChangedBetweenReadAndWrite(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	item := newStatusWriterItem(t, repo, domain.BacklogStatusIdea)
+	id, err := repo.ResolveBacklogItemLookup(ctx, item.ID)
+	require.NoError(t, err)
+
+	var once sync.Once
+	repo.Client.BacklogItem.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(c context.Context, m ent.Mutation) (ent.Value, error) {
+			if m.Op().Is(ent.OpUpdate) {
+				once.Do(func() {
+					_, rerr := repo.Client.BacklogItem.UpdateOneID(id).SetStatus(string(domain.BacklogStatusReview)).Save(c)
+					assert.NoError(t, rerr)
+				})
+			}
+			return next.Mutate(c, m)
+		})
+	})
+
+	_, err = repo.RawTransitionBacklogItemStatusWithNote(ctx, item.ID, domain.BacklogStatusPRPending,
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, domain.TriggeredBySystem, "")
+	require.NoError(t, err)
+
+	evs := statusEventsFor(t, repo, item.ID)
+	require.Len(t, evs, 1)
+	assert.Equal(t, string(domain.BacklogStatusReview), evs[0].FromStatus)
 }
 
 // A concurrent notes edit injected after the writer's read and before its UPDATE

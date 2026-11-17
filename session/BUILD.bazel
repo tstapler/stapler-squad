@@ -327,6 +327,7 @@ go_test(
         "ent_repository_backlog_moved_guards_test.go",
         "ent_repository_backlog_moved_writers_test.go",
         "ent_repository_backlog_read_queries_test.go",
+        "ent_repository_backlog_status_writers_link_test.go",
         "ent_repository_backlog_status_writers_test.go",
         "ent_repository_backlog_stuck_test.go",
         "ent_repository_backlog_test.go",
