@@ -253,6 +253,7 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent/predicate
             - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/sourcesyncevent
+            - github.com/tstapler/stapler-squad/session/markerstore
         # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
         # imports session, github or server.
         isolate_stagecfg:

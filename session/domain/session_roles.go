@@ -7,4 +7,5 @@ const (
 	SessionRoleWork      = "work"
 	SessionRoleReview    = "review"
 	SessionRoleJulesWork = "jules_work"
+	SessionRoleDiagnose  = "diagnose"
 )

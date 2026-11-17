@@ -9,12 +9,13 @@ import (
 
 	"entgo.io/ent/dialect"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
-// ItemSessionBatchChunk keeps IN (...) lists well under SQLite's bound-variable limit. It lives here, the
-// lowest package that chunks, so the backlog code can import it instead of owning a second copy.
-const ItemSessionBatchChunk = 500
+// ItemSessionBatchChunk keeps IN (...) lists well under SQLite's bound-variable limit; the value lives in
+// session/domain so the backlog leaf and this package share one copy.
+const ItemSessionBatchChunk = domain.ItemSessionBatchChunk
 
 // PRStore owns the pull_request_states, session_prs and session_pr_tombstones tables.
 type PRStore struct {
