@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // A dead pane is never nudged: whatever the detector last saw, the snapshot
@@ -121,7 +122,7 @@ func TestHandleDeadPane_should_neverBeNudgeable_When_AnyLastDetectedStatus(t *te
 						got = append(got, state)
 						assert.NotEmpty(t, snap.PaneTail, "BoundedStopTail-processed tail is carried to the recorder")
 					}))
-				h.stopSourceFor = func(*Instance) stopSource {
+				h.stopSourceFor = func(*instance.Instance) stopSource {
 					return &fakeStopSource{status: st, tmuxAlive: true, ctrlActive: true, tail: "last words"}
 				}
 				inst := makeTestInstance("dead-any-status")

@@ -14,23 +14,25 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func setupDiagnoseSession(t *testing.T, storage *session.Storage) (itemID, sessionUUID string) {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Diagnose me",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
 	sessUUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessUUID,
-		SessionRole: session.SessionRoleDiagnose,
+		SessionRole: instance.SessionRoleDiagnose,
 	})
 	require.NoError(t, err)
 
@@ -130,7 +132,7 @@ func TestNudgeSession_should_Refuse_When_NudgeCapAlreadyReached(t *testing.T) {
 	itemID, sessUUID := setupDiagnoseSession(t, storage)
 	ctx := context.Background()
 
-	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bouncing")
+	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bouncing")
 	require.NoError(t, err)
 	require.True(t, applied, "MarkStuck's expectedStatus must match setupDiagnoseSession's item status (review)")
 	const maxAttempts = int32(3)
@@ -238,8 +240,8 @@ func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	pm := &recordingPM{}
-	target := session.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
-	live := &fakeLiveInstanceFinder{instances: map[string]*session.Instance{"target-1": target}}
+	target := instance.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
+	live := &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{"target-1": target}}
 	dh := &diagnoseHandlers{storage: storage, live: live}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -264,7 +266,7 @@ func TestResetRemediation_should_ReArmParkedRow_ThenRefuseDuringCooldown(t *test
 	ctx := context.Background()
 	reason := domain.StuckReasonBouncing
 
-	applied, err := repo.MarkStuck(ctx, itemID, reason, session.BacklogStatusReview, "bouncing")
+	applied, err := repo.MarkStuck(ctx, itemID, reason, domain.BacklogStatusReview, "bouncing")
 	require.NoError(t, err)
 	require.True(t, applied)
 	parkedAt := time.Now().Add(time.Hour)

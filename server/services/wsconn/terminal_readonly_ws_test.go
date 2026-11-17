@@ -10,12 +10,13 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-func writerForHandler(t *testing.T, sender services.TmuxInputSender, inst *session.Instance) services.TerminalWriter {
+func writerForHandler(t *testing.T, sender services.TmuxInputSender, inst *instance.Instance) services.TerminalWriter {
 	t.Helper()
 	h := &ConnectRPCWebSocketHandler{tmuxSender: sender}
 	return h.writerFor(inst)
@@ -29,7 +30,7 @@ func resizeFrame(cols, rows int32) *sessionv1.TerminalData {
 	return &sessionv1.TerminalData{Data: &sessionv1.TerminalData_Resize{Resize: &sessionv1.TerminalResize{Cols: cols, Rows: rows}}}
 }
 
-func capturePaneParamsFor(inst *session.Instance, writer services.TerminalWriter, managed bool) capturePaneStreamParams {
+func capturePaneParamsFor(inst *instance.Instance, writer services.TerminalWriter, managed bool) capturePaneStreamParams {
 	snap := *inst.Snapshot()
 	snap.Permissions.CanSendCommand = true
 	return capturePaneStreamParams{
@@ -194,7 +195,7 @@ func TestReadOnlyAttach_ShouldInvokeNoResizeClosure_WhenControlModeShellPTYOrHub
 // T-RO-41: scroll forwarding types PageUp into the pane, so a read-only attach never reaches it.
 func TestReadOnlyAttach_ShouldNotInvokeForwardScrollAndShouldTakeTheTmuxNativeScrollbackPath_WhenAHiddenSessionStreamRequestsAppScroll(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName, true))
 
 	fallbackCalled := false
 	// A nil instance panics as soon as the gate or ForwardScroll is reached, which is

@@ -14,6 +14,8 @@ import (
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // This file covers Epic 7.2 (`MergeDatabase` Live-Leak Check) from
@@ -30,7 +32,7 @@ import (
 // backlog_stuck_states / backlog_progress_notes) at all. Backlog items are
 // simply outside MergeDatabase's data model entirely, so there is no code
 // path by which a merge could invoke the 9 hooked EntRepository methods (the
-// only place session.ItemChangePublisher.PublishItemChanged is ever called)
+// only place backlogdto.ItemChangePublisher.PublishItemChanged is ever called)
 // — no bypass/suppression parameter is needed per Task 7.2.1b's "else" branch.
 //
 // The three tests below are the confirming tests validation.md maps to R16,
@@ -76,9 +78,9 @@ func seedBacklogItems(t *testing.T, repo *session.EntRepository, ctx context.Con
 	titles := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("%s-%d", titlePrefix, i)
-		_, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  title,
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
 		titles = append(titles, title)
@@ -163,11 +165,11 @@ func TestMergeDatabase_should_stillPersistCopiedItems_When_EventPublishIsSuppres
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
 	defer sourceCleanup()
 	seedBacklogItems(t, sourceRepo, ctx, 5, "source-item")
-	require.NoError(t, sourceRepo.Create(ctx, session.InstanceData{
+	require.NoError(t, sourceRepo.Create(ctx, domain.InstanceData{
 		Title:     "merged-session-1",
 		Path:      "/tmp/merge-test-session-1",
 		Program:   "claude",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))
@@ -208,11 +210,11 @@ func TestMergeDatabase_should_makeCopiedItemsVisibleOnNextSnapshot_When_ClientRe
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
 	defer sourceCleanup()
 	sourceTitles := seedBacklogItems(t, sourceRepo, ctx, 5, "source-item")
-	require.NoError(t, sourceRepo.Create(ctx, session.InstanceData{
+	require.NoError(t, sourceRepo.Create(ctx, domain.InstanceData{
 		Title:     "merged-session-2",
 		Path:      "/tmp/merge-test-session-2",
 		Program:   "claude",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))
@@ -234,7 +236,7 @@ func TestMergeDatabase_should_makeCopiedItemsVisibleOnNextSnapshot_When_ClientRe
 	require.NoError(t, err)
 	defer reconnected.Close()
 
-	items, err := reconnected.ListBacklogItems(ctx, session.BacklogItemFilter{})
+	items, err := reconnected.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 
 	gotTitles := make(map[string]bool, len(items))

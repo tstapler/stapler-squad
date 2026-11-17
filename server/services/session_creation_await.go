@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // creationAwaitPollInterval is the polling interval AwaitCreationTerminal uses
@@ -35,7 +35,7 @@ var ErrCreationVanished = errors.New("session creation was cancelled while waiti
 // see the Domain Glossary entry in project_plans/async-session-creation for
 // why a second, separate re-read of Status()/FailureReason() would be unsafe.
 type CreationOutcome struct {
-	Status        session.Status
+	Status        domain.Status
 	FailureReason string
 	InstanceID    string
 }
@@ -45,8 +45,8 @@ type CreationOutcome struct {
 // Active/Running, or the pipeline failed before it got there. Every other
 // status (Creating, Paused, Stopped, Hibernated, Restoring, Crashed) is not a
 // creation-pipeline terminal state as far as this waiter is concerned.
-func isTerminalCreationStatus(status session.Status) bool {
-	return status == session.Active || status == session.Failed
+func isTerminalCreationStatus(status domain.Status) bool {
+	return status == domain.Active || status == domain.Failed
 }
 
 // AwaitCreationTerminal blocks (bounded by timeout) until instanceID's

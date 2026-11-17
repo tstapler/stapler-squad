@@ -10,35 +10,37 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // newPassItemWithNoopSessions creates a review-status item with a PASS verdict
 // and n ended work sessions that made no commits.
-func newPassItemWithNoopSessions(t *testing.T, storage *session.Storage, n int) *session.BacklogItemData {
+func newPassItemWithNoopSessions(t *testing.T, storage *session.Storage, n int) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PASS item that loops",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	for i := 0; i < n; i++ {
-		is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
-			ItemID: item.ID, SessionUUID: "work-" + uuid.New().String(), SessionRole: session.SessionRoleWork,
+		is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
+			ItemID: item.ID, SessionUUID: "work-" + uuid.New().String(), SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 	}
-	rs, err := storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "review-" + uuid.New().String(), SessionRole: session.SessionRoleReview,
+	rs, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "review-" + uuid.New().String(), SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "reviewv-" + uuid.New().String(), SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{OverallOutcome: session.ReviewOutcomePass, PerCriterion: `[]`, Summary: "ok"})
+	_, err = storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "reviewv-" + uuid.New().String(), SessionRole: instance.SessionRoleReview,
+	}, backlogdto.ReviewVerdictData{OverallOutcome: domain.ReviewOutcomePass, PerCriterion: `[]`, Summary: "ok"})
 	require.NoError(t, err)
 	_ = rs
 	return item
@@ -105,8 +107,8 @@ func TestSelfHealStuck_should_resolveRepeatedNoopDispatch_When_ItemLeavesReviewA
 	require.NoError(t, err)
 	require.True(t, blocked, "row stays open while item is still in review")
 
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusArchived,
-		&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusArchived,
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	listener.selfHealStuck(ctx, er)
 
@@ -127,8 +129,8 @@ func TestReconcileRepeatedNoopDispatch_should_resolve_When_NewCommitLands(t *tes
 
 	// A newer work session that committed breaks the no-op run.
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "work-" + uuid.New().String(), SessionRole: session.SessionRoleWork,
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "work-" + uuid.New().String(), SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, er.UpdateItemSessionGitActivity(ctx, is.ID, "sha1", "msg", time.Now(), 1))

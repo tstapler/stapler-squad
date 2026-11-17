@@ -1,0 +1,54 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backlogdto",
+    srcs = [
+        "backlog_ac_audit_event_data.go",
+        "backlog_hooks.go",
+        "backlog_item.go",
+        "backlog_item_id.go",
+        "backlog_pr_number_url.go",
+        "backlog_workflow_suggestion_data.go",
+        "errors.go",
+        "history.go",
+        "open_stuck_state.go",
+        "pipeline_mode.go",
+        "review.go",
+        "source_dependency.go",
+        "stuck.go",
+        "transition_request.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/domain/backlogdto",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_oklog_ulid_v2//:ulid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backlogdto",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backlogdto_test",
+    srcs = [
+        "backlog_item_id_test.go",
+        "purity_test.go",
+    ],
+    embed = [":backlogdto"],
+)
+
+# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

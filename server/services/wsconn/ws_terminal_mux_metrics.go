@@ -9,7 +9,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -18,11 +17,11 @@ import (
 var (
 	muxSocketsOpen   = upDownNamed("terminal_mux_sockets_open", "Terminal mux sockets currently open")
 	muxStreamsOpen   = upDownNamed("terminal_mux_streams_open", "Terminal streams currently carried by mux sockets")
-	muxFramesTotal   = services.CounterNamed("terminal_mux_frames_total", "Terminal mux frames by direction and type")
-	muxSocketsClosed = services.CounterNamed("terminal_mux_socket_closed_total", "Terminal mux sockets ended, by reason")
-	muxOpensDenied   = services.CounterNamed("terminal_mux_open_denied_total", "Mux OPEN frames refused by the per-OPEN authorization re-check, by listener and reason")
-	muxCreditStalls  = services.CounterNamed("terminal_mux_credit_stalls_total", "Times a stream with queued output had to wait for client credit")
-	muxWriteErrors   = services.CounterNamed("terminal_mux_write_errors_total", "Mux socket write failures (each ends its socket)")
+	muxFramesTotal   = telemetry.CounterNamed("terminal_mux_frames_total", "Terminal mux frames by direction and type")
+	muxSocketsClosed = telemetry.CounterNamed("terminal_mux_socket_closed_total", "Terminal mux sockets ended, by reason")
+	muxOpensDenied   = telemetry.CounterNamed("terminal_mux_open_denied_total", "Mux OPEN frames refused by the per-OPEN authorization re-check, by listener and reason")
+	muxCreditStalls  = telemetry.CounterNamed("terminal_mux_credit_stalls_total", "Times a stream with queued output had to wait for client credit")
+	muxWriteErrors   = telemetry.CounterNamed("terminal_mux_write_errors_total", "Mux socket write failures (each ends its socket)")
 	muxHolWait       = histNamed("terminal_mux_hol_wait", "ms", "Time from a message being queued to its first frame being written")
 	muxQueueBytes    = sync.OnceValue(func() metric.Float64Histogram {
 		h, err := telemetry.GetMeter().Float64Histogram("terminal_mux_queue_bytes",

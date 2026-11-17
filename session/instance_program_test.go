@@ -2,14 +2,14 @@ package session
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestSwitchProgram_SameValue_NoOp verifies that requesting the program the instance
@@ -82,7 +82,7 @@ func TestSwitchProgram_Stopped_PersistsNoRestart(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Stopped
+	inst.Status = domain.Stopped
 
 	persistCalled := false
 	changed, resolved, err := inst.SwitchProgram(context.Background(), "aider", func() error {
@@ -106,8 +106,8 @@ func TestSwitchProgram_RestartError_PersistAlreadyRan(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Active
-	inst.started.Store(true)
+	inst.Status = domain.Active
+	inst.MarkStarted()
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
 	persistedProgram := ""
@@ -130,13 +130,13 @@ func TestSwitchProgram_ActiveStartedFalse_RestartErrorsCannotRestart(t *testing.
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Active
+	inst.Status = domain.Active
 	inst.Path = "/tmp/somewhere" // valid path; started=false is what should trip the error
 	// inst.started left false (zero value)
 
 	changed, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
 
-	require.ErrorIs(t, err, ErrCannotRestart)
+	require.ErrorIs(t, err, instance.ErrCannotRestart)
 	assert.True(t, changed, "program field change and persist still happen even though restart is rejected")
 	assert.Equal(t, "aider", inst.Program)
 }
@@ -149,7 +149,7 @@ func TestSwitchProgram_LeavingClaudeFamily_ClearsConversationState(t *testing.T)
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "abc-123"})
 	inst.HistoryFilePath = "/fake/history.jsonl"
 
 	changed, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
@@ -167,7 +167,7 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "stale-uuid"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "stale-uuid"})
 
 	_, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
 	require.NoError(t, err)
@@ -178,40 +178,6 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching back to claude must not resurrect the stale UUID")
 }
 
-// TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID verifies that a switch
-// that stays within the claude/antigravity family (recognized as history-portable) does
-// NOT take the "leaving the family" clear-state branch. This only asserts the decision
-// (no clear), not PortSessionHistory's own Import/Export behavior, which performs real
-// file I/O against the adapters' backing stores and is out of scope here.
-func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T) {
-	t.Parallel()
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "antigravity"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "antigravity", "claude"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "agy"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "opencode"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "agy"))
-	assert.False(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "aider"))
-	assert.False(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "opencode"))
-
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "claude"))
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "antigravity"))
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "agy"))
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "opencode"))
-	assert.False(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "aider"))
-}
-
-// TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies that gemini (the standalone Gemini CLI)
-// is handled by GeminiAdapter (and thus included in the family gate and cross-switch resolution),
-// while remaining excluded from AgyAdapter.CanHandle (session/agy_adapter.go).
-func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
-	t.Parallel()
-	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "gemini"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "gemini"))
-	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "gemini", "claude"))
-	assert.False(t, NewAgyAdapter().CanHandle("gemini"))
-	assert.True(t, NewGeminiAdapter().CanHandle("gemini"))
-}
-
 // TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState verifies AC0: a
 // claude->aider switch never silently falls into an unhandled state. Since aider isn't
 // history-portable via any adapter, it takes the leaving-the-family ClearConversationState()
@@ -220,7 +186,7 @@ func TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState(t *testing.T
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "abc-123"})
 
 	changed, resolved, err := inst.SwitchProgram(context.Background(), "aider", nil)
 
@@ -228,17 +194,6 @@ func TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState(t *testing.T
 	assert.True(t, changed)
 	assert.Equal(t, "aider", resolved)
 	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching to non-family program must clear the stale claude UUID, not silently keep it")
-}
-
-// TestPortHistoryFailureIsExpected directly covers the Warn-vs-Error log-level selection used
-// by SwitchProgram, independent of whether isClaudeAntigravityCrossSwitch/CanHandle parity
-// currently makes the ErrNoHistoryAdapter branch reachable in production — this keeps the
-// selection logic itself verified as defense-in-depth against future drift.
-func TestPortHistoryFailureIsExpected(t *testing.T) {
-	t.Parallel()
-	assert.True(t, portHistoryFailureIsExpected(ErrNoHistoryAdapter))
-	assert.True(t, portHistoryFailureIsExpected(fmt.Errorf("wrapped: %w", ErrNoHistoryAdapter)))
-	assert.False(t, portHistoryFailureIsExpected(errors.New("disk full")))
 }
 
 // TestSwitchProgram_ConcurrentCalls_Serialize is a race-detector regression guard (run

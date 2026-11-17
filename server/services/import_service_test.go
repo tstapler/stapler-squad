@@ -20,7 +20,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/interceptors"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeProcessFileInspector is a minimal test double for
@@ -67,12 +69,12 @@ func TestImportService_PreviewImportExternalSession_ReturnsResolved_When_PIDExac
 	tmpHome := t.TempDir()
 	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	projectPath := "/Users/alice/myproject"
-	projectDir := session.ClaudeProjectDirName(projectPath)
+	projectDir := instance.ClaudeProjectDirName(projectPath)
 	historyPath := filepath.Join(tmpHome, ".claude", "projects", projectDir, uuid+".jsonl")
 	writeSampleTranscript(t, historyPath)
 
 	inspector := &fakeProcessFileInspector{openFiles: []string{historyPath}}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 	svc := NewImportService(detector, &fakeCreateTimeReader{createTimeMs: 12345})
 
 	req := connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{
@@ -101,7 +103,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsAmbiguous_When_Multip
 	t.Parallel()
 	tmpHome := t.TempDir()
 	projectPath := "/Users/alice/ambiguousproject"
-	projectDir := session.ClaudeProjectDirName(projectPath)
+	projectDir := instance.ClaudeProjectDirName(projectPath)
 	dir := filepath.Join(tmpHome, ".claude", "projects", projectDir)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 
@@ -111,7 +113,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsAmbiguous_When_Multip
 	require.NoError(t, os.WriteFile(filepath.Join(dir, uuid2+".jsonl"), []byte("{}"), 0o644))
 
 	inspector := &fakeProcessFileInspector{openFiles: nil}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 	svc := NewImportService(detector, &fakeCreateTimeReader{})
 
 	req := connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{
@@ -140,7 +142,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsNotFound_When_NoHisto
 	t.Parallel()
 	tmpHome := t.TempDir()
 	inspector := &fakeProcessFileInspector{openFiles: nil}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 	svc := NewImportService(detector, &fakeCreateTimeReader{})
 
 	req := connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{
@@ -162,7 +164,7 @@ func TestImportService_PreviewImportExternalSession_ReturnsNotFound_When_NoHisto
 func TestImportService_PreviewImportExternalSession_ReturnsInvalidArgument_When_CandidateNil(t *testing.T) {
 	t.Parallel()
 	tmpHome := t.TempDir()
-	detector := session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
 	svc := NewImportService(detector, &fakeCreateTimeReader{})
 
 	req := connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{})
@@ -176,7 +178,7 @@ func TestImportService_PreviewImportExternalSession_OmitsPidIdentity_When_Proces
 	t.Parallel()
 	tmpHome := t.TempDir()
 	inspector := &fakeProcessFileInspector{openFiles: nil}
-	detector := session.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(inspector, tmpHome)
 	svc := NewImportService(detector, &fakeCreateTimeReader{err: os.ErrNotExist})
 
 	req := connect.NewRequest(&sessionv1.PreviewImportExternalSessionRequest{
@@ -195,7 +197,7 @@ func TestImportService_PreviewImportExternalSession_OmitsPidIdentity_When_Proces
 
 func TestImportService_CommitImportExternalSession_ReturnsInvalidArgument_When_CandidateNil(t *testing.T) {
 	t.Parallel()
-	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
+	svc := NewImportService(instance.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.CommitImportExternalSession(context.Background(), connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
@@ -203,7 +205,7 @@ func TestImportService_CommitImportExternalSession_ReturnsInvalidArgument_When_C
 
 func TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_InstanceIdEmpty(t *testing.T) {
 	t.Parallel()
-	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
+	svc := NewImportService(instance.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.ConfirmKillExternalSession(context.Background(), connect.NewRequest(&sessionv1.ConfirmKillExternalSessionRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
@@ -211,7 +213,7 @@ func TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_In
 
 func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdEmpty(t *testing.T) {
 	t.Parallel()
-	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
+	svc := NewImportService(instance.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	_, err := svc.CancelPendingKill(context.Background(), connect.NewRequest(&sessionv1.CancelPendingKillRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
@@ -224,17 +226,17 @@ func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdE
 // depended on by the upload-handler tests, so this file uses its own
 // configurable fake instead of generalizing the shared one.
 type fakeImportCollisionStore struct {
-	instances []session.InstanceData
+	instances []domain.InstanceData
 
-	added        []*session.Instance
+	added        []*instance.Instance
 	deletedTitle string
 }
 
-func (f *fakeImportCollisionStore) LoadInstances() ([]*session.Instance, error) { return nil, nil }
-func (f *fakeImportCollisionStore) ListInstanceData() ([]session.InstanceData, error) {
+func (f *fakeImportCollisionStore) LoadInstances() ([]*instance.Instance, error) { return nil, nil }
+func (f *fakeImportCollisionStore) ListInstanceData() ([]domain.InstanceData, error) {
 	return f.instances, nil
 }
-func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	for i := range f.instances {
 		if f.instances[i].MatchesID(id) {
 			return &f.instances[i], nil
@@ -242,8 +244,8 @@ func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*session.Ins
 	}
 	return nil, session.ErrInstanceDataNotFound
 }
-func (f *fakeImportCollisionStore) SaveInstances([]*session.Instance) error { return nil }
-func (f *fakeImportCollisionStore) AddInstance(inst *session.Instance) error {
+func (f *fakeImportCollisionStore) SaveInstances([]*instance.Instance) error { return nil }
+func (f *fakeImportCollisionStore) AddInstance(inst *instance.Instance) error {
 	f.added = append(f.added, inst)
 	return nil
 }
@@ -281,9 +283,9 @@ func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_Path
 	tmpHome := t.TempDir()
 	collidingPath := t.TempDir()
 	store := &fakeImportCollisionStore{
-		instances: []session.InstanceData{{Title: "existing", Path: collidingPath}},
+		instances: []domain.InstanceData{{Title: "existing", Path: collidingPath}},
 	}
-	detector := session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
 	svc := &ImportService{detector: detector, storage: store}
 
 	req := connect.NewRequest(&sessionv1.CommitImportExternalSessionRequest{
@@ -396,7 +398,7 @@ func spawnSleeperForTest(t *testing.T) *exec.Cmd {
 // handler stubs above.
 func newGatedImportTestServer(t *testing.T, flagEnabled func() bool) sessionv1connect.ImportServiceClient {
 	t.Helper()
-	svc := NewImportService(session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
+	svc := NewImportService(instance.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, t.TempDir()), &fakeCreateTimeReader{})
 	mux := http.NewServeMux()
 	path, handler := sessionv1connect.NewImportServiceHandler(
 		svc,

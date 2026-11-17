@@ -6,7 +6,7 @@ package session
 // docs/tasks/backlog-stuck-item-auto-remediation.md Phase A. Two concerns
 // live here deliberately together: the pure backoff-schedule arithmetic
 // (evaluateRemediation/nextRemediationAt — exhaustively table-driven-testable,
-// same rationale as session/stuck_decisions.go) and the DB-integrated gate
+// same rationale as session/backlog/stuck/decisions.go) and the DB-integrated gate
 // (Storage.RemediationDue) that every call site — inside package session and
 // outside it (server/services) — shares, so the accounting write happens in
 // exactly one place no matter which reason or which caller triggers it.
@@ -19,6 +19,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // remediationBackoffSchedule is the gap BEFORE each numbered attempt after
@@ -149,13 +152,13 @@ const (
 // evaluateRemediation decides whether row is eligible for a remediation
 // attempt right now, applying (in order) the attempt cap, the backoff timer,
 // and the restart-grace check. Pure and DB-independent — see
-// session/stuck_decisions.go's doc comment for why detector/gate arithmetic
+// session/backlog/stuck/decisions.go's doc comment for why detector/gate arithmetic
 // like this is kept exhaustively table-driven-testable outside any DB call.
 //
 // bootTime is the current process's serverStartTime, passed explicitly
 // (rather than read as a package var) so tests can simulate "server
 // restarted since this row was last checked" without process-level tricks.
-func EvaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remediationDecision {
+func EvaluateRemediation(row backlogdto.OpenStuckStateData, now, bootTime time.Time) remediationDecision {
 	if row.RemediationAttempts >= MaxRemediationAttempts {
 		// Parked. While parked, next_remediation_at is repurposed (by
 		// RemediationDue) to hold the cold-retry deadline rather than a
@@ -237,12 +240,12 @@ func nextRemediationAtForAttempt(attemptNumber int32, now time.Time) *time.Time 
 // RecordManualRemediationAttempt need "the single open row for this
 // (itemID, reason) pair, if any" and neither wants to duplicate the
 // find-in-slice scan.
-func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool, error) {
+func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string, reason domain.StuckReason) (backlogdto.OpenStuckStateData, bool, error) {
 	rows, err := s.FindOpenStuckStates(ctx)
 	if err != nil {
-		return OpenStuckStateData{}, false, err
+		return backlogdto.OpenStuckStateData{}, false, err
 	}
-	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	return row, ok, nil
 }
 
@@ -377,7 +380,7 @@ func (s *Storage) RemediationBlockedItems(ctx context.Context, reason domain.Stu
 }
 
 // OpenStuckState returns the open row for (itemID, reason), if any.
-func (s *Storage) OpenStuckState(ctx context.Context, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool, error) {
+func (s *Storage) OpenStuckState(ctx context.Context, itemID string, reason domain.StuckReason) (backlogdto.OpenStuckStateData, bool, error) {
 	return s.findOpenStuckStateForReason(ctx, itemID, reason)
 }
 
@@ -452,7 +455,7 @@ var ErrTransitionDeniedHold = errors.New("an automatic transition is denied and 
 // input, which the caller retries as before, so it never parks anything.
 func liftableDenial(reason string) bool {
 	switch reason {
-	case DeniedConfigGraph, DeniedOperatorGate, DeniedTargetStageRemoved:
+	case backlogdto.DeniedConfigGraph, backlogdto.DeniedOperatorGate, backlogdto.DeniedTargetStageRemoved:
 		return true
 	}
 	return false
@@ -462,14 +465,14 @@ func liftableDenial(reason string) bool {
 // describes its item: the item is in the status the denial recorded as "from".
 // selfHealStuck resolves the row once the item has moved on, whichever path
 // moved it.
-func TransitionDenialAnchored(row OpenStuckStateData) bool {
+func TransitionDenialAnchored(row backlogdto.OpenStuckStateData) bool {
 	d, ok := domain.ParseTransitionDeniedContext(row.Context)
 	return ok && d.From == string(row.ItemStatus)
 }
 
 // OpenTransitionDenial returns the open, un-snoozed transition_denied denial
 // whose recorded "from" equals status.
-func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, status BacklogStatus) (domain.TransitionDenial, bool, error) {
+func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, status domain.BacklogStatus) (domain.TransitionDenial, bool, error) {
 	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, domain.StuckReasonTransitionDenied)
 	if err != nil || !ok {
 		return domain.TransitionDenial{}, false, err
@@ -484,7 +487,7 @@ func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, statu
 // HasOpenTransitionDenied is the shared predicate behind every spawn-point and
 // detector-local guard (ADR-007 D12): true iff an open transition_denied row
 // exists whose recorded "from" equals status, the item's current status.
-func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, status BacklogStatus) (bool, error) {
+func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, status domain.BacklogStatus) (bool, error) {
 	_, ok, err := s.OpenTransitionDenial(ctx, itemID, status)
 	return ok, err
 }
@@ -494,8 +497,8 @@ func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, st
 // denial the engine would now allow (gate satisfied, edge re-enabled, class no
 // longer enforced) is resolved here, so the held action proceeds on this call.
 // A read error fails open, as before the denial existed.
-func (s *Storage) TransitionDenialHolds(ctx context.Context, item *BacklogItemData) bool {
-	d, ok, err := s.OpenTransitionDenial(ctx, item.ID, BacklogStatus(item.Status))
+func (s *Storage) TransitionDenialHolds(ctx context.Context, item *backlogdto.BacklogItemData) bool {
+	d, ok, err := s.OpenTransitionDenial(ctx, item.ID, domain.BacklogStatus(item.Status))
 	if err != nil {
 		log.Debug("[TransitionDenialHolds] denial lookup failed; not holding", "item", item.ID, "error", err)
 		return false
@@ -523,17 +526,17 @@ func (s *Storage) resolveLiftedDenial(ctx context.Context, itemID string) {
 // denied when the denial can no longer bind: no gate wired, an unregistered
 // caller, or the caller's class not enforced. It decides quietly: the denial
 // was counted when it was recorded, so a probe adds nothing to the soak signal.
-func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (gateVerdict, bool) {
+func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (backlogdto.GateVerdict, bool) {
 	g := s.gate.Load()
-	spec, known := LookupTransitionCaller(TransitionCaller(d.Caller))
-	if g == nil || !known || g.engine.ModeFor(spec.Class) != ModeEnforce {
-		return gateVerdict{}, false
+	spec, known := domain.LookupTransitionCaller(domain.TransitionCaller(d.Caller))
+	if g == nil || !known || g.engine.ModeFor(spec.Class) != workflowengine.ModeEnforce {
+		return backlogdto.GateVerdict{}, false
 	}
 	item, err := s.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		return gateVerdict{}, true // unknown: keep holding, retry next tick
+		return backlogdto.GateVerdict{}, true // unknown: keep holding, retry next tick
 	}
-	v := decideTransition(g.engine.ForClassQuiet(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
+	v := backlogdto.DecideTransition(g.engine.ForClassQuiet(spec.Class, domain.GuardsNone), item, backlogdto.TransitionRequest{Caller: spec.Name, To: domain.BacklogStatus(d.To)})
 	return v, v.Err != nil
 }
 
@@ -541,10 +544,10 @@ func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d do
 // that nothing retries once denied (the triage session behind them has ended).
 // Every other caller either retries on each sweep tick or re-runs through its
 // spawn point, so lifting its denial only resolves the row.
-var redriveByWrite = map[TransitionCaller]bool{
-	CallerAutonomousComplete: true,
-	CallerMaybeTriggerTriage: true,
-	CallerTriageComplete:     true,
+var redriveByWrite = map[domain.TransitionCaller]bool{
+	domain.CallerAutonomousComplete: true,
+	domain.CallerMaybeTriggerTriage: true,
+	domain.CallerTriageComplete:     true,
 }
 
 // RedriveTransitionDenials is the sweep over recorded denials (Task 1.5.8e): a
@@ -580,16 +583,16 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 		s.reportChangedDenial(ctx, itemID, d, verdict)
 		return false
 	}
-	caller := TransitionCaller(d.Caller)
+	caller := domain.TransitionCaller(d.Caller)
 	if redriveByWrite[caller] {
-		_, err := s.GatedTransition(ctx, TransitionRequest{
+		_, err := s.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller:       caller,
 			ItemID:       itemID,
-			To:           BacklogStatus(d.To),
-			Precondition: &BacklogItemPrecondition{ExpectedStatus: d.From},
-			TriggeredBy:  TriggeredBySystem,
+			To:           domain.BacklogStatus(d.To),
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: d.From},
+			TriggeredBy:  instance.TriggeredBySystem,
 		})
-		if err != nil && !errors.Is(err, ErrPreconditionFailed) {
+		if err != nil && !errors.Is(err, domain.ErrPreconditionFailed) {
 			log.Debug("[RedriveTransitionDenials] re-attempt not applied", "item", itemID, "caller", d.Caller, "error", err)
 			return false
 		}
@@ -601,7 +604,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 // reportChangedDenial re-reports a denial whose reason differs from the
 // recorded one; the reporter is idempotent per exact denial, so an unchanged
 // denial stays quiet.
-func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d domain.TransitionDenial, v gateVerdict) {
+func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d domain.TransitionDenial, v backlogdto.GateVerdict) {
 	g := s.gate.Load()
 	if g == nil || v.Reason == d.Reason {
 		return
@@ -610,5 +613,5 @@ func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d doma
 	if err != nil {
 		return
 	}
-	g.reporter.Report(ctx, item, TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
+	g.reporter.Report(ctx, item, domain.TransitionCaller(d.Caller), domain.BacklogStatus(d.From), domain.BacklogStatus(d.To), v.Reason, v.Err)
 }

@@ -11,8 +11,9 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/deeplink"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -22,7 +23,7 @@ import (
 // no real *session.Storage (and no ent-backed repository) can stand in for
 // tests.
 type backlogItemGetter interface {
-	GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
 }
 
 // HostResolver resolves a deep link's hostname to either a live remote
@@ -198,8 +199,8 @@ type deepLinkUnreachableResponse struct {
 }
 
 type deepLinkLocalResponse struct {
-	Kind string                   `json:"kind"`
-	Item *session.BacklogItemData `json:"item"`
+	Kind string                      `json:"kind"`
+	Item *backlogdto.BacklogItemData `json:"item"`
 }
 
 type deepLinkHandoffResponse struct {
@@ -279,7 +280,7 @@ func (d *DeepLinkResolver) resolveLocal(ctx context.Context, w http.ResponseWrit
 	// means gone/hidden for deep-link purposes (Epic 2.1, Story 2.1.3 sweep —
 	// reviewed, benign; this is not the Done||Archived terminal-status
 	// pattern being consolidated elsewhere).
-	if item.Status == string(session.BacklogStatusArchived) {
+	if item.Status == string(domain.BacklogStatusArchived) {
 		log.Warn("deep_link.resolve_failed", "host", link.Hostname, "item_id", link.ID, "reason", "archived")
 		writeJSON(w, http.StatusNotFound, deepLinkNotFoundResponse{Kind: "not-found", Reason: "archived"})
 		return

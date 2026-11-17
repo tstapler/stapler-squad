@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // hiddenReviewTitle is the title the e2e specs address the session by.
@@ -36,11 +37,11 @@ func main() {
 	defer repo.Close()
 
 	now := time.Now()
-	data := session.InstanceData{
+	data := domain.InstanceData{
 		Title:     hiddenReviewTitle,
 		Path:      filepath.Join(dir, "hidden-review"),
 		Branch:    "main",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		Category:  "Backlog",
 		Tags:      []string{"backlog:review"},

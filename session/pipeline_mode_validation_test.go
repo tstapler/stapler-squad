@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // ─── Drift-prevention: renderTemplate vs ValidatePipelineModeContent ───────
@@ -26,7 +28,7 @@ func TestPlaceholderAllowList_should_BeIdenticalBetweenRenderTemplateAndValidato
 	t.Parallel()
 	got := placeholderAllowList()
 
-	require.Equal(t, RecognizedPlaceholders, got,
+	require.Equal(t, domain.RecognizedPlaceholders, got,
 		"ValidatePipelineModeContent's allow-list must equal renderTemplate's recognizedPlaceholders")
 
 	// Also assert it's the literal SAME backing slice, not merely an
@@ -34,7 +36,7 @@ func TestPlaceholderAllowList_should_BeIdenticalBetweenRenderTemplateAndValidato
 	// gave one function its own copy" regression that require.Equal alone
 	// would miss if the copy happened to start out identical.
 	require.NotEmpty(t, got)
-	require.Same(t, &RecognizedPlaceholders[0], &got[0],
+	require.Same(t, &domain.RecognizedPlaceholders[0], &got[0],
 		"placeholderAllowList() must return the literal shared recognizedPlaceholders slice, not a copy")
 }
 
@@ -159,8 +161,8 @@ func TestValidateStageExecutors_should_Accept_When_TriageProgramIsClaudeOrGemini
 		t.Run(program, func(t *testing.T) {
 			t.Parallel()
 			err := ValidatePipelineModeContent(PipelineModeContentFields{
-				StageExecutors: map[StageRole]PipelineStageExecutor{
-					StageRoleTriage: {Program: program},
+				StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+					stagecfg.StageRoleTriage: {Program: program},
 				},
 			})
 			assert.NoError(t, err)
@@ -174,8 +176,8 @@ func TestValidateStageExecutors_should_Accept_When_TriageProgramIsClaudeOrGemini
 func TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForTriage(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleTriage: {Program: "aider"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Program: "aider"},
 		},
 	})
 	require.Error(t, err)
@@ -189,8 +191,8 @@ func TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderCon
 func TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForReview(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleReview: {Program: "aider"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleReview: {Program: "aider"},
 		},
 	})
 	require.Error(t, err)
@@ -204,8 +206,8 @@ func TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderCon
 func TestValidateStageExecutors_should_Accept_When_AiderConfiguredForWorkStage(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleWork: {Program: "aider"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleWork: {Program: "aider"},
 		},
 	})
 	assert.NoError(t, err)
@@ -217,8 +219,8 @@ func TestValidateStageExecutors_should_Accept_When_AiderConfiguredForWorkStage(t
 func TestValidateStageExecutors_should_Accept_When_ModelIsResolvableFamilyAlias(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleReview: {Model: "family:opus"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleReview: {Model: "family:opus"},
 		},
 	})
 	assert.NoError(t, err)
@@ -230,8 +232,8 @@ func TestValidateStageExecutors_should_Accept_When_ModelIsResolvableFamilyAlias(
 func TestValidateStageExecutors_should_Reject_When_ModelContainsShellMetacharacters(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleTriage: {Model: "claude; rm -rf /"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude; rm -rf /"},
 		},
 	})
 	require.Error(t, err)
@@ -246,8 +248,8 @@ func TestValidateStageExecutors_should_Reject_When_ModelContainsShellMetacharact
 func TestValidateStageExecutors_should_RejectNamingModelAndOverride_When_ModelIsUnrecognized(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleReview: {Model: "claude-opus-9000"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleReview: {Model: "claude-opus-9000"},
 		},
 	})
 	require.Error(t, err)
@@ -260,8 +262,8 @@ func TestValidateStageExecutors_should_RejectNamingModelAndOverride_When_ModelIs
 func TestValidateStageExecutors_should_Accept_When_UnrecognizedModelHasForceUnknownModelSet(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleReview: {Model: "claude-opus-9000"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleReview: {Model: "claude-opus-9000"},
 		},
 		ForceUnknownModel: true,
 	})
@@ -274,8 +276,8 @@ func TestValidateStageExecutors_should_Accept_When_UnrecognizedModelHasForceUnkn
 func TestValidateStageExecutors_should_Accept_When_ModelIsKnownPricingTableEntry(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleTriage: {Model: "claude-haiku-4-5"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude-haiku-4-5"},
 		},
 	})
 	assert.NoError(t, err)
@@ -288,15 +290,15 @@ func TestValidateStageExecutors_should_Accept_When_ModelIsKnownPricingTableEntry
 func TestValidateStageExecutors_should_RejectNamingKeyAndValidRoles_When_MapKeyIsInvalid(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRole("wrok"): {Model: "claude-haiku-4-5"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRole("wrok"): {Model: "claude-haiku-4-5"},
 		},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "wrok")
-	assert.Contains(t, err.Error(), string(StageRoleTriage))
-	assert.Contains(t, err.Error(), string(StageRoleReview))
-	assert.Contains(t, err.Error(), string(StageRoleWork))
+	assert.Contains(t, err.Error(), string(stagecfg.StageRoleTriage))
+	assert.Contains(t, err.Error(), string(stagecfg.StageRoleReview))
+	assert.Contains(t, err.Error(), string(stagecfg.StageRoleWork))
 }
 
 // TestValidateStageExecutors_should_Accept_When_ProgramAndModelAreBothEmpty
@@ -304,8 +306,8 @@ func TestValidateStageExecutors_should_RejectNamingKeyAndValidRoles_When_MapKeyI
 func TestValidateStageExecutors_should_Accept_When_ProgramAndModelAreBothEmpty(t *testing.T) {
 	t.Parallel()
 	err := ValidatePipelineModeContent(PipelineModeContentFields{
-		StageExecutors: map[StageRole]PipelineStageExecutor{
-			StageRoleWork: {},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleWork: {},
 		},
 	})
 	assert.NoError(t, err)

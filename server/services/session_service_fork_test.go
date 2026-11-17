@@ -15,6 +15,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -57,8 +60,8 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire the ReviewQueuePoller so findInstance() can resolve instances.
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 	// Registered after Shutdown's cleanup so it runs first: any session the test
@@ -75,14 +78,14 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 }
 
 // makeInstanceWithCheckpoint creates a minimal Instance that has one checkpoint.
-func makeInstanceWithCheckpoint(title string) (*session.Instance, string) {
+func makeInstanceWithCheckpoint(title string) (*instance.Instance, string) {
 	cpID := "test-checkpoint-id"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:   title,
 		Path:    "/tmp/test",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
-		Checkpoints: session.CheckpointList{
+		Checkpoints: domain.CheckpointList{
 			{
 				ID:        cpID,
 				Label:     "baseline",
@@ -276,11 +279,11 @@ func TestGetSessionDiff_FindsByUUID(t *testing.T) {
 	t.Cleanup(fix.cleanup)
 
 	const testUUID = "22222222-2222-2222-2222-222222222222"
-	svctest.AddInstanceToPoller(fix.poller, &session.Instance{
+	svctest.AddInstanceToPoller(fix.poller, &instance.Instance{
 		UUID:    testUUID,
 		Title:   "diff-session",
 		Path:    "/tmp/test-diff",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	})
 
@@ -301,10 +304,10 @@ func TestGetSessionDiff_FindsByTitle(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	svctest.AddInstanceToPoller(fix.poller, &session.Instance{
+	svctest.AddInstanceToPoller(fix.poller, &instance.Instance{
 		Title:   "diff-by-title",
 		Path:    "/tmp/test-diff-title",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	})
 
@@ -354,11 +357,11 @@ func TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff(t *testing.
 	// Path set, no Worktree. GetSessionDiff's findInstance() must miss this
 	// session and fall through to the completed-session storage lookup.
 	const testUUID = "33333333-3333-3333-3333-333333333333"
-	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+	require.NoError(t, fix.storage.AddInstance(&instance.Instance{
 		UUID:    testUUID,
 		Title:   "directory-mode-diff-session",
 		Path:    repoPath,
-		Status:  session.Stopped,
+		Status:  domain.Stopped,
 		Program: "claude",
 	}))
 

@@ -83,7 +83,7 @@ func resetGHPriorityAdmissionFlagCache() {
 
 // TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate is a
 // code-review MAJOR's cheap safety net: server/services/feature_flag_service.go's
-// knownFeatureFlags registers this same literal under its own
+// the flag Specs registers this same literal under its own
 // githubPriorityAdmissionFlagName constant (github cannot import
 // server/services — a cycle). This test hardcodes that literal so a rename
 // on either side without the other breaks CI here instead of silently

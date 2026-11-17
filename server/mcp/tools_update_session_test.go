@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestUpdateSession_Title_PublishesSnapshot regression-tests the raw
@@ -51,7 +51,7 @@ func TestUpdateSession_Title_RejectsCollisionWithExistingSession(t *testing.T) {
 	// titleCollisionResult checks the persisted store (ListInstanceData), matching
 	// create_session/create_session_for_pr's identical pre-check -- so occupantB
 	// must actually be saved, not just registered on the in-memory poller.
-	require.NoError(t, lh.store.SaveInstances([]*session.Instance{occupantB}))
+	require.NoError(t, lh.store.SaveInstances([]*instance.Instance{occupantB}))
 
 	res, err := lh.updateSession(context.Background(), makeToolReq(map[string]interface{}{
 		"session_id": titleA,

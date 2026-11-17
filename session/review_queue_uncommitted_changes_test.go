@@ -7,42 +7,14 @@ import (
 	"testing"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
-
-// initTestRepoForReviewQueue creates and commits a minimal git repository for the
-// uncommitted-changes detection tests below.
-//
-// Uses go-git directly rather than shelling out — see
-// the `prefer-go-git-over-subshells` skill.
-func initTestRepoForReviewQueue(t *testing.T, repoPath string) {
-	t.Helper()
-	repo, err := gogit.PlainInit(repoPath, false)
-	if err != nil {
-		t.Fatalf("Failed to initialize git repo: %v", err)
-	}
-
-	testFile := filepath.Join(repoPath, "test.txt")
-	if err := os.WriteFile(testFile, []byte("initial content"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("Failed to get worktree: %v", err)
-	}
-	if _, err := wt.Add("."); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
-	}
-}
 
 // TestReviewQueue_UncommittedChangesDetection verifies that uncommitted changes are detected
 func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
@@ -57,7 +29,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 	}
 
 	// Initialize git repo, configure user, and create initial commit
-	initTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree for testing
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "test-session")
@@ -76,23 +48,22 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Create test instance with worktree
 	now := time.Now()
-	instance := &Instance{
+	inst := (&instance.Instance{
 		Title:       "test-uncommitted-changes",
 		Path:        repoPath,
 		Branch:      branchName,
-		Status:      Running,
-		GitManager:  GitWorktreeManager{Worktree: worktree},
+		Status:      domain.Active,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
-	}
-	instance.started.Store(true)
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
+	}).WithWorktreeForTest(worktree)
+	inst.MarkStarted()
 
 	// Create review queue infrastructure
-	queue := NewReviewQueue()
-	statusManager := NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
-	poller.AddInstance(instance)
+	poller.AddInstance(inst)
 
 	// Tests 1-3 below are NOT t.Parallel(): they form a single required
 	// narrative sequence (clean -> dirty -> committed) sharing one queue,
@@ -106,8 +77,8 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 1: Clean worktree (no uncommitted changes) should not be added to queue
 	t.Run("clean_worktree_not_added", func(t *testing.T) {
-		poller.checkSession(instance, nil)
-		if queue.Has(instance.Title) {
+		poller.checkSession(inst, nil)
+		if queue.Has(inst.Title) {
 			t.Error("Expected clean worktree to not be in review queue")
 		}
 	})
@@ -125,23 +96,23 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		worktree.InvalidateDirtyCache()
 
 		// Check session - should detect uncommitted changes
-		poller.checkSession(instance, nil)
+		poller.checkSession(inst, nil)
 
 		// Verify added to queue with correct reason
-		if !queue.Has(instance.Title) {
+		if !queue.Has(inst.Title) {
 			t.Error("Expected uncommitted changes to add session to queue")
 		}
 
-		item, exists := queue.Get(instance.Title)
+		item, exists := queue.Get(inst.Title)
 		if !exists {
 			t.Fatal("Expected item to exist in queue")
 		}
 
-		if item.Reason != ReasonUncommittedChanges {
+		if item.Reason != queuepkg.ReasonUncommittedChanges {
 			t.Errorf("Expected reason UncommittedChanges, got %s", item.Reason)
 		}
 
-		if item.Priority != PriorityLow {
+		if item.Priority != queuepkg.PriorityLow {
 			t.Errorf("Expected priority Low, got %s", item.Priority)
 		}
 
@@ -158,11 +129,11 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		}
 
 		// Check session again - should be removed from queue
-		poller.checkSession(instance, nil)
+		poller.checkSession(inst, nil)
 
-		if queue.Has(instance.Title) {
-			item, _ := queue.Get(instance.Title)
-			if item.Reason == ReasonUncommittedChanges {
+		if queue.Has(inst.Title) {
+			item, _ := queue.Get(inst.Title)
+			if item.Reason == queuepkg.ReasonUncommittedChanges {
 				t.Error("Expected committed changes to remove session from queue")
 			}
 		}
@@ -174,51 +145,51 @@ func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name             string
-		existingReason   AttentionReason
-		existingPriority Priority
+		existingReason   queuepkg.AttentionReason
+		existingPriority queuepkg.Priority
 		shouldOverride   bool
-		expectedReason   AttentionReason
-		expectedPriority Priority
+		expectedReason   queuepkg.AttentionReason
+		expectedPriority queuepkg.Priority
 	}{
 		{
 			name:             "error_overrides_uncommitted",
-			existingReason:   ReasonErrorState,
-			existingPriority: PriorityUrgent,
+			existingReason:   queuepkg.ReasonErrorState,
+			existingPriority: queuepkg.PriorityUrgent,
 			shouldOverride:   false,
-			expectedReason:   ReasonErrorState,
-			expectedPriority: PriorityUrgent,
+			expectedReason:   queuepkg.ReasonErrorState,
+			expectedPriority: queuepkg.PriorityUrgent,
 		},
 		{
 			name:             "approval_overrides_uncommitted",
-			existingReason:   ReasonApprovalPending,
-			existingPriority: PriorityHigh,
+			existingReason:   queuepkg.ReasonApprovalPending,
+			existingPriority: queuepkg.PriorityHigh,
 			shouldOverride:   false,
-			expectedReason:   ReasonApprovalPending,
-			expectedPriority: PriorityHigh,
+			expectedReason:   queuepkg.ReasonApprovalPending,
+			expectedPriority: queuepkg.PriorityHigh,
 		},
 		{
 			name:             "input_overrides_uncommitted",
-			existingReason:   ReasonInputRequired,
-			existingPriority: PriorityMedium,
+			existingReason:   queuepkg.ReasonInputRequired,
+			existingPriority: queuepkg.PriorityMedium,
 			shouldOverride:   false,
-			expectedReason:   ReasonInputRequired,
-			expectedPriority: PriorityMedium,
+			expectedReason:   queuepkg.ReasonInputRequired,
+			expectedPriority: queuepkg.PriorityMedium,
 		},
 		{
 			name:             "uncommitted_can_override_idle",
-			existingReason:   ReasonIdleTimeout,
-			existingPriority: PriorityLow,
+			existingReason:   queuepkg.ReasonIdleTimeout,
+			existingPriority: queuepkg.PriorityLow,
 			shouldOverride:   true,
-			expectedReason:   ReasonUncommittedChanges,
-			expectedPriority: PriorityLow,
+			expectedReason:   queuepkg.ReasonUncommittedChanges,
+			expectedPriority: queuepkg.PriorityLow,
 		},
 		{
 			name:             "uncommitted_can_override_complete",
-			existingReason:   ReasonTaskComplete,
-			existingPriority: PriorityLow,
+			existingReason:   queuepkg.ReasonTaskComplete,
+			existingPriority: queuepkg.PriorityLow,
 			shouldOverride:   true,
-			expectedReason:   ReasonUncommittedChanges,
-			expectedPriority: PriorityLow,
+			expectedReason:   queuepkg.ReasonUncommittedChanges,
+			expectedPriority: queuepkg.PriorityLow,
 		},
 	}
 
@@ -226,7 +197,7 @@ func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Verify priority mapping
-			priority := reasonToPriority(tt.existingReason)
+			priority := queuepkg.ReasonToPriority(tt.existingReason)
 			if priority != tt.existingPriority {
 				t.Errorf("Priority mismatch for %s: expected %s, got %s",
 					tt.existingReason, tt.existingPriority, priority)
@@ -238,7 +209,7 @@ func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
 // TestReviewQueue_UncommittedChanges_ReasonString verifies string conversion
 func TestReviewQueue_UncommittedChanges_ReasonString(t *testing.T) {
 	t.Parallel()
-	reason := ReasonUncommittedChanges
+	reason := queuepkg.ReasonUncommittedChanges
 	expected := "Uncommitted Changes"
 	if reason.String() != expected {
 		t.Errorf("Expected ReasonUncommittedChanges.String() to return %q, got %q",
@@ -251,31 +222,30 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 	t.Parallel()
 	// Create test instance WITHOUT worktree (directory session)
 	now := time.Now()
-	instance := &Instance{
+	inst := (&instance.Instance{
 		Title:       "test-no-worktree",
 		Path:        "/tmp/test-path",
 		Branch:      "",
-		Status:      Running,
-		GitManager:  GitWorktreeManager{Worktree: nil}, // No worktree
+		Status:      domain.Active,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
-	}
-	instance.started.Store(true)
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
+	}).WithWorktreeForTest(nil)
+	inst.MarkStarted()
 
 	// Create review queue infrastructure
-	queue := NewReviewQueue()
-	statusManager := NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
-	poller.AddInstance(instance)
+	poller.AddInstance(inst)
 
 	// Check session - should not crash and not add to queue for uncommitted changes
-	poller.checkSession(instance, nil)
+	poller.checkSession(inst, nil)
 
 	// If added to queue, it should NOT be for uncommitted changes
-	if queue.Has(instance.Title) {
-		item, _ := queue.Get(instance.Title)
-		if item.Reason == ReasonUncommittedChanges {
+	if queue.Has(inst.Title) {
+		item, _ := queue.Get(inst.Title)
+		if item.Reason == queuepkg.ReasonUncommittedChanges {
 			t.Error("Expected session without worktree to not be added for uncommitted changes")
 		}
 	}
@@ -298,7 +268,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	initTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "integration-session")
@@ -316,26 +286,25 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 
 	// Create instance
 	now := time.Now()
-	instance := &Instance{
+	inst := (&instance.Instance{
 		Title:       "integration-test",
 		Path:        repoPath,
 		Branch:      branchName,
-		Status:      Running,
-		GitManager:  GitWorktreeManager{Worktree: worktree},
+		Status:      domain.Active,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
-	}
-	instance.started.Store(true)
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
+	}).WithWorktreeForTest(worktree)
+	inst.MarkStarted()
 
 	// Create review queue with poller
-	queue := NewReviewQueue()
-	statusManager := NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	pollerCfg := DefaultReviewQueuePollerConfig()
 	pollerCfg.PollInterval = 100 * time.Millisecond
 	pollerCfg.SlowPollInterval = 100 * time.Millisecond
 	poller := NewReviewQueuePollerWithConfig(queue, statusManager, nil, pollerCfg)
-	poller.AddInstance(instance)
+	poller.AddInstance(inst)
 
 	// Start polling in background
 	ctx, cancel := context.WithCancel(context.Background())
@@ -354,7 +323,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	}
 
 	// Verify initially clean (not in queue)
-	if queue.Has(instance.Title) {
+	if queue.Has(inst.Title) {
 		t.Error("Expected clean worktree to not be in queue initially")
 	}
 
@@ -371,22 +340,22 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	detectCfg := wait.DefaultWaitConfig()
 	detectCfg.Description = "uncommitted changes detected"
 	if err := wait.WaitForCondition(func() bool {
-		return queue.Has(instance.Title)
+		return queue.Has(inst.Title)
 	}, detectCfg); err != nil {
 		t.Fatalf("poller failed to detect uncommitted changes: %v", err)
 	}
 
 	// Verify detected and added to queue
-	if !queue.Has(instance.Title) {
+	if !queue.Has(inst.Title) {
 		t.Error("Expected uncommitted changes to be detected by poller")
 	}
 
-	item, exists := queue.Get(instance.Title)
+	item, exists := queue.Get(inst.Title)
 	if !exists {
 		t.Fatal("Expected item to exist in queue")
 	}
 
-	if item.Reason != ReasonUncommittedChanges {
+	if item.Reason != queuepkg.ReasonUncommittedChanges {
 		t.Errorf("Expected reason UncommittedChanges, got %s", item.Reason)
 	}
 
@@ -399,19 +368,19 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	committedCfg := wait.DefaultWaitConfig()
 	committedCfg.Description = "committed state detected"
 	if err := wait.WaitForCondition(func() bool {
-		if !queue.Has(instance.Title) {
+		if !queue.Has(inst.Title) {
 			return true
 		}
-		updatedItem, _ := queue.Get(instance.Title)
-		return updatedItem.Reason != ReasonUncommittedChanges
+		updatedItem, _ := queue.Get(inst.Title)
+		return updatedItem.Reason != queuepkg.ReasonUncommittedChanges
 	}, committedCfg); err != nil {
 		t.Fatalf("poller failed to detect committed state: %v", err)
 	}
 
 	// Verify removed from queue (or reason changed)
-	if queue.Has(instance.Title) {
-		updatedItem, _ := queue.Get(instance.Title)
-		if updatedItem.Reason == ReasonUncommittedChanges {
+	if queue.Has(inst.Title) {
+		updatedItem, _ := queue.Get(inst.Title)
+		if updatedItem.Reason == queuepkg.ReasonUncommittedChanges {
 			t.Error("Expected committed changes to remove UncommittedChanges reason from queue")
 		}
 	}

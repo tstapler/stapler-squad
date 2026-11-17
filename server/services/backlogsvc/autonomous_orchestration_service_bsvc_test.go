@@ -12,6 +12,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -41,24 +43,24 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	const title = "autonomous-work-respawn-test"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: repoPath,
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Autonomous work respawn test item",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -85,16 +87,16 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 }
 
 func TestOnAutonomousDriverComplete_should_LeaveIdeaAndRaiseOneDenial_When_SystemGateBlocksIdeaToReady(t *testing.T) {
-	f := newCharFixture(t, "autonomous-denied", session.SessionRoleTriage, session.BacklogStatusIdea)
+	f := newCharFixture(t, "autonomous-denied", instance.SessionRoleTriage, domain.BacklogStatusIdea)
 	bs := NewBacklogService(f.storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, bs)
-	h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
+	h.blockWithGate(t, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 
 	f.complete(session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
 
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusIdea), item.Status)
-	assert.Equal(t, []string{string(session.CallerAutonomousComplete)}, deniedCallers(t, bs, f.itemID))
+	assert.Equal(t, string(domain.BacklogStatusIdea), item.Status)
+	assert.Equal(t, []string{string(domain.CallerAutonomousComplete)}, deniedCallers(t, bs, f.itemID))
 	assert.Equal(t, []string{"Autonomous fix complete — status update failed"}, svctest.NotificationTitles(f.drain()), "the existing status-update-failed notification fires once")
 }

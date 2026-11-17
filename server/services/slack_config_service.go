@@ -7,7 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -74,7 +74,7 @@ func (s *SlackConfigService) UpdateSlackConfig(
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get encryption key: %w", err))
 		}
-		encrypted, err := session.EncryptToken(key, req.Msg.WebhookUrl)
+		encrypted, err := domain.EncryptToken(key, req.Msg.WebhookUrl)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to encrypt webhook url: %w", err))
 		}
@@ -91,7 +91,7 @@ func (s *SlackConfigService) UpdateSlackConfig(
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get encryption key: %w", err))
 		}
-		encrypted, err := session.EncryptToken(key, req.Msg.SigningSecret)
+		encrypted, err := domain.EncryptToken(key, req.Msg.SigningSecret)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to encrypt signing secret: %w", err))
 		}

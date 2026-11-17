@@ -8,6 +8,7 @@ import (
 
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
 )
 
@@ -15,7 +16,7 @@ import (
 // in-memory instances without constructing new Instance objects or spawning PTY
 // processes. HibernationSweeper uses this as a fast path to avoid LoadInstances().
 type LiveInstancesProvider interface {
-	GetInstances() []*Instance
+	GetInstances() []*instance.Instance
 }
 
 // MemoryCacheReader is implemented by HibernationSweeper so SessionService can
@@ -234,7 +235,7 @@ func (s *HibernationSweeper) sweep(ctx context.Context) {
 		return
 	}
 
-	var instances []*Instance
+	var instances []*instance.Instance
 	if s.liveProvider != nil {
 		instances = s.liveProvider.GetInstances()
 	} else {
@@ -259,12 +260,12 @@ func (s *HibernationSweeper) sweep(ctx context.Context) {
 			if inst.NeedsReview() {
 				continue
 			}
-			idle := inst.hibernationIdleDuration()
+			idle := inst.HibernationIdleDuration()
 			if idle >= idleTimeout {
 				log.Info("auto-hibernating idle session",
 					"session", inst.Title,
 					"idle_duration", idle.Round(time.Minute))
-				if err := inst.hibernateAutomatically(ctx, "idle"); err != nil {
+				if err := inst.HibernateAutomatically(ctx, "idle"); err != nil {
 					log.Warn("auto-hibernate failed", "session", inst.Title, "err", err)
 					continue
 				}
@@ -292,7 +293,7 @@ func (s *HibernationSweeper) sweep(ctx context.Context) {
 // All active sessions are measured in a single SessionsRSSMB batch call so
 // the whole sweep pays for one process-table enumeration, not one per
 // session (see processSnapshot in session/memory/reader.go).
-func (s *HibernationSweeper) warmRSSCache(ctx context.Context, instances []*Instance) {
+func (s *HibernationSweeper) warmRSSCache(ctx context.Context, instances []*instance.Instance) {
 	if s.memReader == nil {
 		return
 	}
@@ -334,7 +335,7 @@ func (s *HibernationSweeper) warmRSSCache(ctx context.Context, instances []*Inst
 // sweepResourcePressure hibernates the single longest-idle eligible session when
 // system memory usage is at or above the configured threshold. It does nothing if
 // the threshold is 0 (disabled) or the system memory percentage is 0 (macOS/error).
-func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instances []*Instance) {
+func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instances []*instance.Instance) {
 	threshold := s.cfg.Hibernation.ResourcePressureThreshold
 	if threshold <= 0 || s.memReader == nil {
 		return
@@ -360,7 +361,7 @@ func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instance
 	// Collect eligible candidates: Active sessions idle > pressureGracePeriod
 	// that are NOT waiting for user input in the review queue.
 	type candidate struct {
-		inst    *Instance
+		inst    *instance.Instance
 		idleFor time.Duration
 	}
 	var candidates []candidate
@@ -371,7 +372,7 @@ func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instance
 		if inst.NeedsReview() {
 			continue
 		}
-		idle := inst.hibernationIdleDuration()
+		idle := inst.HibernationIdleDuration()
 		if idle < pressureGracePeriod {
 			continue
 		}
@@ -393,7 +394,7 @@ func (s *HibernationSweeper) sweepResourcePressure(ctx context.Context, instance
 		"idle_duration", candidates[0].idleFor.Round(time.Minute),
 		"system_memory_pct", sysPct)
 
-	if err := target.hibernateAutomatically(ctx, "resource_pressure"); err != nil {
+	if err := target.HibernateAutomatically(ctx, "resource_pressure"); err != nil {
 		log.Warn("resource-pressure hibernate failed", "session", target.Title, "err", err)
 		return
 	}

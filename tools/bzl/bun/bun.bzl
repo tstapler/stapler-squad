@@ -171,7 +171,7 @@ if [ "${{TEST_TOTAL_SHARDS:-0}}" -gt 1 ]; then
   [ -z "${{TEST_SHARD_STATUS_FILE:-}}" ] || touch "$TEST_SHARD_STATUS_FILE"
   SHARD="--shard=$((TEST_SHARD_INDEX + 1))/$TEST_TOTAL_SHARDS"
 fi
-bun x jest --selectProjects web-app --ci --no-coverage --maxWorkers=2 $SHARD {ignore} --json --outputFile="$TEST_UNDECLARED_OUTPUTS_DIR/jest.json" {tests}
+bun x jest --selectProjects web-app --ci --no-coverage --maxWorkers=2 --reporters=summary $SHARD {ignore} --json --outputFile="$TEST_UNDECLARED_OUTPUTS_DIR/jest.json" {tests}
 """
 
 def _bun_jest_test_impl(ctx):

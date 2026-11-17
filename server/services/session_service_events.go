@@ -11,8 +11,10 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -24,7 +26,7 @@ import (
 // item never reaches either (stuck, orphaned, or manually abandoned) would
 // otherwise never get ArchivedAt set and would accumulate forever, since
 // SessionRetentionSweeper only ever considers archived sessions.
-func (s *SessionService) wireAutoArchiveCallback(inst *session.Instance) {
+func (s *SessionService) wireAutoArchiveCallback(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}
@@ -37,11 +39,11 @@ func (s *SessionService) wireAutoArchiveCallback(inst *session.Instance) {
 // autoArchiveListener implements session.LifecycleListener to archive workflow sessions on exit.
 type autoArchiveListener struct {
 	svc  *SessionService
-	inst *session.Instance
+	inst *instance.Instance
 }
 
-func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
-	if event == session.EventExited {
+func (l *autoArchiveListener) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
+	if event == domain.EventExited {
 		go l.svc.maybeAutoArchive(l.inst)
 	}
 }
@@ -49,7 +51,7 @@ func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ s
 // wireColdRestoreOutcomeListener registers a lifecycle listener that notifies
 // the user when a cold restore was forced fresh despite the session having
 // previously captured conversation history (session-revive-uuid-loss AC3).
-func (s *SessionService) wireColdRestoreOutcomeListener(inst *session.Instance) {
+func (s *SessionService) wireColdRestoreOutcomeListener(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}
@@ -60,11 +62,11 @@ func (s *SessionService) wireColdRestoreOutcomeListener(inst *session.Instance) 
 // session.ReasonColdRestoreLostHistory as a durable, user-visible notification.
 type coldRestoreOutcomeListener struct {
 	svc  *SessionService
-	inst *session.Instance
+	inst *instance.Instance
 }
 
-func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
-	if event == session.EventStarted && reason == session.ReasonColdRestoreLostHistory {
+func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event == domain.EventStarted && reason == domain.ReasonColdRestoreLostHistory {
 		l.svc.onColdRestoreLostHistory(l.inst)
 	}
 }
@@ -72,7 +74,7 @@ func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEve
 // onColdRestoreLostHistory publishes a durable WARNING notification for inst
 // when a cold restore could not recover its previous conversation history.
 // Hidden instances are filtered by the delivery gate (routine WARNING).
-func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
+func (s *SessionService) onColdRestoreLostHistory(inst *instance.Instance) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
 	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
@@ -90,7 +92,7 @@ func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
 // SessionUpdatedEvent whenever a session exits unexpectedly (PTY EOF, process
 // crash, reconcile). Without this, the frontend WatchSessions stream never
 // learns the session stopped, leaving the "Thinking…" chip visible indefinitely.
-func (s *SessionService) wireSessionExitedPublisher(inst *session.Instance) {
+func (s *SessionService) wireSessionExitedPublisher(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}
@@ -104,11 +106,11 @@ func (s *SessionService) wireSessionExitedPublisher(inst *session.Instance) {
 // the session was down can upgrade without waiting for a client frame.
 type sessionStartedPublisher struct {
 	svc  *SessionService
-	inst *session.Instance
+	inst *instance.Instance
 }
 
-func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
-	if event != session.EventStarted {
+func (l *sessionStartedPublisher) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
+	if event != domain.EventStarted {
 		return
 	}
 	go l.publishIfActive()
@@ -119,7 +121,7 @@ func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent,
 // emit a status update on every reconcile cycle.
 func (l *sessionStartedPublisher) publishIfActive() bool {
 	snap := l.inst.Snapshot()
-	if snap.Status != session.Active || snap.ArchivedAt != nil {
+	if snap.Status != domain.Active || snap.ArchivedAt != nil {
 		return false
 	}
 	l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
@@ -130,15 +132,15 @@ func (l *sessionStartedPublisher) publishIfActive() bool {
 // when a session exits so the frontend receives the updated Stopped status.
 type sessionExitedPublisher struct {
 	svc  *SessionService
-	inst *session.Instance
+	inst *instance.Instance
 }
 
-func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
-	if event != session.EventExited {
+func (l *sessionExitedPublisher) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
+	if event != domain.EventExited {
 		return
 	}
 	go func() {
-		_ = l.svc.storage.SaveInstances([]*session.Instance{l.inst})
+		_ = l.svc.storage.SaveInstances([]*instance.Instance{l.inst})
 		l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
 		// Status is already Crashed here: MarkCrashed completes its transition
 		// before firing EventExited, and this goroutine reads it afterwards.
@@ -151,7 +153,7 @@ func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, 
 // the poll cycle. Also publishes a session update event so WatchSessions clients receive
 // the detection state change without waiting for the next poll cycle.
 // Safe to call before or after the controller is started.
-func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
+func (s *SessionService) wireStatusChangeCallback(inst *instance.Instance) {
 	if inst == nil || s.reviewQueueSvc == nil {
 		return
 	}
@@ -178,7 +180,7 @@ const rateLimitLookupTimeout = 2 * time.Second
 // wireRateLimitCallbacks registers server-level callbacks on an Instance so that
 // rate-limit detection and recovery events are published to the event bus and
 // trigger desktop push notifications.
-func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
+func (s *SessionService) wireRateLimitCallbacks(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}
@@ -200,7 +202,7 @@ func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
 // (via concStorage), bounded by rateLimitLookupTimeout. Returns "" when the
 // instance isn't backlog-linked, when concStorage is nil (fake InstanceStore
 // backing, e.g. in some test setups), or when the lookup fails/times out.
-func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
+func (s *SessionService) rateLimitLinkedItemID(inst *instance.Instance) string {
 	if s.concStorage == nil {
 		return ""
 	}
@@ -208,7 +210,7 @@ func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
 	defer cancel()
 	itemSession, err := s.concStorage.GetItemSessionBySessionUUID(lookupCtx, inst.UUID)
 	if err != nil {
-		if !errors.Is(err, session.ErrNotFound) {
+		if !errors.Is(err, domain.ErrNotFound) {
 			log.Warn("wireRateLimitCallbacks: ItemSession lookup failed", "session", inst.UUID, "err", err)
 		}
 		return ""
@@ -218,7 +220,7 @@ func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
 
 // onRateLimitDetected publishes the rate-limit-detected notification for inst.
 // Hidden instances are filtered by the delivery gate (routine WARNING).
-func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID string, resetTime time.Time) {
+func (s *SessionService) onRateLimitDetected(inst *instance.Instance, sessionID string, resetTime time.Time) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
 	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 
@@ -257,7 +259,7 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 // function branching on success internally); the wireRateLimitCallbacks
 // dispatch closure picks the function that matches the outcome instead of
 // passing a flag.
-func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, sessionID string) {
+func (s *SessionService) onRateLimitRecoverySucceeded(inst *instance.Instance, sessionID string) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
 	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 	s.eventBus.Publish(events.NewNotificationEvent(
@@ -274,7 +276,7 @@ func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, se
 // onRateLimitRecoveryFailed is onRateLimitRecoverySucceeded's failure
 // counterpart -- see its doc comment. errMsg is the auto-resume failure
 // reason, surfaced in the notification body.
-func (s *SessionService) onRateLimitRecoveryFailed(inst *session.Instance, sessionID, errMsg string) {
+func (s *SessionService) onRateLimitRecoveryFailed(inst *instance.Instance, sessionID, errMsg string) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
 	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 	s.eventBus.Publish(events.NewNotificationEvent(
@@ -290,12 +292,12 @@ func (s *SessionService) onRateLimitRecoveryFailed(inst *session.Instance, sessi
 
 // wireClaudeSessionIDCallback registers a callback on inst so that when the
 // session driver captures a Claude session_id, the instance is persisted.
-func (s *SessionService) wireClaudeSessionIDCallback(inst *session.Instance) {
+func (s *SessionService) wireClaudeSessionIDCallback(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}
 	inst.SetClaudeSessionIDSavedCallback(func() {
-		_ = s.storage.SaveInstances([]*session.Instance{inst})
+		_ = s.storage.SaveInstances([]*instance.Instance{inst})
 	})
 }
 
@@ -403,7 +405,7 @@ func (s *SessionService) SetWorkflowService(svc *WorkflowService) {
 
 // SetWorkflowRepository injects the workflow repository used to populate the meta cache.
 // Must be called after both SessionService and WorkflowRepository are constructed.
-func (s *SessionService) SetWorkflowRepository(repo session.WorkflowRepository) {
+func (s *SessionService) SetWorkflowRepository(repo stagecfg.WorkflowRepository) {
 	s.workflowRepo = repo
 	s.refreshWorkflowMetaCache(context.Background())
 }
@@ -571,7 +573,7 @@ func (s *SessionService) ArchiveSession(
 	if err := inst.ArchiveWithStop(now); err != nil {
 		log.Warn("failed to transition archived session to Stopped", "session", req.Msg.SessionId, "err", err)
 	}
-	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := s.storage.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
 	// Notifies event-driven cleanup (ReactiveQueueManager evicting any stale review-queue entry), mirroring ArchiveSessionByUUID.
@@ -663,7 +665,7 @@ func (s *SessionService) GetProviderLimits(
 // and falling back to the plain NewSessionUpdatedEvent otherwise. Shared by UpdateSession's
 // end-of-handler publish and UpdateSessionProgram (the capacity-monitor auto-fallback path)
 // so the two program-switch entry points publish identically instead of drifting.
-func (s *SessionService) publishSessionUpdatedEvent(instance *session.Instance, updatedFields []string) {
+func (s *SessionService) publishSessionUpdatedEvent(instance *instance.Instance, updatedFields []string) {
 	if s.statusManager != nil {
 		statusInfo := s.statusManager.GetStatus(instance)
 		if statusInfo.IsControllerActive {
@@ -689,7 +691,7 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 	}
 
 	changed, _, err := inst.SwitchProgram(ctx, newProgram, func() error {
-		return s.storage.SaveInstances([]*session.Instance{inst})
+		return s.storage.SaveInstances([]*instance.Instance{inst})
 	})
 	if !changed {
 		return nil
@@ -722,7 +724,7 @@ func (s *SessionService) SetQuotaGate(g *QuotaGate) {
 }
 
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.
-func (s *SessionService) GetInstances() []*session.Instance {
+func (s *SessionService) GetInstances() []*instance.Instance {
 	return s.allInstances()
 }
 

@@ -13,16 +13,19 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // DiagnosticSpawner is the narrow slice of *SessionService DiagnosticService
 // needs to dispatch a hidden, one-shot diagnostic agent — mirrors
 // session.ReviewGateSpawner's shape for the sibling dispatch case.
 type DiagnosticSpawner interface {
-	SpawnDiagnosticSession(ctx context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error)
+	SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*instance.Instance, error)
 }
 
 // DiagnosticService backs the DiagnosticService RPCs for "Diagnose & Nudge"
@@ -56,7 +59,7 @@ func (d *DiagnosticService) SetExternalDiscovery(disc *session.ExternalSessionDi
 
 // findInstance mirrors TerminalService.findInstance's poller ->
 // external-discovery fallback chain.
-func (d *DiagnosticService) findInstance(id string) *session.Instance {
+func (d *DiagnosticService) findInstance(id string) *instance.Instance {
 	if d.poller != nil {
 		if inst := d.poller.FindInstance(id); inst != nil {
 			return inst
@@ -130,10 +133,10 @@ func (d *DiagnosticService) DispatchDiagnose(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dispatch diagnostic session: %w", spawnErr))
 	}
 
-	if _, createErr := d.storage.CreateItemSession(ctx, session.ItemSessionData{
+	if _, createErr := d.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleDiagnose,
+		SessionRole: instance.SessionRoleDiagnose,
 	}); createErr != nil {
 		log.Warn("[DiagnosticService] failed to link diagnostic ItemSession", "item", item.ID, "session", inst.UUID, "err", createErr)
 	}
@@ -204,8 +207,8 @@ func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuck
 // buildBundle gathers item/AC/history/verdicts/linked-session/git data and
 // hands it to session.BuildDiagnosticBundle (the pure assembly/compaction
 // logic — see session/diagnose_bundle.go).
-func (d *DiagnosticService) buildBundle(ctx context.Context, item *session.BacklogItemData) (session.DiagnosticBundle, error) {
-	acCriteria, acErr := session.ParseAcCriteria(item.AcceptanceCriteria)
+func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.BacklogItemData) (session.DiagnosticBundle, error) {
+	acCriteria, acErr := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if acErr != nil {
 		log.Warn("[DiagnosticService] ParseAcCriteria failed", "item", item.ID, "err", acErr)
 	}
@@ -267,7 +270,7 @@ func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID stri
 		if wt, wtErr := d.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID); wtErr == nil {
 			ls.Branch = wt.BranchName
 			if gitDiff == "" && wt.WorktreePath != "" {
-				gitDiff, gitDiffTruncated, _ = backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+				gitDiff, gitDiffTruncated, _ = pipeline.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 				gitLog = gitLogSummary(ctx, wt.WorktreePath, wt.BaseCommitSHA, wt.BranchName)
 			}
 		}
@@ -280,7 +283,7 @@ func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID stri
 // ItemSession, in descending order of freshness — LastProgressAt refreshes
 // on every report_progress call, LastCommitAt only on new commits, CreatedAt
 // as the final fallback so the field is never a zero time.
-func lastActivityFor(is session.ItemSessionSummary) time.Time {
+func lastActivityFor(is backlogdto.ItemSessionSummary) time.Time {
 	if is.LastProgressAt != nil {
 		return *is.LastProgressAt
 	}

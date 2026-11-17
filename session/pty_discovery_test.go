@@ -10,6 +10,8 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -62,10 +64,10 @@ func TestPTYDiscovery_SetSessions(t *testing.T) {
 	t.Parallel()
 	pd := NewPTYDiscovery()
 
-	sessions := []*Instance{
-		{Title: "session1", Status: Running, Program: "claude"},
-		{Title: "session2", Status: Paused, Program: "claude"},
-		{Title: "session3", Status: Running, Program: "aider"},
+	sessions := []*instance.Instance{
+		{Title: "session1", Status: domain.Active, Program: "claude"},
+		{Title: "session2", Status: domain.Paused, Program: "claude"},
+		{Title: "session3", Status: domain.Active, Program: "aider"},
 	}
 
 	pd.SetSessions(sessions)
@@ -449,7 +451,7 @@ func TestPTYDiscovery_Stop_JoinsMonitorLoop(t *testing.T) {
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(lister.releaseCh) }) })
 
-	pd := NewPTYDiscoveryWithConfig(PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
+	pd := NewPTYDiscoveryWithConfig(instance.PTYDiscoveryConfig{DiscoveryInterval: time.Millisecond}, WithSessionLister(lister))
 	pd.Start()
 
 	// Block until monitorLoop's initial Refresh() call reaches

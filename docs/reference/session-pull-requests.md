@@ -8,6 +8,8 @@ Decisions: [ADR-001](../../project_plans/session-multi-pr-tracking/decisions/ADR
 
 Hand-written ent schemas in `session/ent/schema/`. Generated ent code is not committed.
 
+The repository for these three entities is the leaf package `session/sessionpr` (`PRStore`), which `session.EntRepository` embeds; it holds the state writer (`ent_repository_session_pr.go`), the guard views, the legacy-PR backfill (`session_pr_backfill.go`) and the orphan-link GC (`session_pr_gc.go`).
+
 | Entity | File | Purpose |
 |---|---|---|
 | `PullRequestState` | `pull_request_state.go` | One row per PR: state, draft flag, check conclusion, review counts, timestamps, poll health. Unique on `(host, owner, repo, number)`. Only the PR status poller writes it. |
@@ -93,5 +95,5 @@ In `proto/session/v1/types.proto`, `Session` carries `repeated SessionPullReques
 ## Guards
 
 - `make pr-field-guard`: no direct writes to the PR fields outside `session/instance*.go`.
-- `make pr-state-write-guard`: no direct `PullRequestState` writes outside the repository and the garbage collector.
+- `make pr-state-write-guard`: no direct `PullRequestState` writes outside `session/sessionpr/ent_repository_session_pr.go` and `session/sessionpr/session_pr_gc.go` (the garbage collector only deletes).
 - Allow-list tests for readers of the legacy fields.

@@ -10,14 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newInProgressItem is not a review item because waits on review items are refused immediately.
 func newInProgressItem(t *testing.T, storage *session.Storage) string {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "Waiting for event",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	return item.ID
@@ -25,9 +27,9 @@ func newInProgressItem(t *testing.T, storage *session.Storage) string {
 
 func newReviewItem(t *testing.T, storage *session.Storage) string {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "Waiting for verdict",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	return item.ID
@@ -87,9 +89,9 @@ func TestWaitForBacklogEvent_ParksSessionAfterRepeatedTimeouts(t *testing.T) {
 // A capped session can still read state that already satisfies the wait.
 func TestWaitForBacklogEvent_CappedSession_StillSeesExistingState(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "Already archived",
-		Status: string(session.BacklogStatusArchived),
+		Status: string(domain.BacklogStatusArchived),
 	})
 	require.NoError(t, err)
 	handler := &backlogHandlers{storage: storage, eventBus: events.NewEventBus(32)}

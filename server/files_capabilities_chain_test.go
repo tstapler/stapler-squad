@@ -14,13 +14,13 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type noWorkspace struct{}
 
-func (noWorkspace) GetWorkspace(string) (session.Workspace, error) {
-	return session.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
+func (noWorkspace) GetWorkspace(string) (domain.Workspace, error) {
+	return domain.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
 }
 
 type capsStub struct {

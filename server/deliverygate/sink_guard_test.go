@@ -26,7 +26,7 @@ const (
 	serverEventsPath = modulePath + "/server/events" // type/const aliases of pkg/events
 	notifPkgPath     = modulePath + "/server/notifications"
 	svcPkgPath       = modulePath + "/server/services"
-	sessionPkgPath   = modulePath + "/session"
+	instancePkgPath  = modulePath + "/session/instance"
 	fixturePkgSuffix = "/server/deliverygate/testdata/sinkfixture"
 )
 
@@ -247,7 +247,7 @@ func isRawHiddenRead(p *packages.Package, sel *ast.SelectorExpr) bool {
 	}
 	named := namedOf(s.Recv())
 	return named != nil && named.Obj().Pkg() != nil &&
-		named.Obj().Pkg().Path() == sessionPkgPath && named.Obj().Name() == "Instance"
+		named.Obj().Pkg().Path() == instancePkgPath && named.Obj().Name() == "Instance"
 }
 
 // namedOf returns the named type behind t, looking through pointers and aliases

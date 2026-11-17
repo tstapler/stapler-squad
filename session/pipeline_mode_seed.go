@@ -14,6 +14,8 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // DefaultSDDPipelineModeSlug is the slug of the seeded pipeline mode that
@@ -32,14 +34,14 @@ const DefaultSDDPipelineModeSlug = "sdd"
 // log-and-continue, matching NewPipelineEngine's own non-fatal-boot posture:
 // a seeding failure must never abort server startup for a feature most items
 // don't use yet (see requirements.md's Non-functional Requirements).
-func EnsureDefaultSDDPipelineMode(ctx context.Context, repo PipelineModeRepository) error {
+func EnsureDefaultSDDPipelineMode(ctx context.Context, repo stagecfg.PipelineModeRepository) error {
 	if repo == nil {
 		return nil
 	}
 
 	if _, err := repo.GetBySlug(ctx, DefaultSDDPipelineModeSlug); err == nil {
 		return nil
-	} else if !errors.Is(err, ErrNotFound) {
+	} else if !errors.Is(err, domain.ErrNotFound) {
 		return fmt.Errorf("EnsureDefaultSDDPipelineMode: GetBySlug: %w", err)
 	}
 
@@ -69,7 +71,7 @@ func EnsureDefaultSDDPipelineMode(ctx context.Context, repo PipelineModeReposito
 	}
 
 	if _, err := repo.Create(ctx, input); err != nil {
-		if errors.Is(err, ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			// Lost a create race (another boot, or a concurrent caller) —
 			// the row exists now either way, which is the only thing this
 			// function promises.
@@ -107,8 +109,8 @@ func EnsureDefaultSDDPipelineMode(ctx context.Context, repo PipelineModeReposito
 // submit_review_verdict MCP tool contract buildDefaultSlashCommandSet uses,
 // so BacklogLifecycleListener/WorkflowEngine's status-transition machinery
 // keeps working unmodified — only the work leading up to those calls differs.
-func defaultSDDPipelineModeInput() PipelineModeCreateInput {
-	return PipelineModeCreateInput{
+func defaultSDDPipelineModeInput() stagecfg.PipelineModeCreateInput {
+	return stagecfg.PipelineModeCreateInput{
 		Slug: DefaultSDDPipelineModeSlug,
 		Name: "SDD (Stapler-Driven Development)",
 		Description: "Multi-phase pipeline: research, plan, validate, implement, and an " +

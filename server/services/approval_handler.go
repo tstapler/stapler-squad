@@ -22,7 +22,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
@@ -47,8 +49,8 @@ type hookDecision struct {
 // ReviewQueueChecker is an interface for triggering immediate review queue checks.
 // This avoids importing the session package's concrete ReviewQueuePoller type directly.
 type ReviewQueueChecker interface {
-	FindInstance(sessionID string) *session.Instance
-	CheckSession(inst *session.Instance)
+	FindInstance(sessionID string) *instance.Instance
+	CheckSession(inst *instance.Instance)
 }
 
 // approvalNotificationStamper is a narrow interface for stamping approval outcomes
@@ -927,7 +929,7 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 }
 
 // stableIDForData mirrors Instance.GetStableID for raw InstanceData.
-func stableIDForData(d session.InstanceData) string {
+func stableIDForData(d domain.InstanceData) string {
 	if d.UUID != "" {
 		return d.UUID
 	}
@@ -941,7 +943,7 @@ func stableIDForData(d session.InstanceData) string {
 //
 // TODO: move stableIDForData and matchesIDData to session.InstanceData methods so
 // the matching semantics are colocated with the type they operate on.
-func matchesIDData(d session.InstanceData, id string) bool {
+func matchesIDData(d domain.InstanceData, id string) bool {
 	if d.UUID != "" && d.UUID == id {
 		return true
 	}

@@ -224,8 +224,11 @@ test.describe("artifacts-view", () => {
   test("artifacts page should be reachable from main navigation in two clicks", async ({ page }) => {
     await artifacts.mockBrowse(() => browseResponse(ALL_ROWS));
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-    await page.getByTestId("drawer-nav").getByRole("link", { name: "Artifacts" }).click();
-    await expect(page).toHaveURL(/\/artifacts$/);
+    // A click before the nav hydrates can be a no-op (CI saw the URL stay on /?window=...), so retry the click until it navigates.
+    await expect(async () => {
+      await page.getByTestId("drawer-nav").getByRole("link", { name: "Artifacts" }).click();
+      await expect(page).toHaveURL(/\/artifacts$/, { timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(artifacts.heading).toBeVisible();
     await expect(page).toHaveTitle("Artifacts - Stapler Squad");
   });

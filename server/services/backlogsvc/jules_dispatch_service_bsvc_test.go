@@ -14,6 +14,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // createTestJulesReadyItemForRPC is createTestJulesReadyItem plus
@@ -22,12 +25,12 @@ import (
 // additionally enforces "plan approved or skip_planning" before allowing the
 // in_progress transition; that gate is orthogonal to what Epic 2.4.3 tests,
 // so it's satisfied here rather than exercised.
-func createTestJulesReadyItemForRPC(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
+func createTestJulesReadyItemForRPC(t *testing.T, ctx context.Context, storage *session.Storage, title string) *backlogdto.BacklogItemData {
 	t.Helper()
 	repoPath := svctest.NewTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        title,
-		Status:       string(session.BacklogStatusReady),
+		Status:       string(domain.BacklogStatusReady),
 		RepoPath:     repoPath,
 		SkipPlanning: true,
 	})
@@ -62,13 +65,13 @@ func TestBacklogService_DispatchToJules_should_ReturnItemSessionWithJulesWorkRol
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.ItemSession)
-	assert.Equal(t, string(session.SessionRoleJulesWork), resp.Msg.ItemSession.SessionRole)
+	assert.Equal(t, string(instance.SessionRoleJulesWork), resp.Msg.ItemSession.SessionRole)
 	assert.True(t, strings.HasPrefix(resp.Msg.ItemSession.SessionUuid, "jules-sessions/"),
 		"session_uuid must start with jules-sessions/, got %q", resp.Msg.ItemSession.SessionUuid)
 
 	refreshed, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), refreshed.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), refreshed.Status)
 }
 
 func TestBacklogService_DispatchToJules_should_ReturnInvalidArgument_When_BranchEmpty(t *testing.T) {

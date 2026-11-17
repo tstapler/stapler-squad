@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -41,16 +43,16 @@ func TestSessionStartInWorktreeWithMCP(t *testing.T) {
 
 	mcpURL := "http://localhost:8543/mcp"
 
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:        "integration-test-mcp",
 		Path:         repoDir,
 		Program:      "claude",
-		SessionType:  SessionTypeNewWorktree,
+		SessionType:  domain.SessionTypeNewWorktree,
 		MCPServerURL: mcpURL,
 		TmuxPrefix:   "sstest_",
 	}
 
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("NewInstance: %v", err)
 	}
@@ -154,15 +156,15 @@ func TestRestartFromPausedUsesWorktreeDir(t *testing.T) {
 	mustRun(t, "git", "-C", repoDir, "init")
 	mustRun(t, "git", "-C", repoDir, "commit", "--allow-empty", "-m", "init")
 
-	opts := InstanceOptions{
+	opts := instance.InstanceOptions{
 		Title:       "integration-test-restart",
 		Path:        repoDir,
 		Program:     "sh", // use sh so we don't need claude
-		SessionType: SessionTypeNewWorktree,
+		SessionType: domain.SessionTypeNewWorktree,
 		TmuxPrefix:  "sstest_",
 	}
 
-	inst, err := NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		t.Fatalf("NewInstance: %v", err)
 	}
@@ -178,7 +180,7 @@ func TestRestartFromPausedUsesWorktreeDir(t *testing.T) {
 	if err := inst.Pause(); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	if inst.Status != Paused {
+	if inst.Status != domain.Paused {
 		t.Fatalf("expected Paused status, got %v", inst.Status)
 	}
 	// Worktree directory should be gone after pause.
@@ -190,7 +192,7 @@ func TestRestartFromPausedUsesWorktreeDir(t *testing.T) {
 	if err := inst.Restart(false, ""); err != nil {
 		t.Fatalf("Restart from Paused: %v", err)
 	}
-	if inst.Status != Running {
+	if inst.Status != domain.Active {
 		t.Errorf("expected Running after restart, got %v", inst.Status)
 	}
 
@@ -240,7 +242,7 @@ var _ = git.NewGitWorktreeFromStorage
 var _ = tmux.NewTmuxSessionWithPrefix
 
 // Verify CapturePaneContent is accessible (it's a method on Instance)
-var _ = (*Instance).CapturePaneContent
+var _ = (*instance.Instance).CapturePaneContent
 
 // ensure filepath is used
 var _ = filepath.Join

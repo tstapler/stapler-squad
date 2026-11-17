@@ -7,7 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // IT-002: in_progress → review via onSessionExited (lifecycle listener)
@@ -21,19 +23,19 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 	ctx := context.Background()
 
 	// 1. Create item (status "in_progress"), create ItemSession (role "work")
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Refactor database",
 		Description:        "Improve query performance",
 		AcceptanceCriteria: `[{"index":0,"text":"Queries run in <100ms","status":"pending"}]`,
 		Priority:           2,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     false,
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -52,7 +54,7 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 	// 4. Reload item, assert status == "review"
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.Status)
 
 	// 6. Reload ItemSession, assert ended_at is set
 	repo := storage.Repo
@@ -71,12 +73,12 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 	ctx := context.Background()
 
 	// 1. Create item with SkipReviewGate=true
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Quick fix",
 		Description:        "Minor bug fix",
 		AcceptanceCriteria: `[{"index":0,"text":"Fix is deployed","status":"pending"}]`,
 		Priority:           3,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     true,
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
@@ -84,7 +86,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 
 	// 2. Create ItemSession
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -99,7 +101,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 	// 4. Verify item transitions to done (not review)
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), fetchedItem.Status, "should transition to done when SkipReviewGate=true")
+	require.Equal(t, string(domain.BacklogStatusDone), fetchedItem.Status, "should transition to done when SkipReviewGate=true")
 
 	// 5. Verify ItemSession.EndedAt is set
 	repo := storage.Repo
@@ -118,12 +120,12 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 	ctx := context.Background()
 
 	// 1. Create item (status "in_progress")
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Stuck task",
 		Description:        "This task is stuck in progress",
 		AcceptanceCriteria: `[{"index":0,"text":"Complete work","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     false,
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
@@ -131,7 +133,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 
 	// 2. Create ItemSession (role "work")
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -152,7 +154,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 	// 5. Reload item, assert status == "review" and notes contain "[auto]"
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.Status)
 
 	// Notes must contain the exact auto-reconciliation marker written by ReconcileStuckItems.
 	require.Contains(t, fetchedItem.Notes, "[auto]", "ReconcileStuckItems should set notes with [auto] marker")
@@ -160,9 +162,9 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 
 	// 6. A BacklogStatusEvent audit row must be recorded for the reconcile transition.
 	require.Len(t, fetchedItem.StatusEvents, 1)
-	require.Equal(t, string(session.BacklogStatusInProgress), fetchedItem.StatusEvents[0].FromStatus)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.StatusEvents[0].ToStatus)
-	require.Equal(t, session.TriggeredBySystem, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, string(domain.BacklogStatusInProgress), fetchedItem.StatusEvents[0].FromStatus)
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.StatusEvents[0].ToStatus)
+	require.Equal(t, instance.TriggeredBySystem, fetchedItem.StatusEvents[0].TriggeredBy)
 }
 
 // IT-006: Review session exit does NOT transition item (recursion guard)
@@ -175,19 +177,19 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 	ctx := context.Background()
 
 	// 1. Create item (status "review")
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Under review",
 		Description:        "Item awaiting review",
 		AcceptanceCriteria: `[{"index":0,"text":"Code reviewed","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
 	// 2. Create ItemSession with role "review"
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "review",
@@ -202,7 +204,7 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 	// 4. Verify item status did NOT change (still "review")
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.Status, "review session exit should not transition item")
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.Status, "review session exit should not transition item")
 
 	// 5. Verify ItemSession.EndedAt IS set (exit is recorded for all roles)
 	repo := storage.Repo

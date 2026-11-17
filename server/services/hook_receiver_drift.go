@@ -13,7 +13,7 @@ import (
 )
 
 // driftCheckMainBranch is the branch this hook checks drift against. Matches the
-// hardcoded "main" used elsewhere for the same purpose (session/stuck_decisions.go's
+// hardcoded "main" used elsewhere for the same purpose (session/backlog/stuck/decisions.go's
 // bounceMainBranch, backlog_service_triage.go's prFixMainBranch) — this codebase does
 // not yet support a configurable default branch.
 const driftCheckMainBranch = "main"

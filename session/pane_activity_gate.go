@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // FeatureFlagDriverPaneActivityGate is the kill switch for paneActivityGate. Default on: with
@@ -147,7 +148,7 @@ func (g *paneActivityGate) preview(ctx context.Context, tmuxName string, capture
 		return g.content, nil
 	}
 	content, err := capture(ctx)
-	// "" is also what previewBlocked returns for a paused/stopped/not-started instance; caching it
+	// "" is also what PreviewBlocked returns for a paused/stopped/not-started instance; caching it
 	// would serve a blank pane after the instance resumes.
 	if err != nil || !inSnapshot || content == "" {
 		g.valid = false
@@ -196,8 +197,8 @@ func parseWindowActivity(out []byte) map[string]time.Time {
 // driverPreview is the driver's per-tick preview: gated, except that a blocked instance (paused,
 // stopped, hibernated, not started) always goes through PreviewContext so it gets its "" and the
 // gate forgets any cached content.
-func driverPreview(ctx context.Context, gate *paneActivityGate, inst *Instance) (string, error) {
-	if inst.previewBlocked() {
+func driverPreview(ctx context.Context, gate *paneActivityGate, inst *instance.Instance) (string, error) {
+	if inst.PreviewBlocked() {
 		gate.reset()
 		return inst.PreviewContext(ctx)
 	}

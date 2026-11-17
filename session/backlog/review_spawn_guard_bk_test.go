@@ -11,12 +11,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // blockingReviewSpawner blocks every SpawnReviewSession call until release is
 // closed, signalling entered first so a test can observe overlapping spawns.
 type blockingReviewSpawner struct {
-	mockReviewGateSpawner
+	blktest.MockReviewGateSpawner
 	entered chan struct{}
 	release chan struct{}
 }
@@ -25,35 +30,35 @@ func newBlockingReviewSpawner() *blockingReviewSpawner {
 	return &blockingReviewSpawner{entered: make(chan struct{}, 16), release: make(chan struct{})}
 }
 
-func (b *blockingReviewSpawner) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, isID, prompt string) (*session.Instance, error) {
+func (b *blockingReviewSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, isID, prompt string) (*instance.Instance, error) {
 	b.entered <- struct{}{}
 	<-b.release
-	return b.mockReviewGateSpawner.SpawnReviewSession(ctx, item, isID, prompt)
+	return b.MockReviewGateSpawner.SpawnReviewSession(ctx, item, isID, prompt)
 }
 
 // reviewGuardFixture is a listener plus one in-review item with a work session.
 type reviewGuardFixture struct {
 	l       *BacklogLifecycleListener
 	storage *session.Storage
-	item    *session.BacklogItemData
-	work    session.ItemSessionSummary
+	item    *backlogdto.BacklogItemData
+	work    backlogdto.ItemSessionSummary
 }
 
-func newReviewGuardFixture(t *testing.T, spawner ReviewGateSpawner, status session.BacklogStatus) *reviewGuardFixture {
+func newReviewGuardFixture(t *testing.T, spawner reviewgate.ReviewGateSpawner, status domain.BacklogStatus) *reviewGuardFixture {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 	t.Cleanup(cleanup)
 	ctx := context.Background()
 
-	created, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "dup review guard",
 		Priority: 1,
 		Status:   string(status),
-		RepoPath: newNonEmptyDiffGitRepo(t),
+		RepoPath: blktest.NewNonEmptyDiffGitRepo(t),
 	})
 	require.NoError(t, err)
-	work, err := storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID: created.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleWork,
+	work, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
+		ItemID: created.ID, SessionUUID: uuid.New().String(), SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -68,7 +73,7 @@ func (f *reviewGuardFixture) reviewRows(t *testing.T) (total, open int) {
 	sessions, err := f.storage.ListItemSessions(context.Background(), f.item.ID)
 	require.NoError(t, err)
 	for _, s := range sessions {
-		if s.Role == session.SessionRoleReview {
+		if s.Role == instance.SessionRoleReview {
 			total++
 			if s.EndedAt == nil {
 				open++
@@ -85,7 +90,7 @@ func (f *reviewGuardFixture) reviewRows(t *testing.T) (total, open int) {
 func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
 	t.Parallel()
 	spawner := newBlockingReviewSpawner()
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 
 	const callers = 3
 	var returned atomic.Int32
@@ -119,7 +124,7 @@ func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
 	close(spawner.release)
 	wg.Wait()
 
-	assert.Equal(t, 1, spawner.getCallCount(), "exactly one reviewer must spawn per item")
+	assert.Equal(t, 1, spawner.CallCount(), "exactly one reviewer must spawn per item")
 	total, open := f.reviewRows(t)
 	assert.Equal(t, 1, total, "exactly one review ItemSession row")
 	assert.Equal(t, 1, open)
@@ -127,23 +132,21 @@ func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
 
 func TestReviewGate_ReleasedAfterSpawnError_AllowsRetry(t *testing.T) {
 	t.Parallel()
-	spawner := &mockReviewGateSpawner{err: assert.AnError}
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	spawner := &blktest.MockReviewGateSpawner{Err: assert.AnError}
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 
 	f.l.spawnReviewGate(builtInReviewGateContext, f.item, f.work)
 	assert.False(t, f.l.ReviewSpawnGuard().InFlight(f.item.ID), "reservation must be released after a spawn error")
 
-	spawner.mu.Lock()
-	spawner.err = nil
-	spawner.mu.Unlock()
+	spawner.SetErr(nil)
 	f.l.spawnReviewGate(builtInReviewGateContext, f.item, f.work)
-	assert.Equal(t, 2, spawner.getCallCount(), "retry after a failed spawn must be allowed")
+	assert.Equal(t, 2, spawner.CallCount(), "retry after a failed spawn must be allowed")
 }
 
 func TestReviewGate_ReservationHeldUntilItemSessionPersisted(t *testing.T) {
 	t.Parallel()
 	spawner := newBlockingReviewSpawner()
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 
 	done := make(chan struct{})
 	go func() {
@@ -163,42 +166,42 @@ func TestReviewGate_ReservationHeldUntilItemSessionPersisted(t *testing.T) {
 func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
 	t.Parallel()
 	t.Run("not in review", func(t *testing.T) {
-		spawner := &mockReviewGateSpawner{}
-		f := newReviewGuardFixture(t, spawner, session.BacklogStatusInProgress)
+		spawner := &blktest.MockReviewGateSpawner{}
+		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusInProgress)
 		f.l.triggerReviewForSession(f.work.SessionUUID)
-		assert.Equal(t, 0, spawner.getCallCount())
+		assert.Equal(t, 0, spawner.CallCount())
 	})
 	t.Run("open review session", func(t *testing.T) {
-		spawner := &mockReviewGateSpawner{}
-		f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
-		_, err := f.storage.CreateItemSession(context.Background(), session.ItemSessionData{
-			ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview,
+		spawner := &blktest.MockReviewGateSpawner{}
+		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
+		_, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
+			ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: instance.SessionRoleReview,
 		})
 		require.NoError(t, err)
 		f.l.triggerReviewForSession(f.work.SessionUUID)
-		assert.Equal(t, 0, spawner.getCallCount())
+		assert.Equal(t, 0, spawner.CallCount())
 	})
 	t.Run("in-flight reservation", func(t *testing.T) {
-		spawner := &mockReviewGateSpawner{}
-		f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+		spawner := &blktest.MockReviewGateSpawner{}
+		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 		release, ok := f.l.ReserveReview(context.Background(), f.item.ID)
 		require.True(t, ok)
 		defer release()
 		f.l.triggerReviewForSession(f.work.SessionUUID)
-		assert.Equal(t, 0, spawner.getCallCount())
+		assert.Equal(t, 0, spawner.CallCount())
 	})
 }
 
 func TestReviewGate_ReReviewAllowedAfterPriorEnded(t *testing.T) {
 	t.Parallel()
-	spawner := &mockReviewGateSpawner{}
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
-	prior, err := f.storage.CreateItemSession(context.Background(), session.ItemSessionData{
-		ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview,
+	spawner := &blktest.MockReviewGateSpawner{}
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
+	prior, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
+		ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 	require.NoError(t, f.storage.UpdateItemSessionEnded(context.Background(), prior.ID, time.Now()))
 
 	f.l.triggerReviewForSession(f.work.SessionUUID)
-	assert.Equal(t, 1, spawner.getCallCount())
+	assert.Equal(t, 1, spawner.CallCount())
 }

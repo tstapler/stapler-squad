@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // HeadlessPoolClient is the narrow interface AutonomousDriver needs from the headless pool.
@@ -102,8 +104,8 @@ type panePreviewer interface {
 
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
 type AutonomousDriver struct {
-	inst           *Instance
-	controller     *ClaudeController
+	inst           *instance.Instance
+	controller     *claudectl.ClaudeController
 	headlessPool   HeadlessPoolClient
 	goal           string
 	maxTurns       int
@@ -170,7 +172,7 @@ func (d *AutonomousDriver) previewPane() (string, error) {
 // NewAutonomousDriver creates an AutonomousDriver for inst.
 // pool must not be nil; maxTurns ≤ 0 defaults to 20.
 // Use functional options (e.g. WithStartupTimeout) to override defaults.
-func NewAutonomousDriver(inst *Instance, pool HeadlessPoolClient, goal string, maxTurns int, opts ...DriverOption) *AutonomousDriver {
+func NewAutonomousDriver(inst *instance.Instance, pool HeadlessPoolClient, goal string, maxTurns int, opts ...DriverOption) *AutonomousDriver {
 	if maxTurns <= 0 {
 		maxTurns = 20
 	}
@@ -513,19 +515,19 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		// only, and a timeout takes the existing submit-error path.
 		leaseWait := d.turnLeaseWait
 		if leaseWait <= 0 {
-			leaseWait = AutonomousTurnLeaseWait
+			leaseWait = instance.AutonomousTurnLeaseWait
 		}
-		lease, leaseErr := d.inst.AcquireTerminalWriteLease(ctx, LeaseWriterAutonomous, leaseWait)
+		lease, leaseErr := d.inst.AcquireTerminalWriteLease(ctx, instance.LeaseWriterAutonomous, leaseWait)
 		if leaseErr != nil {
 			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", leaseErr)
 			siteReason := domain.StopReasonSubmitFailed
-			if errors.Is(leaseErr, ErrLeaseBusy) {
+			if errors.Is(leaseErr, instance.ErrLeaseBusy) {
 				siteReason = domain.StopReasonLeaseTimeout
 			}
 			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, siteReason), Reason: leaseErr.Error(), Turns: turnCount + 1}
 			break
 		}
-		if sendErr := SubmitDriverContent(ctx, d.inst, lease, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
+		if sendErr := instance.SubmitDriverContent(ctx, d.inst, lease, nextMsg, d.paneSettlePollInterval, d.paneSettleMaxWait); sendErr != nil {
 			log.Warn("AutonomousDriver: failed to submit turn", "session", sessionName, "turn", turnCount+1, "err", sendErr)
 			exit = AutonomousDriverOutcome{StopReason: d.stopReasonFor(ctx, domain.StopReasonSubmitFailed), Reason: sendErr.Error(), Turns: turnCount + 1}
 			break
@@ -564,42 +566,6 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		exit = AutonomousDriverOutcome{StopReason: domain.StopReasonMaxTurns, Reason: reason, Turns: d.maxTurns}
 	}
 	d.finish(sessionName, exit.StopReason, exit)
-}
-
-// paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
-// by *Instance's existing HasUpdated method.
-type paneSettleChecker interface {
-	HasUpdated() (updated bool, hasPrompt bool)
-}
-
-// waitForPaneSettle polls inst until its pane content stops changing for two
-// consecutive polls, or maxWait elapses — whichever first. Used between
-// writing a turn's content and sending the submit keystroke (BUG-031): a
-// large paste can still be landing/rendering in the TUI's paste-detection
-// window when a follow-up "\r" arrives, so giving the pane a chance to settle
-// first shrinks the race that folds the submit keystroke into the paste block
-// instead of ending it. Best-effort: a pane that never settles (e.g. a
-// permanently busy session) is left alone once the deadline passes — the
-// caller still sends "\r" either way.
-func waitForPaneSettle(ctx context.Context, inst paneSettleChecker, pollInterval, maxWait time.Duration) {
-	deadline := time.Now().Add(maxWait)
-	stableCount := 0
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(pollInterval):
-		}
-		updated, _ := inst.HasUpdated()
-		if updated {
-			stableCount = 0
-			continue
-		}
-		stableCount++
-		if stableCount >= 2 {
-			return
-		}
-	}
 }
 
 // maxRateLimitWait caps how long waitForRateLimitClear will block in total.
@@ -671,7 +637,7 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 // redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
 //
 // Returns true if a turn is warranted, false if ctx expired first.
-func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow, pollInterval time.Duration) bool {
+func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *claudectl.ClaudeController, settleWindow, pollInterval time.Duration) bool {
 	if settleWindow <= 0 {
 		if cc.IsIdle() {
 			return true
@@ -681,7 +647,7 @@ func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, 
 			case <-ctx.Done():
 				return false
 			case status := <-statusCh:
-				if isIdleStatus(status) || isImmediateStatus(status) {
+				if instance.IsIdleStatus(status) || isImmediateStatus(status) {
 					return true
 				}
 			}
@@ -712,7 +678,7 @@ func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, 
 			switch {
 			case isImmediateStatus(status):
 				return true
-			case isIdleStatus(status):
+			case instance.IsIdleStatus(status):
 				if idleSince.IsZero() {
 					idleSince = time.Now()
 				}
@@ -723,10 +689,6 @@ func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, 
 			// Loop back around to re-check the settle window above.
 		}
 	}
-}
-
-func isIdleStatus(s detection.DetectedStatus) bool {
-	return s == detection.StatusIdle || s == detection.StatusReady || s == detection.StatusSuccess
 }
 
 // isImmediateStatus reports whether s already represents an explicit signal

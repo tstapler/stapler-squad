@@ -88,7 +88,7 @@ The four flags are registered in `server/services/feature_flag_service.go` and w
 | `askuserquestion_structured` | OFF | `stage:render`, `stage:answer`, `stage:hook_reply` |
 | `agent_wake_triggers` | OFF | `trigger:<at, cron, backlog_event, pr_event, ci_event, session_state, guidance_answered>`, `tool:<schedule_wake, list_wakes, cancel_wake, request_help>` |
 
-Source for the table: `server/services/feature_flags_notification_actions.go` (scope constants and `knownFeatureFlags` entries in `server/services/feature_flag_service.go:312-330`). `channel:remote:tierB` and `stage:hook_reply` stay closed regardless of the flag until the Spike S6 and S1 constants in that file (`spikeS6TierBPassed`, `spikeS1HookReplyPassed`) are set to true in code; record their current value in step 2.1.
+Source for the table: `server/services/feature_flags_notification_actions.go` (scope constants and `featureflags.Spec` entries in `server/services/feature_flag_specs.go`). `channel:remote:tierB` and `stage:hook_reply` stay closed regardless of the flag until the Spike S6 and S1 constants in that file (`spikeS6TierBPassed`, `spikeS1HookReplyPassed`) are set to true in code; record their current value in step 2.1.
 
 Precedence: an explicit scoped value wins in either direction, then the explicit global value, then the default (ADR-008, Decision). Dependencies: `stage:answer` needs `stage:render`; `stage:hook_reply` needs `stage:answer` and Spike S1; `channel:remote:tierB` needs `channel:remote` and Spike S6; for `agent_wake_triggers` a `trigger:<type>` or `tool:<name>` scope is effective only while the dispatcher runs.
 
@@ -218,7 +218,7 @@ The dialog matcher is pinned to fixtures captured from Claude Code `v2.1.296` (`
 2. Re-run the fixture tests against current captures. First capture a fresh dialog from the new version into a scratch file with `tmux -L ssq-manual-1 capture-pane -p -t <session>`, then compare it by eye with `session/testdata/reply_dialogs/claude_auq_twoq_step1_single_select.txt`. Then run the existing matcher tests:
 
    ```bash
-   go test ./session -run 'TestClaudeProfile' -count=1
+   go test ./session/panereply -run 'TestClaudeProfile' -count=1
    ```
 
    Output:

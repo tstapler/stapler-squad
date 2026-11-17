@@ -8,7 +8,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // prwatchSessionView is the steerer subset the Sessions adapter needs;
@@ -21,9 +23,9 @@ type prwatchSessionView interface {
 
 // prwatchBacklogStore is the Storage subset used for the D4 exclusion.
 type prwatchBacklogStore interface {
-	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]session.ItemSessionSummary, error)
-	GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error)
-	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
+	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
+	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
 }
 
 // prwatchRemoteResolver resolves owner/repo/host from a session's git remote
@@ -39,7 +41,7 @@ func detectRemote(path string) (owner, repo, host string, resolved bool) {
 	if path == "" {
 		return "", "", "", true
 	}
-	e := session.ActiveWorktreeEnricher()
+	e := instance.ActiveWorktreeEnricher()
 	if e == nil {
 		return "", "", "", false
 	}
@@ -59,7 +61,7 @@ func detectRemote(path string) (owner, repo, host string, resolved bool) {
 
 // prwatchSessions implements prwatch.Sessions over live session snapshots.
 type prwatchSessions struct {
-	snapshots   func() []*session.InstanceSnapshot
+	snapshots   func() []*domain.InstanceSnapshot
 	view        prwatchSessionView
 	store       prwatchBacklogStore
 	ignoreRepos []string
@@ -76,7 +78,7 @@ type prwatchSessions struct {
 
 var _ prwatch.Sessions = (*prwatchSessions)(nil)
 
-func newPRWatchSessions(snapshots func() []*session.InstanceSnapshot, view prwatchSessionView, store prwatchBacklogStore, ignoreRepos []string) *prwatchSessions {
+func newPRWatchSessions(snapshots func() []*domain.InstanceSnapshot, view prwatchSessionView, store prwatchBacklogStore, ignoreRepos []string) *prwatchSessions {
 	return &prwatchSessions{
 		snapshots: snapshots, view: view, store: store, ignoreRepos: ignoreRepos,
 		resolve: detectRemote, clock: time.Now,
@@ -101,7 +103,7 @@ func (s *prwatchSessions) List(ctx context.Context) ([]prwatch.SessionRef, error
 // factsFor returns the session's watch facts: one per open PR when perPR is on
 // and the session has any, else the single legacy-scalar fact (an all-terminal
 // session stays one entry so its skip reason still reads PR-terminal).
-func (s *prwatchSessions) factsFor(sn *session.InstanceSnapshot, perPR bool) []prwatch.SessionFacts {
+func (s *prwatchSessions) factsFor(sn *domain.InstanceSnapshot, perPR bool) []prwatch.SessionFacts {
 	base := s.factsOf(sn)
 	if !perPR {
 		return []prwatch.SessionFacts{base}
@@ -122,7 +124,7 @@ func (s *prwatchSessions) factsFor(sn *session.InstanceSnapshot, perPR bool) []p
 	return out
 }
 
-func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionFacts {
+func (s *prwatchSessions) factsOf(sn *domain.InstanceSnapshot) prwatch.SessionFacts {
 	gh := sn.GitHub
 	f := prwatch.SessionFacts{
 		UUID: sn.UUID, Title: sn.Title, Lifecycle: lifecycleOf(sn.Status), Hidden: sn.Hidden,
@@ -137,7 +139,7 @@ func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionF
 
 // remoteOf holds s.mu only for map access, never across the resolver, so one
 // slow path cannot stall List or any other session's resolution.
-func (s *prwatchSessions) remoteOf(sn *session.InstanceSnapshot) (owner, repo, host string) {
+func (s *prwatchSessions) remoteOf(sn *domain.InstanceSnapshot) (owner, repo, host string) {
 	s.mu.Lock()
 	r, ok := s.resolved[sn.UUID]
 	s.mu.Unlock()
@@ -157,13 +159,13 @@ func (s *prwatchSessions) remoteOf(sn *session.InstanceSnapshot) (owner, repo, h
 	return o, rp, h
 }
 
-func lifecycleOf(st session.Status) prwatch.Lifecycle {
+func lifecycleOf(st domain.Status) prwatch.Lifecycle {
 	switch st {
-	case session.Paused, session.Hibernated, session.Crashed:
+	case domain.Paused, domain.Hibernated, domain.Crashed:
 		return prwatch.LifeSuspended
-	case session.Stopped, session.PermanentlyFailed, session.Failed:
+	case domain.Stopped, domain.PermanentlyFailed, domain.Failed:
 		return prwatch.LifeGone
-	case session.Creating, session.Restoring:
+	case domain.Creating, domain.Restoring:
 		return prwatch.LifeTransitional
 	}
 	return prwatch.LifeLive
@@ -203,7 +205,7 @@ func (l *prwatchBacklogLinks) Pending(ctx context.Context, uuids []string) (pend
 		itemID := link.BacklogItemID
 		if itemID == "" {
 			// The batched query does not load the BacklogItem edge
-			// (session/storage_backlog.go:408-423), so BacklogItemID is empty;
+			// (session/ent_repository_backlog_items.go), so BacklogItemID is empty;
 			// the single-session query does load it.
 			one, oerr := l.store.GetItemSessionBySessionUUID(ctx, sessionUUID)
 			if oerr != nil || one.BacklogItemID == "" {
@@ -216,12 +218,12 @@ func (l *prwatchBacklogLinks) Pending(ctx context.Context, uuids []string) (pend
 		if !seen {
 			item, gerr := l.store.GetBacklogItem(ctx, itemID)
 			switch {
-			case errors.Is(gerr, session.ErrNotFound):
+			case errors.Is(gerr, domain.ErrNotFound):
 				// Dangling link: nothing else steers it, keep watching.
 			case gerr != nil || item == nil:
 				v.failed = true
 			default:
-				v.pending = item.Status == string(session.BacklogStatusPRPending)
+				v.pending = item.Status == string(domain.BacklogStatusPRPending)
 			}
 			byItem[itemID] = v
 		}

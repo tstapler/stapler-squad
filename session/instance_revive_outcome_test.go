@@ -5,6 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,8 +20,8 @@ type reviveOutcomeRecorder struct {
 	reasons []string
 }
 
-func (r *reviveOutcomeRecorder) OnLifecycleEvent(event LifecycleEvent, reason string) {
-	if event == EventStarted {
+func (r *reviveOutcomeRecorder) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event == domain.EventStarted {
 		r.reasons = append(r.reasons, reason)
 	}
 }
@@ -30,16 +35,16 @@ func TestReviveOutcomeForColdRestore(t *testing.T) {
 		hadUUIDBeforeRecovery bool
 		hasClaudeSession      bool
 		everHadHistory        bool
-		want                  ReviveOutcome
+		want                  domain.ReviveOutcome
 	}{
-		{"already had UUID, no recovery needed", true, true, false, ReviveOutcomeResumeLive},
-		{"no UUID, recovery found one", false, true, false, ReviveOutcomeResumeRecovered},
-		{"no UUID, recovery found nothing, never had history", false, false, false, ReviveOutcomeFreshExpected},
-		{"no UUID, recovery found nothing, had history before", false, false, true, ReviveOutcomeFreshLostHistory},
+		{"already had UUID, no recovery needed", true, true, false, domain.ReviveOutcomeResumeLive},
+		{"no UUID, recovery found one", false, true, false, domain.ReviveOutcomeResumeRecovered},
+		{"no UUID, recovery found nothing, never had history", false, false, false, domain.ReviveOutcomeFreshExpected},
+		{"no UUID, recovery found nothing, had history before", false, false, true, domain.ReviveOutcomeFreshLostHistory},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviveOutcomeForColdRestore(tt.hadUUIDBeforeRecovery, tt.hasClaudeSession, tt.everHadHistory)
+			got := domain.ReviveOutcomeForColdRestore(tt.hadUUIDBeforeRecovery, tt.hasClaudeSession, tt.everHadHistory)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -57,21 +62,21 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	tests := []struct {
 		name    string
-		startFn func(inst *Instance) error
+		startFn func(inst *instance.Instance) error
 	}{
 		{
 			name: "startLocked (actor-routed Start)",
-			startFn: func(inst *Instance) error {
+			startFn: func(inst *instance.Instance) error {
 				return inst.Start(false)
 			},
 		},
 		{
 			name: "legacy start (StartWithCleanup)",
-			startFn: func(inst *Instance) error {
+			startFn: func(inst *instance.Instance) error {
 				startCleanup, err := inst.StartWithCleanup(false)
 				if startCleanup != nil {
 					t.Cleanup(func() { _ = startCleanup() })
@@ -84,14 +89,14 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			title := fmt.Sprintf("test-cold-lost-history-%d", time.Now().UnixNano())
-			inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+			inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 				Title:            title,
 				Path:             t.TempDir(),
 				Program:          "sleep 300",
-				SessionType:      SessionTypeDirectory,
+				SessionType:      domain.SessionTypeDirectory,
 				AutoYes:          false,
 				TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-				TmuxServerSocket: coldRestoreSocket(t),
+				TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 			})
 			require.NoError(t, err)
 			defer func() {
@@ -115,9 +120,9 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 
 			require.NoError(t, tt.startFn(inst), "cold start with lost history should not error")
 
-			assert.Equal(t, ReviveOutcomeFreshLostHistory, inst.LastReviveOutcome)
+			assert.Equal(t, domain.ReviveOutcomeFreshLostHistory, inst.LastReviveOutcome)
 			require.Len(t, recorder.reasons, 1, "expected exactly one EventStarted")
-			assert.Equal(t, ReasonColdRestoreLostHistory, recorder.reasons[0])
+			assert.Equal(t, domain.ReasonColdRestoreLostHistory, recorder.reasons[0])
 		})
 	}
 }
@@ -132,17 +137,17 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-no-history-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -159,7 +164,7 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 
 	require.NoError(t, inst.Start(false), "cold start with no prior history should not error")
 
-	assert.Equal(t, ReviveOutcomeFreshExpected, inst.LastReviveOutcome)
+	assert.Equal(t, domain.ReviveOutcomeFreshExpected, inst.LastReviveOutcome)
 	require.Len(t, recorder.reasons, 1, "expected exactly one EventStarted")
 	assert.Equal(t, "", recorder.reasons[0], "a genuinely fresh start must not carry the lost-history reason")
 }
@@ -178,17 +183,17 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-then-hot-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -201,7 +206,7 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 	// FreshLostHistory and, as a side effect of pm().Start(), leaves tmux alive.
 	inst.EverHadConversationHistory = true
 	require.NoError(t, inst.Start(false), "cold start with lost history should not error")
-	require.Equal(t, ReviveOutcomeFreshLostHistory, inst.LastReviveOutcome, "sanity: first cycle must record lost history")
+	require.Equal(t, domain.ReviveOutcomeFreshLostHistory, inst.LastReviveOutcome, "sanity: first cycle must record lost history")
 	require.True(t, inst.TmuxAlive(), "sanity: tmux must be alive after the first cycle's pm().Start()")
 
 	recorder := &reviveOutcomeRecorder{}
@@ -211,7 +216,7 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 	// nothing was lost this time, and the stale FreshLostHistory value must not survive.
 	require.NoError(t, inst.Start(false), "hot restore should not error")
 
-	assert.Equal(t, ReviveOutcomeResumeLive, inst.LastReviveOutcome, "hot restore must overwrite the stale FreshLostHistory value")
+	assert.Equal(t, domain.ReviveOutcomeResumeLive, inst.LastReviveOutcome, "hot restore must overwrite the stale FreshLostHistory value")
 	require.Len(t, recorder.reasons, 1, "expected exactly one EventStarted for the second cycle")
 	assert.Equal(t, "", recorder.reasons[0], "hot restore must not re-fire the lost-history reason")
 }

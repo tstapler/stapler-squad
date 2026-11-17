@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -80,7 +82,7 @@ type PipelineModeContentFields struct {
 	// trivially passes — an Update request that isn't touching stage
 	// executors at all only needs to leave this unset, same convention as
 	// the 9 content-template fields above.
-	StageExecutors    map[StageRole]PipelineStageExecutor
+	StageExecutors    map[stagecfg.StageRole]stagecfg.PipelineStageExecutor
 	ForceUnknownModel bool
 }
 
@@ -151,10 +153,10 @@ func ValidatePipelineModeContent(fields PipelineModeContentFields) error {
 // StageRole's 3 exported consts. A typo'd key (e.g. "wrok") would otherwise
 // round-trip silently through JSON/proto (StageRole is a newtype, not a
 // validated sum type) and simply never be consulted by ExecutorFor.
-var validStageRoles = map[StageRole]bool{
-	StageRoleTriage: true,
-	StageRoleReview: true,
-	StageRoleWork:   true,
+var validStageRoles = map[stagecfg.StageRole]bool{
+	stagecfg.StageRoleTriage: true,
+	stagecfg.StageRoleReview: true,
+	stagecfg.StageRoleWork:   true,
 }
 
 // headlessOnlyPrograms is the allow-list ADR-002 permits for
@@ -182,14 +184,14 @@ var headlessOnlyPrograms = map[string]bool{
 //     typo (syntactically valid, but not a real model) at save time. A
 //     "family:" alias skips the pricing cross-check entirely; it's already
 //     validated by ResolveModel's own unknown-alias error.
-func validateStageExecutors(executors map[StageRole]PipelineStageExecutor, forceUnknownModel bool) error {
+func validateStageExecutors(executors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor, forceUnknownModel bool) error {
 	for role, executor := range executors {
 		if !validStageRoles[role] {
 			return fmt.Errorf("stage_executors: invalid role %q (must be one of %q, %q, %q)",
-				role, StageRoleTriage, StageRoleReview, StageRoleWork)
+				role, stagecfg.StageRoleTriage, stagecfg.StageRoleReview, stagecfg.StageRoleWork)
 		}
 
-		if executor.Program != "" && (role == StageRoleTriage || role == StageRoleReview) {
+		if executor.Program != "" && (role == stagecfg.StageRoleTriage || role == stagecfg.StageRoleReview) {
 			if !headlessOnlyPrograms[executor.Program] {
 				return fmt.Errorf("stage_executors[%s].program: %q has no headless mode (ADR-002) — must be one of \"claude\", \"gemini\"",
 					role, executor.Program)
@@ -262,7 +264,7 @@ func validateRecognizedPlaceholders(fieldName, value string) error {
 
 // isRecognizedPlaceholder reports whether name is in recognizedPlaceholders.
 func isRecognizedPlaceholder(name string) bool {
-	for _, recognized := range RecognizedPlaceholders {
+	for _, recognized := range domain.RecognizedPlaceholders {
 		if recognized == name {
 			return true
 		}
@@ -278,5 +280,5 @@ func isRecognizedPlaceholder(name string) bool {
 // which fails immediately if a future edit gives one function its own copy
 // that drifts from the other.
 func placeholderAllowList() []string {
-	return RecognizedPlaceholders
+	return domain.RecognizedPlaceholders
 }

@@ -11,8 +11,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ownerChoiceFixed means the owner has resolved the gap outside the app (environment repaired,
@@ -24,17 +24,17 @@ const (
 
 // flaggedForOwner returns the verdicts of the latest review that more rework cannot resolve
 // and whose criterion is still unmet (a waiver or completion since then clears the flag).
-func flaggedForOwner(perCriterionJSON string, criteria []session.AcCriterion) []session.CriterionVerdict {
-	var verdicts []session.CriterionVerdict
+func flaggedForOwner(perCriterionJSON string, criteria []domain.AcCriterion) []domain.CriterionVerdict {
+	var verdicts []domain.CriterionVerdict
 	if err := json.Unmarshal([]byte(perCriterionJSON), &verdicts); err != nil {
 		return nil
 	}
-	var out []session.CriterionVerdict
+	var out []domain.CriterionVerdict
 	for _, v := range verdicts {
 		if !v.NeedsOwner() || v.CriterionIndex < 0 || v.CriterionIndex >= len(criteria) {
 			continue
 		}
-		if st := criteria[v.CriterionIndex].Status; st == session.AcStatusDone || st == session.AcStatusWaived {
+		if st := criteria[v.CriterionIndex].Status; st == domain.AcStatusDone || st == domain.AcStatusWaived {
 			continue
 		}
 		out = append(out, v)
@@ -45,7 +45,7 @@ func flaggedForOwner(perCriterionJSON string, criteria []session.AcCriterion) []
 // escalateVerdictToOwner raises one owner-action request for the first flagged criterion
 // instead of reopening the worker blindly. It returns true when the item should stay in
 // review (a request is pending or was just raised).
-func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *session.BacklogItemData, flagged []session.CriterionVerdict) bool {
+func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *backlogdto.BacklogItemData, flagged []domain.CriterionVerdict) bool {
 	v := flagged[0]
 	id, err := uuid.Parse(item.ID)
 	if err != nil {
@@ -61,7 +61,7 @@ func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *sessi
 	if prior, found := s.priorEscalation(ctx, item.ID, questionText); found {
 		return prior.Answer != ownerChoiceFixed
 	}
-	row, err := s.storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	row, err := s.storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &id,
 		QuestionText: questionText,
@@ -87,7 +87,7 @@ func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *sessi
 
 // priorEscalation finds an earlier request with the same text, so a sweep that re-runs the
 // router neither re-asks a pending question nor re-asks one the owner already answered.
-func (s *BacklogService) priorEscalation(ctx context.Context, itemID, questionText string) (*session.GuidanceRequestData, bool) {
+func (s *BacklogService) priorEscalation(ctx context.Context, itemID, questionText string) (*domain.GuidanceRequestData, bool) {
 	rows, _, _, err := s.storage.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, itemID, 0)
 	if err != nil {
 		return nil, false
@@ -100,7 +100,7 @@ func (s *BacklogService) priorEscalation(ctx context.Context, itemID, questionTe
 	return nil, false
 }
 
-func classLabel(v session.CriterionVerdict) string {
+func classLabel(v domain.CriterionVerdict) string {
 	if v.FailureClass == "" {
 		return "proposed waiver"
 	}
@@ -126,7 +126,7 @@ func mustJSON(v []string) string {
 // failed-review reopen runs; if the item moved on already this is a no-op.
 func (s *BacklogService) ResumeAfterOwnerWaiver(ctx context.Context, itemID string) {
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
-	if err != nil || session.BacklogStatus(item.Status) != session.BacklogStatusReview {
+	if err != nil || domain.BacklogStatus(item.Status) != domain.BacklogStatusReview {
 		return
 	}
 	if err := s.AutoReopenAfterFailedReview(ctx, itemID); err != nil {

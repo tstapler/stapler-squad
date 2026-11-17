@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sessionpr",
+    srcs = [
+        "ent_repository_session_pr.go",
+        "ent_repository_session_pr_guard.go",
+        "session_pr_backfill.go",
+        "session_pr_gc.go",
+        "store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/sessionpr",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//log",
+        "//session/domain",
+        "//session/instance",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:itemsession",
+        "//tools/bzl/ent:predicate",
+        "//tools/bzl/ent:pullrequeststate",
+        "//tools/bzl/ent:session",
+        "//tools/bzl/ent:sessionpr",
+        "//tools/bzl/ent:sessionprtombstone",
+        "@com_github_google_uuid//:uuid",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sessionpr",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sessionpr_test",
+    srcs = ["session_pr_backfill_test.go"],
+    embed = [":sessionpr"],
+    deps = [
+        "//session/internal/fixturetest",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
+
+# Read by session's legacy item-PR reader scan and the PullRequestState write-allow-list scan.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

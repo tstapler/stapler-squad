@@ -7,7 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	logpkg "github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Handing the selector (anything but *ConfiguredWorkflowEngine) to the
@@ -17,13 +18,13 @@ func TestBacklogLifecycleListener_NonConfiguredEngine_LogsGateContextDegrade(t *
 	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
 
-	selector := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, nil)
+	selector := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, nil)
 	l := &BacklogLifecycleListener{}
 	l.SetWorkflowEngine(selector)
 
-	_, ok := l.resolveReviewGateContext(session.BacklogStatusReady, session.BacklogStatusQueued)
+	_, ok := l.resolveReviewGateContext(domain.BacklogStatusReady, domain.BacklogStatusQueued)
 	require.False(t, ok)
-	_, _, ok = l.resolveCustomCheckGateContext(session.BacklogStatusReady, session.BacklogStatusQueued)
+	_, _, ok = l.resolveCustomCheckGateContext(domain.BacklogStatusReady, domain.BacklogStatusQueued)
 	require.False(t, ok)
 
 	require.Contains(t, buf.String(), "not a *ConfiguredWorkflowEngine")
@@ -37,7 +38,7 @@ func TestBacklogLifecycleListener_NilEngine_DoesNotLogDegrade(t *testing.T) {
 	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
 
 	l := &BacklogLifecycleListener{}
-	_, ok := l.resolveReviewGateContext(session.BacklogStatusReady, session.BacklogStatusQueued)
+	_, ok := l.resolveReviewGateContext(domain.BacklogStatusReady, domain.BacklogStatusQueued)
 	require.False(t, ok)
 	require.NotContains(t, buf.String(), "not a *ConfiguredWorkflowEngine")
 }

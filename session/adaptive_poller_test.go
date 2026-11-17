@@ -5,15 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestPoller creates a ReviewQueuePoller with a minimal configuration suitable for
 // unit tests: no storage, no status manager, no instances. It uses a short fastInterval
 // and a longer slowInterval so tests can observe adaptive behavior within milliseconds.
-func newTestPoller(t *testing.T, fastInterval, slowInterval time.Duration) (*ReviewQueuePoller, *ReviewQueue) {
+func newTestPoller(t *testing.T, fastInterval, slowInterval time.Duration) (*ReviewQueuePoller, *queue.ReviewQueue) {
 	t.Helper()
-	queue := NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	config := ReviewQueuePollerConfig{
 		PollInterval:      fastInterval,
 		SlowPollInterval:  slowInterval,

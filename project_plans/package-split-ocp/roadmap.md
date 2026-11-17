@@ -48,7 +48,7 @@ Cheapest items that either have no lens reject (reviewqueue) or establish the op
   - go run ./tools/bzl/scoping replay and criteria on the file set
   - Gazelle diff clean; make lint-custom
 
-### HIST-slice: session -> session (in place, step 1 of 2; physical session/historyadapters move deferred)
+### HIST-slice: session -> session (in place, step 1 of 2; step 2, the physical session/historyadapters move, is done)
 
 - Cost: S-M (single PR; characterization test first)
 - Role: application-service
@@ -324,7 +324,7 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 - **session P3-itemsources (as proposed)**: Folded into ITEMSRC-registry (wave 2) and ITEMSRC-move (wave 4) with corrections: drop depends_on P1, keep helpers unexported, fix server/mcp and services direct constructors.
 - **session P4-procbackend (package move)**: pm() lazily builds a tmux default for bare &Instance{}; 36 in-package tests cannot import a leaf that imports session; SC6 fails (ledger lib 0.00, universal -0.41). In-place registry (BACKEND-registry) delivers the OCP win.
 - **session P5-entstore**: XL; port 'second implementation' is NewTestEntRepository (real ent); 9 staying files declare EntRepository methods; GetEntClient has 37 callers; depends on P1/P2 that do not exist; 149 of 170 ent_* commits also touch core. Only wake+webhook and guidance sub-leaves could be re-proposed after replay.
-- **session P6-historyadapters (physical move)**: Step 2 of HIST-slice. Needs canonical/records lowering, HistorySession port defined in a lower package, Instance setters via the actor path, Pi event reader relocation; SC6 near zero.
+- **session P6-historyadapters (physical move)**: done (history-adapters-move-plan.md). The five adapters, `DefaultHistoryAdapters`, `PortSessionHistory` and the inhibition engine live in `session/historyadapters`. No HistorySession port or records lowering was needed. `session/history_wiring.go` blank-imports the leaf so its `init()` hooks stay registered; `TestHistoryHooks_RegisteredWhenSessionLinked` guards that. SC6 gain 0.00 pp (OCP, not speed).
 - **server/services P1-svckit**: Grab-bag; outcome/applied claims false; opens no extension point. At most relocate DerivePriority and RedactErrorDetail inside a consuming PR if backlogsvc back-edge removal is wanted.
 - **server/services P2-backlogsync**: Subscriber port speculative (plugin dispatch already open); SC4 fails; deliverygate sink_guard keys break. Do only an injected subscriber-start list at the composition root if wanted.
 - **server/services P3-webhooks**: Not a leaf: cycles via CrossHostClaimDedupFlagName, validateTargetDirectory, SSRF validator; Source port speculative; SC6 fail (ledger). Defer until a second webhook provider exists.

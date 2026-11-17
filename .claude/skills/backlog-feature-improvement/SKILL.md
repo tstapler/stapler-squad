@@ -51,7 +51,7 @@ Goal: find items stuck/looping/silently stalled *right now*, not just theoretica
    ```
 4. Optional DB cross-check: `~/.stapler-squad/sessions.db` — `backlog_items`, `backlog_status_events`, `backlog_stuck_states`, `item_sessions`. **Caveat (found 2026-07-14): this file can go stale for weeks while the live server serves current data from elsewhere** — a run that day found `sessions.db` frozen since 2026-06-30 returning 0 rows while the RPC returned live current items. Check the DB's mtime before trusting it; if stale, skip this step and rely on the RPC/MCP tools alone rather than burning time locating the live DB path.
 
-Flag: items where `session/workflow_engine.go` / `session/backlog.go` allow a transition into a dead-end state, or a status-event log that flaps (idea→ready→idea repeatedly).
+Flag: items where `session/workflow_engine.go` / `session/domain/backlog.go` allow a transition into a dead-end state, or a status-event log that flaps (idea→ready→idea repeatedly).
 
 ## Phase 1b — Dispatch Background Agents on Hung/Repeating Sessions
 
@@ -125,7 +125,7 @@ Run each scoped to backlog code, not the whole repo:
 
 | Skill | Scope | What to look for |
 |---|---|---|
-| `quality:architecture-review` | `server/services/backlog_service*.go`, `autonomous_orchestration_service.go`, `session/workflow_engine.go`, `session/backlog.go`, `session/repository.go` | SOLID/Clean Architecture gaps; specifically whether pipeline-stage selection is injected (per ADR-013's `WorkflowEngine` seam) or hardcoded |
+| `quality:architecture-review` | `server/services/backlog_service*.go`, `autonomous_orchestration_service.go`, `session/workflow_engine.go`, `session/domain/backlog.go`, `session/repository.go` | SOLID/Clean Architecture gaps; specifically whether pipeline-stage selection is injected (per ADR-013's `WorkflowEngine` seam) or hardcoded |
 | `ux:review` | `/backlog`, `/backlog/board`, item detail + review flows | Friction requiring human judgment where policy/config could decide instead |
 | `code:review` | Recent diffs touching `backlog_*`, `autonomous_orchestration_service.go`, `workflow_engine.go` | Correctness bugs in the reconciliation loop — races, missed error handling, silent catches |
 | `code:is-it-ready` | Treat "backlog feature = the product" | GO/HOLD/FIX-THEN-SHIP verdict against the autonomous-factory goal |

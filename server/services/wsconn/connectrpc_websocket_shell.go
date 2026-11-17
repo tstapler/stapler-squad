@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -36,7 +36,7 @@ type shellStreamParams struct {
 	// resize and the initial redraw nudge are dropped.
 	writer               services.TerminalWriter
 	stream               *connectWebSocketStream
-	instance             *session.Instance
+	instance             *instance.Instance
 	shellSess            *tmux.TmuxSession
 	cursorTarget         shellPanePTY
 	sessionID            string
@@ -425,7 +425,7 @@ func handleShellMidStreamCurrentPaneRequest(p shellStreamParams, paneReq *sessio
 // the capture-pane polling path. It targets the shell's own sibling tmux
 // session directly (shellSess) rather than the parent Instance's PTY, since
 // the shell runs in its own tmux session sharing only the server socket.
-func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWebSocketStream, instance *session.Instance, shellID, shellTmuxSessionName string) error {
+func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWebSocketStream, instance *instance.Instance, shellID, shellTmuxSessionName string) error {
 	snap := instance.Snapshot()
 	sessionID := snap.Title
 

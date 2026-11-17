@@ -12,7 +12,10 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // WorkflowEngineWiring is the production workflow-engine stack: the selector
@@ -22,9 +25,9 @@ type WorkflowEngineWiring struct {
 	// Engine is the only engine handed to BacklogService and SyncLoop. It must
 	// never be handed to BacklogLifecycleListener, which needs the concrete
 	// *session.ConfiguredWorkflowEngine (see BacklogLifecycleListener.workflowEngine).
-	Engine *session.SwitchableWorkflowEngine
+	Engine *workflowengine.SwitchableWorkflowEngine
 	// Modes resolves each caller class's mode from live config.
-	Modes *session.FlagClassModeSource
+	Modes *workflowengine.FlagClassModeSource
 	// Recorder persists the shadow ledger; its Run is started with the server.
 	Recorder *shadowledger.ShadowLedgerRecorder
 	// Soak backs /actuator/workflow-engine.
@@ -36,7 +39,7 @@ type WorkflowEngineWiring struct {
 // newWorkflowEngineWiring builds the selector over def and cfgEngine (nil
 // when stage-config construction failed; the selector then answers from Default)
 // with the shadow recorder in place before any engine call can happen.
-func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *session.ConfiguredWorkflowEngine, entClient *ent.Client, loadConfig func() *config.Config) *WorkflowEngineWiring {
+func newWorkflowEngineWiring(def *workflowengine.DefaultWorkflowEngine, cfgEngine *workflowengine.ConfiguredWorkflowEngine, entClient *ent.Client, loadConfig func() *config.Config) *WorkflowEngineWiring {
 	dir, err := shadowledger.ShadowLedgerDir()
 	if err != nil {
 		log.Warn("workflow engine shadow ledger directory unavailable; the soak window will not persist", "err", err)
@@ -44,13 +47,13 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 	}
 	recorder := shadowledger.NewShadowLedgerRecorder(dir)
 	modes := services.NewWorkflowEngineClassModeSource(loadConfig, nil)
-	engine := session.NewSwitchableWorkflowEngine(def, cfgEngine, modes,
-		session.WithShadowRecorder(recorder),
-		session.WithConfigLabeler(shadowledger.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
+	engine := workflowengine.NewSwitchableWorkflowEngine(def, cfgEngine, modes,
+		workflowengine.WithShadowRecorder(recorder),
+		workflowengine.WithConfigLabeler(shadowledger.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
 	)
 
 	soak := &WorkflowEngineSoakSource{
-		Ledger: func() (session.ShadowLedger, error) { return recorder.Snapshot(), nil },
+		Ledger: func() (workflowengine.ShadowLedger, error) { return recorder.Snapshot(), nil },
 		AnyClassEnforced: func() bool {
 			cfg := loadConfig()
 			return config.EffectiveWorkflowEngineEnforce(cfg) || config.EffectiveWorkflowEngineEnforceAgent(cfg) || config.EffectiveWorkflowEngineEnforceSystem(cfg)
@@ -78,7 +81,7 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 // InjectTransitionGate wires the selector and the denial reporter into storage
 // in one call, so the gate can never be live without its reporter, and logs the
 // startup line that says so.
-func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, reporter session.TransitionDeniedReporter) error {
+func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, reporter backlogdto.TransitionDeniedReporter) error {
 	if err := storage.SetTransitionGate(w.Engine, reporter); err != nil {
 		return fmt.Errorf("inject transition gate: %w", err)
 	}
@@ -89,8 +92,8 @@ func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, re
 
 // anyFallback reports whether the enforce composition has ever answered from
 // Default because the Configured engine was unusable.
-func anyFallback(e *session.SwitchableWorkflowEngine) bool {
-	for _, r := range []session.FallbackReason{session.FallbackCfgNil, session.FallbackCacheEmpty, session.FallbackLoadError} {
+func anyFallback(e *workflowengine.SwitchableWorkflowEngine) bool {
+	for _, r := range []workflowengine.FallbackReason{workflowengine.FallbackCfgNil, workflowengine.FallbackCacheEmpty, workflowengine.FallbackLoadError} {
 		if e.FallbackTotal(r) > 0 {
 			return true
 		}
@@ -101,7 +104,7 @@ func anyFallback(e *session.SwitchableWorkflowEngine) bool {
 // transitionGateStartupLine is the line an operator greps for to confirm the
 // choke point is live. The system class has no enforce flag until Task 1.5.8g,
 // so it reads shadow (or off when the shadow flag is off).
-func transitionGateStartupLine(storage *session.Storage, reporterWired bool, modes session.ClassModeSource) string {
+func transitionGateStartupLine(storage *session.Storage, reporterWired bool, modes workflowengine.ClassModeSource) string {
 	wired := func(b bool) string {
 		if b {
 			return "wired"
@@ -109,7 +112,7 @@ func transitionGateStartupLine(storage *session.Storage, reporterWired bool, mod
 		return "unwired"
 	}
 	classModes := make([]string, 0, 3)
-	for _, c := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
+	for _, c := range []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem} {
 		classModes = append(classModes, fmt.Sprintf("%s:%s", c, engineModeName(modes.ModeFor(c))))
 	}
 	return fmt.Sprintf("workflow engine gate: transition_gate=%s reporter=%s class_modes=%s",
@@ -127,14 +130,14 @@ func stageFingerprintFunc(entClient *ent.Client) func() (string, error) {
 		if entClient == nil {
 			return "", fmt.Errorf("no ent client")
 		}
-		return session.StageConfigFingerprint(context.Background(), entClient)
+		return workflowengine.StageConfigFingerprint(context.Background(), entClient)
 	}
 }
 
 // logWorkflowEngineStartup logs the one line an operator greps for. A nil
 // cfgEngine means stage/transition/gate CRUD writes cannot invalidate any
 // cache, so that case is a WARN.
-func logWorkflowEngineStartup(mode session.EngineMode, cfgEngine *session.ConfiguredWorkflowEngine) {
+func logWorkflowEngineStartup(mode workflowengine.EngineMode, cfgEngine *workflowengine.ConfiguredWorkflowEngine) {
 	msg := fmt.Sprintf("workflow engine: mode=%s configured_loaded=%t invalidator_wired=%t",
 		engineModeName(mode), cfgEngine != nil && cfgEngine.HasAnyStage(), cfgEngine != nil)
 	if cfgEngine == nil {
@@ -144,13 +147,13 @@ func logWorkflowEngineStartup(mode session.EngineMode, cfgEngine *session.Config
 	log.Info(msg)
 }
 
-func engineModeName(m session.EngineMode) string {
+func engineModeName(m workflowengine.EngineMode) string {
 	switch m {
-	case session.ModeOff:
+	case workflowengine.ModeOff:
 		return "off"
-	case session.ModeShadow:
+	case workflowengine.ModeShadow:
 		return "shadow"
-	case session.ModeEnforce:
+	case workflowengine.ModeEnforce:
 		return "enforce"
 	}
 	return "unknown"

@@ -8,6 +8,8 @@ import (
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // countLastAddedToQueueWrites counts session mutations that set
@@ -39,21 +41,21 @@ func TestAddDetectedItem_Should_PersistLastAddedToQueueOnce_When_EntryUnchanged(
 	require.NoError(t, storage.AddInstance(inst))
 	writes := countLastAddedToQueueWrites(t, storage)
 
-	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), storage)
-	result := DetectionResult{Action: DetectionActionAdd, Reason: ReasonIdle, Priority: PriorityMedium, Context: "idle"}
+	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), storage)
+	result := DetectionResult{Action: DetectionActionAdd, Reason: queue.ReasonIdle, Priority: queue.PriorityMedium, Context: "idle"}
 	snap := inst.Snapshot()
 
 	for i := 0; i < 5; i++ {
-		rqp.addDetectedItem(inst, snap, result, InstanceStatusInfo{})
+		rqp.addDetectedItem(inst, snap, result, instance.InstanceStatusInfo{})
 	}
 	assert.Equal(t, int64(1), writes.Load(), "five identical detections must persist once")
 	// The in-memory stamp feeds the 2-minute re-add rate limit and must keep advancing.
 	first := inst.LastAddedToQueue
-	rqp.addDetectedItem(inst, snap, result, InstanceStatusInfo{})
+	rqp.addDetectedItem(inst, snap, result, instance.InstanceStatusInfo{})
 	assert.True(t, inst.LastAddedToQueue.After(first), "in-memory LastAddedToQueue must advance on every add")
 	assert.Equal(t, int64(1), writes.Load())
 
 	result.Context = "idle, new output"
-	rqp.addDetectedItem(inst, snap, result, InstanceStatusInfo{})
+	rqp.addDetectedItem(inst, snap, result, instance.InstanceStatusInfo{})
 	assert.Equal(t, int64(2), writes.Load(), "a changed entry must persist again")
 }

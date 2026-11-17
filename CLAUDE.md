@@ -347,7 +347,7 @@ list itself shows just a one-line description the rest of the time. See the
 
 `.claude/rules/*.md` **does** exist again for the narrower case a skill can't
 cover: a guardrail scoped to specific file paths via glob frontmatter
-(`globs: ["session/instance*.go"]`), auto-loaded only when Claude touches a
+(`globs: ["session/instance/**"]`), auto-loaded only when Claude touches a
 matching path rather than every session — the context-cost objection above
 doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 
@@ -401,7 +401,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Fix flaky tests when found, don't just re-defer as "known pre-existing" | `fix-flaky-tests-dont-defer` skill |
 | Prefer deterministic, fast tests over real sleeps/timeouts/t.Setenv fixtures | `deterministic-fast-tests` skill |
 | Test I/O/storage isolation strategy: in-memory DB, config-dir-resolved state directories, `envtest` env helpers | `docs/explanation/test-io-storage-isolation.md` |
-| Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance*.go`) |
+| Read *Instance fields via Snapshot(), not the raw field (avoids actor-write races) | `.claude/rules/instance-lock-free-reads.md` (glob-scoped to `session/instance/**`) |
 | Slack Phase 2 interactive-approvals public reachability (scoping a tunnel to one path) | `docs/how-to/expose-slack-interactive-endpoint.md` |
 | GitHub webhook (`/webhooks/github`, incl. PR-fix events) public reachability | `docs/how-to/expose-github-webhook-endpoint.md` |
 | SQLite free-space reclaim: `auto_vacuum`, background `incremental_vacuum` loop, env knobs, `/actuator/db` maintenance stats, offline VACUUM remedy | `docs/how-to/reclaim-sqlite-free-space.md` |

@@ -27,7 +27,7 @@ func backlogItemStateLookup(storage *session.Storage) notifications.ItemStateLoo
 		states := make(map[string]notifications.ItemState, len(itemIDs))
 		for _, id := range itemIDs {
 			item, err := storage.GetBacklogItem(ctx, id)
-			if errors.Is(err, session.ErrNotFound) {
+			if errors.Is(err, domain.ErrNotFound) {
 				states[id] = notifications.ItemState{Terminal: true}
 				continue
 			}

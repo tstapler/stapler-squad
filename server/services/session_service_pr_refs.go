@@ -13,8 +13,9 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // UI-only RPCs for editing a session's PR set. They are never reachable from the
@@ -28,7 +29,7 @@ type prRefsSeams struct {
 	lookup func(ctx context.Context, ref github.RepoRef, number int) (*github.PRInfo, error)
 	// refresh re-polls one PR and returns once the state row is updated. Nil
 	// until the awaited poller refresh (T3.3.2) is wired.
-	refresh func(ctx context.Context, inst *session.Instance, ref session.PRRef) error
+	refresh func(ctx context.Context, inst *instance.Instance, ref domain.PRRef) error
 	// detail reads fresh PR state for ask-to-fix; nil means the GraphQL fetcher.
 	detail github.PRDetailFetcher
 	// tokens resolves the owning account's token; nil means the user PR cache.
@@ -54,11 +55,11 @@ func (s prRefsSeams) lookupPR(ctx context.Context, ref github.RepoRef, number in
 
 // SetPRRefreshFunc installs the awaited per-PR refresh behind
 // RefreshSessionPullRequests.
-func (s *SessionService) SetPRRefreshFunc(f func(ctx context.Context, inst *session.Instance, ref session.PRRef) error) {
+func (s *SessionService) SetPRRefreshFunc(f func(ctx context.Context, inst *instance.Instance, ref domain.PRRef) error) {
 	s.prRefs.refresh = f
 }
 
-func (s *SessionService) livePRInstance(id string) (*session.Instance, error) {
+func (s *SessionService) livePRInstance(id string) (*instance.Instance, error) {
 	if id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("session id is required"))
 	}
@@ -75,32 +76,32 @@ func (s *SessionService) livePRInstance(id string) (*session.Instance, error) {
 	return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", id))
 }
 
-func prRefFromProto(p *sessionv1.PullRequestRef) (session.PRRef, error) {
+func prRefFromProto(p *sessionv1.PullRequestRef) (domain.PRRef, error) {
 	if p == nil || p.GetNumber() <= 0 {
-		return session.PRRef{}, connect.NewError(connect.CodeInvalidArgument, errors.New("a pull request is required"))
+		return domain.PRRef{}, connect.NewError(connect.CodeInvalidArgument, errors.New("a pull request is required"))
 	}
-	ref, err := session.NewPRRef(p.GetHost(), p.GetOwner(), p.GetRepo(), int(p.GetNumber()))
+	ref, err := domain.NewPRRef(p.GetHost(), p.GetOwner(), p.GetRepo(), int(p.GetNumber()))
 	if err != nil {
-		return session.PRRef{}, connect.NewError(connect.CodeInvalidArgument, err)
+		return domain.PRRef{}, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	return ref, nil
 }
 
 func prSetError(err error) error {
 	switch {
-	case errors.Is(err, session.ErrPRNotAttached):
+	case errors.Is(err, instance.ErrPRNotAttached):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, session.ErrPRPersisterUnavailable), errors.Is(err, session.ErrNoSessionUUID):
+	case errors.Is(err, instance.ErrPRPersisterUnavailable), errors.Is(err, domain.ErrNoSessionUUID):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, session.ErrSessionPRLinkCap):
+	case errors.Is(err, domain.ErrSessionPRLinkCap):
 		return connect.NewError(connect.CodeResourceExhausted, err)
-	case errors.Is(err, session.ErrZeroPRRef):
+	case errors.Is(err, instance.ErrZeroPRRef):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	return connect.NewError(connect.CodeInternal, err)
 }
 
-func currentPRList(inst *session.Instance) []*sessionv1.SessionPullRequest {
+func currentPRList(inst *instance.Instance) []*sessionv1.SessionPullRequest {
 	snap := inst.Snapshot()
 	return adapters.SessionPullRequests(snap.GitHub.PRs, snap.Branch)
 }
@@ -178,7 +179,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	if err != nil || parsed.Type != github.RefTypePR {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("url must be a GitHub pull request URL"))
 	}
-	ref, err := session.NewPRRef(parsed.Host, parsed.Owner, parsed.Repo, parsed.PRNumber)
+	ref, err := domain.NewPRRef(parsed.Host, parsed.Owner, parsed.Repo, parsed.PRNumber)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -204,12 +205,12 @@ func (s *SessionService) AttachSessionPullRequest(
 	}), nil
 }
 
-func prInitialFromInfo(info *github.PRInfo) session.PRInitial {
-	state, err := session.ParsePRState(strings.ToLower(info.State))
+func prInitialFromInfo(info *github.PRInfo) domain.PRInitial {
+	state, err := domain.ParsePRState(strings.ToLower(info.State))
 	if err != nil {
-		state = session.PRStateUnknown
+		state = domain.PRStateUnknown
 	}
-	initial := session.PRInitial{State: state, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	initial := domain.PRInitial{State: state, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
 	// An observed state is verified; `unknown` stays non-terminal, never seeded terminal.
 	initial.Terminal = state.Terminal()
 	return initial
@@ -245,22 +246,22 @@ func (s *SessionService) RefreshSessionPullRequests(
 
 // refreshablePR: open, unknown and unverified-terminal rows; never a verified
 // merged or closed one.
-func refreshablePR(v session.PRView) bool {
+func refreshablePR(v domain.PRView) bool {
 	return !v.State.Terminal()
 }
 
 // listPRFilter turns the optional ListSessions pr selector into a ref. Unset is
 // no filter; a set selector that does not name a PR is an error, never PR 0.
-func listPRFilter(p *sessionv1.PullRequestRef) (ref session.PRRef, set bool, err error) {
+func listPRFilter(p *sessionv1.PullRequestRef) (ref domain.PRRef, set bool, err error) {
 	if p == nil {
-		return session.PRRef{}, false, nil
+		return domain.PRRef{}, false, nil
 	}
 	ref, err = prRefFromProto(p)
 	return ref, err == nil, err
 }
 
 // instanceHasPR reports whether the session holds a link to ref.
-func instanceHasPR(inst *session.Instance, ref session.PRRef) bool {
+func instanceHasPR(inst *instance.Instance, ref domain.PRRef) bool {
 	for _, v := range inst.Snapshot().GitHub.PRs {
 		if v.Ref == ref {
 			return true
@@ -273,8 +274,8 @@ func instanceHasPR(inst *session.Instance, ref session.PRRef) bool {
 // selector means the session's active PR; a set one must belong to the session.
 // The returned ref is never the zero ref: a session with no PR gets
 // FailedPrecondition "no pull request", never a call for number 0.
-func resolveTargetPR(inst *session.Instance, sel *sessionv1.PullRequestRef) (*session.PRRef, error) {
-	var requested *session.PRRef
+func resolveTargetPR(inst *instance.Instance, sel *sessionv1.PullRequestRef) (*domain.PRRef, error) {
+	var requested *domain.PRRef
 	if sel != nil {
 		ref, err := prRefFromProto(sel)
 		if err != nil {
@@ -284,9 +285,9 @@ func resolveTargetPR(inst *session.Instance, sel *sessionv1.PullRequestRef) (*se
 	}
 	resolved, err := inst.ResolveTargetPR(requested)
 	switch {
-	case errors.Is(err, session.ErrNoPullRequest):
+	case errors.Is(err, instance.ErrNoPullRequest):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("no pull request"))
-	case errors.Is(err, session.ErrPRNotAttached):
+	case errors.Is(err, instance.ErrPRNotAttached):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	case err != nil:
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -356,7 +357,7 @@ func (s *SessionService) AskSessionToFixPullRequest(
 
 // askFixDeliver runs the guarded steps (target check, fresh read, steer). On a
 // delivered or typed-steer result it fills out and returns the outcome as a stop.
-func (s *SessionService) askFixDeliver(ctx context.Context, id string, target session.PRRef, out *sessionv1.AskSessionToFixPullRequestResponse) (*askFixStop, error) {
+func (s *SessionService) askFixDeliver(ctx context.Context, id string, target domain.PRRef, out *sessionv1.AskSessionToFixPullRequestResponse) (*askFixStop, error) {
 	live, stop, err := s.askFixTarget(id)
 	if live == nil {
 		return stop, err
@@ -385,7 +386,7 @@ func (s *SessionService) askFixDeliver(ctx context.Context, id string, target se
 
 // askFixTarget re-finds the live instance and refuses what cannot take a
 // request. A nil instance ends the call with stop or err.
-func (s *SessionService) askFixTarget(id string) (*session.Instance, *askFixStop, error) {
+func (s *SessionService) askFixTarget(id string) (*instance.Instance, *askFixStop, error) {
 	live := s.FindLiveInstance(id)
 	if live == nil {
 		return nil, &askFixStop{sessionv1.NudgeOutcome_NUDGE_OUTCOME_NOT_RUNNING, nudgeNotTrackedDetail}, nil
@@ -404,7 +405,7 @@ func (s *SessionService) askFixTarget(id string) (*session.Instance, *askFixStop
 
 // askFixPrompt reads fresh PR state with the owning account's token and builds
 // the prompt. An empty prompt ends the call with stop or err.
-func (s *SessionService) askFixPrompt(ctx context.Context, ref session.PRRef) (string, []sessionv1.NudgeReason, *askFixStop, error) {
+func (s *SessionService) askFixPrompt(ctx context.Context, ref domain.PRRef) (string, []sessionv1.NudgeReason, *askFixStop, error) {
 	key, err := github.NewPRKey(ref.Host(), ref.Owner(), ref.Repo(), ref.Number())
 	if err != nil {
 		return "", nil, nil, connect.NewError(connect.CodeInvalidArgument, err)

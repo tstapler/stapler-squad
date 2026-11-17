@@ -63,6 +63,7 @@ alias(
 go_test(
     name = "git_test",
     srcs = [
+        "default_branch_test.go",
         "diff_test.go",
         "drift_test.go",
         "gitwiring_test.go",
@@ -113,5 +114,15 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@io_opentelemetry_go_otel_metric//:metric",
         "@org_golang_x_crypto//ssh",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
     ],
 )

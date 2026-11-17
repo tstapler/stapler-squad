@@ -11,7 +11,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // LeaseWedgeScanInterval is how often wedged write leases are scanned.
@@ -37,8 +37,8 @@ func (s *SessionService) ScanLeaseWedges(now time.Time) int {
 // scanLeaseWedges is ScanLeaseWedges restricted to the instances include
 // accepts (nil accepts all); tests use it so parallel tests' leases are not
 // swept up.
-func (s *SessionService) scanLeaseWedges(now time.Time, include func(*session.Instance) bool) int {
-	wedges := session.ScanWedgedLeases(now, session.LeaseWedgeWarnAfter, include)
+func (s *SessionService) scanLeaseWedges(now time.Time, include func(*instance.Instance) bool) int {
+	wedges := instance.ScanWedgedLeases(now, instance.LeaseWedgeWarnAfter, include)
 	for _, w := range wedges {
 		snap := w.Instance.Snapshot()
 		meta := events.SessionScopedMetadata(

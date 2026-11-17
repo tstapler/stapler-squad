@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var (
@@ -30,7 +32,7 @@ func (f *scanFindings) addFileWrite(c artifactContentBlock, ts time.Time) {
 	if err := json.Unmarshal(c.Input, &in); err != nil || !isPlanDocPath(in.FilePath) {
 		return
 	}
-	f.records = append(f.records, PlanDocRecord{Path: in.FilePath, FirstSeenAt: ts})
+	f.records = append(f.records, domain.PlanDocRecord{Path: in.FilePath, FirstSeenAt: ts})
 }
 
 func isPlanDocPath(p string) bool {
@@ -47,12 +49,12 @@ func isPlanDocPath(p string) bool {
 func (f *scanFindings) addCommandRecords(command string, ts time.Time) {
 	for _, seg := range commandSegments(shellFields(command)) {
 		if name, action := gitBranchAction(seg); name != "" {
-			f.records = append(f.records, BranchRecord{Name: name, Action: action, FirstSeenAt: ts})
+			f.records = append(f.records, domain.BranchRecord{Name: name, Action: action, FirstSeenAt: ts})
 		}
 	}
 	for _, m := range reIssueRef.FindAllStringSubmatch(command, -1) {
 		n, _ := strconv.Atoi(m[4])
-		f.records = append(f.records, IssueRecord{Owner: m[2], Repo: m[3], Number: n, Relation: strings.ToLower(m[1]), FirstSeenAt: ts})
+		f.records = append(f.records, domain.IssueRecord{Owner: m[2], Repo: m[3], Number: n, Relation: strings.ToLower(m[1]), FirstSeenAt: ts})
 	}
 }
 
@@ -131,11 +133,11 @@ func hasAny(ss []string, wants ...string) bool {
 // addResultRecords records commits, CI runs and issue links printed by a command.
 func (f *scanFindings) addResultRecords(text string, ts time.Time) {
 	for _, m := range reCommitLine.FindAllStringSubmatch(text, -1) {
-		f.records = append(f.records, CommitRecord{SHA: m[2], Subject: m[3], Branch: m[1], FirstSeenAt: ts})
+		f.records = append(f.records, domain.CommitRecord{SHA: m[2], Subject: m[3], Branch: m[1], FirstSeenAt: ts})
 	}
 	for _, u := range reCIURL.FindAllString(text, -1) {
 		if ClassifyURL(u) == URLClassCI {
-			f.records = append(f.records, CILinkRecord{URL: u, FirstSeenAt: ts})
+			f.records = append(f.records, domain.CILinkRecord{URL: u, FirstSeenAt: ts})
 		}
 	}
 	for _, u := range reIssueURL.FindAllString(text, -1) {

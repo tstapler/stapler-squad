@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // createTestStorage returns a Storage over a fresh in-memory test repository; the cleanup func is a no-op kept so
@@ -19,7 +20,7 @@ func createTestStorage(t *testing.T) (*session.Storage, func()) {
 }
 
 // newTestInstance returns a minimal Paused Instance ready for Storage.AddInstance.
-func newTestInstance(title string) *session.Instance { return session.NewPausedTestInstance(title) }
+func newTestInstance(title string) *instance.Instance { return instance.NewPausedTestInstance(title) }
 
 var prTestEpoch = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 

@@ -12,7 +12,10 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -38,13 +41,13 @@ func (p *fakeProgressPlugin) posted() []string {
 	return append([]string(nil), p.bodies...)
 }
 
-func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*session.Storage, *session.PluginRegistry, *session.SyncLoop, *session.BacklogItemData) {
+func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*session.Storage, *session.PluginRegistry, *session.SyncLoop, *backlogdto.BacklogItemData) {
 	t.Helper()
 	storage := svctest.NewForwardSyncTestStorage(t)
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, fake.pluginID, false, "")
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:          "progress item",
-		Status:         string(session.BacklogStatusInProgress),
+		Status:         string(domain.BacklogStatusInProgress),
 		SourceID:       sourceID,
 		ExternalID:     "42",
 		ExternalURL:    "https://github.com/o/r/issues/42",
@@ -52,7 +55,7 @@ func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*
 	})
 	require.NoError(t, err)
 	if prURL != "" {
-		item, err = storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+		item, err = storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 		require.NoError(t, err)
 	}
 	registry := session.NewPluginRegistry()
@@ -194,15 +197,15 @@ func TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts(t *testing.T) {
 func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 	t.Parallel()
 	storage := svctest.NewForwardSyncTestStorage(t)
-	registry := session.NewPluginRegistry()
+	registry := session.NewPluginRegistry(itemsources.NewGitHubIssuesPlugin())
 	syncLoop := session.NewSyncLoop(storage, registry)
 
-	_, cfg, id, ok := resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"})
+	_, cfg, id, ok := resolveProgressTarget(context.Background(), registry, syncLoop, storage, &backlogdto.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"})
 	require.True(t, ok)
 	require.Equal(t, "5", id)
 	require.Contains(t, cfg.Raw, `"owner":"o"`)
 
-	_, _, _, ok = resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://example.com/not-github"})
+	_, _, _, ok = resolveProgressTarget(context.Background(), registry, syncLoop, storage, &backlogdto.BacklogItemData{ExternalURL: "https://example.com/not-github"})
 	require.False(t, ok)
 }
 
@@ -210,8 +213,8 @@ func TestForwardSyncClose_PostsCommentWithHostID(t *testing.T) {
 	t.Parallel()
 	storage := svctest.NewForwardSyncTestStorage(t)
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_closer", true, "")
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
-		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
+		Title: "t", Status: string(domain.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
 	})
 	require.NoError(t, err)
 	fake := &fakeForwardSyncCloserPlugin{pluginID: "fake_closer", closeUpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
@@ -235,10 +238,10 @@ func TestCreateBacklogItem_StampsClaimingHostOnlyWithExternalURL(t *testing.T) {
 	storage := svctest.NewForwardSyncTestStorage(t)
 	storage.SetClaimRecorder(stubHostRecorder{id: "host-xyz"})
 
-	withURL, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "a", Status: "idea", ExternalURL: "https://github.com/o/r/issues/1"})
+	withURL, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "a", Status: "idea", ExternalURL: "https://github.com/o/r/issues/1"})
 	require.NoError(t, err)
 	require.Equal(t, "host-xyz", withURL.ClaimingHostID)
-	local, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "b", Status: "idea"})
+	local, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "b", Status: "idea"})
 	require.NoError(t, err)
 	require.Empty(t, local.ClaimingHostID)
 }
@@ -250,10 +253,10 @@ func (s stubHostRecorder) LocalHostID() string                                  
 
 func TestProgressSync_ShouldLinkAllPRs_WhenTwoPRs(t *testing.T) {
 	body := progressReviewComments([]progressPR{
-		{URL: "https://github.com/acme/app/pull/21", State: session.PRStateMerged},
-		{URL: "https://github.com/acme/app/pull/22", State: session.PRStateOpen},
+		{URL: "https://github.com/acme/app/pull/21", State: domain.PRStateMerged},
+		{URL: "https://github.com/acme/app/pull/22", State: domain.PRStateOpen},
 		{URL: "https://github.com/acme/app/pull/23"},
-		{URL: "javascript:alert(1)//pull/9", State: session.PRStateOpen},
+		{URL: "javascript:alert(1)//pull/9", State: domain.PRStateOpen},
 	})
 	assert.Contains(t, body, "- https://github.com/acme/app/pull/21 (merged)")
 	assert.Contains(t, body, "- https://github.com/acme/app/pull/22 (open)")
@@ -263,5 +266,18 @@ func TestProgressSync_ShouldLinkAllPRs_WhenTwoPRs(t *testing.T) {
 
 func TestProgressSync_ShouldKeepSinglePRWording(t *testing.T) {
 	assert.Equal(t, progressReviewComment("https://github.com/acme/app/pull/21"),
-		progressReviewComments([]progressPR{{URL: "https://github.com/acme/app/pull/21", State: session.PRStateOpen}}))
+		progressReviewComments([]progressPR{{URL: "https://github.com/acme/app/pull/21", State: domain.PRStateOpen}}))
+}
+
+func TestResolveProgressTarget_SourcelessSkipsWhenPluginMissingOrRegistryNil(t *testing.T) {
+	t.Parallel()
+	storage := svctest.NewForwardSyncTestStorage(t)
+	item := &backlogdto.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"}
+
+	empty := session.NewPluginRegistry()
+	_, _, _, ok := resolveProgressTarget(context.Background(), empty, session.NewSyncLoop(storage, empty), storage, item)
+	require.False(t, ok)
+
+	_, _, _, ok = resolveProgressTarget(context.Background(), nil, session.NewSyncLoop(storage, empty), storage, item)
+	require.False(t, ok)
 }

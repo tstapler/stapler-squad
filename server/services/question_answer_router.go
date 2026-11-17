@@ -11,8 +11,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // question_answer_router.go is the AnswerRouter of ADR-005: it picks a delivery
@@ -36,7 +36,7 @@ const (
 
 // routedSession is a session lookup result.
 type routedSession struct {
-	inst  *session.Instance
+	inst  *instance.Instance
 	phase answerPhase
 }
 
@@ -44,7 +44,7 @@ type answerSessionFinder func(sessionID string) routedSession
 
 // answerRows is the slice of guidance storage the router reads and writes.
 type answerRows interface {
-	GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*session.GuidanceRequestData, error)
+	GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error)
 	AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error)
 	SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error)
 }
@@ -196,7 +196,7 @@ func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit
 // writeVisible runs the shared PaneReplyCore against a visible session. The
 // dispatcher already ran the local-caller verdict on the real peer; the core's
 // audit line records the in-process peer as the hidden path does.
-func (r *AnswerRouter) writeVisible(ctx context.Context, inst *session.Instance, in QuestionAnswer, digit byte) (ActionResult, error) {
+func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in QuestionAnswer, digit byte) (ActionResult, error) {
 	refusal, err := EvaluateLocalWrite(ctx, inProcessPeerAddr, LocalWriteLocalCaller)
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
@@ -221,7 +221,7 @@ func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRou
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
 	case err != nil:
 		return ActionResult{}, fmt.Errorf("read question %s: %w", in.QuestionID, err)
@@ -248,7 +248,7 @@ func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRou
 // answerFitsQuestion reports whether answer is one the question offers, as the
 // live path and hook_reply.go already require. A row with no recorded options
 // takes free text.
-func answerFitsQuestion(row *session.GuidanceRequestData, answer string) bool {
+func answerFitsQuestion(row *domain.GuidanceRequestData, answer string) bool {
 	if row.QuestionsJSON != "" {
 		payload, err := domain.ParseQuestionPayload([]byte(row.QuestionsJSON))
 		if err != nil {
@@ -283,16 +283,16 @@ func optionOffered(q domain.Question, label string) bool {
 
 // settledAnswer reports a row that can no longer take an answer: cancelled (a
 // session that ended takes a hook or peer row with it) or already answered.
-func settledAnswer(row *session.GuidanceRequestData) (ActionResult, bool) {
+func settledAnswer(row *domain.GuidanceRequestData) (ActionResult, bool) {
 	switch row.Status() {
-	case session.GuidanceRequestStatusCancelled:
+	case domain.GuidanceRequestStatusCancelled:
 		if row.CancelReason == domain.CancelReasonSessionEnded {
 			return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, true
 		}
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED}, true
-	case session.GuidanceRequestStatusAnswered:
+	case domain.GuidanceRequestStatusAnswered:
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, row.Answer), true
-	case session.GuidanceRequestStatusPending:
+	case domain.GuidanceRequestStatusPending:
 	}
 	return ActionResult{}, false
 }

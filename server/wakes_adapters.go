@@ -14,6 +14,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Adapters from the server/wakes ports onto the services they stand in for.
@@ -36,10 +38,10 @@ func (s wakeSteerer) WriteWake(ctx context.Context, sessionUUID, text string) (w
 	return wakes.WriteIfIdle(ctx, instancePane{inst: inst}, text)
 }
 
-type instancePane struct{ inst *session.Instance }
+type instancePane struct{ inst *instance.Instance }
 
 func (p instancePane) Lock() (wakes.PaneLease, bool) {
-	lease, ok := p.inst.TryTerminalWriteLease(session.LeaseWriterSteer)
+	lease, ok := p.inst.TryTerminalWriteLease(instance.LeaseWriterSteer)
 	if !ok {
 		return nil, false
 	}
@@ -47,8 +49,8 @@ func (p instancePane) Lock() (wakes.PaneLease, bool) {
 }
 
 type instanceLease struct {
-	inst  *session.Instance
-	lease *session.HeldLease
+	inst  *instance.Instance
+	lease *instance.HeldLease
 }
 
 func (l *instanceLease) Capture() (string, error) { return l.inst.CapturePaneContent() }
@@ -58,11 +60,11 @@ func (l *instanceLease) Release() { l.lease.Release() }
 // Submit verifies the tmux pane still belongs to the session (a tmux-name
 // collision would otherwise write into a stranger's pane), then writes.
 func (l *instanceLease) Submit(ctx context.Context, text string) error {
-	if err := session.VerifyPaneOwnershipBeforeWrite(ctx, l.inst); err != nil {
+	if err := instance.VerifyPaneOwnershipBeforeWrite(ctx, l.inst); err != nil {
 		l.lease.Release()
 		return err
 	}
-	return session.SubmitContentWithEnter(ctx, l.inst, l.lease, text)
+	return instance.SubmitContentWithEnter(ctx, l.inst, l.lease, text)
 }
 
 // wakeAdmission is BacklogService.Admit (the WIP cap); without a backlog
@@ -92,8 +94,8 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 		f = wakes.OwnerFacts{
 			Exists:   true,
 			Archived: snap.ArchivedAt != nil,
-			OneShot:  session.IsOneShot(inst),
-			Live:     snap.Status == session.Active,
+			OneShot:  instance.IsOneShot(inst),
+			Live:     snap.Status == domain.Active,
 			Starting: isStartingStatus(snap.Status),
 
 			WorkspaceKey: inst.WorkspaceKey(),
@@ -122,8 +124,8 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 }
 
 // isStartingStatus: a session that is still coming up is neither live nor stopped.
-func isStartingStatus(s session.Status) bool {
-	return s == session.Creating || s == session.Restoring
+func isStartingStatus(s domain.Status) bool {
+	return s == domain.Creating || s == domain.Restoring
 }
 
 // itemTerminal reports whether the backlog item this session works is done or
@@ -137,7 +139,7 @@ func (o wakeOwners) itemTerminal(ctx context.Context, sessionUUID string) bool {
 	if err != nil {
 		return false
 	}
-	return item.Status == string(session.BacklogStatusDone) || item.Status == string(session.BacklogStatusArchived)
+	return item.Status == string(domain.BacklogStatusDone) || item.Status == string(domain.BacklogStatusArchived)
 }
 
 // wakeBacklogState reads the persisted item state reconcile predicates use.
@@ -145,7 +147,7 @@ type wakeBacklogState struct{ storage *session.Storage }
 
 func (b wakeBacklogState) ItemState(ctx context.Context, itemID string) (wakes.ItemState, error) {
 	item, err := b.storage.GetBacklogItem(ctx, itemID)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return wakes.ItemState{}, nil
 	}
 	if err != nil {
@@ -153,7 +155,7 @@ func (b wakeBacklogState) ItemState(ctx context.Context, itemID string) (wakes.I
 	}
 	st := wakes.ItemState{
 		Exists:   true,
-		Archived: item.ArchivedAt != nil || item.Status == string(session.BacklogStatusArchived),
+		Archived: item.ArchivedAt != nil || item.Status == string(domain.BacklogStatusArchived),
 		Status:   item.Status,
 	}
 	for _, s := range item.ItemSessions {

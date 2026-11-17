@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -190,7 +189,7 @@ func newLimiter() *limiter { return &limiter{lastLimitMsg: map[string]time.Time{
 
 // reserve books one steer_text delivery for row, or reports the limit that
 // refused it and when the window frees a slot. Callers hold capMu.
-func (l *limiter) reserveLocked(row *session.WakeTriggerData, now time.Time, lim Limits) (limit string, freeAt time.Time, ok bool) {
+func (l *limiter) reserveLocked(row *domain.WakeTriggerData, now time.Time, lim Limits) (limit string, freeAt time.Time, ok bool) {
 	cutoff := now.Add(-time.Hour)
 	l.window = slices.DeleteFunc(l.window, func(e rateEntry) bool { return !e.at.After(cutoff) })
 	var ownerCount int
@@ -248,7 +247,7 @@ func (d *Dispatcher) limitHit(limit, phase string) { d.cfg.Metrics.Inc(MetricLim
 // rateGate is the claim-time gate for the two hourly delivery limits. Only
 // steer_text counts: a notify_operator wake writes nothing into a session.
 // A refused row is deferred, never dropped.
-func (d *Dispatcher) rateGate(ctx context.Context, row *session.WakeTriggerData, now time.Time) bool {
+func (d *Dispatcher) rateGate(ctx context.Context, row *domain.WakeTriggerData, now time.Time) bool {
 	if row.Action.Kind != domain.WakeActionSteerText {
 		return true
 	}
@@ -262,7 +261,7 @@ func (d *Dispatcher) rateGate(ctx context.Context, row *session.WakeTriggerData,
 	return false
 }
 
-func (d *Dispatcher) deferClaim(ctx context.Context, row *session.WakeTriggerData, now time.Time, limit string, freeAt time.Time) {
+func (d *Dispatcher) deferClaim(ctx context.Context, row *domain.WakeTriggerData, now time.Time, limit string, freeAt time.Time) {
 	d.limitHit(limit, PhaseFire)
 	d.notifyLimitOnce(row, limit, now)
 	id, err := uuid.Parse(row.ID)
@@ -297,7 +296,7 @@ func (d *Dispatcher) deferClaim(ctx context.Context, row *session.WakeTriggerDat
 
 // notifyLimitOnce raises one failure-class digest per owner per hour, never
 // one per deferral.
-func (d *Dispatcher) notifyLimitOnce(row *session.WakeTriggerData, limit string, now time.Time) {
+func (d *Dispatcher) notifyLimitOnce(row *domain.WakeTriggerData, limit string, now time.Time) {
 	if d.cfg.Notifier == nil {
 		return
 	}
@@ -338,7 +337,7 @@ type ScheduleRequest struct {
 // Schedule validates req against every create-time row of the Wake limits
 // table and inserts the trigger. The pending-cap check and the insert run
 // under capMu and one transaction; capMu is never held across a revive.
-func (d *Dispatcher) Schedule(ctx context.Context, req ScheduleRequest) (*session.WakeTriggerData, bool, error) {
+func (d *Dispatcher) Schedule(ctx context.Context, req ScheduleRequest) (*domain.WakeTriggerData, bool, error) {
 	row, created, err := d.schedule(ctx, req)
 	if err == nil && created && !row.Type.IsTimeBased() {
 		d.fireIfAlreadyHolds(ctx, row)
@@ -349,7 +348,7 @@ func (d *Dispatcher) Schedule(ctx context.Context, req ScheduleRequest) (*sessio
 // fireIfAlreadyHolds claims a new event-type row whose condition is already
 // true (a peer that is idle now, a PR already merged): no event will come.
 // Before the dispatcher is ready the startup reconcile does it instead.
-func (d *Dispatcher) fireIfAlreadyHolds(ctx context.Context, row *session.WakeTriggerData) {
+func (d *Dispatcher) fireIfAlreadyHolds(ctx context.Context, row *domain.WakeTriggerData) {
 	select {
 	case <-d.ready:
 	default:
@@ -365,7 +364,7 @@ func (d *Dispatcher) fireIfAlreadyHolds(ctx context.Context, row *session.WakeTr
 	}
 }
 
-func (d *Dispatcher) schedule(ctx context.Context, req ScheduleRequest) (*session.WakeTriggerData, bool, error) {
+func (d *Dispatcher) schedule(ctx context.Context, req ScheduleRequest) (*domain.WakeTriggerData, bool, error) {
 	now := d.cfg.Clock.Now()
 	in, err := d.buildCreateInput(ctx, req, now)
 	if err != nil {
@@ -374,7 +373,7 @@ func (d *Dispatcher) schedule(ctx context.Context, req ScheduleRequest) (*sessio
 	d.limiter.capMu.Lock()
 	defer d.limiter.capMu.Unlock()
 	row, created, err := d.cfg.Store.CreateWakeTrigger(ctx, in)
-	if errors.Is(err, session.ErrWakeCapExceeded) {
+	if errors.Is(err, domain.ErrWakeCapExceeded) {
 		d.limitHit(LimitPendingPerOwner, PhaseCreate)
 		return nil, false, &CapExceededError{Limit: LimitPendingPerOwner, Detail: fmt.Sprintf("more than %d pending wakes for this session", d.limits.PendingPerOwner)}
 	}
@@ -389,28 +388,28 @@ func (d *Dispatcher) refuse(limit, detail string) error {
 	return &CapExceededError{Limit: limit, Detail: detail}
 }
 
-func (d *Dispatcher) buildCreateInput(ctx context.Context, req ScheduleRequest, now time.Time) (session.CreateWakeTriggerInput, error) {
+func (d *Dispatcher) buildCreateInput(ctx context.Context, req ScheduleRequest, now time.Time) (domain.CreateWakeTriggerInput, error) {
 	lim := d.limits
 	if n := len([]rune(req.Action.Payload)); n > lim.PayloadChars {
 		d.limitHit(LimitPayloadSize, PhaseCreate)
-		return session.CreateWakeTriggerInput{}, fmt.Errorf("%w: payload is %d characters, the limit is %d", ErrInvalid, n, lim.PayloadChars)
+		return domain.CreateWakeTriggerInput{}, fmt.Errorf("%w: payload is %d characters, the limit is %d", ErrInvalid, n, lim.PayloadChars)
 	}
 	if req.Spec == nil {
-		return session.CreateWakeTriggerInput{}, fmt.Errorf("%w: spec is required", ErrInvalid)
+		return domain.CreateWakeTriggerInput{}, fmt.Errorf("%w: spec is required", ErrInvalid)
 	}
 	typ := req.Spec.TriggerType()
 	if !typ.IsTimeBased() && d.cfg.Events == nil {
-		return session.CreateWakeTriggerInput{}, ErrEventStreamUnavailable
+		return domain.CreateWakeTriggerInput{}, ErrEventStreamUnavailable
 	}
 	if err := ValidateSpec(req.Spec); err != nil {
-		return session.CreateWakeTriggerInput{}, err
+		return domain.CreateWakeTriggerInput{}, err
 	}
 	if err := d.checkSource(ctx, req.Owner, req.Spec); err != nil {
-		return session.CreateWakeTriggerInput{}, err
+		return domain.CreateWakeTriggerInput{}, err
 	}
 	next, timed, err := d.firstFire(req.Spec, now)
 	if err != nil {
-		return session.CreateWakeTriggerInput{}, err
+		return domain.CreateWakeTriggerInput{}, err
 	}
 	var nextFire *time.Time
 	if timed {
@@ -418,16 +417,16 @@ func (d *Dispatcher) buildCreateInput(ctx context.Context, req ScheduleRequest, 
 	}
 	maxFires, err := d.resolveMaxFires(typ, req.MaxFires)
 	if err != nil {
-		return session.CreateWakeTriggerInput{}, err
+		return domain.CreateWakeTriggerInput{}, err
 	}
 	expires, err := d.resolveExpiry(req.ExpiresAt, nextFire, now)
 	if err != nil {
-		return session.CreateWakeTriggerInput{}, err
+		return domain.CreateWakeTriggerInput{}, err
 	}
 	if req.Generation > lim.Generation {
-		return session.CreateWakeTriggerInput{}, d.refuse(LimitGeneration, fmt.Sprintf("chain generation %d exceeds %d", req.Generation, lim.Generation))
+		return domain.CreateWakeTriggerInput{}, d.refuse(LimitGeneration, fmt.Sprintf("chain generation %d exceeds %d", req.Generation, lim.Generation))
 	}
-	return session.CreateWakeTriggerInput{
+	return domain.CreateWakeTriggerInput{
 		OwnerSessionUUID: req.Owner, Spec: req.Spec, Action: req.Action, NextFireAt: nextFire,
 		MaxFires: maxFires, Generation: req.Generation, AllowRevive: req.AllowRevive,
 		ExpiresAt: &expires, PendingCap: lim.PendingPerOwner,

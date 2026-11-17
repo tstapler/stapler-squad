@@ -14,7 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -28,7 +28,7 @@ func TestWireMCPProofs_should_InstallProviderSweepStaleAndCleanOnDelete(t *testi
 	t.Cleanup(func() {
 		services.SetDefaultHookProofs(prevKeys)
 		services.SetDefaultMcpProofs(prevMcp)
-		session.SetMCPProofProvider(nil)
+		instance.SetMCPProofProvider(nil)
 	})
 
 	// A stale file for a session that is no longer known, and one for a kept session.
@@ -38,23 +38,23 @@ func TestWireMCPProofs_should_InstallProviderSweepStaleAndCleanOnDelete(t *testi
 
 	ctx, cancel := context.WithCancel(context.Background())
 	bus := events.NewEventBus(16)
-	deps := &ServerDependencies{EventBus: bus, Instances: []*session.Instance{{UUID: "kept"}}}
+	deps := &ServerDependencies{EventBus: bus, Instances: []*instance.Instance{{UUID: "kept"}}}
 	done := make(chan struct{})
 	wireMCPProofs(ctx, deps, func(fn func()) { go func() { fn(); close(done) }() })
 
 	proofs := services.DefaultMcpProofs()
 	require.NotNil(t, proofs, "self-check passed and proofs were installed")
-	assert.NoFileExists(t, session.MCPProofFilePath(dir, "dead"), "startup sweep")
-	assert.FileExists(t, session.MCPProofFilePath(dir, "kept"))
+	assert.NoFileExists(t, instance.MCPProofFilePath(dir, "dead"), "startup sweep")
+	assert.FileExists(t, instance.MCPProofFilePath(dir, "kept"))
 
 	// Deleting a session removes its proof file (the subscriber is asynchronous).
 	require.NoError(t, proofs.EnsureFile("doomed"))
 	bus.Publish(events.NewSessionDeletedEvent("doomed"))
 	wait.RequireEventually(t, func() bool {
-		_, statErr := os.Stat(session.MCPProofFilePath(dir, "doomed"))
+		_, statErr := os.Stat(instance.MCPProofFilePath(dir, "doomed"))
 		return os.IsNotExist(statErr)
 	}, 5*time.Second, 10*time.Millisecond, "proof file removed on session delete")
-	assert.FileExists(t, session.MCPProofFilePath(dir, "kept"), "other sessions untouched")
+	assert.FileExists(t, instance.MCPProofFilePath(dir, "kept"), "other sessions untouched")
 
 	cancel()
 	<-done
@@ -77,9 +77,9 @@ func TestWireMCPProofs_should_InstallNothing_When_HookProofSecretMissing(t *test
 
 type fakeLiveFinder struct{ live map[string]bool }
 
-func (f fakeLiveFinder) FindLiveInstance(id string) *session.Instance {
+func (f fakeLiveFinder) FindLiveInstance(id string) *instance.Instance {
 	if f.live[id] {
-		return &session.Instance{UUID: id}
+		return &instance.Instance{UUID: id}
 	}
 	return nil
 }
@@ -95,13 +95,13 @@ func TestNewMCPIdentityMiddleware_should_VerifyThroughDefaultProofs(t *testing.T
 	var sawClaim, sawProofHeader bool
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		sawClaim = r.Header.Get("X-Stapler-Session-UUID") == "live"
-		sawProofHeader = r.Header.Get(session.MCPProofHeader) != ""
+		sawProofHeader = r.Header.Get(instance.MCPProofHeader) != ""
 	})
 	mw := newMCPIdentityMiddleware(next, fakeLiveFinder{live: map[string]bool{"live": true}})
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	req.Header.Set("X-Stapler-Session-UUID", "live")
-	req.Header.Set(session.MCPProofHeader, proofs.HeaderValue("live"))
+	req.Header.Set(instance.MCPProofHeader, proofs.HeaderValue("live"))
 
 	// Before wiring (no default proofs) the request is simply unverified, never an error.
 	services.SetDefaultMcpProofs(nil)

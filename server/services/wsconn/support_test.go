@@ -23,7 +23,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // testMetricReader backs the one MeterProvider OTel's global delegate accepts per process.
@@ -123,9 +123,9 @@ func (f *fakeTmuxSender) counts() (inputs, resizes int) {
 	return len(f.inputs), len(f.resizes)
 }
 
-func hiddenInstance(t *testing.T, hidden bool) *session.Instance {
+func hiddenInstance(t *testing.T, hidden bool) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   "access-" + t.Name(),
 		Path:    t.TempDir(),
 		Program: "claude",
@@ -149,7 +149,7 @@ func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 }
 
 // replyPM is a pane that reports itself alive and records nothing; enough for a started test instance.
-type replyPM struct{ session.ProcessManager }
+type replyPM struct{ instance.ProcessManager }
 
 func (r *replyPM) GetSessionIdentifier() string     { return "" }
 func (r *replyPM) HasSession() bool                 { return true }

@@ -1,7 +1,5 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"bufio"
 	"bytes"
@@ -14,18 +12,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/linkdata/deadlock"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
-
-// stopJoinTimeout bounds how long Stop() waits for monitorLoop to exit.
-// refreshRate defaults to 5s and a single Refresh() cycle should complete
-// well within it, so a multiple of the default is a generous margin without
-// risking an indefinite hang if a poller is genuinely stuck (e.g. blocked on
-// a contended tmux exec-gate slot).
-const stopJoinTimeout = 10 * time.Second
 
 // paneEntry holds the result of one row from `tmux list-panes -a`.
 type paneEntry struct {
@@ -261,13 +257,13 @@ func (s PTYStatus) String() string {
 
 // PTYConnection represents a discovered PTY
 type PTYConnection struct {
-	Path         string            // /dev/pts/12
-	PID          int               // Process ID
-	Command      string            // "claude" or "aider"
-	SessionName  string            // Associated squad session (if any)
-	Status       PTYStatus         // Current status
-	LastActivity time.Time         // Last activity timestamp
-	Controller   *ClaudeController // Connected controller (if any)
+	Path         string                      // /dev/pts/12
+	PID          int                         // Process ID
+	Command      string                      // "claude" or "aider"
+	SessionName  string                      // Associated squad session (if any)
+	Status       PTYStatus                   // Current status
+	LastActivity time.Time                   // Last activity timestamp
+	Controller   *claudectl.ClaudeController // Connected controller (if any)
 
 	// Ownership and management metadata
 	IsManaged       bool   // True if this is a squad-managed session
@@ -312,14 +308,14 @@ func WithSessionLister(l tmux.SessionLister) PTYDiscoveryOption {
 type PTYDiscovery struct {
 	mu            deadlock.RWMutex
 	connections   []*PTYConnection
-	sessionMap    map[string]*Instance // Session name -> Instance
+	sessionMap    map[string]*instance.Instance // Session name -> Instance
 	stopCh        chan struct{}
 	stopOnce      sync.Once
 	monitorWG     sync.WaitGroup // tracks monitorLoop, joined by Stop()
 	refreshRate   time.Duration
-	config        PTYDiscoveryConfig // Discovery configuration
-	sessionLister tmux.SessionLister // nil = use exec fallback
-	refreshing    atomic.Bool        // true while a Refresh() from monitorLoop is in flight
+	config        instance.PTYDiscoveryConfig // Discovery configuration
+	sessionLister tmux.SessionLister          // nil = use exec fallback
+	refreshing    atomic.Bool                 // true while a Refresh() from monitorLoop is in flight
 }
 
 // NewPTYDiscovery creates a new PTY discovery service with default configuration.
@@ -327,10 +323,10 @@ type PTYDiscovery struct {
 func NewPTYDiscovery(opts ...PTYDiscoveryOption) *PTYDiscovery {
 	pd := &PTYDiscovery{
 		connections: make([]*PTYConnection, 0),
-		sessionMap:  make(map[string]*Instance),
+		sessionMap:  make(map[string]*instance.Instance),
 		stopCh:      make(chan struct{}),
 		refreshRate: 5 * time.Second,
-		config:      DefaultPTYDiscoveryConfig(),
+		config:      instance.DefaultPTYDiscoveryConfig(),
 	}
 	for _, opt := range opts {
 		opt(pd)
@@ -348,10 +344,10 @@ func NewPTYDiscovery(opts ...PTYDiscoveryOption) *PTYDiscovery {
 
 // NewPTYDiscoveryWithConfig creates a new PTY discovery service with custom configuration.
 // Optional PTYDiscoveryOption values are applied after initialization.
-func NewPTYDiscoveryWithConfig(config PTYDiscoveryConfig, opts ...PTYDiscoveryOption) *PTYDiscovery {
+func NewPTYDiscoveryWithConfig(config instance.PTYDiscoveryConfig, opts ...PTYDiscoveryOption) *PTYDiscovery {
 	pd := &PTYDiscovery{
 		connections: make([]*PTYConnection, 0),
-		sessionMap:  make(map[string]*Instance),
+		sessionMap:  make(map[string]*instance.Instance),
 		stopCh:      make(chan struct{}),
 		refreshRate: config.DiscoveryInterval,
 		config:      config,
@@ -387,17 +383,17 @@ func (pd *PTYDiscovery) Stop() {
 	pd.stopOnce.Do(func() {
 		close(pd.stopCh)
 	})
-	if !syncutil.WaitWithTimeout(&pd.monitorWG, stopJoinTimeout) {
-		log.Warn("PTYDiscovery.Stop: monitorLoop did not exit within timeout; it may still be running", "timeout", stopJoinTimeout)
+	if !syncutil.WaitWithTimeout(&pd.monitorWG, instance.StopJoinTimeout) {
+		log.Warn("PTYDiscovery.Stop: monitorLoop did not exit within timeout; it may still be running", "timeout", instance.StopJoinTimeout)
 	}
 }
 
 // SetSessions updates the session map for correlation
-func (pd *PTYDiscovery) SetSessions(sessions []*Instance) {
+func (pd *PTYDiscovery) SetSessions(sessions []*instance.Instance) {
 	pd.mu.Lock()
 	defer pd.mu.Unlock()
 
-	pd.sessionMap = make(map[string]*Instance)
+	pd.sessionMap = make(map[string]*instance.Instance)
 	for _, session := range sessions {
 		pd.sessionMap[session.Title] = session
 	}
@@ -547,12 +543,12 @@ func (pd *PTYDiscovery) discoverSquadPTYsWithCache(paneInfoMap map[string]paneEn
 		tmuxSessionName string
 		pty             string
 		pid             int
-		instance        *Instance
+		instance        *instance.Instance
 	}
 
 	var pending []pendingEntry
 	for sessionName, instance := range pd.sessionMap {
-		if instance.Status != Active {
+		if instance.Status != domain.Active {
 			continue
 		}
 		tmuxName := tmux.ToStaplerSquadTmuxName(instance.Title)

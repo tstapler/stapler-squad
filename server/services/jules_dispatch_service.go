@@ -21,23 +21,9 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-)
-
-// julesSessionUUIDPrefix is prepended to a jules.JulesSessionName to form
-// ItemSession.session_uuid once CreateSession confirms a real session.
-// julesPendingUUIDPrefix is the reservation UUID written *before* the
-// CreateSession POST (ADR-004's idempotency reservation), replaced with the
-// real name after.
-//
-// Declared independently here and in session/jules_session_poller.go
-// (Task 2.3.1a) — session/ cannot import server/services (import-direction
-// constraint), mirroring headlessTriageUUIDPrefix's existing duplication
-// (server/services/backlog_service_triage.go:423 /
-// session/backlog_lifecycle_triage.go:43-50). Keep both copies byte-identical
-// if either ever changes.
-const (
-	JulesSessionUUIDPrefix = "jules-"
-	julesPendingUUIDPrefix = "jules-pending-"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ErrJulesDispatchInFlight indicates this item already has an open (or
@@ -84,7 +70,7 @@ type JulesSessionCreator interface {
 // convention for one server/services type reaching BacklogService behavior
 // via a consumer-owned interface rather than a concrete sibling pointer.
 type julesTransitionGuard interface {
-	TransitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error)
+	TransitionWithGuard(ctx context.Context, item *backlogdto.BacklogItemData, to domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error)
 	HasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error)
 }
 
@@ -132,7 +118,7 @@ func NewJulesDispatchRequest(itemID, branch, prompt string) (JulesDispatchReques
 // depend on. Deliberately not a widening of SessionCreator (ADR-001): a
 // Jules dispatch has no tmux ProcessManager and no *session.Instance.
 type JulesDispatcher interface {
-	DispatchToJules(ctx context.Context, item *session.BacklogItemData, req JulesDispatchRequest) (jules.JulesSessionName, error)
+	DispatchToJules(ctx context.Context, item *backlogdto.BacklogItemData, req JulesDispatchRequest) (jules.JulesSessionName, error)
 }
 
 // JulesDispatchService is the JulesDispatcher implementation: guards
@@ -232,7 +218,7 @@ func (s *JulesDispatchService) logDispatchRejected(itemID, reason string) {
 // (Task 2.2.1b). Each guard returns immediately on failure; none of it
 // reaches client.CreateSession (the only billed call) unless every guard
 // before it passed.
-func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *session.BacklogItemData, req JulesDispatchRequest) (jules.JulesSessionName, error) {
+func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlogdto.BacklogItemData, req JulesDispatchRequest) (jules.JulesSessionName, error) {
 	// 1. In-process mutex guard (double-click). Released via defer once the
 	// whole sequence below finishes — see the type's itemLocks doc comment.
 	mu := s.itemMutex(item.ID)
@@ -304,7 +290,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 	}
 	if hasBlockers {
 		s.logDispatchRejected(item.ID, "unresolved_blockers")
-		return "", fmt.Errorf("jules: item %s has unresolved blockers: %w", item.ID, session.ErrUnresolvedBlockers)
+		return "", fmt.Errorf("jules: item %s has unresolved blockers: %w", item.ID, domain.ErrUnresolvedBlockers)
 	}
 
 	// 6. Resolve owner/repo -> JulesSourceName, reserve, create, confirm.
@@ -320,11 +306,11 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 
 	log.Info("jules dispatch requested", "item_id", item.ID, "repo", ref.String(), "branch", string(req.Branch), "source_name", string(sourceName))
 
-	reservationUUID := julesPendingUUIDPrefix + uuid.New().String()
-	reservation, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
+	reservationUUID := domain.JulesPendingUUIDPrefix + uuid.New().String()
+	reservation, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: reservationUUID,
-		SessionRole: session.SessionRoleJulesWork,
+		SessionRole: instance.SessionRoleJulesWork,
 	})
 	if err != nil {
 		return "", fmt.Errorf("jules: creating item session reservation: %w", err)
@@ -347,18 +333,18 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 		return "", fmt.Errorf("jules: creating session: %w", createErr)
 	}
 
-	sessionUUID := JulesSessionUUIDPrefix + string(julesSession.Name)
+	sessionUUID := domain.JulesSessionUUIDPrefix + string(julesSession.Name)
 	if err := s.storage.UpdateItemSessionSessionUUID(ctx, reservation.ID, sessionUUID); err != nil {
 		return "", fmt.Errorf("jules: recording session name: %w", err)
 	}
 
 	log.Info("jules session created", "item_id", item.ID, "jules_session", string(julesSession.Name), "item_session_id", reservation.ID)
 
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}
 	// hasBlockers is guaranteed false here — step 5 already returned early
 	// otherwise — so this call site can never drift back out of sync with
 	// the real check above if the guard sequence is ever reordered.
-	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, session.BacklogStatusInProgress, precondition, session.TriggeredByUser, hasBlockers); err != nil {
+	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, domain.BacklogStatusInProgress, precondition, instance.TriggeredByUser, hasBlockers); err != nil {
 		return "", fmt.Errorf("jules: transitioning item %s to in_progress: %w", item.ID, err)
 	}
 
@@ -370,7 +356,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 
 // recordAPIFailure classifies a failed Jules API call (Task 4.1.1a) into
 // jules.api.rate_limited (429) vs jules.api.error (everything else), mirroring
-// the same classification session.JulesSessionPoller applies to poll errors.
+// the same classification sessionjules.JulesSessionPoller applies to poll errors.
 func (s *JulesDispatchService) recordAPIFailure(err error) {
 	if s.usage == nil {
 		return
@@ -409,7 +395,7 @@ func (s *JulesDispatchService) endFailedReservation(ctx context.Context, itemSes
 // julesSessionCreator's narrow, CreateSession-only shape); an unresolvable
 // key surfaces from the real *jules.Client at the CreateSession call itself
 // (classifyJulesResponse maps a 401/403 to jules.ErrJulesNotConfigured).
-func (s *JulesDispatchService) checkEgressConsent(item *session.BacklogItemData) error {
+func (s *JulesDispatchService) checkEgressConsent(item *backlogdto.BacklogItemData) error {
 	var cfg *config.Config
 	if s.cfgFn != nil {
 		cfg = s.cfgFn()
@@ -437,7 +423,7 @@ func (s *JulesDispatchService) checkEgressConsent(item *session.BacklogItemData)
 // already fetched for the persisted-duplicate check (Task 2.2.1b step 2),
 // reused here for the concurrency count instead of a second
 // ListOpenJulesItemSessions call.
-func (s *JulesDispatchService) checkSpendGuards(ctx context.Context, openSessions []session.ItemSessionBacklogEntry) error {
+func (s *JulesDispatchService) checkSpendGuards(ctx context.Context, openSessions []backlogdto.ItemSessionBacklogEntry) error {
 	var cfg *config.Config
 	if s.cfgFn != nil {
 		cfg = s.cfgFn()
@@ -473,7 +459,7 @@ func resolveJulesOwnerRepo(repoPath string) (githubpkg.RepoRef, error) {
 	}
 	// A GitHub URL (e.g. the settings panel's test-connection field) has no
 	// local git remote to read; parse it directly.
-	if parsed, perr := session.ParseGitHubURLWithHosts(repoPath, enterpriseHosts); perr == nil {
+	if parsed, perr := instance.ParseGitHubURLWithHosts(repoPath, enterpriseHosts); perr == nil {
 		return githubpkg.NewRepoRef(parsed.Owner, parsed.Repo)
 	}
 	ref, err := githubpkg.GetOwnerRepoFromRemote(repoPath, enterpriseHosts)

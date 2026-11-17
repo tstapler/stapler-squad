@@ -12,7 +12,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -61,12 +62,12 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &svctest.MockInstancePoller{
-		Instances: []*session.Instance{
+		Instances: []*instance.Instance{
 			{
 				Title:   "test-session",
 				UUID:    "session-uuid-1",
 				Program: "claude",
-				Status:  session.Active,
+				Status:  domain.Active,
 			},
 		},
 	}
@@ -161,12 +162,12 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &svctest.MockInstancePoller{
-		Instances: []*session.Instance{
+		Instances: []*instance.Instance{
 			{
 				Title:   "test-session-auto",
 				UUID:    "session-uuid-auto",
 				Program: "claude",
-				Status:  session.Active,
+				Status:  domain.Active,
 			},
 		},
 	}
@@ -233,12 +234,12 @@ func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(10)
 	poller := &svctest.MockInstancePoller{
-		Instances: []*session.Instance{
+		Instances: []*instance.Instance{
 			{
 				Title:   "test-session-rl",
 				UUID:    "session-uuid-rl",
 				Program: "claude",
-				Status:  session.Active,
+				Status:  domain.Active,
 			},
 		},
 	}
@@ -383,7 +384,7 @@ type fakeCompactor struct {
 	err   error
 }
 
-func (f *fakeCompactor) compact(_ context.Context, inst *session.Instance, _ string) error {
+func (f *fakeCompactor) compact(_ context.Context, inst *instance.Instance, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, inst.Snapshot().Title)
@@ -408,8 +409,8 @@ func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseRes
 	t.Helper()
 	eventBus := events.NewEventBus(10)
 	poller := &svctest.MockInstancePoller{
-		Instances: []*session.Instance{
-			{Title: "idle-wait-session", UUID: "sess-uuid-1", Program: "claude", Status: session.Active},
+		Instances: []*instance.Instance{
+			{Title: "idle-wait-session", UUID: "sess-uuid-1", Program: "claude", Status: domain.Active},
 		},
 	}
 	poller.Instances[0].SetClaudeConversationUUID("conv-uuid-1")

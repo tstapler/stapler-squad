@@ -7,7 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestPushAndCreatePR_ShouldRecordItemDirectLink_AndNeverLeavePendingWithoutLinkSet(t *testing.T) {
@@ -22,7 +23,7 @@ func TestPushAndCreatePR_ShouldRecordItemDirectLink_AndNeverLeavePendingWithoutL
 
 	got, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status)
 	prs, err := storage.ItemPRs(ctx, item.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, prs, "pr_pending never has an empty link set and pr_number=0")
@@ -55,7 +56,7 @@ func TestPushAndCreatePR_ShouldReuseTrackedPROnlyWhenOpenOnBranch_WhenReaderOn(t
 			})
 			item, is := newPreflightFixture(t, storage)
 			n, url := 7, "https://github.com/tstapler/stapler-squad/pull/7"
-			updated, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+			updated, err := storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 			require.NoError(t, err)
 
 			h.listener.pushAndCreatePR(ctx, updated, is)

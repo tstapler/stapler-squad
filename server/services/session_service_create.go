@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	instancepkg "github.com/tstapler/stapler-squad/session/instance"
+
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -43,7 +46,7 @@ import (
 // could collide with. Returns "" with a nil error when RestartFromSessionId
 // is unset. Errors are already-wrapped *connect.Error values, ready to
 // return directly from CreateSession.
-func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionRequest, existing []session.InstanceData) (string, error) {
+func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionRequest, existing []domain.InstanceData) (string, error) {
 	if req.RestartFromSessionId == "" {
 		return "", nil
 	}
@@ -120,7 +123,7 @@ func generateOneOffPath(cfg *config.Config) (string, error) {
 // FromInstanceData calling Start() on every session) and rejects msg.Title as
 // a duplicate if any existing row already uses it. The returned rows are
 // reused by CreateSession's later restart-source resolution.
-func (s *SessionService) checkTitleConflictAndLoadExisting(msg *sessionv1.CreateSessionRequest) ([]session.InstanceData, error) {
+func (s *SessionService) checkTitleConflictAndLoadExisting(msg *sessionv1.CreateSessionRequest) ([]domain.InstanceData, error) {
 	existing, err := s.storage.ListInstanceData()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list instances: %w", err))
@@ -164,7 +167,7 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 			errors.New("fork_at_message must not be negative"))
 	}
 	lineCount := uint64(msg.ForkAtMessage) //#nosec G115 -- validated non-negative above
-	newUUID, forkErr := session.ForkClaudeConversation(srcPath, lineCount, filepath.Dir(srcPath))
+	newUUID, forkErr := instancepkg.ForkClaudeConversation(srcPath, lineCount, filepath.Dir(srcPath))
 	if forkErr != nil {
 		return connect.NewError(connect.CodeInternal,
 			fmt.Errorf("fork conversation failed: %w", forkErr))
@@ -184,7 +187,7 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 // explicit-field merge and custom-program step still run. Returns the
 // possibly-alias-resolved path (unchanged when msg.AliasName's Path is empty
 // or resolvedPath was already set) alongside the resolved program/autoYes/
-// env/CLI-flags and the alias's own session-type override (config.SessionTypeDefault
+// env/CLI-flags and the alias's own session-type override (domain.SessionTypeDefault
 // when none applies).
 func (s *SessionService) resolveAliasSessionDefaults(
 	cfg *config.Config,
@@ -194,8 +197,8 @@ func (s *SessionService) resolveAliasSessionDefaults(
 	program string,
 	autoYes bool,
 	instanceEnvVars map[string]string,
-) (outProgram string, outAutoYes bool, outCLIFlags string, outResolvedPath string, aliasSessionType config.SessionType, err error) {
-	aliasSessionType = config.SessionTypeDefault
+) (outProgram string, outAutoYes bool, outCLIFlags string, outResolvedPath string, aliasSessionType domain.SessionType, err error) {
+	aliasSessionType = domain.SessionTypeDefault
 	resolved, aliasErr := config.ResolveAlias(cfg, msg.AliasName, msg.Branch, msg.Title, "")
 	if aliasErr != nil {
 		if errors.Is(aliasErr, config.ErrAliasNotFound) {
@@ -234,12 +237,12 @@ func (s *SessionService) resolveAliasSessionDefaults(
 }
 
 func (s *SessionService) resolveSessionDefaults(cfg *config.Config, msg *sessionv1.CreateSessionRequest, resolvedPath string, remoteRequested bool) (
-	program string, autoYes bool, instanceEnvVars map[string]string, instanceCLIFlags string, aliasSessionType config.SessionType, outPath string, err error,
+	program string, autoYes bool, instanceEnvVars map[string]string, instanceCLIFlags string, aliasSessionType domain.SessionType, outPath string, err error,
 ) {
 	program = msg.Program
 	autoYes = msg.AutoYes
 	instanceEnvVars = make(map[string]string)
-	aliasSessionType = config.SessionTypeDefault // session type from alias config (empty = no override)
+	aliasSessionType = domain.SessionTypeDefault // session type from alias config (empty = no override)
 	if !msg.SkipDefaults {
 		if msg.AliasName != "" {
 			var aliasErr error
@@ -308,31 +311,31 @@ func (s *SessionService) resolveSessionDefaults(cfg *config.Config, msg *session
 // would break the --resume lookup). requestedNewWorktree is captured before
 // any of these remaps run, so it names the wire-level request itself -- feeds
 // startLocked's Epic 1.5 invariant check.
-func remapSessionTypeForSpecialCases(msg *sessionv1.CreateSessionRequest, branch string, aliasSessionType config.SessionType, deferredGitHubURL bool) (session.SessionType, bool, error) {
+func remapSessionTypeForSpecialCases(msg *sessionv1.CreateSessionRequest, branch string, aliasSessionType domain.SessionType, deferredGitHubURL bool) (domain.SessionType, bool, error) {
 	sessionType, err := resolveSessionType(msg, branch)
 	if err != nil {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	requestedNewWorktree := msg.SessionType == sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	if aliasSessionType != config.SessionTypeDefault && msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
+	if aliasSessionType != domain.SessionTypeDefault && msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		sessionType = aliasSessionType
 	}
 
 	// One-off sessions run as directory sessions — the path was already generated above.
-	if sessionType == session.SessionTypeOneOff {
-		sessionType = session.SessionTypeDirectory
+	if sessionType == domain.SessionTypeOneOff {
+		sessionType = domain.SessionTypeDirectory
 	}
 
 	if deferredGitHubURL && msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED &&
 		msg.ExistingWorktree == "" {
-		sessionType = session.SessionTypeNewWorktree
+		sessionType = domain.SessionTypeNewWorktree
 	}
 
 	// For resume sessions, force DIRECTORY type — we must not create a new worktree
 	// that would produce a different project path and break the --resume lookup.
 	if msg.ResumeId != "" && msg.ForkSourceId == "" &&
 		msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
-		sessionType = session.SessionTypeDirectory
+		sessionType = domain.SessionTypeDirectory
 	}
 
 	return sessionType, requestedNewWorktree, nil
@@ -345,7 +348,7 @@ func (s *SessionService) createRemoteNewWorktree(
 	ctx context.Context,
 	msg *sessionv1.CreateSessionRequest,
 	cfg *config.Config,
-	resolvedRemote *session.RemoteTarget,
+	resolvedRemote *instancepkg.RemoteTarget,
 	runner tmux.CommandRunner,
 	resolvedPath string,
 	branch string,
@@ -438,31 +441,31 @@ func (s *SessionService) setupRemoteSessionTarget(
 	ctx context.Context,
 	msg *sessionv1.CreateSessionRequest,
 	cfg *config.Config,
-	resolvedRemote *session.RemoteTarget,
+	resolvedRemote *instancepkg.RemoteTarget,
 	remoteRequested bool,
-	sessionType session.SessionType,
+	sessionType domain.SessionType,
 	resolvedPath string,
 	branch string,
 	program string,
-) (executionTarget session.ExecutionTarget, existingWorktreeOverride string, remoteCreationWarning string, outSessionType session.SessionType, outBranch string, err error) {
-	executionTarget = session.LocalTarget{}
+) (executionTarget instancepkg.ExecutionTarget, existingWorktreeOverride string, remoteCreationWarning string, outSessionType domain.SessionType, outBranch string, err error) {
+	executionTarget = instancepkg.LocalTarget{}
 	existingWorktreeOverride = msg.ExistingWorktree
 	if !remoteRequested {
 		return executionTarget, existingWorktreeOverride, "", sessionType, branch, nil
 	}
 
 	switch sessionType {
-	case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
+	case domain.SessionTypeNewWorktree, domain.SessionTypeExistingWorktree, domain.SessionTypeDirectory, domain.SessionTypeNewProject:
 		// supported, handled below
 	default:
 		return nil, "", "", "", "", connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("remote sessions do not support session_type=%q (supported: new_worktree, existing_worktree, directory, new_project)", sessionType))
 	}
-	if sessionType == session.SessionTypeExistingWorktree && msg.ExistingWorktree == "" {
+	if sessionType == domain.SessionTypeExistingWorktree && msg.ExistingWorktree == "" {
 		return nil, "", "", "", "", connect.NewError(connect.CodeInvalidArgument,
 			errors.New("existing_worktree path is required for remote session_type=existing_worktree"))
 	}
-	if sessionType == session.SessionTypeNewProject && resolvedPath == "" {
+	if sessionType == domain.SessionTypeNewProject && resolvedPath == "" {
 		// Local NewProject can leave resolvedPath empty and still resolve one later
 		// via alias config (see the "path is required" exemption above and the
 		// alias-resolution block below) -- but a remote NewProject has no such
@@ -503,7 +506,7 @@ func (s *SessionService) setupRemoteSessionTarget(
 		createdWorktree   bool
 	)
 	switch sessionType {
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		var newWTErr error
 		remoteWorkingPath, worktreeOps, remoteWT, remoteCreationWarning, branch, newWTErr =
 			s.createRemoteNewWorktree(ctx, msg, cfg, resolvedRemote, runner, resolvedPath, branch)
@@ -511,11 +514,11 @@ func (s *SessionService) setupRemoteSessionTarget(
 			return nil, "", "", "", "", newWTErr
 		}
 		createdWorktree = true
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		remoteWorkingPath = msg.ExistingWorktree
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		remoteWorkingPath = resolvedPath
-	case session.SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		remoteWorkingPath = resolvedPath
 		// No createdWorktree/rollback bookkeeping here, matching
 		// InitializeProjectDirectory's own doc comment: unlike CreateWorktree
@@ -573,7 +576,7 @@ func (s *SessionService) setupRemoteSessionTarget(
 			resolvedRemote.Name, ensureErr, remoteWorkingPath))
 	}
 
-	executionTarget = session.NewRemoteExecutionTarget(*resolvedRemote, runner)
+	executionTarget = instancepkg.NewRemoteExecutionTarget(*resolvedRemote, runner)
 	// Only NewWorktree/ExistingWorktree originated in a real git worktree on the
 	// remote host -- remap those to ExistingWorktree so setupFirstTimeWorktree
 	// attaches to remoteWorkingPath instead of re-running worktree creation
@@ -586,8 +589,8 @@ func (s *SessionService) setupRemoteSessionTarget(
 	// setupFirstTimeWorktree's existing default/NewProject cases
 	// (SetWorktree(nil), no worktree persisted), identical to their local
 	// counterparts, with no ent schema change needed.
-	if sessionType != session.SessionTypeDirectory && sessionType != session.SessionTypeNewProject {
-		sessionType = session.SessionTypeExistingWorktree
+	if sessionType != domain.SessionTypeDirectory && sessionType != domain.SessionTypeNewProject {
+		sessionType = domain.SessionTypeExistingWorktree
 	}
 	existingWorktreeOverride = remoteWorkingPath
 
@@ -692,7 +695,7 @@ func (s *SessionService) CreateSession(
 		resolvedPath = restartSourcePath
 	}
 	branch := req.Msg.Branch
-	var gitHubRef *session.GitHubRef
+	var gitHubRef *instancepkg.GitHubRef
 	var clonedRepoPath string
 
 	// Union statically-configured hosts with hosts from dynamically-added
@@ -712,7 +715,7 @@ func (s *SessionService) CreateSession(
 	// background goroutine patches them in via Instance.SetGitHubResolution
 	// once the clone completes, before Start() runs. Epic 2.2 will fold this
 	// into the full named Background Resolution Pipeline.
-	deferredGitHubURL := session.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts)
+	deferredGitHubURL := instancepkg.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts)
 	if deferredGitHubURL {
 		log.Info("[CreateSession] detected GitHub URL, deferring resolution to background", "path", req.Msg.Path)
 	}
@@ -748,7 +751,7 @@ func (s *SessionService) CreateSession(
 	// the remote mode-specific block below), and existence is the remote host's to answer,
 	// not this process's local filesystem.
 	// create_if_missing=true falls through this whole check; setupFirstTimeWorktree handles creation.
-	if sessionType == session.SessionTypeDirectory && !remoteRequested && !req.Msg.CreateIfMissing {
+	if sessionType == domain.SessionTypeDirectory && !remoteRequested && !req.Msg.CreateIfMissing {
 		if _, statErr := os.Stat(resolvedPath); os.IsNotExist(statErr) {
 			if req.Msg.ResumeId != "" {
 				return nil, connect.NewError(connect.CodeNotFound,
@@ -771,7 +774,7 @@ func (s *SessionService) CreateSession(
 	// bypass flag for -- the Omnibar UI disables the checkbox client-side, but that's not
 	// a guarantee for other RPC callers (MCP tools, scripts, curl), so the invariant is
 	// enforced here too rather than left purely client-enforced.
-	if req.Msg.AutoApprove && !session.AutoApproveSupported(program) {
+	if req.Msg.AutoApprove && !instancepkg.AutoApproveSupported(program) {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("auto_approve is not supported for program %q", program))
 	}
@@ -827,7 +830,7 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Build instance options
-	instanceOpts := session.InstanceOptions{
+	instanceOpts := instancepkg.InstanceOptions{
 		Title:                req.Msg.Title,
 		Path:                 resolvedPath,
 		WorkingDir:           req.Msg.WorkingDir,
@@ -876,7 +879,7 @@ func (s *SessionService) CreateSession(
 		// req.Msg.Title — since that's what TymuxSessionOverrides/StreamHubSessionOverrides are
 		// keyed by (see config.Config.TymuxSessionOverrides's doc comment and
 		// tmuxSessionNameForStreamPath's identical derivation in connectrpc_websocket.go).
-		Backend: session.ResolveSessionBackendForTitle(cfg, req.Msg.Title, session.ProcessManagerBackend(req.Msg.GetBackendOverride())),
+		Backend: instancepkg.ResolveSessionBackendForTitle(cfg, req.Msg.Title, domain.ProcessManagerBackend(req.Msg.GetBackendOverride())),
 		// Tags is a direct passthrough of req.Msg.Tags (Task 2.3.1c) -- set once, synchronously,
 		// at construction time, like Title/Path. This exists so MCP's create_session/
 		// create_session_for_pr can apply "source:mcp"/PR-derived tags before the async
@@ -1009,11 +1012,11 @@ func (s *SessionService) CreateSession(
 // exactly like the local InjectHookConfig call site it replaces for remote
 // sessions (the session is fully functional without approval-hook config,
 // it just falls back to no hook at all for PermissionRequest events).
-func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, rootDir, title string) error {
+func (s *SessionService) setupRemoteApprovalHooks(instance *instancepkg.Instance, rootDir, title string) error {
 	if s.permissionRequestHandler == nil {
 		return errors.New("remote approval relay: no PermissionRequestHandler wired (SetPermissionRequestHandler was never called)")
 	}
-	remoteTarget, ok := instance.GetExecutionTarget().(session.RemoteExecutionTarget)
+	remoteTarget, ok := instance.GetExecutionTarget().(instancepkg.RemoteExecutionTarget)
 	if !ok {
 		return fmt.Errorf("instance.IsRemote() true but ExecutionTarget is %T, not session.RemoteExecutionTarget", instance.GetExecutionTarget())
 	}
@@ -1083,7 +1086,7 @@ func (s *SessionService) setupRemoteApprovalHooks(instance *session.Instance, ro
 // prune-stale-backend.sh deletes any committed backend file whose id it can't re-derive from
 // the proto+markers scan on every run (silently deleted the hand-authored file the first time
 // `make registry-generate` ran after adding it).
-func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *session.RemoteTarget, ok bool, err error) {
+func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *instancepkg.RemoteTarget, ok bool, err error) {
 	if msg.GetRemote() == nil || msg.GetRemote().GetRemoteName() == "" {
 		return nil, false, nil
 	}
@@ -1092,7 +1095,7 @@ func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config
 	if !found {
 		return nil, false, fmt.Errorf("no remote configured named %q", remoteName)
 	}
-	return &session.RemoteTarget{
+	return &instancepkg.RemoteTarget{
 		Name:        remoteCfg.Name,
 		Host:        remoteCfg.Host,
 		User:        remoteCfg.User,
@@ -1105,19 +1108,19 @@ func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config
 // Priority: explicit session_type > inference from branch/existing_worktree.
 // ONE_OFF is returned as SessionTypeOneOff; callers are responsible for converting it to
 // SessionTypeDirectory after the one-off directory has been generated.
-func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (session.SessionType, error) {
+func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (domain.SessionType, error) {
 	if msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		switch msg.SessionType {
 		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-			return session.SessionTypeDirectory, nil
+			return domain.SessionTypeDirectory, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-			return session.SessionTypeNewWorktree, nil
+			return domain.SessionTypeNewWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-			return session.SessionTypeExistingWorktree, nil
+			return domain.SessionTypeExistingWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
-			return session.SessionTypeNewProject, nil
+			return domain.SessionTypeNewProject, nil
 		case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
-			return session.SessionTypeOneOff, nil
+			return domain.SessionTypeOneOff, nil
 		default:
 			// Fail loudly instead of silently downgrading an unrecognized enum value
 			// to SessionTypeDirectory -- this exact silent-substitution shape has
@@ -1127,12 +1130,12 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (ses
 		}
 	}
 	if msg.ExistingWorktree != "" {
-		return session.SessionTypeExistingWorktree, nil
+		return domain.SessionTypeExistingWorktree, nil
 	}
 	if branch != "" {
-		return session.SessionTypeNewWorktree, nil
+		return domain.SessionTypeNewWorktree, nil
 	}
-	return session.SessionTypeDirectory, nil
+	return domain.SessionTypeDirectory, nil
 }
 
 // enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts
@@ -1149,8 +1152,8 @@ func (s *SessionService) enterpriseHosts(cfg *config.Config) []string {
 	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
 	hosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
 	addHost := func(host string) {
-		host = githubpkg.NormalizeHost(host)
-		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
+		host = domain.NormalizeHost(host)
+		if host == "" || domain.IsGitHubCom(host) || seenHosts[host] {
 			return
 		}
 		seenHosts[host] = true
@@ -1177,13 +1180,13 @@ func (s *SessionService) PreviewDestinationPath(
 
 	switch req.Msg.Mode {
 	case "github_url":
-		ref, err := session.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
+		ref, err := instancepkg.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
 		if err != nil {
 			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
 				UnresolvedReason: "not a recognized GitHub URL",
 			}), nil
 		}
-		path := session.DefaultRepoPathManager.GetRepoPath(ref)
+		path := instancepkg.DefaultRepoPathManager.GetRepoPath(ref)
 		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
 			Path:    path,
 			IsExact: true,

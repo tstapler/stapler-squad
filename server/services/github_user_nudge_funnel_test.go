@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func steerReadyOf(t *testing.T, f *nudgeFixture) bool {
@@ -29,7 +29,7 @@ func TestUserPRsToProto_should_NotMarkSteerReady_When_SessionCannotTakeANudge(t 
 		setup func(f *nudgeFixture)
 	}{
 		{"not idle", func(f *nudgeFixture) { f.nudger.notIdle = true }},
-		{"paused", func(f *nudgeFixture) { f.inst.Status = session.Paused }},
+		{"paused", func(f *nudgeFixture) { f.inst.Status = domain.Paused }},
 		{"unsteerable program", func(f *nudgeFixture) { f.inst.Program = "aider" }},
 		{"not tracked live", func(f *nudgeFixture) { f.nudger.insts = nil }},
 		{"legacy fallback link", func(f *nudgeFixture) { f.prs.prs[0].LinkedSessions[0].LegacyFallback = true }},

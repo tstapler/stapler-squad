@@ -3,7 +3,7 @@ package deliverygate
 import (
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // T-MX-11: the three accepted stragglers are delivered (fail open), each
@@ -11,7 +11,7 @@ import (
 // (resolved_later) moves only for sessions that exist in storage.
 func TestStragglers_ShouldDeliverAndCountEach_WhenDeletedBeforeRestartUnfedCreatePathOrRenamedBeforeFeed(t *testing.T) {
 	t.Parallel()
-	storageRows := []session.InstanceData{
+	storageRows := []domain.InstanceData{
 		{UUID: "u-unfed", Title: "unfed-create", Hidden: true, Tags: []string{"backlog:review"}},
 		{UUID: "u-renamed", Title: "renamed-new", Hidden: true, Tags: []string{"backlog:diagnose"}},
 	}

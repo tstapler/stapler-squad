@@ -6,9 +6,10 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // StartRetentionEnforcer starts a background goroutine that periodically archives
@@ -29,7 +30,7 @@ import (
 func StartRetentionEnforcer(
 	ctx context.Context,
 	entClient *ent.Client,
-	workflowRepo session.WorkflowRepository,
+	workflowRepo stagecfg.WorkflowRepository,
 	interval time.Duration,
 	wg *sync.WaitGroup,
 ) {
@@ -56,7 +57,7 @@ func StartRetentionEnforcer(
 }
 
 // RunRetentionSweep performs a single retention sweep. Exported for use in tests.
-func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo session.WorkflowRepository) {
+func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
 	runRetentionSweep(ctx, entClient, workflowRepo)
 }
 
@@ -72,16 +73,16 @@ func archiveExcessSessions(ctx context.Context, entClient *ent.Client, excess []
 			entsession.IDIn(excess...),
 			entsession.ArchivedAtIsNil(),
 			entsession.StatusNotIn(
-				int(session.Active),
-				int(session.Creating),
-				int(session.Paused),
+				int(domain.Active),
+				int(domain.Creating),
+				int(domain.Paused),
 			),
 		).
 		SetArchivedAt(now).
 		Save(ctx)
 }
 
-func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo session.WorkflowRepository) {
+func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
 	workflows, err := workflowRepo.ListAll(ctx)
 	if err != nil {
 		log.Warn("[workflows/retention] failed to list workflows", "err", err)
@@ -104,9 +105,9 @@ func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo 
 					// Only archive terminal sessions — never active/creating/paused.
 					// DB status values: Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
 					entsession.StatusNotIn(
-						int(session.Active),
-						int(session.Creating),
-						int(session.Paused),
+						int(domain.Active),
+						int(domain.Creating),
+						int(domain.Paused),
 					),
 					entsession.UpdatedAtLT(cutoff),
 				).
@@ -128,9 +129,9 @@ func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo 
 					entsession.WorkflowID(wf.ID.String()),
 					entsession.ArchivedAtIsNil(),
 					entsession.StatusNotIn(
-						int(session.Active),
-						int(session.Creating),
-						int(session.Paused),
+						int(domain.Active),
+						int(domain.Creating),
+						int(domain.Paused),
 					),
 				).
 				Order(entsession.ByCreatedAt()).

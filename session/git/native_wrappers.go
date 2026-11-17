@@ -109,7 +109,7 @@ func worktreeStagedDirty(idx *index.Index, headHashes map[string]plumbing.Hash) 
 // per-GitWorktree allocation-avoidance caches native.IsDirtyFast needs. Those two are
 // safe to share without reintroducing staleness: headTreeCache is keyed by HEAD's own
 // commit hash and gitignoreFS has its own invalidation (InvalidateDirtyCache). Used by
-// session.WorktreeChangeDetector's periodic tick, which needs a fresh per-tick answer.
+// gitwt.WorktreeChangeDetector's periodic tick, which needs a fresh per-tick answer.
 func (g *GitWorktree) IsDirtyUncached() (bool, error) {
 	return native.IsDirtyFast(g.GetWorktreePath(), &g.gitignoreFS, &g.headTreeCache)
 }

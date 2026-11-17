@@ -8,12 +8,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // approval_question.go feeds the pending-question registry from the hook stream
 // (ADR-010 decision 2). The hook only registers; which question is on screen is
-// decided by session.DialogMatch when a reply claims it.
+// decided by panereply.DialogMatch when a reply claims it.
 
 // Notification metadata keys of a question notification.
 const (
@@ -151,7 +151,7 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribut
 	pending := h.questions.store.Register(PendingQuestion{
 		QuestionID:  id,
 		SessionUUID: sessionID,
-		Dialog:      session.QuestionDialog{Question: asked.Question, Header: asked.Header, Labels: asked.Labels},
+		Dialog:      panereply.QuestionDialog{Question: asked.Question, Header: asked.Header, Labels: asked.Labels},
 		Token:       QuestionToken(asked.Question),
 	})
 	meta[metaQuestionID] = id

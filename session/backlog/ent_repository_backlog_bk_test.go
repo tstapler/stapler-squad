@@ -7,7 +7,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassignedAfterSessionStart
@@ -23,15 +26,15 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	defer cleanup()
 	ctx := context.Background()
 
-	pmRepo := session.NewEntPipelineModeRepository(repo.GetEntClient())
-	_, err := pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(repo.GetEntClient())
+	_, err := pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                 "quick",
 		Name:                 "Quick Fix",
 		Enabled:              true,
 		TriagePromptTemplate: "original quick triage prompt",
 	})
 	require.NoError(t, err)
-	_, err = pmRepo.Create(ctx, session.PipelineModeCreateInput{
+	_, err = pmRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                 "full",
 		Name:                 "Full Review",
 		Enabled:              true,
@@ -39,22 +42,22 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	})
 	require.NoError(t, err)
 
-	engine, err := NewPipelineEngine(pmRepo)
+	engine, err := pipeline.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
-	spawnTimeHash, ok := engine.ContentHashFor(PipelineMode("quick"))
+	spawnTimeHash, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok)
 	require.NotEmpty(t, spawnTimeHash)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item spawning under quick mode",
 		PipelineMode: "quick",
 	})
 	require.NoError(t, err)
 
-	createdIS, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	createdIS, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              "snapshot-freeze-test-session",
-		SessionRole:              session.SessionRoleWork,
+		SessionRole:              instance.SessionRoleWork,
 		PipelineModeSnapshot:     "quick",
 		PipelineModeSnapshotHash: spawnTimeHash,
 	})
@@ -62,19 +65,19 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 
 	// Case (a): reassign the item's live pipeline_mode to "full".
 	newMode := "full"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PipelineMode: &newMode}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PipelineMode: &newMode}, nil)
 	require.NoError(t, err)
 
 	// Case (b): edit "quick"'s own content, changing its live content hash.
 	quickMode, err := pmRepo.GetBySlug(ctx, "quick")
 	require.NoError(t, err)
 	newTemplate := "edited quick triage prompt — content since changed"
-	_, err = pmRepo.Update(ctx, quickMode.ID, session.PipelineModeUpdateInput{TriagePromptTemplate: &newTemplate})
+	_, err = pmRepo.Update(ctx, quickMode.ID, stagecfg.PipelineModeUpdateInput{TriagePromptTemplate: &newTemplate})
 	require.NoError(t, err)
 
 	// Sanity: "quick"'s live content hash has actually changed (proves the edit was real).
 	require.NoError(t, engine.InvalidateCache(ctx))
-	liveHash, ok := engine.ContentHashFor(PipelineMode("quick"))
+	liveHash, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok)
 	require.NotEqual(t, spawnTimeHash, liveHash, "setup: the edit must have changed quick's live content hash")
 
@@ -112,8 +115,8 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 
 	// --- (1) Up: pre-existing PipelineMode and ItemSession rows read back safe defaults ---
 
-	pipelineModeRepo := session.NewEntPipelineModeRepository(repo.Client)
-	preExistingMode, err := pipelineModeRepo.Create(ctx, session.PipelineModeCreateInput{
+	pipelineModeRepo := stagecfg.NewEntPipelineModeRepository(repo.Client)
+	preExistingMode, err := pipelineModeRepo.Create(ctx, stagecfg.PipelineModeCreateInput{
 		Slug:                  "pre-existing-mode",
 		Name:                  "Mode created before stage-executor fields existed",
 		Enabled:               true,
@@ -131,21 +134,21 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	})
 	require.NoError(t, err)
 
-	parsedExecutors, err := session.ParseStageExecutors(preExistingMode.StageExecutorsJSON)
+	parsedExecutors, err := stagecfg.ParseStageExecutors(preExistingMode.StageExecutorsJSON)
 	require.NoError(t, err, "a pre-existing row's stage_executors_json must parse cleanly")
 	assert.Equal(t, "{}", preExistingMode.StageExecutorsJSON)
 	assert.Empty(t, parsedExecutors)
 
-	preExistingItem, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	preExistingItem, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item for pre-existing item-session stage-executor fields",
 		PipelineMode: preExistingMode.Slug,
 	})
 	require.NoError(t, err)
 
-	preExistingSession, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	preExistingSession, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      preExistingItem.ID,
 		SessionUUID: "pre-existing-stage-executor-session",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 		// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
 		// ExecutorFallbackReason/CostUnpriced deliberately omitted: simulates a
 		// row created before these fields existed.
@@ -163,11 +166,11 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 
 	// --- (2) Behavior parity: ExecutorFor must never invent overrides for a mode that never configured any ---
 
-	engine, err := NewPipelineEngine(pipelineModeRepo)
+	engine, err := pipeline.NewPipelineEngine(pipelineModeRepo)
 	require.NoError(t, err)
-	itemOnPreExistingMode := &session.BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
+	itemOnPreExistingMode := &backlogdto.BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
 
-	for _, role := range []session.StageRole{session.StageRoleTriage, session.StageRoleReview, session.StageRoleWork} {
+	for _, role := range []stagecfg.StageRole{stagecfg.StageRoleTriage, stagecfg.StageRoleReview, stagecfg.StageRoleWork} {
 		program, model := engine.ExecutorFor(itemOnPreExistingMode, role)
 		assert.Equal(t, "", program, "role %s: pre-existing mode must never resolve a program override", role)
 		assert.Equal(t, "", model, "role %s: pre-existing mode must never resolve a model override", role)
@@ -176,7 +179,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	// --- (3) Rollback safety: round trip through pre-project accessors that never reference the new fields ---
 
 	newName := "Renamed pre-existing mode"
-	updatedMode, err := pipelineModeRepo.Update(ctx, preExistingMode.ID, session.PipelineModeUpdateInput{
+	updatedMode, err := pipelineModeRepo.Update(ctx, preExistingMode.ID, stagecfg.PipelineModeUpdateInput{
 		Name: &newName,
 	})
 	require.NoError(t, err)

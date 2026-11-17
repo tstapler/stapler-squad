@@ -16,6 +16,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const maxAuditUserAgent = 200
@@ -38,7 +41,7 @@ func acActorFromRequest(ctx context.Context, h http.Header, peerAddr string) ses
 	if h.Get("Sec-Fetch-Site") == "same-origin" {
 		actor.Source = "ui"
 	}
-	sid, proof := strings.TrimSpace(h.Get("X-Stapler-Session-UUID")), h.Get(session.MCPProofHeader)
+	sid, proof := strings.TrimSpace(h.Get("X-Stapler-Session-UUID")), h.Get(instance.MCPProofHeader)
 	switch {
 	case sid != "" || proof != "":
 		actor.Class = session.AcActorAgentSession
@@ -68,8 +71,8 @@ func truncateAuditField(s string, n int) string {
 // recordDeniedAcAttempt appends an audit row for an attempt refused before it reached storage.
 // Failing to write it is logged, never allowed to turn a denial into an allow.
 func (s *BacklogService) recordDeniedAcAttempt(ctx context.Context, itemID string, index int, reason, outcome string) {
-	err := s.storage.RecordAcAudit(ctx, session.AcAuditEventData{
-		ItemID: itemID, CriterionIndex: index, NewStatus: string(session.AcStatusWaived), Reason: reason, Outcome: outcome,
+	err := s.storage.RecordAcAudit(ctx, backlogdto.AcAuditEventData{
+		ItemID: itemID, CriterionIndex: index, NewStatus: string(domain.AcStatusWaived), Reason: reason, Outcome: outcome,
 	})
 	if err != nil {
 		log.Warn("failed to record AC audit event", "item", itemID, "outcome", outcome, "err", err)
@@ -86,7 +89,7 @@ func (s *BacklogService) ListAcAuditEvents(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 	rows, err := s.storage.ListAcAudit(ctx, req.Msg.ItemId)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 	}
 	if err != nil {
@@ -108,7 +111,7 @@ func (s *BacklogService) ListAcAuditEvents(
 }
 
 // acCriteriaToProto converts criteria (used for the waivers an update dropped) to proto form.
-func acCriteriaToProto(cs []session.AcCriterion) []*sessionv1.AcCriterion {
+func acCriteriaToProto(cs []domain.AcCriterion) []*sessionv1.AcCriterion {
 	out := make([]*sessionv1.AcCriterion, len(cs))
 	for i, c := range cs {
 		out[i] = &sessionv1.AcCriterion{

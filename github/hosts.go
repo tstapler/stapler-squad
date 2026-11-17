@@ -1,30 +1,13 @@
 package github
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+)
 
 // defaultHost is the GitHub.com hostname used when no host is specified.
-const defaultHost = "github.com"
-
-// NormalizeHost returns the canonical form of a GitHub host: lowercased, no
-// scheme, no trailing slash, and "" mapped to github.com. Hostnames are
-// case-insensitive (DNS), and GHE hosts are free-text admin/user input, so
-// lowercasing here keeps registration and URL-match comparisons consistent
-// regardless of how a host was typed.
-func NormalizeHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	if host == "" {
-		return defaultHost
-	}
-	host = strings.TrimPrefix(host, "https://")
-	host = strings.TrimPrefix(host, "http://")
-	host = strings.TrimSuffix(host, "/")
-	return host
-}
-
-// IsGitHubCom reports whether host (after normalization) is github.com.
-func IsGitHubCom(host string) bool {
-	return NormalizeHost(host) == defaultHost
-}
+const defaultHost = domain.GitHubComHost
 
 // enterpriseBaseURLOverride lets tests redirect a specific enterprise host's
 // API traffic (both REST and GraphQL) to an httptest.Server, mirroring the
@@ -43,7 +26,7 @@ var enterpriseBaseURLOverride = map[string]string{}
 // graphQLURLForHost normalize their lookup key, so callers may pass a raw
 // host (with scheme, casing, or trailing slash) and still hit the override.
 func SetEnterpriseBaseURLOverride(host, url string) {
-	host = NormalizeHost(host)
+	host = domain.NormalizeHost(host)
 	hostConfigMu.Lock()
 	defer hostConfigMu.Unlock()
 	if url == "" {
@@ -64,7 +47,7 @@ func enterpriseBaseURLOverrideFor(host string) (string, bool) {
 // trailing slash. For github.com this returns GhBaseURL unchanged, preserving
 // the test seam that overrides it directly.
 func RestBaseURLForHost(host string) string {
-	host = NormalizeHost(host)
+	host = domain.NormalizeHost(host)
 	if host == defaultHost {
 		return GhBaseURL()
 	}
@@ -76,7 +59,7 @@ func RestBaseURLForHost(host string) string {
 
 // graphQLURLForHost returns the GraphQL endpoint URL for host.
 func graphQLURLForHost(host string) string {
-	host = NormalizeHost(host)
+	host = domain.NormalizeHost(host)
 	if host == defaultHost {
 		return GhBaseURL() + "graphql"
 	}
@@ -88,5 +71,5 @@ func graphQLURLForHost(host string) string {
 
 // webBaseURLForHost returns the web (non-API) base URL for host, no trailing slash.
 func webBaseURLForHost(host string) string {
-	return "https://" + NormalizeHost(host)
+	return "https://" + domain.NormalizeHost(host)
 }

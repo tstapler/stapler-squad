@@ -26,7 +26,7 @@ type fakeWakeBackend struct {
 	scheduleErr func(call int, req wakes.ScheduleRequest) error
 	generation  int
 	limits      wakes.Limits
-	live        []*session.WakeTriggerData
+	live        []*domain.WakeTriggerData
 	cancelErr   error
 }
 
@@ -34,7 +34,7 @@ func newFakeWakeBackend() *fakeWakeBackend {
 	return &fakeWakeBackend{limits: wakes.ResolveLimits(wakes.LimitSettings{})}
 }
 
-func (b *fakeWakeBackend) Schedule(_ context.Context, req wakes.ScheduleRequest) (*session.WakeTriggerData, bool, error) {
+func (b *fakeWakeBackend) Schedule(_ context.Context, req wakes.ScheduleRequest) (*domain.WakeTriggerData, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.scheduled = append(b.scheduled, req)
@@ -43,7 +43,7 @@ func (b *fakeWakeBackend) Schedule(_ context.Context, req wakes.ScheduleRequest)
 			return nil, false, err
 		}
 	}
-	return &session.WakeTriggerData{
+	return &domain.WakeTriggerData{
 		ID: uuid.NewString(), OwnerSessionUUID: req.Owner, Type: req.Spec.TriggerType(), Spec: req.Spec,
 		Action: req.Action, Status: domain.WakeStatusPending, MaxFires: 1, Generation: req.Generation,
 	}, true, nil
@@ -55,8 +55,8 @@ func (b *fakeWakeBackend) scheduleCalls() []wakes.ScheduleRequest {
 	return append([]wakes.ScheduleRequest(nil), b.scheduled...)
 }
 
-func (b *fakeWakeBackend) ListByOwner(_ context.Context, owner string) ([]*session.WakeTriggerData, error) {
-	var out []*session.WakeTriggerData
+func (b *fakeWakeBackend) ListByOwner(_ context.Context, owner string) ([]*domain.WakeTriggerData, error) {
+	var out []*domain.WakeTriggerData
 	for _, r := range b.live {
 		if r.OwnerSessionUUID == owner {
 			out = append(out, r)
@@ -65,7 +65,7 @@ func (b *fakeWakeBackend) ListByOwner(_ context.Context, owner string) ([]*sessi
 	return out, nil
 }
 
-func (b *fakeWakeBackend) Cancel(_ context.Context, owner, id string) (*session.WakeTriggerData, bool, error) {
+func (b *fakeWakeBackend) Cancel(_ context.Context, owner, id string) (*domain.WakeTriggerData, bool, error) {
 	if b.cancelErr != nil {
 		return nil, false, b.cancelErr
 	}

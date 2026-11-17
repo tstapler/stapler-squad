@@ -22,11 +22,14 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // gateSatisfactionToProto converts a session.GateSatisfactionData to its
 // proto representation.
-func gateSatisfactionToProto(rec *session.GateSatisfactionData) *sessionv1.GateSatisfactionRecord {
+func gateSatisfactionToProto(rec *stagecfg.GateSatisfactionData) *sessionv1.GateSatisfactionRecord {
 	out := &sessionv1.GateSatisfactionRecord{
 		Id:          rec.ID.String(),
 		ItemId:      rec.ItemID.String(),
@@ -70,7 +73,7 @@ func (s *BacklogService) RecordGateApproval(
 
 	record, err := session.RecordGateApproval(ctx, s.gateSatisfactionRepo, itemID, gateID, req.Msg.SatisfiedBy, req.Msg.Approved)
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("gate %s for item %s cannot be updated: already approved, or changed concurrently", gateID, itemID))
 		}
@@ -83,7 +86,7 @@ func (s *BacklogService) RecordGateApproval(
 }
 
 // gateStatusToProto converts a session.GateStatus to its proto representation.
-func gateStatusToProto(g session.GateStatus) *sessionv1.GateStatus {
+func gateStatusToProto(g domain.GateStatus) *sessionv1.GateStatus {
 	return &sessionv1.GateStatus{
 		GateId:      g.GateID,
 		Kind:        string(g.Kind),
@@ -115,15 +118,15 @@ func (s *BacklogService) GetPendingGates(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	to := session.BacklogStatus(req.Msg.ToStatus)
+	to := domain.BacklogStatus(req.Msg.ToStatus)
 	guardInput := s.buildPendingGatesGuardInput(ctx, item, to)
-	fallback := session.BuildStageConfigSnapshotFallback(item)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(item)
 
 	gates, err := s.engine.PendingGates(guardInput, to, fallback)
 	if err != nil {
@@ -143,9 +146,9 @@ func (s *BacklogService) GetPendingGates(
 // never worth failing the whole request over.
 func (s *BacklogService) buildPendingGatesGuardInput(
 	ctx context.Context,
-	item *session.BacklogItemData,
-	to session.BacklogStatus,
-) session.BacklogItemTransitionInput {
+	item *backlogdto.BacklogItemData,
+	to domain.BacklogStatus,
+) domain.BacklogItemTransitionInput {
 	guardInput, err := s.buildGuardInput(ctx, item, to, "GetPendingGates")
 	if err != nil {
 		log.WarningLog().Printf("[GetPendingGates] failed to check unresolved blockers for item %s: %v", item.ID, err)
@@ -162,18 +165,18 @@ func (s *BacklogService) buildPendingGatesGuardInput(
 // leaves OverallOutcome empty (TransitionGuard then blocks review->done).
 func (s *BacklogService) buildGuardInput(
 	ctx context.Context,
-	item *session.BacklogItemData,
-	to session.BacklogStatus,
+	item *backlogdto.BacklogItemData,
+	to domain.BacklogStatus,
 	caller string,
-) (session.BacklogItemTransitionInput, error) {
+) (domain.BacklogItemTransitionInput, error) {
 	var hasUnshippedCode bool
-	if to == session.BacklogStatusDone {
+	if to == domain.BacklogStatusDone {
 		hasUnshippedCode = !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, caller)
 	}
 
 	var hasUnresolvedBlockers bool
 	var blockersErr error
-	if to == session.BacklogStatusInProgress {
+	if to == domain.BacklogStatusInProgress {
 		hasUnresolvedBlockers, blockersErr = s.HasUnresolvedBlockers(ctx, item.ID)
 	}
 
@@ -182,7 +185,7 @@ func (s *BacklogService) buildGuardInput(
 		log.WarningLog().Printf("[%s] failed to load review verdict for item %s: %v", caller, item.ID, err)
 	}
 
-	guardInput := session.NewBacklogItemTransitionInput(item, session.BacklogStatus(item.Status))
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, domain.BacklogStatus(item.Status))
 	guardInput.OverallOutcome = overallOutcome
 	guardInput.HasUnshippedCode = hasUnshippedCode
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers && blockersErr == nil

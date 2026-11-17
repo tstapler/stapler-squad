@@ -13,7 +13,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // fakeTriageRespawner is a test double for TriageRespawner recording calls,
@@ -119,7 +120,7 @@ func TestAnswerGuidanceRequest_should_PublishDurableNotification_When_ScopeIsSes
 
 // TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered
 // is the RPC-level half of AC4 (the repository-level race is already covered
-// by session/ent_repository_guidance_test.go): answering an already-answered
+// by session/guidancestore/guidance_test.go): answering an already-answered
 // request returns applied=false with the CURRENT persisted answer rather than
 // overwriting it or erroring.
 func TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered(t *testing.T) {
@@ -188,7 +189,7 @@ func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_CallerNotLinke
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "unlinked item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "unlinked item"})
 	require.NoError(t, err)
 
 	_, err = svc.CreateGuidanceRequest(ctx, connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
@@ -227,14 +228,14 @@ func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_SessionScopeMi
 
 // TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCap
 // covers AC6 at the RPC layer (the repository-level race/boundary cases are
-// covered by session/ent_repository_guidance_test.go).
+// covered by session/guidancestore/guidance_test.go).
 func TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCap(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
-	for i := 0; i < session.DefaultGuidanceRequestPendingCap; i++ {
+	for i := 0; i < domain.DefaultGuidanceRequestPendingCap; i++ {
 		_, err := svc.CreateGuidanceRequest(ctx, connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
 			Scope:        "standalone",
 			QuestionText: "distinct question " + string(rune('A'+i)),
@@ -266,10 +267,10 @@ func TestAnswerGuidanceRequest_should_RespawnTriage_When_BacklogItemScopeAnswere
 	svc := NewGuidanceRequestService(storage, nil, respawner)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "ambiguous item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "ambiguous item"})
 	require.NoError(t, err)
 	callerUUID := "triage-session-1"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: callerUUID,
 		SessionRole: "triage",

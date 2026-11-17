@@ -24,7 +24,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // bypassPrimitives are the six status writers (ADR-007 D1); a call is matched
@@ -153,7 +154,7 @@ var bypassInventory = []bypassSite{
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.spawnSessionAfterGates", 1, "GatedTransition as spawn_session_after_gates (Unconditional)"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.respawnTriage", 1, "GatedTransition as respawn_triage"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.skipTriageForNewItem", 1, "GatedTransition as maybe_trigger_triage"),
-	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
+	gated("server/services/backlogsvc/backlog_service_headless_run.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
 	gated("server/services/backlogsvc/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
 	gated("server/services/backlogsvc/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
@@ -172,8 +173,8 @@ var bypassInventory = []bypassSite{
 	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcilePRPendingItem", 1, "GatedTransition as lifecycle_reconcile_pr_pending"),
 	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recoverDriftedPRItem", 1, "GatedTransition as lifecycle_recover_drifted_pr"),
 	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.resolveToPRPending", 1, "GatedTransition as lifecycle_resolve_to_pr_pending"),
-	gated("session/jules_session_poller.go", "JulesSessionPoller.failJulesSession", 1, "GatedTransition as jules_fail_session"),
-	gated("session/jules_session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "GatedTransition twice and GatedSetPRAndTransition as jules_apply_completed"),
+	gated("session/jules/session_poller.go", "JulesSessionPoller.failJulesSession", 1, "GatedTransition as jules_fail_session"),
+	gated("session/jules/session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "GatedTransition twice and GatedSetPRAndTransition as jules_apply_completed"),
 	gated("session/backlog_sync.go", "SyncLoop.transitionBackward", 1, "GatedTransition as sync_loop_backward"),
 }
 
@@ -195,7 +196,7 @@ func walkModuleFuncs(t *testing.T, root string, visit func(rel string, fd *ast.F
 				return nil
 			case strings.HasPrefix(d.Name(), "."), d.Name() == "node_modules", d.Name() == "vendor",
 				rel == "web-app", rel == "tools/lint", rel == "gen",
-				rel == "server/services/internal/svctest": // testonly support code, scanned like the _test.go files it came from
+				rel == "server/services/internal/svctest", rel == "session/backlog/internal/blktest": // testonly support code, scanned like the _test.go files it came from
 				return filepath.SkipDir
 			}
 			return nil
@@ -354,16 +355,16 @@ const delegateFile = "server/mcp/tools_backlog_dependencies.go"
 // keyed like the inventory ("file function").
 func registryCallCounts() map[string]int {
 	counts := map[string]int{}
-	add := func(cs session.CallSite) { counts[cs.File+" "+cs.Func] += cs.Calls }
-	for _, c := range session.TransitionCallers() {
+	add := func(cs domain.CallSite) { counts[cs.File+" "+cs.Func] += cs.Calls }
+	for _, c := range domain.TransitionCallers() {
 		for _, cs := range c.Sites {
 			add(cs)
 		}
 	}
-	for _, e := range session.ExemptTransitionSites() {
+	for _, e := range domain.ExemptTransitionSites() {
 		add(e.CallSite)
 	}
-	for _, cs := range session.SharedGuardHelperSites() {
+	for _, cs := range domain.SharedGuardHelperSites() {
 		add(cs)
 	}
 	return counts
@@ -383,7 +384,7 @@ func TestWorkflowBypassInventory_EveryGatedAndEngineRoutedSiteIsRegistered(t *te
 		covered[s.key()] = true
 		switch n := got[s.key()]; {
 		case n == 0:
-			problems = append(problems, fmt.Sprintf("unregistered %s site %s: add a caller entry to session/transition_callers.go", s.class, s.key()))
+			problems = append(problems, fmt.Sprintf("unregistered %s site %s: add a caller entry to session/domain/transition_callers.go", s.class, s.key()))
 		case n != s.calls:
 			problems = append(problems, fmt.Sprintf("%s: registry accounts for %d call(s), inventory says %d (duplicate or missing registration)", s.key(), n, s.calls))
 		}
@@ -401,9 +402,9 @@ func TestWorkflowBypassInventory_EveryGatedAndEngineRoutedSiteIsRegistered(t *te
 // GuardedTransitionAllowed is an edge some registered caller declares, and the
 // functions making those calls are registered as an Origin or Site.
 func TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirTargets(t *testing.T) {
-	owners := map[string][]session.TransitionCallerSpec{}
+	owners := map[string][]domain.TransitionCallerSpec{}
 	origins := map[string]bool{}
-	for _, c := range session.TransitionCallers() {
+	for _, c := range domain.TransitionCallers() {
 		for _, cs := range c.Origins {
 			owners[cs.File+" "+cs.Func] = append(owners[cs.File+" "+cs.Func], c)
 			origins[cs.File+" "+cs.Func] = true
@@ -443,12 +444,12 @@ func TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirT
 	assert.Empty(t, problems, strings.Join(problems, "\n"))
 }
 
-var statusConstNames = map[string]session.BacklogStatus{
-	"BacklogStatusIdea": session.BacklogStatusIdea, "BacklogStatusRefining": session.BacklogStatusRefining,
-	"BacklogStatusReady": session.BacklogStatusReady, "BacklogStatusQueued": session.BacklogStatusQueued,
-	"BacklogStatusInProgress": session.BacklogStatusInProgress, "BacklogStatusReview": session.BacklogStatusReview,
-	"BacklogStatusPRPending": session.BacklogStatusPRPending, "BacklogStatusDone": session.BacklogStatusDone,
-	"BacklogStatusArchived": session.BacklogStatusArchived,
+var statusConstNames = map[string]domain.BacklogStatus{
+	"BacklogStatusIdea": domain.BacklogStatusIdea, "BacklogStatusRefining": domain.BacklogStatusRefining,
+	"BacklogStatusReady": domain.BacklogStatusReady, "BacklogStatusQueued": domain.BacklogStatusQueued,
+	"BacklogStatusInProgress": domain.BacklogStatusInProgress, "BacklogStatusReview": domain.BacklogStatusReview,
+	"BacklogStatusPRPending": domain.BacklogStatusPRPending, "BacklogStatusDone": domain.BacklogStatusDone,
+	"BacklogStatusArchived": domain.BacklogStatusArchived,
 }
 
 // statusLiteralName returns the status value of a BacklogStatus* constant
@@ -463,7 +464,7 @@ func statusLiteralName(e ast.Expr) string {
 	return ""
 }
 
-func anyDeclaresTarget(specs []session.TransitionCallerSpec, to string) bool {
+func anyDeclaresTarget(specs []domain.TransitionCallerSpec, to string) bool {
 	for _, c := range specs {
 		for _, e := range c.Edges {
 			if string(e.To) == to {
@@ -496,18 +497,18 @@ func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *te
 	})
 	assert.Equal(t, []string{"ready"}, assigned, "a new toStatus assignment needs a registry edge and a new pin")
 
-	c, ok := session.LookupTransitionCaller(session.CallerAutonomousComplete)
+	c, ok := domain.LookupTransitionCaller(domain.CallerAutonomousComplete)
 	require.True(t, ok)
-	assert.Equal(t, []session.SystemEdge{{From: session.BacklogStatusIdea, To: session.BacklogStatusReady}}, c.Edges)
+	assert.Equal(t, []domain.SystemEdge{{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady}}, c.Edges)
 }
 
 func TestRecordEngineBypass_IncrementsCounter(t *testing.T) {
-	const c = session.TransitionCaller("inventory_test_caller")
-	before := session.EngineBypassCount(c)
-	session.RecordEngineBypass(c)
-	session.RecordEngineBypass(c)
-	assert.Equal(t, before+2, session.EngineBypassCount(c))
-	assert.Equal(t, before+2, session.EngineBypassSnapshot()[string(c)])
+	const c = domain.TransitionCaller("inventory_test_caller")
+	before := workflowengine.EngineBypassCount(c)
+	workflowengine.RecordEngineBypass(c)
+	workflowengine.RecordEngineBypass(c)
+	assert.Equal(t, before+2, workflowengine.EngineBypassCount(c))
+	assert.Equal(t, before+2, workflowengine.EngineBypassSnapshot()[string(c)])
 }
 
 // --- creation (ADR-007 D1, exempt class "create") -----------------------------
@@ -558,10 +559,10 @@ var createInventory = []createSite{
 	{"session/backlog_sync.go", "SyncLoop.SyncOne", 1, classCreateForwarder, "item comes from the source plugin's MapToBacklogItem (not resolvable here): the GitHub plugins set idea and the Jira and Linear plugins set no status"},
 
 	{"server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.createSimpleBacklogItem", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeed", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedQueued", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedWorkSessionWithWorktree", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.createSimpleBacklogItem", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeed", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedQueued", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedWorkSessionWithWorktree", 1, classCreateDebug, debugCreateReason},
 }
 
 // createCallName is the unqualified name of a creator call, or "".
@@ -724,16 +725,16 @@ func TestWorkflowBypassInventory_CreateScannerFlagsNonIdleStatuses(t *testing.T)
 	dir := t.TempDir()
 	src := `package x
 type a struct{}
-func (a *a) Idle(s st)         { s.CreateBacklogItem(ctx, session.BacklogItemData{Status: string(session.BacklogStatusIdea)}) }
-func (a *a) NoStatus(s st)     { s.CreateBacklogItem(ctx, session.BacklogItemData{Title: "t"}) }
-func (a *a) Done(s st)         { s.CreateBacklogItem(ctx, session.BacklogItemData{Status: string(session.BacklogStatusDone)}) }
-func (a *a) Variable(s st, v string) { s.CreateBacklogItem(ctx, session.BacklogItemData{Status: v}) }
-func (a *a) ViaStringLiteral(s st)      { d := session.BacklogItemData{Status: "idea"}; _ = d; s.CreateBacklogItem(ctx, d) }
-func (a *a) ViaIdent(s st)     { d := session.BacklogItemData{Status: string(session.BacklogStatusIdea)}; s.CreateBacklogItem(ctx, d) }
-func (a *a) ViaReassigned(s st) { d := session.BacklogItemData{}; d.Status = string(session.BacklogStatusDone); s.CreateBacklogItem(ctx, d) }
-func (a *a) Param(s st, d session.BacklogItemData) { s.CreateBacklogItem(ctx, d) }
+func (a *a) Idle(s st)         { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Status: string(session.BacklogStatusIdea)}) }
+func (a *a) NoStatus(s st)     { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t"}) }
+func (a *a) Done(s st)         { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Status: string(session.BacklogStatusDone)}) }
+func (a *a) Variable(s st, v string) { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Status: v}) }
+func (a *a) ViaStringLiteral(s st)      { d := backlogdto.BacklogItemData{Status: "idea"}; _ = d; s.CreateBacklogItem(ctx, d) }
+func (a *a) ViaIdent(s st)     { d := backlogdto.BacklogItemData{Status: string(session.BacklogStatusIdea)}; s.CreateBacklogItem(ctx, d) }
+func (a *a) ViaReassigned(s st) { d := backlogdto.BacklogItemData{}; d.Status = string(session.BacklogStatusDone); s.CreateBacklogItem(ctx, d) }
+func (a *a) Param(s st, d backlogdto.BacklogItemData) { s.CreateBacklogItem(ctx, d) }
 func (a *a) RPC(s st)          { s.CreateBacklogItem(ctx, connect.NewRequest(req)) }
-func (a *a) Debug(s st)        { s.CreateBacklogItemForDebug(ctx, session.BacklogItemData{Status: "done"}) }
+func (a *a) Debug(s st)        { s.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{Status: "done"}) }
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "x.go"), []byte(src), 0o600))
 	got := map[string]int{}

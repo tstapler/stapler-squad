@@ -13,7 +13,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // pane_reply_core.go is the claim, audit, write-lease, DialogMatch and
@@ -183,14 +184,14 @@ func (l *replyLimiters) forget(sessionUUID string) {
 // its AnswerTarget admits.
 type QuestionReplyWriter struct {
 	claim PendingQuestionClaim
-	inst  *session.Instance
+	inst  *instance.Instance
 	after func(time.Duration) <-chan time.Time
 }
 
 // QuestionReplyWriter returns the writer for claim on inst, or ErrReadOnly for
 // a zero claim (never claimed) and errAnswerTargetMismatch when this access is
 // not the kind target admits.
-func (a TerminalAccess) QuestionReplyWriter(target AnswerTarget, claim PendingQuestionClaim, inst *session.Instance, after func(time.Duration) <-chan time.Time) (*QuestionReplyWriter, error) {
+func (a TerminalAccess) QuestionReplyWriter(target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance, after func(time.Duration) <-chan time.Time) (*QuestionReplyWriter, error) {
 	if !claim.Valid() || inst == nil {
 		return nil, ErrReadOnly
 	}
@@ -200,10 +201,10 @@ func (a TerminalAccess) QuestionReplyWriter(target AnswerTarget, claim PendingQu
 	return &QuestionReplyWriter{claim: claim, inst: inst, after: after}, nil
 }
 
-// SubmitReply writes the digit through session.SubmitReplyOnce under lease. It
+// SubmitReply writes the digit through panereply.SubmitReplyOnce under lease. It
 // never calls SubmitContentWithEnter: that primitive writes a blind second Enter.
-func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *session.HeldLease, digit byte, beforeFirstByte func() error) (session.ReplyStage, error) {
-	return session.SubmitReplyOnce(ctx, w.inst, lease, digit, session.ReplyOptions{
+func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *instance.HeldLease, digit byte, beforeFirstByte func() error) (panereply.ReplyStage, error) {
+	return panereply.SubmitReplyOnce(ctx, w.inst, lease, digit, panereply.ReplyOptions{
 		Dialog:          w.claim.Question().Dialog,
 		BeforeFirstByte: beforeFirstByte,
 		After:           w.after,
@@ -221,7 +222,7 @@ type PaneReplyCore struct {
 	auditSink        func() *AuditSink
 	count            func(label string)
 	after            func(time.Duration) <-chan time.Time
-	controllerActive func(*session.Instance) bool
+	controllerActive func(*instance.Instance) bool
 	canary           *DialogMatchCanary
 }
 
@@ -246,7 +247,7 @@ type replyInput struct {
 
 // Run is the leader's path: limiters, claim, audit, lease, write. cache is
 // true when the result must be returned to a Retry instead of attempted again.
-func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyInput, inst *session.Instance, facts steerRequestFacts) (res replyOutcomeResult, cache bool) {
+func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyInput, inst *instance.Instance, facts steerRequestFacts) (res replyOutcomeResult, cache bool) {
 	key := QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}
 	done := func(o sessionv1.ReplyOutcome) replyOutcomeResult {
 		c.count(replyOutcomeLabel(o))
@@ -296,8 +297,8 @@ func (e *replyWriteError) Error() string { return "reply refused before the firs
 // writeUnderLease is the Reply chain's acquirer: it takes the lease, runs the
 // before-first-byte checks and the one write. consumed is true when the digit
 // may have reached the pane.
-func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget, in replyInput, claim PendingQuestionClaim, inst *session.Instance) (res replyOutcomeResult, stage string, consumed bool) {
-	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
+func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget, in replyInput, claim PendingQuestionClaim, inst *instance.Instance) (res replyOutcomeResult, stage string, consumed bool) {
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	if !ok {
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT}, replyStageLeaseBusy, false
 	}
@@ -315,14 +316,14 @@ func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget
 	return mapReplyStage(rs, err)
 }
 
-func mapReplyStage(rs session.ReplyStage, err error) (replyOutcomeResult, string, bool) {
+func mapReplyStage(rs panereply.ReplyStage, err error) (replyOutcomeResult, string, bool) {
 	var refused *replyWriteError
 	switch rs {
-	case session.StageDialogClosed:
+	case panereply.StageDialogClosed:
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT}, replyStageDialogClosed, true
-	case session.StageDialogStillOpen:
+	case panereply.StageDialogStillOpen:
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageDialogStillOpen, true
-	case session.StageWriteEntered:
+	case panereply.StageWriteEntered:
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageIndeterminate, true
 	}
 	if errors.As(err, &refused) {
@@ -336,7 +337,7 @@ func mapReplyStage(rs session.ReplyStage, err error) (replyOutcomeResult, string
 // controller is active (its value is never read: it is blank for 6-9 s after any
 // key and cannot tell a question from a permission dialog); and the structural
 // match of a fresh live capture, which is authoritative.
-func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim PendingQuestionClaim, inst *session.Instance) func() error {
+func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance) func() error {
 	return func() error {
 		if !target.admits(AccessFor(inst)) {
 			out, stage := target.mismatchOutcome()
@@ -352,7 +353,7 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 		if err != nil {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, replyStageNotWaiting}
 		}
-		matched := session.DialogMatch(capture, claim.Question().Dialog)
+		matched := panereply.DialogMatch(capture, claim.Question().Dialog)
 		c.canary.Record(DialogMatchResultOf(matched))
 		if !matched {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT, replyStageStalePrompt}
@@ -363,7 +364,7 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 
 // ---- audit and metrics ----
 
-func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *session.Instance, facts steerRequestFacts) AuditLine {
+func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) AuditLine {
 	q := claim.Question()
 	idx := int(in.digit - '0')
 	label := ""

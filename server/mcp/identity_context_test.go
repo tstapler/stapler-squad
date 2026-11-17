@@ -13,7 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // identityProbe records what the middleware put in the request context.
@@ -53,7 +53,7 @@ func TestIdentityMiddleware_should_VerifyOnlyMatchingLiveProof(t *testing.T) {
 	headers := func(uuid, proof string) map[string]string {
 		h := map[string]string{"X-Stapler-Session-UUID": uuid}
 		if proof != "" {
-			h[session.MCPProofHeader] = proof
+			h[instance.MCPProofHeader] = proof
 		}
 		return h
 	}
@@ -67,7 +67,7 @@ func TestIdentityMiddleware_should_VerifyOnlyMatchingLiveProof(t *testing.T) {
 		{"session B uuid with session A proof", headers("B", proofs.HeaderValue("A")), ""},
 		{"garbage proof", headers("A", "ssqmcp1.zzzz"), ""},
 		{"valid proof for a deleted session", headers("gone", proofs.HeaderValue("gone")), ""},
-		{"proof without uuid", map[string]string{session.MCPProofHeader: proofs.HeaderValue("A")}, ""},
+		{"proof without uuid", map[string]string{instance.MCPProofHeader: proofs.HeaderValue("A")}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestIdentityMiddleware_should_VerifyOnlyMatchingLiveProof(t *testing.T) {
 func TestIdentityMiddleware_should_VerifyNothing_When_NoVerifierOrLookup(t *testing.T) {
 	t.Parallel()
 	proofs := newTestProofs(t)
-	h := map[string]string{"X-Stapler-Session-UUID": "A", session.MCPProofHeader: proofs.HeaderValue("A")}
+	h := map[string]string{"X-Stapler-Session-UUID": "A", instance.MCPProofHeader: proofs.HeaderValue("A")}
 
 	probe := &identityProbe{}
 	probeRequest(t, NewIdentityMiddleware(probe, nil, func(string) bool { return true }), h)
@@ -120,8 +120,8 @@ func TestSessionHasMCPProof_should_ReportFilePresenceNeverValue(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
 	assert.False(t, sessionHasMCPProof("s1"))
 
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, session.MCPProofsDirName), 0o700))
-	require.NoError(t, os.WriteFile(session.MCPProofFilePath(dir, "s1"), []byte("x"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, instance.MCPProofsDirName), 0o700))
+	require.NoError(t, os.WriteFile(instance.MCPProofFilePath(dir, "s1"), []byte("x"), 0o600))
 	assert.True(t, sessionHasMCPProof("s1"))
 	assert.False(t, sessionHasMCPProof("../s1"))
 }

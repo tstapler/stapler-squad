@@ -16,14 +16,16 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeJulesTransitionCall records one transitionWithGuard invocation for
 // assertion.
 type fakeJulesTransitionCall struct {
 	itemID                string
-	to                    session.BacklogStatus
+	to                    domain.BacklogStatus
 	triggeredBy           string
 	hasUnresolvedBlockers bool
 }
@@ -43,7 +45,7 @@ func (f *fakeJulesTransitionGuard) HasUnresolvedBlockers(_ context.Context, _ st
 	return f.hasBlockers, f.hasBlockersErr
 }
 
-func (f *fakeJulesTransitionGuard) TransitionWithGuard(_ context.Context, item *session.BacklogItemData, to session.BacklogStatus, _ *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
+func (f *fakeJulesTransitionGuard) TransitionWithGuard(_ context.Context, item *backlogdto.BacklogItemData, to domain.BacklogStatus, _ *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error) {
 	f.mu.Lock()
 	f.transitionCalls = append(f.transitionCalls, fakeJulesTransitionCall{
 		itemID: item.ID, to: to, triggeredBy: triggeredBy, hasUnresolvedBlockers: hasUnresolvedBlockers,
@@ -75,8 +77,8 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 		sessions, err := storage.ListItemSessions(ctx, item.ID)
 		require.NoError(t, err)
 		require.Len(t, sessions, 1, "reservation row must exist before the billed CreateSession call")
-		assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
-		assert.True(t, strings.HasPrefix(sessions[0].SessionUUID, julesPendingUUIDPrefix),
+		assert.Equal(t, instance.SessionRoleJulesWork, sessions[0].Role)
+		assert.True(t, strings.HasPrefix(sessions[0].SessionUUID, domain.JulesPendingUUIDPrefix),
 			"reservation SessionUUID must carry the pending prefix before CreateSession returns, got %q", sessions[0].SessionUUID)
 	}
 	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
@@ -92,14 +94,14 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
-	assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
+	assert.Equal(t, instance.SessionRoleJulesWork, sessions[0].Role)
 	assert.Equal(t, "jules-sessions/xyz", sessions[0].SessionUUID)
 
 	require.Equal(t, 1, guard.callCount())
 	call := guard.transitionCalls[0]
 	assert.Equal(t, item.ID, call.itemID)
-	assert.Equal(t, session.BacklogStatusInProgress, call.to)
-	assert.Equal(t, session.TriggeredByUser, call.triggeredBy)
+	assert.Equal(t, domain.BacklogStatusInProgress, call.to)
+	assert.Equal(t, instance.TriggeredByUser, call.triggeredBy)
 	assert.False(t, call.hasUnresolvedBlockers, "must be sourced from the real hasUnresolvedBlockers check, not a hardcoded literal")
 }
 
@@ -188,7 +190,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithErrUnresolvedBloc
 
 	_, err = svc.DispatchToJules(ctx, item, req)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, session.ErrUnresolvedBlockers)
+	assert.ErrorIs(t, err, domain.ErrUnresolvedBlockers)
 	assert.Equal(t, 0, client.CallCount())
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
@@ -222,7 +224,7 @@ func TestJulesDispatchService_DispatchToJules_should_EndReservationWithDispatchF
 
 	refreshed, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), refreshed.Status, "item must stay in ready")
+	assert.Equal(t, string(domain.BacklogStatusReady), refreshed.Status, "item must stay in ready")
 
 	notes, err := storage.ListProgressNotesForItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -237,15 +239,15 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMes
 
 	// Two open jules_work sessions on other items, at the (default) ceiling.
 	for i := 0; i < 2; i++ {
-		other, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		other, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "other item",
-			Status: string(session.BacklogStatusInProgress),
+			Status: string(domain.BacklogStatusInProgress),
 		})
 		require.NoError(t, err)
-		_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+		_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      other.ID,
 			SessionUUID: "jules-sessions/other-" + other.ID,
-			SessionRole: session.SessionRoleJulesWork,
+			SessionRole: instance.SessionRoleJulesWork,
 		})
 		require.NoError(t, err)
 	}
@@ -335,15 +337,15 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithDailyCapMessage_W
 	// trailing 24h — zero currently open, but the daily cap still trips.
 	const dailyLimit = 15
 	for i := 0; i < dailyLimit; i++ {
-		other, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		other, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "completed jules item",
-			Status: string(session.BacklogStatusDone),
+			Status: string(domain.BacklogStatusDone),
 		})
 		require.NoError(t, err)
-		is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      other.ID,
 			SessionUUID: "jules-sessions/done-" + other.ID,
-			SessionRole: session.SessionRoleJulesWork,
+			SessionRole: instance.SessionRoleJulesWork,
 		})
 		require.NoError(t, err)
 		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
@@ -503,7 +505,7 @@ func TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNex
 
 // TestJulesDispatchService_checkEgressConsent_should_HaveNoConsentParameter_When_SignatureInspected
 // is a compile-level signature check (Task 2.2.3b): checkEgressConsent takes
-// only a *session.BacklogItemData and returns only an error — no
+// only a *backlogdto.BacklogItemData and returns only an error — no
 // boolean/EgressAcknowledged-shaped parameter a future edit could
 // reintroduce and have DispatchToJules silently trust.
 func TestJulesDispatchService_checkEgressConsent_should_HaveNoConsentParameter_When_SignatureInspected(t *testing.T) {
@@ -512,8 +514,8 @@ func TestJulesDispatchService_checkEgressConsent_should_HaveNoConsentParameter_W
 	methodType := reflect.TypeOf(svc.checkEgressConsent)
 
 	require.Equal(t, 1, methodType.NumIn(), "checkEgressConsent must take exactly one parameter")
-	assert.Equal(t, reflect.TypeOf(&session.BacklogItemData{}), methodType.In(0),
-		"checkEgressConsent's only parameter must be *session.BacklogItemData, never a caller-supplied consent flag")
+	assert.Equal(t, reflect.TypeOf(&backlogdto.BacklogItemData{}), methodType.In(0),
+		"checkEgressConsent's only parameter must be *backlogdto.BacklogItemData, never a caller-supplied consent flag")
 
 	require.Equal(t, 1, methodType.NumOut(), "checkEgressConsent must return exactly one value")
 	assert.Equal(t, reflect.TypeOf((*error)(nil)).Elem(), methodType.Out(0))

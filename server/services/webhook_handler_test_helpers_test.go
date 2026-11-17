@@ -15,6 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // fakeTriggerSessionService is a test double for workflows.SessionServiceInterface
@@ -59,7 +61,7 @@ func (f *fakeTriggerSessionService) LastRequest() *sessionv1.CreateSessionReques
 // arbitration (AC12), not application-level bookkeeping.
 type webhookTestInfra struct {
 	entRepo      *session.EntRepository
-	workflowRepo session.WorkflowRepository
+	workflowRepo stagecfg.WorkflowRepository
 	fireEvents   session.TriggerFireEventRepository
 	scheduler    *workflows.Scheduler
 	sessionSvc   *fakeTriggerSessionService
@@ -76,7 +78,7 @@ func newWebhookTestInfra(t *testing.T) *webhookTestInfra {
 
 	entRepo := session.NewTestEntRepository(t)
 
-	workflowRepo := session.NewEntWorkflowRepository(entRepo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(entRepo.GetEntClient())
 	fireEvents := session.NewEntTriggerFireEventRepository(entRepo.GetEntClient())
 
 	sessionSvc := &fakeTriggerSessionService{}
@@ -102,7 +104,7 @@ func (infra *webhookTestInfra) encryptSecret(t *testing.T, secret string) string
 	t.Helper()
 	key, err := infra.cfg.GetOrCreateEncryptionKey()
 	require.NoError(t, err)
-	enc, err := session.EncryptToken(key, secret)
+	enc, err := domain.EncryptToken(key, secret)
 	require.NoError(t, err)
 	return enc
 }

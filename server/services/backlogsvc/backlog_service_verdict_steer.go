@@ -17,8 +17,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -68,7 +69,7 @@ func (s *BacklogService) dispatchVerdictSteer(p *events.BacklogItemEventPayload)
 	go s.steerWorkSessionWithVerdict(s.shutdownCtx, p, key)
 }
 
-func verdictSteerKey(v *session.ReviewVerdictData) string {
+func verdictSteerKey(v *backlogdto.ReviewVerdictData) string {
 	override := ""
 	if v.OverrideAt != nil {
 		override = v.OverrideAt.UTC().Format(time.RFC3339Nano)
@@ -100,7 +101,7 @@ func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *eve
 	// so a stale unended row doesn't hide the real one.
 	var workUUID string
 	for i := range sessions {
-		if sessions[i].Role != session.SessionRoleWork || sessions[i].EndedAt != nil {
+		if sessions[i].Role != instance.SessionRoleWork || sessions[i].EndedAt != nil {
 			continue
 		}
 		if _, live := s.sessionSteerer.SessionProgram(sessions[i].SessionUUID); live {
@@ -162,13 +163,13 @@ func (s *BacklogService) waitForSteerReady(ctx context.Context, sessionUUID stri
 	}
 }
 
-func buildVerdictSteerMessage(itemID string, v *session.ReviewVerdictData) string {
+func buildVerdictSteerMessage(itemID string, v *backlogdto.ReviewVerdictData) string {
 	summary := truncateUTF8Bytes(strings.TrimSpace(v.Summary), maxVerdictSummaryBytes)
 	var next string
-	if v.OverallOutcome == session.ReviewOutcomePass {
+	if v.OverallOutcome == domain.ReviewOutcomePass {
 		next = "Run /backlog/ship now to open the pull request yourself."
 	} else {
-		next = fmt.Sprintf("Fix the noted gaps in this same session and call request_review again (at most %d review attempts per session; after that run /backlog/ship to hand off to a human).", session.MaxSameSessionReviewAttempts)
+		next = fmt.Sprintf("Fix the noted gaps in this same session and call request_review again (at most %d review attempts per session; after that run /backlog/ship to hand off to a human).", domain.MaxSameSessionReviewAttempts)
 	}
 	return fmt.Sprintf("Review verdict for backlog item %s: %s.\n%s\n\n%s\nThis message is the verdict delivery; do not poll with wait_for_backlog_event or ScheduleWakeup.",
 		itemID, v.OverallOutcome, summary, next)
@@ -185,7 +186,7 @@ func buildVerdictSteerMessage(itemID string, v *session.ReviewVerdictData) strin
 // identical literal-constant precedent.
 func (s *BacklogService) notifyVerdictSteerFailed(ctx context.Context, itemID, itemTitle, sessionUUID, reason string) {
 	if s.storage != nil {
-		if _, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonVerdictUndelivered, session.BacklogStatusReview,
+		if _, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonVerdictUndelivered, domain.BacklogStatusReview,
 			fmt.Sprintf("session %s did not receive its review verdict (%s)", sessionUUID, reason)); err != nil {
 			log.WarningLog().Printf("[VerdictSteer] MarkStuck(verdict_undelivered) item=%s: %v", itemID, err)
 		}

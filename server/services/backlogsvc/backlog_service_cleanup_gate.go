@@ -8,7 +8,10 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // cleanupWiring is BacklogService's cleanup-gate state: the gate, the live-work probe
@@ -19,13 +22,13 @@ type cleanupWiring struct {
 
 	mu      sync.Mutex
 	gate    *session.PRCleanupGate
-	probe   session.LiveWorkProbe
+	probe   instance.LiveWorkProbe
 	blocked *session.BlockedSet
 
 	// liveEnabled replaces the reader:backlog lookup in tests.
 	liveEnabled func() bool
 	// removeFn replaces the git worktree removal in tests; nil: git cleanup.
-	removeFn func(wt session.GitWorktreeData) error
+	removeFn func(wt domain.GitWorktreeData) error
 }
 
 func newCleanupWiring(storage *session.Storage) *cleanupWiring {
@@ -55,7 +58,7 @@ func (w *cleanupWiring) gateAndSet() (*session.PRCleanupGate, *session.BlockedSe
 }
 
 // ruleLProbe is the probe RULE L consults: nil unless the scope is on.
-func (w *cleanupWiring) ruleLProbe() session.LiveWorkProbe {
+func (w *cleanupWiring) ruleLProbe() instance.LiveWorkProbe {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if !w.scopeOn() {
@@ -64,7 +67,7 @@ func (w *cleanupWiring) ruleLProbe() session.LiveWorkProbe {
 	return w.probe
 }
 
-func (w *cleanupWiring) remove(wt session.GitWorktreeData) error {
+func (w *cleanupWiring) remove(wt domain.GitWorktreeData) error {
 	if w.removeFn != nil {
 		return w.removeFn(wt)
 	}
@@ -73,7 +76,7 @@ func (w *cleanupWiring) remove(wt session.GitWorktreeData) error {
 
 // SetLiveWorkProbe wires the live-work probe shared with the lifecycle listener and
 // rebuilds the gate around it.
-func (s *BacklogService) SetLiveWorkProbe(p session.LiveWorkProbe) {
+func (s *BacklogService) SetLiveWorkProbe(p instance.LiveWorkProbe) {
 	s.cleanup.mu.Lock()
 	defer s.cleanup.mu.Unlock()
 	s.cleanup.probe = p
@@ -81,7 +84,7 @@ func (s *BacklogService) SetLiveWorkProbe(p session.LiveWorkProbe) {
 }
 
 // LiveWorkProbe returns the probe the service and its gate share (nil when unwired).
-func (s *BacklogService) LiveWorkProbe() session.LiveWorkProbe {
+func (s *BacklogService) LiveWorkProbe() instance.LiveWorkProbe {
 	s.cleanup.mu.Lock()
 	defer s.cleanup.mu.Unlock()
 	return s.cleanup.probe
@@ -101,7 +104,7 @@ func (s *BacklogService) BlockedCleanups() []session.BlockedItem {
 
 // gateOutcome runs the gate; blocked true means the caller must remove nothing.
 // The first block of a (path, item) pair is counted and logged once.
-func (s *BacklogService) gateOutcome(ctx context.Context, sessions []session.ItemSessionSummary, opts session.GateOptions) (session.CleanupOutcome, bool) {
+func (s *BacklogService) gateOutcome(ctx context.Context, sessions []backlogdto.ItemSessionSummary, opts session.GateOptions) (session.CleanupOutcome, bool) {
 	gate, set := s.cleanup.gateAndSet()
 	if gate == nil {
 		return session.CleanupOutcome{}, false
@@ -123,7 +126,7 @@ func (s *BacklogService) gateOutcome(ctx context.Context, sessions []session.Ite
 	return session.CleanupBlockedOutcome(block), true
 }
 
-func firstItemID(sessions []session.ItemSessionSummary) string {
+func firstItemID(sessions []backlogdto.ItemSessionSummary) string {
 	for _, is := range sessions {
 		if is.BacklogItemID != "" {
 			return is.BacklogItemID

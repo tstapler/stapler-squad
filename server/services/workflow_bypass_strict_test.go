@@ -26,7 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- rule (a): legacy writer names ---------------------------------------------
@@ -183,11 +184,11 @@ func clsExprText(e ast.Expr) string {
 	return fmt.Sprintf("%T", e)
 }
 
-// clsRegistryConstants maps each Caller* constant in session/transition_callers.go
+// clsRegistryConstants maps each Caller* constant in session/domain/transition_callers.go
 // to its string value.
 func clsRegistryConstants(t *testing.T, root string) map[string]string {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, "session", "transition_callers.go"), nil, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, "session", "domain", "transition_callers.go"), nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 	out := map[string]string{}
 	for _, decl := range f.Decls {
@@ -213,7 +214,7 @@ var clsDynamicCallers = map[string]string{
 	"server/services/backlogsvc/backlog_service_lifecycle.go BacklogService.TransitionBacklogItemStatus": "resolveTransitionCaller(ctx), bounded by TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers",
 	"server/services/backlogsvc/backlog_service_triage.go BacklogService.TransitionWithGuard":            "guardedTransitionCaller(to, actor), bounded by TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers",
 	"session/backlog_remediation.go Storage.redriveOne":                                                  "the recorded denial's caller, re-checked by LookupTransitionCaller in transitionStillDenied and limited to redriveByWrite",
-	"session/workflow_engine_replay.go replayAnswer":                                                     "a decision only (no write): spec.Name comes from iterating the registry",
+	"session/workflowengine/workflow_engine_replay.go replayAnswer":                                      "a decision only (no write): spec.Name comes from iterating the registry",
 	"session/backlog_remediation.go Storage.transitionStillDenied":                                       "a decision only (no write): spec.Name is a LookupTransitionCaller result",
 }
 
@@ -223,9 +224,9 @@ func clsRequestViolations(lits []clsRequestLiteral, consts map[string]string, dy
 		value, isConst := consts[l.constRef]
 		switch {
 		case l.caller == "":
-			problems = append(problems, fmt.Sprintf("%s builds a TransitionRequest with no Caller: name a registered caller (session/transition_callers.go)", l.key))
+			problems = append(problems, fmt.Sprintf("%s builds a TransitionRequest with no Caller: name a registered caller (session/domain/transition_callers.go)", l.key))
 		case isConst:
-			if _, ok := session.LookupTransitionCaller(session.TransitionCaller(value)); !ok {
+			if _, ok := domain.LookupTransitionCaller(domain.TransitionCaller(value)); !ok {
 				problems = append(problems, fmt.Sprintf("%s uses %s (%q), which is not in the caller registry", l.key, l.constRef, value))
 			}
 		case dynamic[l.key] != "":
@@ -273,12 +274,12 @@ func Dynamic(c string)  { _ = TransitionRequest{Caller: pick(c)} }
 }
 
 func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t *testing.T) {
-	for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, "robot", ""} {
+	for _, actor := range []string{instance.TriggeredByUser, instance.TriggeredByAgent, instance.TriggeredBySystem, "robot", ""} {
 		ctx := WithTransitionActor(t.Context(), actor)
-		_, ok := session.LookupTransitionCaller(ResolveTransitionCaller(ctx))
+		_, ok := domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)
-		ctx = WithTransitionCaller(ctx, session.CallerOperatorNotificationAction)
-		_, ok = session.LookupTransitionCaller(ResolveTransitionCaller(ctx))
+		ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
+		_, ok = domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q with the notification caller", actor)
 	}
 }
@@ -291,7 +292,7 @@ func clsCallerRefs(t *testing.T, root string, consts map[string]string) map[stri
 	t.Helper()
 	refs := map[string]map[string]bool{}
 	walkModuleFuncs(t, root, func(rel string, fd *ast.FuncDecl) {
-		if rel == "session/transition_callers.go" {
+		if rel == "session/domain/transition_callers.go" {
 			return
 		}
 		ast.Inspect(fd.Body, func(n ast.Node) bool {
@@ -323,7 +324,7 @@ var clsDynamicProducerKeys = []string{
 
 // clsUnusedCallers returns the non-forwarding registry entries with no call path:
 // no owned site or origin, or a constant mentioned nowhere a write can start.
-func clsUnusedCallers(specs []session.TransitionCallerSpec, consts map[string]string, lits []clsRequestLiteral, refs map[string]map[string]bool) []string {
+func clsUnusedCallers(specs []domain.TransitionCallerSpec, consts map[string]string, lits []clsRequestLiteral, refs map[string]map[string]bool) []string {
 	constFor := map[string]string{}
 	for name, value := range consts {
 		constFor[value] = name
@@ -339,11 +340,11 @@ func clsUnusedCallers(specs []session.TransitionCallerSpec, consts map[string]st
 		}
 		name := constFor[string(spec.Name)]
 		if name == "" {
-			problems = append(problems, fmt.Sprintf("registered caller %s has no Caller* constant in session/transition_callers.go", spec.Name))
+			problems = append(problems, fmt.Sprintf("registered caller %s has no Caller* constant in session/domain/transition_callers.go", spec.Name))
 			continue
 		}
 		reached := literal[name]
-		for _, cs := range append(append([]session.CallSite{}, spec.Sites...), spec.Origins...) {
+		for _, cs := range append(append([]domain.CallSite{}, spec.Sites...), spec.Origins...) {
 			reached = reached || refs[name][cs.File+" "+cs.Func]
 		}
 		for _, key := range clsDynamicProducerKeys {
@@ -363,14 +364,14 @@ func clsUnusedCallers(specs []session.TransitionCallerSpec, consts map[string]st
 func TestWorkflowBypassStrict_EveryNonForwardingRegisteredCallerHasACallSite(t *testing.T) {
 	root := moduleRoot(t)
 	consts := clsRegistryConstants(t, root)
-	problems := clsUnusedCallers(session.TransitionCallers(), consts, clsScanRequestLiterals(t, root), clsCallerRefs(t, root, consts))
+	problems := clsUnusedCallers(domain.TransitionCallers(), consts, clsScanRequestLiterals(t, root), clsCallerRefs(t, root, consts))
 	assert.Empty(t, problems, strings.Join(problems, "\n"))
 
 	forwarding := 0
-	for _, c := range session.TransitionCallers() {
+	for _, c := range domain.TransitionCallers() {
 		if c.Forwarding {
 			forwarding++
-			assert.Equal(t, session.CallerMCPTransitionDelegate, c.Name, "only the MCP delegate is exempt; its coverage is the handler caller-resolution test")
+			assert.Equal(t, domain.CallerMCPTransitionDelegate, c.Name, "only the MCP delegate is exempt; its coverage is the handler caller-resolution test")
 		}
 	}
 	assert.Equal(t, 1, forwarding)
@@ -378,12 +379,12 @@ func TestWorkflowBypassStrict_EveryNonForwardingRegisteredCallerHasACallSite(t *
 
 func TestWorkflowBypassStrict_UnusedCallerRuleFlagsAnEntryWithNoPath(t *testing.T) {
 	consts := map[string]string{"CallerGhost": "ghost", "CallerLive": "live", "CallerFwd": "fwd"}
-	specs := []session.TransitionCallerSpec{
-		{Name: "ghost", Sites: []session.CallSite{{File: "a.go", Func: "F", Calls: 1}}},
-		{Name: "live", Sites: []session.CallSite{{File: "a.go", Func: "G", Calls: 1}}},
+	specs := []domain.TransitionCallerSpec{
+		{Name: "ghost", Sites: []domain.CallSite{{File: "a.go", Func: "F", Calls: 1}}},
+		{Name: "live", Sites: []domain.CallSite{{File: "a.go", Func: "G", Calls: 1}}},
 		{Name: "fwd", Forwarding: true},
 		{Name: "nosite"},
-		{Name: "noconst", Sites: []session.CallSite{{File: "a.go", Func: "H", Calls: 1}}},
+		{Name: "noconst", Sites: []domain.CallSite{{File: "a.go", Func: "H", Calls: 1}}},
 	}
 	lits := []clsRequestLiteral{{key: "a.go G", caller: "CallerLive", constRef: "CallerLive"}, {key: "a.go H", caller: "pick(...)"}}
 	problems := clsUnusedCallers(specs, consts, lits, map[string]map[string]bool{})
@@ -484,14 +485,17 @@ func clsIdentDefinedFromBacklogItem(fd *ast.FuncDecl, name string, depth int) bo
 	return found
 }
 
-// clsSetStatusViolations scans <root>/session (the only package that can reach
-// the ent client) for SetStatus calls on a BacklogItem builder outside allowed.
+// clsSetStatusViolations scans every non-test file in the module except the
+// generated session/ent tree for SetStatus calls on a BacklogItem builder
+// outside allowed. It is deliberately not scoped to a directory: session/ leaf
+// packages (workflowengine, stagecfg, markerstore, ...) may import session/ent
+// via depguard allow entries, so any directory list would rot as leaves land.
 func clsSetStatusViolations(t *testing.T, root string, allowed map[string]string) []string {
 	t.Helper()
 	var problems []string
 	hit := map[string]bool{}
 	walkModuleFuncs(t, root, func(rel string, fd *ast.FuncDecl) {
-		if filepath.ToSlash(filepath.Dir(rel)) != "session" {
+		if strings.HasPrefix(rel, "session/ent/") {
 			return
 		}
 		key := rel + " " + funcDisplayName(fd)
@@ -523,6 +527,23 @@ func clsSetStatusViolations(t *testing.T, root string, allowed map[string]string
 func TestBacklogItemSetStatus_OnlyInsideAllowListedWriters(t *testing.T) {
 	problems := clsSetStatusViolations(t, moduleRoot(t), clsSetStatusAllowed)
 	assert.Empty(t, problems, strings.Join(problems, "\n"))
+}
+
+func TestBacklogItemSetStatus_FixtureLeafPackageViolationIsFlagged(t *testing.T) {
+	dir := t.TempDir()
+	leaf := filepath.Join(dir, "session", "workflowengine")
+	require.NoError(t, os.MkdirAll(leaf, 0o750))
+	src := `package workflowengine
+func Sneaky(c *entClient, id int) error {
+	_, err := c.BacklogItem.UpdateOneID(id).SetStatus("done").Save(nil)
+	return err
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(leaf, "zz_violation.go"), []byte(src), 0o600))
+
+	problems := clsSetStatusViolations(t, dir, nil)
+	require.Len(t, problems, 1, strings.Join(problems, "\n"))
+	assert.Contains(t, problems[0], "session/workflowengine/zz_violation.go Sneaky")
 }
 
 func TestBacklogItemSetStatus_FixtureSeventhWriterIsFlaggedNamingFileAndFunction(t *testing.T) {

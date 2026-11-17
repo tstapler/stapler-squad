@@ -10,7 +10,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Gate owns the visibility index, flag cache, counters and logger from
@@ -172,7 +172,7 @@ func (g *Gate) Stop() {
 
 // SeedFromInstances seeds the index synchronously from already-loaded
 // instances, reading each only through Snapshot() (no storage or poller call).
-func (g *Gate) SeedFromInstances(instances []*session.Instance) {
+func (g *Gate) SeedFromInstances(instances []*instance.Instance) {
 	entries := make([]Entry, 0, len(instances))
 	for _, inst := range instances {
 		if inst == nil {
@@ -184,7 +184,7 @@ func (g *Gate) SeedFromInstances(instances []*session.Instance) {
 }
 
 // UpsertInstance feeds one session (create, restore, rename, tag change).
-func (g *Gate) UpsertInstance(inst *session.Instance) {
+func (g *Gate) UpsertInstance(inst *instance.Instance) {
 	if inst == nil {
 		return
 	}

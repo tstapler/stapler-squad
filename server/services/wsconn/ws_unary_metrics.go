@@ -11,7 +11,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -33,15 +32,15 @@ const (
 )
 
 var (
-	wsUnaryCallsCounter         = services.CounterNamed(metricWsUnaryCalls, "Unary calls served over the WebSocket bridge by method and Connect code")
-	wsUnaryDeniedCounter        = services.CounterNamed(metricWsUnaryDenied, "Unary calls refused by the WebSocket bridge's deny-by-default allowlist")
-	wsUnaryUpgradeDeniedCounter = services.CounterNamed(metricWsUnaryUpgradeDenied, "Unary WebSocket upgrades refused, by listener and reason")
+	wsUnaryCallsCounter         = telemetry.CounterNamed(metricWsUnaryCalls, "Unary calls served over the WebSocket bridge by method and Connect code")
+	wsUnaryDeniedCounter        = telemetry.CounterNamed(metricWsUnaryDenied, "Unary calls refused by the WebSocket bridge's deny-by-default allowlist")
+	wsUnaryUpgradeDeniedCounter = telemetry.CounterNamed(metricWsUnaryUpgradeDenied, "Unary WebSocket upgrades refused, by listener and reason")
 	wsUnaryConnsOpen            = upDownNamed("ws_unary_connections_open", "Unary WebSocket bridge connections currently open, by listener")
-	wsUnaryConnsClosed          = services.CounterNamed("ws_unary_connections_closed_total", "Unary WebSocket bridge connections ended, by listener and reason")
-	wsUnaryWriteErrors          = services.CounterNamed("ws_unary_write_errors_total", "Unary WebSocket bridge writer failures (each ends its connection), by listener")
+	wsUnaryConnsClosed          = telemetry.CounterNamed("ws_unary_connections_closed_total", "Unary WebSocket bridge connections ended, by listener and reason")
+	wsUnaryWriteErrors          = telemetry.CounterNamed("ws_unary_write_errors_total", "Unary WebSocket bridge writer failures (each ends its connection), by listener")
 	wsUnaryPingRTT              = histNamed("ws_unary_ping_rtt", "ms", "Server ping to client pong round trip on the unary WebSocket bridge, by listener")
 	wsUnaryCallDuration         = histNamed("ws_unary_call_duration", "ms", "Unary call handling time on the WebSocket bridge (dispatch to reply enqueue; abandoned calls are not timed), by method")
-	wsUnaryAbandonedCounter     = services.CounterNamed(metricWsUnaryAbandoned, "Unary calls abandoned server-side before the handler returned, by reason (cancel, deadline, shutdown, zombie_cap)")
+	wsUnaryAbandonedCounter     = telemetry.CounterNamed(metricWsUnaryAbandoned, "Unary calls abandoned server-side before the handler returned, by reason (cancel, deadline, shutdown, zombie_cap)")
 	wsUnaryZombiesGauge         = sync.OnceValue(func() metric.Int64UpDownCounter {
 		g, err := telemetry.GetMeter().Int64UpDownCounter(metricWsUnaryZombies,
 			metric.WithDescription("Abandoned unary handlers still running after their slot was released"))
@@ -101,11 +100,11 @@ func (m *unaryMetrics) connClosed(listener, reason string) {
 	if g := wsUnaryConnsOpen(); g != nil {
 		g.Add(context.Background(), -1, metric.WithAttributes(attribute.String("listener", listener)))
 	}
-	services.AddOne(wsUnaryConnsClosed(), attribute.String("listener", listener), attribute.String("reason", reason))
+	telemetry.AddOne(wsUnaryConnsClosed(), attribute.String("listener", listener), attribute.String("reason", reason))
 }
 
 func (m *unaryMetrics) writeError(listener string) {
-	services.AddOne(wsUnaryWriteErrors(), attribute.String("listener", listener))
+	telemetry.AddOne(wsUnaryWriteErrors(), attribute.String("listener", listener))
 }
 
 func (m *unaryMetrics) pingRTT(listener string, d time.Duration) {
@@ -156,7 +155,7 @@ func (m *unaryMetrics) call(method, code string) {
 	m.mu.Lock()
 	m.calls[unaryCallKey{method, code}]++
 	m.mu.Unlock()
-	services.AddOne(wsUnaryCallsCounter(), attribute.String("method", method), attribute.String("code", code))
+	telemetry.AddOne(wsUnaryCallsCounter(), attribute.String("method", method), attribute.String("code", code))
 }
 
 func (m *unaryMetrics) deny(method string) {
@@ -164,14 +163,14 @@ func (m *unaryMetrics) deny(method string) {
 	m.mu.Lock()
 	m.denied[method]++
 	m.mu.Unlock()
-	services.AddOne(wsUnaryDeniedCounter(), attribute.String("method", method))
+	telemetry.AddOne(wsUnaryDeniedCounter(), attribute.String("method", method))
 }
 
 func (m *unaryMetrics) upgradeDeny(listener, reason string) {
 	m.mu.Lock()
 	m.upgradeDenied[unaryUpgradeKey{listener, reason}]++
 	m.mu.Unlock()
-	services.AddOne(wsUnaryUpgradeDeniedCounter(), attribute.String("listener", listener), attribute.String("reason", reason))
+	telemetry.AddOne(wsUnaryUpgradeDeniedCounter(), attribute.String("listener", listener), attribute.String("reason", reason))
 }
 
 func (m *unaryMetrics) inflightDelta(d int64) {
@@ -193,7 +192,7 @@ func (m *unaryMetrics) abandoned(reason string) {
 	m.mu.Lock()
 	m.abandonedBy[reason]++
 	m.mu.Unlock()
-	services.AddOne(wsUnaryAbandonedCounter(), attribute.String("reason", reason))
+	telemetry.AddOne(wsUnaryAbandonedCounter(), attribute.String("reason", reason))
 }
 
 // Zombies returns the ws_unary_zombies gauge value.

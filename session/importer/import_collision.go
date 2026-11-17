@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"path/filepath"
 	"strings"
 )
@@ -27,7 +28,7 @@ func CheckPathNotAlreadyManaged(candidatePath string, registry session.InstanceS
 		return fmt.Errorf("check path not already managed: registry is required")
 	}
 
-	resolved, err := session.ResolveSessionPath(candidatePath)
+	resolved, err := instance.ResolveSessionPath(candidatePath)
 	if err != nil {
 		return fmt.Errorf("check path not already managed: %w", err)
 	}
@@ -42,7 +43,7 @@ func CheckPathNotAlreadyManaged(candidatePath string, registry session.InstanceS
 			if managedPath == "" {
 				continue
 			}
-			resolvedManaged, err := session.ResolveSessionPath(managedPath)
+			resolvedManaged, err := instance.ResolveSessionPath(managedPath)
 			if err != nil {
 				continue
 			}

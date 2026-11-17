@@ -77,3 +77,10 @@ ADR-005 does not list Playwright in its exception table; the plan's actual posit
 ### Update (2026-11-05): owner decision after the S14 `Fail`
 
 - Owner choice "Full e2e run" (AskUserQuestion, 2026-11-05): keep e2e as a full run in CI; no e2e selection. `check-spike-results.py` shows S14 as owner-accepted (display only) and `scoping t9` reports T9f as N/A by owner decision; S14 stays `Fail` in `spike-results.yaml` and no PASS rule is changed.
+
+### Update (2026-11-16): PR spec selection by path rules is allowed (owner decision D1)
+
+- Owner decision D1 of `project_plans/e2e-runtime-reduction/plan.md` amends the 2026-11-05 "no e2e selection" outcome. What S14 rejected was Bazel observed-dependency slices. The path-rule selector `tests/e2e/scripts/select-specs.ts` (live on PRs since 2026-11-09, commit `80176bddc`) is a different mechanism: it falls back to `all` on any shared surface, so it never drops a spec on a guess.
+- Allowed: PR runs (`pull_request` only) may select specs with `select-specs.ts`. Not changed: `main` and `workflow_dispatch` run the full suite, and nightly keeps the full matrix. Epic 12 stays unreleased and the Bazel-slice parts of the Decision remain not adopted.
+- Rationale: the PR gate already ignores per-test failures and the goal is runner-minutes, so selection only removes runtime that cannot change a PR verdict, while the full runs on main and nightly keep the safety net.
+- Related owner decisions (D2 baseline-fail skip on PRs, D3 renderer-project choice, D5 runner-minutes as the metric) are recorded in the plan.

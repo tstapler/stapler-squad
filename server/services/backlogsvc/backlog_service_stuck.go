@@ -21,8 +21,9 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -164,7 +165,7 @@ func applyAutoMerge(item *sessionv1.StuckBacklogItem, res githubpkg.RepoSettings
 // filtered to open + un-snoozed by FindOpenStuckStates) to its proto
 // representation. allow_auto_merge is left unset here; ListStuckBacklogItems populates it via
 // populateAutoMerge so one lookup serves every item of a repo.
-func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBacklogItem {
+func stuckBacklogItemToProto(row backlogdto.OpenStuckStateData) *sessionv1.StuckBacklogItem {
 	item := &sessionv1.StuckBacklogItem{
 		ItemId:          row.ItemID,
 		Title:           row.ItemTitle,
@@ -216,11 +217,11 @@ func (s *BacklogService) ListStuckBacklogItems(
 	// fetch them for every such item in one batch instead of per row.
 	var reviewIDs []string
 	for _, row := range rows {
-		if row.ItemStatus == session.BacklogStatusReview {
+		if row.ItemStatus == domain.BacklogStatusReview {
 			reviewIDs = append(reviewIDs, row.ItemID)
 		}
 	}
-	var sessionsByItem map[string][]session.ItemSessionSummary
+	var sessionsByItem map[string][]backlogdto.ItemSessionSummary
 	if len(reviewIDs) > 0 {
 		var sessErr error
 		if sessionsByItem, sessErr = s.storage.ListItemSessionsForItems(ctx, reviewIDs); sessErr != nil {
@@ -231,7 +232,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
-		if ref := backlog.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
+		if ref := stuck.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
 			items[i].DuplicatePending = true
 			items[i].DuplicateRef = ref
 		}

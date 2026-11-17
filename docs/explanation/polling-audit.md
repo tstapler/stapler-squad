@@ -109,7 +109,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/history_linker.go:248` | 5 s | `scanAllSessions` correlates every monitored instance with Claude history | History-file fsnotify watcher (`HistoryFileWatcher` exists) | Pure-event |
 | `session/mux/discovery.go:352` | 30 s backstop | Scan for external PTY sessions | Mux socket events | Cheap-enough |
 | `session/health.go:636` | configured interval | `RecoverUnhealthySessions` over all instances, may `SaveInstances` | tmux session-closed notifications | Needs-new-event-source |
-| `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `jules_session_poller.go:236`, `session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
+| `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `session/jules/session_poller.go:236`, `session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
 | `server/services/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
 | `server/services/guidance_ack_detector.go:155` | 3 s | per-row sample (name) | same | Pure-event |
 | `server/services/config_file_rules_reload.go:76` | 3 s | stat `shared_rules.yaml` | FSEvents or a parent-directory watch, not per-file kqueue (editors replace the file by rename) | Pure-event, trivial |
@@ -118,7 +118,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `server/server_leasewedge.go:13` | 10 s | Lease scan (name) | Lease events | Cheap-enough |
 | `server/services/approval_handler.go:986` | 30 s | `CleanupExpired` in memory | Per-approval timer | Cheap-enough |
 | `session/orphan_tmux_sweeper.go:75`, `tmux/leaked_control_mode_sweeper.go:33` | 5 m | Subprocess scans | none useful | Cheap-enough |
-| `session/worktree_consistency_sweep.go:946` | 15 m (flag-gated, default off) | `git worktree list` reconcile | worktree watcher | Cheap-enough |
+| `session/wtconsistency/sweep.go:946` | 15 m (flag-gated, default off) | `git worktree list` reconcile | worktree watcher | Cheap-enough |
 | `session/hibernation_sweeper.go:216`, `server/services/session_retention_sweeper.go:46` (1 h), `guidance_session_reaper.go:128` (6 h), `contexthistory/recorder.go:100` (6 h), `analytics/retention.go:31` (1 h), `workflows/retention.go:40`, `dependencies.go:1382` (24 h), `dependencies.go:1975` (30 m paused-tmux reaper) | minutes to hours | Retention deletes | none needed | Cheap-enough |
 | `session/dbmaint/dbmaint.go:167` | 15 m | SQLite maintenance | none | Cheap-enough |
 | `session/host_advertiser.go:76`, `claim_gossiper.go:107` (5 m), `main.go:1486,1730`, `sshremote/health_prober.go:300` | 5 m | Multi-host heartbeats | peer events | Cheap-enough |

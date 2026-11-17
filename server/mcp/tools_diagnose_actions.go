@@ -10,7 +10,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const (
@@ -29,7 +30,7 @@ func registerSuggestWorkflowActionTool(s *mcpserver.MCPServer, dh *diagnoseHandl
 			mcpgo.WithDescription("Post a structured recommendation for the operator on the backlog item (e.g. \"Move item back to ready — stall resolved\"). It renders as a dismissible card on the item; nothing is applied automatically. Role: diagnose only."),
 			mcpgo.WithString("item_id", mcpgo.Description("UUID of the backlog item this diagnostic session was dispatched for"), mcpgo.Required()),
 			mcpgo.WithString("recommendation", mcpgo.Description("What the operator should do and why (max 500 chars)"), mcpgo.Required()),
-			mcpgo.WithString("action_type", mcpgo.Description("Kind of action recommended"), mcpgo.Enum(session.WorkflowSuggestionActionTypes...), mcpgo.Required()),
+			mcpgo.WithString("action_type", mcpgo.Description("Kind of action recommended"), mcpgo.Enum(backlogdto.WorkflowSuggestionActionTypes...), mcpgo.Required()),
 		),
 		dh.suggestWorkflowAction,
 	)
@@ -51,16 +52,16 @@ func (dh *diagnoseHandlers) suggestWorkflowAction(ctx context.Context, req mcpgo
 		return errResult(ErrInvalidArgument, fmt.Sprintf("recommendation is required and must be at most %d chars", maxWorkflowRecommendationLen), ""), nil
 	}
 	actionType, _ := args["action_type"].(string)
-	if !slices.Contains(session.WorkflowSuggestionActionTypes, actionType) {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("action_type must be one of %v", session.WorkflowSuggestionActionTypes), ""), nil
+	if !slices.Contains(backlogdto.WorkflowSuggestionActionTypes, actionType) {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("action_type must be one of %v", backlogdto.WorkflowSuggestionActionTypes), ""), nil
 	}
 	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID); errRes != nil {
 		return errRes, nil
 	}
-	id, appendErr := dh.storage.AppendWorkflowSuggestion(ctx, itemID, session.WorkflowSuggestionData{
+	id, appendErr := dh.storage.AppendWorkflowSuggestion(ctx, itemID, backlogdto.WorkflowSuggestionData{
 		ActionType: actionType, Recommendation: recommendation, SessionUUID: callerUUID,
 	})
-	if errors.Is(appendErr, session.ErrDuplicateWorkflowSuggestion) || errors.Is(appendErr, session.ErrTooManyWorkflowSuggestions) {
+	if errors.Is(appendErr, backlogdto.ErrDuplicateWorkflowSuggestion) || errors.Is(appendErr, backlogdto.ErrTooManyWorkflowSuggestions) {
 		return errResult(ErrInvalidArgument, appendErr.Error(), ""), nil
 	}
 	if appendErr != nil {
@@ -114,20 +115,20 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 		return errRes, nil
 	}
 	callerUUID := callerSessionUUIDForAudit(ctx)
-	created, createErr := dh.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, createErr := dh.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       title,
 		Description: harnessGapDescription(evidence, severity, callerUUID, origin),
-		Priority:    session.DefaultBacklogPriority,
-		Status:      string(session.BacklogStatusIdea),
+		Priority:    domain.DefaultBacklogPriority,
+		Status:      string(domain.BacklogStatusIdea),
 		RepoPath:    origin.RepoPath,
-		Category:    string(session.BacklogCategoryBugfix),
+		Category:    string(domain.BacklogCategoryBugfix),
 		Labels:      []string{"harness:bug", "auto-diagnose"},
 	})
 	if createErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("create harness-gap item: %v", createErr), ""), nil
 	}
 	linkNote := ""
-	if depErr := dh.storage.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{BlockerID: origin.ID, BlockedID: created.ID}); depErr != nil {
+	if depErr := dh.storage.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: origin.ID, BlockedID: created.ID}); depErr != nil {
 		log.WarningLog().Printf("[mcp:report_harness_gap] link %s blocked_by %s: %v", created.ID, origin.ID, depErr)
 		linkNote = fmt.Sprintf(" (warning: could not link blocked_by %s: %v)", origin.ID, depErr)
 	}
@@ -135,7 +136,7 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 	return mcpgo.NewToolResultText(fmt.Sprintf("Filed harness gap as item %s%s", created.ID, linkNote)), nil
 }
 
-func harnessGapDescription(evidence, severity, sessionUUID string, origin *session.BacklogItemData) string {
+func harnessGapDescription(evidence, severity, sessionUUID string, origin *backlogdto.BacklogItemData) string {
 	return fmt.Sprintf("%s\n\n## Evidence\n- Severity: %s\n- Originating item: %s (%s)\n- Reporting session: %s\n- Outcome/summary: see the originating item's diagnosis result\n",
 		evidence, severity, origin.ID, origin.Title, sessionUUID)
 }
@@ -148,7 +149,7 @@ func (dh *diagnoseHandlers) checkHarnessGapCap(ctx context.Context, originID str
 	}
 	open := 0
 	for _, ref := range blocking {
-		if ref.Status == string(session.BacklogStatusDone) || ref.Status == string(session.BacklogStatusArchived) {
+		if ref.Status == string(domain.BacklogStatusDone) || ref.Status == string(domain.BacklogStatusArchived) {
 			continue
 		}
 		item, getErr := dh.storage.GetBacklogItem(ctx, ref.ItemID)

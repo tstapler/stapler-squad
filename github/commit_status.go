@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
@@ -92,7 +94,7 @@ func SetCommitStatus(repo RepoRef, req CommitStatusRequest) error {
 		args = append(args, "-f", fmt.Sprintf("target_url=%s", req.TargetURL))
 	}
 	if repo.Host() != "" {
-		args = append(args, "--hostname", NormalizeHost(repo.Host()))
+		args = append(args, "--hostname", domain.NormalizeHost(repo.Host()))
 	}
 
 	cmd := safeexec.CommandContext(ctx, "gh", args...)

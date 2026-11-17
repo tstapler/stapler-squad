@@ -493,7 +493,7 @@ export async function openTerminalSession(
   });
   await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
   await page.goto(`${baseUrl}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeAttached({ timeout: 20_000 });
+  await expect(page.getByRole('textbox', { name: 'Terminal input' }).last()).toBeAttached({ timeout: 20_000 });
   if (waitForText) {
     await expect.poll(async () => (await readTerminalFacts(page)).text, { timeout: 15_000 }).toContain(marker);
   }

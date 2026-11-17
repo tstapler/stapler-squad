@@ -13,6 +13,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // attachWorkSessionWithRange is attachWorkSessionWithCommit but takes an explicit
@@ -20,26 +23,26 @@ import (
 // content (base..sha) rather than a degenerate empty range.
 func attachWorkSessionWithRange(t *testing.T, storage *session.Storage, repo *session.EntRepository, itemID, sessionUUID, repoPath, worktreePath, branchName, baseSHA, sha string) {
 	t.Helper()
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, sha, "work commit", time.Now(), 1))
 
 	now := time.Now()
-	require.NoError(t, repo.Create(t.Context(), session.InstanceData{
+	require.NoError(t, repo.Create(t.Context(), domain.InstanceData{
 		Title:      sessionUUID,
 		UUID:       sessionUUID,
 		Path:       worktreePath,
 		WorkingDir: worktreePath,
 		Branch:     branchName,
-		Status:     session.Paused,
+		Status:     domain.Paused,
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoPath,
 			WorktreePath:  worktreePath,
 			SessionName:   sessionUUID,
@@ -70,10 +73,10 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLo
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "done item, worktree cleaned up",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -107,10 +110,10 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item still in progress",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithRange(t, storage, repo, item.ID, "live-work", repoPath, repoPath, "feature", baseSHA, sha)
@@ -146,10 +149,10 @@ func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefres
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "review item with a real Gate Verdict",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -193,10 +196,10 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "reopened item, rework session made no commits",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 

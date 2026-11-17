@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -87,19 +89,19 @@ func TestEvaluateContextHealth(t *testing.T) {
 	cfg := config.ContextHealthConfig{}.ContextHealthConfigOrDefault()
 	tests := []struct {
 		name       string
-		sig        ContextHealthSignals
-		wantLevel  ContextHealthLevel
+		sig        domain.ContextHealthSignals
+		wantLevel  domain.ContextHealthLevel
 		wantReason string
 	}{
-		{"below sample floor", ContextHealthSignals{ToolCallsInWindow: 3, MaxConsecutiveRepeats: 3, ConfusionPhraseCount: 9}, HealthUnknown, ""},
-		{"loop at threshold", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Bash"}, HealthAmber, "Repeated the same Bash call 3 times in a row"},
-		{"loop at 2x threshold", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 6, RepeatedToolName: "Bash"}, HealthRed, "Repeated the same Bash call 6 times in a row"},
-		{"both signals", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Edit", ConfusionPhraseCount: 5}, HealthRed, "Repeated the same Edit call 3 times in a row; 5 self-correction messages in the last 20 turns"},
-		{"confusion at threshold", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1, ConfusionPhraseCount: 5}, HealthAmber, "5 self-correction messages in the last 20 turns"},
-		{"confusion at 2x", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1, ConfusionPhraseCount: 10}, HealthRed, "10 self-correction messages in the last 20 turns"},
-		{"loop just below", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 2, RepeatedToolName: "Bash"}, HealthGreen, ""},
-		{"confusion just below", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1, ConfusionPhraseCount: 4}, HealthGreen, ""},
-		{"clean", ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1}, HealthGreen, ""},
+		{"below sample floor", domain.ContextHealthSignals{ToolCallsInWindow: 3, MaxConsecutiveRepeats: 3, ConfusionPhraseCount: 9}, domain.HealthUnknown, ""},
+		{"loop at threshold", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Bash"}, domain.HealthAmber, "Repeated the same Bash call 3 times in a row"},
+		{"loop at 2x threshold", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 6, RepeatedToolName: "Bash"}, domain.HealthRed, "Repeated the same Bash call 6 times in a row"},
+		{"both signals", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Edit", ConfusionPhraseCount: 5}, domain.HealthRed, "Repeated the same Edit call 3 times in a row; 5 self-correction messages in the last 20 turns"},
+		{"confusion at threshold", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1, ConfusionPhraseCount: 5}, domain.HealthAmber, "5 self-correction messages in the last 20 turns"},
+		{"confusion at 2x", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1, ConfusionPhraseCount: 10}, domain.HealthRed, "10 self-correction messages in the last 20 turns"},
+		{"loop just below", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 2, RepeatedToolName: "Bash"}, domain.HealthGreen, ""},
+		{"confusion just below", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1, ConfusionPhraseCount: 4}, domain.HealthGreen, ""},
+		{"clean", domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 1}, domain.HealthGreen, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,16 +113,16 @@ func TestEvaluateContextHealth(t *testing.T) {
 }
 
 func TestEvaluateContextHealth_ZeroConfigUsesDefaults(t *testing.T) {
-	sig := ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Bash"}
+	sig := domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Bash"}
 	assert.Equal(t,
 		EvaluateContextHealth(sig, config.ContextHealthConfig{}.ContextHealthConfigOrDefault()),
 		EvaluateContextHealth(sig, config.ContextHealthConfig{}))
 }
 
 func TestEvaluateContextHealth_ConcurrentCallsAgree(t *testing.T) {
-	sig := ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Bash"}
+	sig := domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: 3, RepeatedToolName: "Bash"}
 	var wg sync.WaitGroup
-	got := make([]ContextHealthVerdict, 8)
+	got := make([]domain.ContextHealthVerdict, 8)
 	for i := range got {
 		wg.Add(1)
 		go func() { defer wg.Done(); got[i] = EvaluateContextHealth(sig, config.ContextHealthConfig{}) }()

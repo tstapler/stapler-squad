@@ -12,7 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- REQ-0: wire-compat when new fields are unset ----------------------------
@@ -129,9 +129,9 @@ func TestSearchClaudeHistory_LogsExcludedCountOnlyWhenSessionsActuallyExcluded(t
 		}},
 	})
 	svc := setupSearchService()
-	hiddenInst := &session.Instance{Hidden: true} //nolint:exhaustruct
+	hiddenInst := &instance.Instance{Hidden: true} //nolint:exhaustruct
 	hiddenInst.SetClaudeConversationUUID("hidden-session")
-	svc.SetInstanceProvider(func() []*session.Instance { return []*session.Instance{hiddenInst} })
+	svc.SetInstanceProvider(func() []*instance.Instance { return []*instance.Instance{hiddenInst} })
 
 	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
 	// swap against every other log.SetSlogDefaultForTest swap in this package.
@@ -195,9 +195,9 @@ func TestListClaudeHistory_ExcludesAutomationSessionsWhenRequested(t *testing.T)
 		}},
 	})
 	svc := setupSearchService()
-	hiddenInst := &session.Instance{Hidden: true} //nolint:exhaustruct
+	hiddenInst := &instance.Instance{Hidden: true} //nolint:exhaustruct
 	hiddenInst.SetClaudeConversationUUID("hidden-session")
-	svc.SetInstanceProvider(func() []*session.Instance { return []*session.Instance{hiddenInst} })
+	svc.SetInstanceProvider(func() []*instance.Instance { return []*instance.Instance{hiddenInst} })
 
 	resp, err := svc.ListClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.ListClaudeHistoryRequest{
 		ExcludeAutomationSessions: svctest.BoolPtr(true),

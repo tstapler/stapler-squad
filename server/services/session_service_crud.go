@@ -10,7 +10,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // hiddenVisibleInList applies include_hidden / hidden_only to one session. hidden_only
@@ -24,13 +27,13 @@ func hiddenVisibleInList(hidden bool, req *sessionv1.ListSessionsRequest) bool {
 
 // itemSessionBatchLookup is the one storage call background_outcome needs.
 type itemSessionBatchLookup interface {
-	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]session.ItemSessionSummary, error)
+	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error)
 }
 
 type hiddenOutcomeEntry struct {
 	proto  *sessionv1.Session
 	uuid   string
-	status session.Status
+	status domain.Status
 }
 
 // populateBackgroundOutcomes sets Session.background_outcome for hidden_only
@@ -44,7 +47,7 @@ func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries
 	if lookup == nil && s.concStorage != nil {
 		lookup = s.concStorage
 	}
-	var byUUID map[string]session.ItemSessionSummary
+	var byUUID map[string]backlogdto.ItemSessionSummary
 	if lookup != nil {
 		uuids := make([]string, 0, len(entries))
 		for _, e := range entries {
@@ -56,7 +59,7 @@ func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries
 		}
 	}
 	for _, e := range entries {
-		var is *session.ItemSessionSummary
+		var is *backlogdto.ItemSessionSummary
 		if row, ok := byUUID[e.uuid]; ok {
 			is = &row
 		}
@@ -107,7 +110,7 @@ func (s *SessionService) SetFederation(f *FederatedSessions) { s.federation = f 
 
 // instanceMatchesListFilters applies ListSessions' status, category, hidden,
 // archived and workflow filters to a managed instance.
-func instanceMatchesListFilters(inst *session.Instance, msg *sessionv1.ListSessionsRequest) bool {
+func instanceMatchesListFilters(inst *instance.Instance, msg *sessionv1.ListSessionsRequest) bool {
 	// Read the status directly off the instance instead of building the full proto
 	// just to inspect one field: the proto build runs the expensive
 	// GetEffectiveStatus/DetectStateFromContent chain, so doing it twice per
@@ -137,7 +140,7 @@ func instanceMatchesListFilters(inst *session.Instance, msg *sessionv1.ListSessi
 
 // externalMatchesListFilters applies the status, category and hidden filters to
 // a mux-discovered external session (always running, hence ACTIVE).
-func externalMatchesListFilters(ext *session.Instance, msg *sessionv1.ListSessionsRequest) bool {
+func externalMatchesListFilters(ext *instance.Instance, msg *sessionv1.ListSessionsRequest) bool {
 	if msg.Status != nil && *msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED &&
 		*msg.Status != sessionv1.SessionStatus_SESSION_STATUS_ACTIVE {
 		return false
@@ -154,7 +157,7 @@ func (s *SessionService) listLocalSessions(
 ) (*connect.Response[sessionv1.ListSessionsResponse], error) {
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
-	var instances []*session.Instance
+	var instances []*instance.Instance
 	if s.ReviewQueuePoller != nil {
 		instances = s.ReviewQueuePoller.GetInstances()
 	} else {

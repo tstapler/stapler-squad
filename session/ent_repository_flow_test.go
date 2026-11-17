@@ -12,6 +12,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/flow"
+	"github.com/tstapler/stapler-squad/session/flowstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // newFlowTestRepo opens an on-disk repository (dbpool reader/writer split).
@@ -52,7 +54,7 @@ func TestEntFlowReader_should_FilterByParsedInstant_When_RowsCarryMixedOffsets(t
 	// 2026-10-05 20:00:00+00:00 is 2026-10-05T20:00Z (before From 21:30Z).
 	seedFlowEvent(t, c, item, "in_progress", "review", time.Date(2026, 10, 5, 20, 0, 0, 0, time.UTC), "b")
 
-	r := NewEntFlowReader(c)
+	r := newFlowReader(c)
 	rng := flow.EventRange{
 		From: time.Date(2026, 10, 5, 21, 30, 0, 0, time.UTC),
 		To:   time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
@@ -64,10 +66,10 @@ func TestEntFlowReader_should_FilterByParsedInstant_When_RowsCarryMixedOffsets(t
 	require.Equal(t, time.Date(2026, 10, 6, 3, 0, 0, 0, time.UTC), got[0].At)
 	require.Equal(t, time.UTC, got[0].At.Location())
 
-	// The SQL prefilter is a superset: the raw fetch saw both rows.
-	raw, err := r.fetchEvents(context.Background(), rng)
+	// The exact instant filter, not the SQL range, dropped the second row: both are stored.
+	stored, err := c.BacklogStatusEvent.Query().Count(context.Background())
 	require.NoError(t, err)
-	require.Len(t, raw, 2)
+	require.Equal(t, 2, stored)
 }
 
 func TestEntFlowReader_should_OrderByInstantThenSeq_When_RowsCarryMixedOffsets(t *testing.T) {
@@ -80,7 +82,7 @@ func TestEntFlowReader_should_OrderByInstantThenSeq_When_RowsCarryMixedOffsets(t
 	seedFlowEvent(t, c, item, "ready", "in_progress", time.Date(2026, 8, 10, 10, 30, 0, 0, pdt), "later")
 	seedFlowEvent(t, c, item, "idea", "ready", time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC), "earlier")
 
-	got, err := NewEntFlowReader(c).Events(context.Background(), flow.EventRange{
+	got, err := newFlowReader(c).Events(context.Background(), flow.EventRange{
 		From: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -100,7 +102,7 @@ func TestEntFlowReader_should_ReturnLatestPreRangeEvent_When_LastEventsBefore(t 
 	seedFlowEvent(t, c, b, "idea", "ready", base.Add(2*time.Hour), "b1")
 
 	before := base.Add(24 * time.Hour)
-	got, err := NewEntFlowReader(c).LastEventsBefore(context.Background(), before,
+	got, err := newFlowReader(c).LastEventsBefore(context.Background(), before,
 		[]flow.ItemID{flow.ItemID(a.String()), flow.ItemID(b.String()), flow.ItemID(uuid.NewString())})
 	require.NoError(t, err)
 	notes := map[flow.ItemID]string{}
@@ -121,7 +123,7 @@ func TestEntFlowReader_should_ListOnlyNonTerminalItems_When_OpenItemIDs(t *testi
 		require.NoError(t, err)
 	}
 
-	got, err := NewEntFlowReader(c).OpenItemIDs(context.Background())
+	got, err := newFlowReader(c).OpenItemIDs(context.Background())
 
 	require.NoError(t, err)
 	require.Equal(t, []flow.ItemID{flow.ItemID(open.String())}, got)
@@ -132,9 +134,9 @@ func TestEntFlowReader_should_ReturnTypedError_When_ContextCancelled(t *testing.
 	repo := newFlowTestRepo(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := NewEntFlowReader(repo.GetEntClient()).Events(ctx, flow.EventRange{From: time.Now().Add(-time.Hour)})
+	_, err := newFlowReader(repo.GetEntClient()).Events(ctx, flow.EventRange{From: time.Now().Add(-time.Hour)})
 	require.ErrorIs(t, err, context.Canceled)
-	var re *FlowReadError
+	var re *flowstore.FlowReadError
 	require.ErrorAs(t, err, &re)
 	require.Equal(t, "events", re.Op)
 }
@@ -146,7 +148,7 @@ func TestEntFlowReader_should_LabelReadsReaderPool_When_PlainSelectsOnly(t *test
 	item := seedFlowItem(t, c, "pool")
 	seedFlowEvent(t, c, item, "idea", "ready", time.Now().UTC().Add(-time.Hour), "x")
 
-	r := NewEntFlowReader(c)
+	r := newFlowReader(c)
 	rng := flow.EventRange{From: time.Now().UTC().Add(-48 * time.Hour)}
 	ids := []flow.ItemID{flow.ItemID(item.String())}
 	ctx := context.Background()
@@ -179,4 +181,9 @@ func poolQueries(name string) int64 {
 		}
 	}
 	return n
+}
+
+// newFlowReader builds a flowstore.Reader with the default workflow engine.
+func newFlowReader(c *ent.Client) *flowstore.Reader {
+	return flowstore.New(c, workflowengine.NewDefaultWorkflowEngine())
 }

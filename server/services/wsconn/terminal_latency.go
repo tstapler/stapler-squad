@@ -8,11 +8,12 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 // streamLatency holds one stream's backend and listener labels. The listener is known at
@@ -57,9 +58,9 @@ func (s *streamLatency) setListener(listener string) {
 	s.update(func(l *termlat.Labels) { l.Listener = termlat.NormalizeListener(listener) })
 }
 
-func (s *streamLatency) setBackend(b session.ProcessManagerBackend) {
+func (s *streamLatency) setBackend(b domain.ProcessManagerBackend) {
 	if b == "" {
-		b = session.BackendTmux // an unset backend is the tmux default
+		b = domain.BackendTmux // an unset backend is the tmux default
 	}
 	s.update(func(l *termlat.Labels) { l.Backend = termlat.NormalizeBackend(string(b)) })
 }
@@ -81,7 +82,7 @@ func (t *WebSocketTransport) LatencyLabels() termlat.Labels {
 
 // keystrokeDelivery carries one browser keystroke to a session pane and times each stage.
 type keystrokeDelivery struct {
-	instance    *session.Instance
+	instance    *instance.Instance
 	latency     *streamLatency
 	bookkeeper  *inputBookkeeper
 	logPrefix   string

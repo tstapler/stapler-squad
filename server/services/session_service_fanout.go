@@ -15,9 +15,10 @@ import (
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -113,11 +114,11 @@ func (s *SessionService) FanOutSession(
 // stopped or been paused/hibernated, or it is Active but sitting at an idle/ready/success
 // prompt. Anything still producing output (or crashed/failed/creating) is rejected so a
 // partial diff is never merged.
-func fanoutWinnerEligibility(status session.Status, claude detection.DetectedStatus) error {
+func fanoutWinnerEligibility(status domain.Status, claude detection.DetectedStatus) error {
 	switch status {
-	case session.Stopped, session.Paused, session.Hibernated:
+	case domain.Stopped, domain.Paused, domain.Hibernated:
 		return nil
-	case session.Active:
+	case domain.Active:
 		switch claude {
 		case detection.StatusIdle, detection.StatusReady, detection.StatusSuccess:
 			return nil
@@ -128,9 +129,9 @@ func fanoutWinnerEligibility(status session.Status, claude detection.DetectedSta
 	}
 }
 
-func (s *SessionService) fanoutGroupMembers(groupID string) []*session.Instance {
+func (s *SessionService) fanoutGroupMembers(groupID string) []*instance.Instance {
 	tag := fanoutGroupTagPrefix + groupID
-	var members []*session.Instance
+	var members []*instance.Instance
 	for _, inst := range s.GetInstances() {
 		if inst.HasTag(tag) {
 			members = append(members, inst)
@@ -139,7 +140,7 @@ func (s *SessionService) fanoutGroupMembers(groupID string) []*session.Instance 
 	return members
 }
 
-func fanoutBaseBranch(inst *session.Instance) string {
+func fanoutBaseBranch(inst *instance.Instance) string {
 	for _, t := range inst.GetTags() {
 		if v, ok := strings.CutPrefix(t, fanoutBaseTagPrefix); ok {
 			return v
@@ -193,7 +194,7 @@ func (s *SessionService) PickFanoutWinner(
 }
 
 // resolveFanoutWinner returns the group's members and the pickable winner among them.
-func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *session.Instance, members []*session.Instance, err error) {
+func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *instance.Instance, members []*instance.Instance, err error) {
 	members = s.fanoutGroupMembers(groupID)
 	if len(members) == 0 {
 		return nil, nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fan-out group not found: %s", groupID))
@@ -214,7 +215,7 @@ func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *
 	if s.statusManager != nil {
 		claude = s.statusManager.GetStatus(winner).ClaudeStatus
 	}
-	if eligErr := fanoutWinnerEligibility(session.Status(winner.GetStatus()), claude); eligErr != nil {
+	if eligErr := fanoutWinnerEligibility(domain.Status(winner.GetStatus()), claude); eligErr != nil {
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, eligErr)
 	}
 	return winner, members, nil
@@ -222,7 +223,7 @@ func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *
 
 // checkFanoutMergeTarget verifies the winner's repo is ready to receive the merge: the group's
 // base branch is checked out and the tree is clean.
-func checkFanoutMergeTarget(winner *session.Instance) (wt *git.GitWorktree, baseBranch string, err error) {
+func checkFanoutMergeTarget(winner *instance.Instance) (wt *git.GitWorktree, baseBranch string, err error) {
 	wt, wtErr := winner.GetGitWorktree()
 	if wtErr != nil || wt == nil {
 		return nil, "", connect.NewError(connect.CodeFailedPrecondition,
@@ -253,7 +254,7 @@ func checkFanoutMergeTarget(winner *session.Instance) (wt *git.GitWorktree, base
 	return wt, baseBranch, nil
 }
 
-func (s *SessionService) archiveFanoutLosers(ctx context.Context, groupID string, members []*session.Instance, winner *session.Instance) (archived, failed []string) {
+func (s *SessionService) archiveFanoutLosers(ctx context.Context, groupID string, members []*instance.Instance, winner *instance.Instance) (archived, failed []string) {
 	for _, m := range members {
 		if m.UUID == winner.UUID || m.IsArchived() {
 			continue

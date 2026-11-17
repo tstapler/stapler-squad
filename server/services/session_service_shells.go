@@ -19,17 +19,17 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // goShellStatusToProto maps the Go-side ShellStatus string constant to the proto enum.
-func goShellStatusToProto(s session.ShellStatus) sessionv1.ShellStatus {
+func goShellStatusToProto(s instance.ShellStatus) sessionv1.ShellStatus {
 	switch s {
-	case session.ShellStatusRunning:
+	case instance.ShellStatusRunning:
 		return sessionv1.ShellStatus_SHELL_STATUS_RUNNING
-	case session.ShellStatusStopped:
+	case instance.ShellStatusStopped:
 		return sessionv1.ShellStatus_SHELL_STATUS_STOPPED
-	case session.ShellStatusError:
+	case instance.ShellStatusError:
 		return sessionv1.ShellStatus_SHELL_STATUS_ERROR
 	default:
 		return sessionv1.ShellStatus_SHELL_STATUS_UNSPECIFIED
@@ -37,7 +37,7 @@ func goShellStatusToProto(s session.ShellStatus) sessionv1.ShellStatus {
 }
 
 // shellToProto converts an in-memory session.Shell to the proto Shell message.
-func shellToProto(sh *session.Shell) *sessionv1.Shell {
+func shellToProto(sh *instance.Shell) *sessionv1.Shell {
 	if sh == nil {
 		return nil
 	}
@@ -108,7 +108,7 @@ func (s *SessionService) SpawnShell(
 			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}
 
-	shell, spawnErr := inst.SpawnShell(ctx, session.SpawnShellRequest{
+	shell, spawnErr := inst.SpawnShell(ctx, instance.SpawnShellRequest{
 		Name:       req.Msg.Name,
 		Command:    req.Msg.Command,
 		WorkingDir: req.Msg.WorkingDir,

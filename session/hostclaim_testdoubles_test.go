@@ -4,12 +4,9 @@ package session
 // _test.go files, which no other package can import.
 
 import (
-	"bytes"
-	"log/slog"
 	"testing"
 	"time"
 
-	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -61,15 +58,4 @@ func newTestClaimIndex(t *testing.T, stateDir string, clock hostclaim.Clock, pin
 		t.Fatalf("NewClaimIndex() error = %v, want nil", err)
 	}
 	return index
-}
-
-// captureLogInfo redirects the log package's slog seam to a text handler writing into the returned buffer.
-func captureLogInfo(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() {
-		ssqlog.SetSlogDefaultForTest(prev)
-	})
-	return &buf
 }

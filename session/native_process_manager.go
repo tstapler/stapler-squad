@@ -14,6 +14,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -28,7 +29,7 @@ import (
 // Content capture (CapturePaneContent variants) and precise CWD via lsof/proc
 // are deferred to Phase 3.
 type NativeProcessManager struct {
-	opts ProcessManagerOptions
+	opts instance.ProcessManagerOptions
 
 	mu       sync.Mutex
 	ptm      *os.File      // PTY master fd; nil when not started
@@ -47,7 +48,7 @@ type NativeProcessManager struct {
 
 // NewNativeProcessManager creates a NativeProcessManager with the given options.
 // Call Start() to launch the process.
-func NewNativeProcessManager(opts ProcessManagerOptions) *NativeProcessManager {
+func NewNativeProcessManager(opts instance.ProcessManagerOptions) *NativeProcessManager {
 	return &NativeProcessManager{
 		opts:   opts,
 		stopCh: make(chan struct{}),
@@ -56,10 +57,10 @@ func NewNativeProcessManager(opts ProcessManagerOptions) *NativeProcessManager {
 }
 
 // compile-time check that *NativeProcessManager satisfies ProcessManager.
-var _ ProcessManager = (*NativeProcessManager)(nil)
+var _ instance.ProcessManager = (*NativeProcessManager)(nil)
 
 // WireLaunch sets the program Start launches.
-func (n *NativeProcessManager) WireLaunch(spec LaunchSpec) {
+func (n *NativeProcessManager) WireLaunch(spec instance.LaunchSpec) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.opts.Program = spec.Program

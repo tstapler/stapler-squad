@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func toolUseLine(t *testing.T, ts, id, command string) []byte {
@@ -57,10 +59,10 @@ func scanLines(lines ...[]byte) *scanFindings {
 	return &f
 }
 
-func prRecords(f *scanFindings) []PRRecord {
-	var out []PRRecord
+func prRecords(f *scanFindings) []domain.PRRecord {
+	var out []domain.PRRecord
 	for _, r := range f.records {
-		if p, ok := r.(PRRecord); ok {
+		if p, ok := r.(domain.PRRecord); ok {
 			out = append(out, p)
 		}
 	}
@@ -78,7 +80,7 @@ func TestExtractor_ShouldEmitAuthoredPRRecord_WhenToolUsePairedWithResult(t *tes
 	if len(prs) != 1 {
 		t.Fatalf("want one PR record, got %#v", f.records)
 	}
-	want := PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: PRSourceCreated,
+	want := domain.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: domain.PRSourceCreated,
 		Branch: "feat-b", Base: "feat-a", FirstSeenAt: time.Date(2026, 11, 4, 10, 15, 0, 0, time.UTC)}
 	if prs[0] != want {
 		t.Fatalf("got %#v\nwant %#v", prs[0], want)
@@ -95,7 +97,7 @@ func TestExtractor_ShouldMarkMentioned_WhenGhPrViewOnly(t *testing.T) {
 		toolResultLine(t, "2026-11-04T10:00:01Z", "t1", "title: x\nurl: https://github.com/acme/app/pull/99"),
 	)
 	prs := prRecords(f)
-	if len(prs) != 1 || prs[0].Source != PRSourceMentioned || prs[0].Number != 99 {
+	if len(prs) != 1 || prs[0].Source != domain.PRSourceMentioned || prs[0].Number != 99 {
 		t.Fatalf("got %#v", prs)
 	}
 }
@@ -103,7 +105,7 @@ func TestExtractor_ShouldMarkMentioned_WhenGhPrViewOnly(t *testing.T) {
 func TestExtractor_ShouldMarkMentioned_WhenResultHasNoMatchingToolUse(t *testing.T) {
 	t.Parallel()
 	f := scanLines(toolResultLine(t, "2026-11-04T10:00:01Z", "orphan", "https://github.com/acme/app/pull/7"))
-	if prs := prRecords(f); len(prs) != 1 || prs[0].Source != PRSourceMentioned {
+	if prs := prRecords(f); len(prs) != 1 || prs[0].Source != domain.PRSourceMentioned {
 		t.Fatalf("got %#v", prs)
 	}
 }
@@ -115,9 +117,9 @@ func TestScan_ShouldPairCommandWithResult_WhenCommandRecordCaptured(t *testing.T
 		toolResultLine(t, "2026-11-04T10:00:02Z", "t1", "[main 1a2b3c4] fix: x\n 1 file changed"),
 		toolUseLine(t, "2026-11-04T10:01:00Z", "t2", `go get example.com/x@v1`), // never answered
 	)
-	var cmds []CommandRecord
+	var cmds []domain.CommandRecord
 	for _, r := range f.records {
-		if c, ok := r.(CommandRecord); ok {
+		if c, ok := r.(domain.CommandRecord); ok {
 			cmds = append(cmds, c)
 		}
 	}
@@ -140,7 +142,7 @@ func TestExtractor_ShouldTruncateResult_WhenLong(t *testing.T) {
 		toolResultLine(t, "2026-11-04T10:00:02Z", "t1", long),
 	)
 	for _, r := range f.records {
-		if c, ok := r.(CommandRecord); ok && len(c.Result) > MaxResultBytes {
+		if c, ok := r.(domain.CommandRecord); ok && len(c.Result) > MaxResultBytes {
 			t.Fatalf("result %d bytes", len(c.Result))
 		}
 	}

@@ -10,12 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -42,14 +43,14 @@ var (
 // classifiedQuery is a query reduced to its shape.
 type classifiedQuery struct {
 	kind string
-	pr   session.PRRef // set for queryKindPR
-	sha  string        // set for queryKindSHA, lowercased
+	pr   domain.PRRef // set for queryKindPR
+	sha  string       // set for queryKindSHA, lowercased
 }
 
 func classifyArtifactQuery(q string) classifiedQuery {
 	if m := prQueryPattern.FindStringSubmatch(q); m != nil {
 		if n, err := strconv.Atoi(m[4]); err == nil {
-			if ref, err := session.NewPRRef(m[1], m[2], m[3], n); err == nil {
+			if ref, err := domain.NewPRRef(m[1], m[2], m[3], n); err == nil {
 				return classifiedQuery{kind: queryKindPR, pr: ref}
 			}
 		}
@@ -164,11 +165,11 @@ func (a *ArtifactService) addExactMatches(ctx context.Context, g *hitGroups, cq 
 			return err
 		}
 		for _, f := range found {
-			g.addMatch(f.SessionID, artifacts.KindPR, prDisplay(cq.pr), exactMatchScore)
+			g.addMatch(f.SessionID, domain.KindPR, prDisplay(cq.pr), exactMatchScore)
 		}
 	case queryKindSHA:
 		for _, id := range a.index.SessionsForSHAPrefix(cq.sha) {
-			g.addMatch(id, artifacts.KindCommit, cq.sha, exactMatchScore)
+			g.addMatch(id, domain.KindCommit, cq.sha, exactMatchScore)
 		}
 	}
 	return nil
@@ -177,12 +178,12 @@ func (a *ArtifactService) addExactMatches(ctx context.Context, g *hitGroups, cq 
 // exactMatchScore outranks any BM25 score: the identifier was typed in full.
 const exactMatchScore = 1e6
 
-func prDisplay(ref session.PRRef) string {
+func prDisplay(ref domain.PRRef) string {
 	return fmt.Sprintf("%s/%s#%d", ref.Owner(), ref.Repo(), ref.Number())
 }
 
 // sessionsForPR is the set of visible sessions tied to ref by either source.
-func (a *ArtifactService) sessionsForPR(ctx context.Context, ref session.PRRef, vis visibleSet) (map[string]struct{}, error) {
+func (a *ArtifactService) sessionsForPR(ctx context.Context, ref domain.PRRef, vis visibleSet) (map[string]struct{}, error) {
 	found, err := a.index.SessionsForPR(ctx, ref)
 	if err != nil {
 		return nil, err
@@ -207,17 +208,17 @@ func clampSearchLimit(n int32) int {
 }
 
 // visibleSet is the live sessions a caller may see, keyed by UUID (the index key).
-type visibleSet struct{ byUUID map[string]*session.Instance }
+type visibleSet struct{ byUUID map[string]*instance.Instance }
 
 // visibleSessions applies the history-search hidden rule (hidden sessions are
 // dropped only on request) and the list rule (archived are dropped unless asked
 // for). A session without a live Instance is never visible: results are sessions.
 func (a *ArtifactService) visibleSessions(excludeAutomation, includeArchived bool) visibleSet {
-	var all []*session.Instance
+	var all []*instance.Instance
 	if a.allInstances != nil {
 		all = a.allInstances()
 	}
-	out := make(map[string]*session.Instance, len(all))
+	out := make(map[string]*instance.Instance, len(all))
 	for _, inst := range all {
 		snap := inst.Snapshot()
 		switch {
@@ -241,21 +242,21 @@ func (v visibleSet) unscanned() int32 {
 			n++
 			continue
 		}
-		if st := blob.State(); st == artifacts.ScanStateNotLinked || st == artifacts.ScanStateScanning {
+		if st := blob.State(); st == domain.ScanStateNotLinked || st == domain.ScanStateScanning {
 			n++
 		}
 	}
 	return n
 }
 
-func sessionLastActivity(snap *session.InstanceSnapshot) time.Time {
+func sessionLastActivity(snap *domain.InstanceSnapshot) time.Time {
 	if !snap.LastMeaningfulChangeAt.IsZero() {
 		return snap.LastMeaningfulChangeAt
 	}
 	return snap.UpdatedAt
 }
 
-func newSessionHit(inst *session.Instance, source string) *sessionv1.SessionArtifactHit {
+func newSessionHit(inst *instance.Instance, source string) *sessionv1.SessionArtifactHit {
 	snap := inst.Snapshot()
 	hit := &sessionv1.SessionArtifactHit{SessionId: inst.GetStableID(), Title: snap.Title, Source: source}
 	if t := sessionLastActivity(snap); !t.IsZero() {
@@ -296,7 +297,7 @@ func newHitGroups(vis visibleSet) *hitGroups {
 	return &hitGroups{vis: vis, hits: map[string]*sessionv1.SessionArtifactHit{}, score: map[string]float64{}}
 }
 
-func (g *hitGroups) addMatch(uuid string, kind artifacts.RecordKind, text string, score float64) {
+func (g *hitGroups) addMatch(uuid string, kind domain.RecordKind, text string, score float64) {
 	inst, ok := g.vis.byUUID[uuid]
 	if !ok {
 		return

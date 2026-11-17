@@ -23,22 +23,22 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // dirWorkspaces maps session ids to worktree directories that exist on disk.
-type dirWorkspaces map[string]session.Workspace
+type dirWorkspaces map[string]domain.Workspace
 
-func (d dirWorkspaces) GetWorkspace(id string) (session.Workspace, error) {
+func (d dirWorkspaces) GetWorkspace(id string) (domain.Workspace, error) {
 	ws, ok := d[id]
 	if !ok {
-		return session.Workspace{}, connect.NewError(connect.CodeNotFound, errors.New("no such session"))
+		return domain.Workspace{}, connect.NewError(connect.CodeNotFound, errors.New("no such session"))
 	}
 	return ws, nil
 }
 
-func onDisk(dir string) session.Workspace {
-	return session.Workspace{RepoRoot: dir, ActiveDir: dir, ExistingDir: dir}
+func onDisk(dir string) domain.Workspace {
+	return domain.Workspace{RepoRoot: dir, ActiveDir: dir, ExistingDir: dir}
 }
 
 type recordingTelemetry struct {
@@ -126,7 +126,7 @@ func searchReq(session, client, pattern string) *sessionv1.SearchContentRequest 
 	}
 }
 
-func fillWorktree(t testing.TB, files map[string]string) session.Workspace {
+func fillWorktree(t testing.TB, files map[string]string) domain.Workspace {
 	dir, _ := writeTree(t, files)
 	return onDisk(dir)
 }
@@ -335,7 +335,7 @@ func busyDetail(t testing.TB, err error) string {
 
 func TestSearchContentHandler_ShouldRefuseWithWorktreeMissing_WhenExistingDirIsRepoRootFallback(t *testing.T) {
 	repo := fillWorktree(t, map[string]string{"a.txt": "needle\n"}).ExistingDir
-	gone := session.Workspace{RepoRoot: repo, WorktreeDir: repo + "-gone", ActiveDir: repo + "-gone", ExistingDir: repo}
+	gone := domain.Workspace{RepoRoot: repo, WorktreeDir: repo + "-gone", ActiveDir: repo + "-gone", ExistingDir: repo}
 	rig := newRig(t, dirWorkspaces{"paused": gone, "dirmode": onDisk(repo)})
 	gs := newGatedSearcher()
 	close(gs.release)

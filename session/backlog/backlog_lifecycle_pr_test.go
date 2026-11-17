@@ -15,9 +15,13 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // TestBacklogItemLink locks in the deep-link shape pushAndCreatePR and
@@ -67,13 +71,13 @@ func TestBuildFallbackPRBody(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		item           *session.BacklogItemData
+		item           *backlogdto.BacklogItemData
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name: "no acceptance criteria — no test plan section",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:          itemID,
 				Description: "Fixes the flaky retry loop in the push remediation path.",
 			},
@@ -86,7 +90,7 @@ func TestBuildFallbackPRBody(t *testing.T) {
 		},
 		{
 			name: "acceptance criteria present — test plan checklist with mixed statuses",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:          itemID,
 				Description: "Adds a deep link to the fallback PR body.",
 				AcceptanceCriteria: mustSerializeAcCriteria(t, []domain.AcCriterion{
@@ -125,7 +129,7 @@ func TestBuildFallbackPRBody(t *testing.T) {
 func TestBuildFallbackPRBody_SanitizesDescription(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:          "b608ab1e-b86e-4130-8879-7328cd363063",
 		Description: "<script>alert(1)</script>" + strings.Repeat("a", 2000),
 	}
@@ -150,7 +154,7 @@ var testHostID = func() hostclaim.HostID {
 func TestPRFooter_AlwaysIdentifiesItemAndHost(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
+	item := &backlogdto.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
 	tests := []struct {
 		name         string
 		origin       PRFooterOrigin
@@ -199,14 +203,14 @@ func TestPRFooter_AlwaysIdentifiesItemAndHost(t *testing.T) {
 func TestPRFooter_WithoutHostStillNamesItem(t *testing.T) {
 	t.Parallel()
 
-	got := prFooter(PRFooterOrigin{}, &session.BacklogItemData{ID: "abc"})
+	got := prFooter(PRFooterOrigin{}, &backlogdto.BacklogItemData{ID: "abc"})
 	require.Equal(t, "Backlog item: abc\n", got)
 }
 
 func TestBuildFallbackPRBody_TextOnlyFooter_WhenNoBaseURL(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
+	item := &backlogdto.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
 	got := buildFallbackPRBody(item, PRFooterOrigin{HostID: testHostID}, "")
 
 	require.Contains(t, got, "Backlog item: "+item.ID)
@@ -218,7 +222,7 @@ func TestBuildFallbackPRBody_TextOnlyFooter_WhenNoBaseURL(t *testing.T) {
 func TestAppendBacklogFooter(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
+	item := &backlogdto.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
 	origin := PRFooterOrigin{BaseURL: "https://ssq.example.com", HostID: testHostID, Hostname: "onyx.lan"}
 	got := appendBacklogFooter("## Summary\n\nBody text.\n\n", origin, item, "")
 
@@ -273,7 +277,7 @@ func mustSerializeAcCriteria(t *testing.T, criteria []domain.AcCriterion) domain
 
 // failingCIListener wires a listener over a still-CI-failing PR and returns it
 // with its stamped-capable notifier and fix spawner.
-func failingCIListener(t *testing.T, storage *session.Storage, prNumber int) (*BacklogLifecycleListener, *autoRemediatingNotifier, *session.BacklogItemData) {
+func failingCIListener(t *testing.T, storage *session.Storage, prNumber int) (*BacklogLifecycleListener, *autoRemediatingNotifier, *backlogdto.BacklogItemData) {
 	t.Helper()
 	item := newPRPendingTestItem(t, storage, prNumber)
 	listener := NewBacklogLifecycleListener(storage)
@@ -324,7 +328,7 @@ func TestPRNeedsAttention_ShouldHaveUnstampedEscalation_WhenAutomationFails(t *t
 
 // newPreflightFixture is newPushAndCreatePRTestFixture with a real git repo
 // whose origin remote resolves to tstapler/stapler-squad.
-func newPreflightFixture(t *testing.T, storage *session.Storage) (*session.BacklogItemData, session.ItemSessionSummary) {
+func newPreflightFixture(t *testing.T, storage *session.Storage) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
 	t.Helper()
 	ctx := context.Background()
 	repoDir := t.TempDir()
@@ -338,19 +342,19 @@ func newPreflightFixture(t *testing.T, storage *session.Storage) (*session.Backl
 		require.NoError(t, err, string(out))
 	}
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "Preflight item", AcceptanceCriteria: `[]`, Priority: 1,
-		Status: string(session.BacklogStatusReview), RepoPath: repoDir,
+		Status: string(domain.BacklogStatusReview), RepoPath: repoDir,
 	})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	inst := newTestInstance("preflight-" + sessionUUID[:8])
 	inst.UUID = sessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir+"/../wt", "preflight-test", "backlog/preflight-test", "abc123")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
-	return item, session.ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir+"/../wt", "preflight-test", "backlog/preflight-test", "abc123")
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
+	return item, backlogdto.ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 }
 
 type preflightHarness struct {
@@ -480,8 +484,8 @@ func TestPushAndCreatePR_Preflight_SilentWhenUndetermined(t *testing.T) {
 func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhenSatisfied(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusPRPending, session.BacklogStatusDone, session.GateKindHumanApproval, nil)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := newPRPendingTestItem(t, h.storage, 9701)
 	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
 
@@ -493,13 +497,13 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 
 	for tick := 1; tick <= 2; tick++ {
 		listener.ReconcilePRPending(ctx, h.repo)
-		require.Equal(t, string(session.BacklogStatusPRPending), h.status(t, item.ID), "tick %d", tick)
+		require.Equal(t, string(domain.BacklogStatusPRPending), h.status(t, item.ID), "tick %d", tick)
 	}
 	reports := h.rep.snapshot()
 	require.Len(t, reports, 2)
 	for _, r := range reports {
-		assert.Equal(t, session.CallerReconcilePRPendingMerge, r.caller)
-		assert.Equal(t, session.DeniedOperatorGate, r.reason)
+		assert.Equal(t, domain.CallerReconcilePRPendingMerge, r.caller)
+		assert.Equal(t, backlogdto.DeniedOperatorGate, r.reason)
 	}
 	for _, c := range notifier.Calls {
 		assert.NotEqual(t, "Status update failed after work completed", c.Title, "the gate's report is the only notification")
@@ -507,46 +511,46 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 
 	sessDisableGates(t, h)
 	listener.ReconcilePRPending(ctx, h.repo)
-	assert.Equal(t, string(session.BacklogStatusDone), h.status(t, item.ID))
+	assert.Equal(t, string(domain.BacklogStatusDone), h.status(t, item.ID))
 }
 
 func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusReview, session.BacklogStatusPRPending, session.GateKindHumanApproval, nil)
-	item := h.newItem(t, session.BacklogStatusReview)
+	h := newGateHarness(t, workflowengine.ModeEnforce)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
+	item := h.newItem(t, domain.BacklogStatusReview)
 	listener := NewBacklogLifecycleListener(h.storage)
 	pr := &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/77", Number: 77}
 
 	err := listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found")
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
-	require.True(t, session.IsGateDenial(err))
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
+	require.True(t, domain.IsGateDenial(err))
 	got, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusReview), got.Status)
 	assert.Zero(t, got.PrNumber)
 	require.Len(t, h.rep.snapshot(), 1)
-	assert.Equal(t, session.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
+	assert.Equal(t, domain.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
 
 	sessDisableGates(t, h)
 	require.NoError(t, listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found"))
 	got, err = h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status)
 	assert.Equal(t, 77, got.PrNumber)
 }
 
 func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReassignment(t *testing.T) {
 	t.Parallel()
-	h := newGateHarness(t, session.ModeOff)
-	item := h.newItem(t, session.BacklogStatusInProgress)
+	h := newGateHarness(t, workflowengine.ModeOff)
+	item := h.newItem(t, domain.BacklogStatusInProgress)
 	listener := NewBacklogLifecycleListener(h.storage)
 
 	err := listener.recordOrphanedAgentPR(context.Background(), item.ID, &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/78", Number: 78}, "found")
 
-	require.ErrorIs(t, err, session.ErrPreconditionFailed)
-	assert.Equal(t, string(session.BacklogStatusInProgress), h.status(t, item.ID))
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), h.status(t, item.ID))
 }
 
 func TestPRBodies_ClosingKeyword(t *testing.T) {
@@ -564,7 +568,7 @@ func TestPRBodies_ClosingKeyword(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			item := &session.BacklogItemData{ID: "item-1", Description: "Fix it.", ExternalURL: tt.externalURL}
+			item := &backlogdto.BacklogItemData{ID: "item-1", Description: "Fix it.", ExternalURL: tt.externalURL}
 			bodies := map[string]string{
 				"fallback": buildFallbackPRBody(item, PRFooterOrigin{}, tt.remote),
 				"drafted":  appendBacklogFooter("## Summary\n\nBody.\n", PRFooterOrigin{}, item, tt.remote),
@@ -585,7 +589,7 @@ func TestPRBodies_ClosingKeyword(t *testing.T) {
 // triggerValuesFor returns the pr_fix_trigger marker values stored for itemID, oldest first.
 func triggerValuesFor(t *testing.T, er *session.EntRepository, itemID string) []string {
 	t.Helper()
-	got, err := er.ListFlowMarkersForItem(context.Background(), itemID, session.FlowMarkerPRFixTrigger,
+	got, err := er.ListFlowMarkersForItem(context.Background(), itemID, markerstore.FlowMarkerPRFixTrigger,
 		time.Unix(0, 0), time.Now().Add(100*365*24*time.Hour))
 	require.NoError(t, err)
 	vals := make([]string, 0, len(got))
@@ -614,17 +618,17 @@ func TestPrFixReopen_should_RecordTriggerOnce_When_PollerDecidesFix(t *testing.T
 	for i := 0; i < 5; i++ {
 		listener.ReconcilePRPending(ctx, er)
 	}
-	assert.Equal(t, []string{session.PRFixTriggerCI}, triggerValuesFor(t, er, item.ID), "thrash ticks dedupe to one record")
+	assert.Equal(t, []string{markerstore.PRFixTriggerCI}, triggerValuesFor(t, er, item.ID), "thrash ticks dedupe to one record")
 
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\n"},
 	})
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerCI, session.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID), "changed trigger value is written immediately")
+	assert.Equal(t, []string{markerstore.PRFixTriggerCI, markerstore.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID), "changed trigger value is written immediately")
 
-	clk.Advance(session.TriggerRecordMinInterval)
+	clk.Advance(markerstore.TriggerRecordMinInterval)
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerCI, session.PRFixTriggerConflict, session.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, []string{markerstore.PRFixTriggerCI, markerstore.PRFixTriggerConflict, markerstore.PRFixTriggerConflict}, triggerValuesFor(t, er, item.ID))
 }
 
 func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
@@ -642,7 +646,7 @@ func TestPrFixReopen_should_RecordMixed_When_AllFlagsSet(t *testing.T) {
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, []string{markerstore.PRFixTriggerMixed}, triggerValuesFor(t, er, item.ID))
 }
 
 func TestPrFixReopen_should_RecordClosedTriggerWithoutCountingUnknown_When_PRClosedWithoutMerge(t *testing.T) {
@@ -657,8 +661,8 @@ func TestPrFixReopen_should_RecordClosedTriggerWithoutCountingUnknown_When_PRClo
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}})
 	listener.SetPRFixSpawner(&fakePRFixSpawner{})
 
-	before := session.PRFixTriggerUnknownCount()
+	before := markerstore.PRFixTriggerUnknownCount()
 	listener.ReconcilePRPending(ctx, er)
-	assert.Equal(t, []string{session.PRFixTriggerClosed}, triggerValuesFor(t, er, item.ID))
-	assert.Equal(t, before, session.PRFixTriggerUnknownCount(), "closed branch must not move the unknown counter")
+	assert.Equal(t, []string{markerstore.PRFixTriggerClosed}, triggerValuesFor(t, er, item.ID))
+	assert.Equal(t, before, markerstore.PRFixTriggerUnknownCount(), "closed branch must not move the unknown counter")
 }

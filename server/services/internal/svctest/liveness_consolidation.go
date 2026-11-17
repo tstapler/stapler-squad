@@ -8,13 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // newEmptyPoller returns a ReviewQueuePoller that is never Start()ed, so it
 // holds instances without running any background loop.
 func NewEmptyPoller() *session.ReviewQueuePoller {
-	return session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	return session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 }
 
 // startRealTmuxSession starts a real, detached tmux session named exactly as a

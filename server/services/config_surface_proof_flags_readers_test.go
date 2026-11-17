@@ -19,8 +19,11 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/gitwt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -58,7 +61,7 @@ func TestConfigSurfaceProof_BrowserPassthrough_ChangesInstanceManagerGate(t *tes
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set("browser-passthrough", setting.(bool))
-		return session.BrowserPassthroughEnabled(config.LoadConfig())
+		return instance.BrowserPassthroughEnabled(config.LoadConfig())
 	}, false, true)
 }
 
@@ -97,7 +100,7 @@ func TestConfigSurfaceProof_WorkspacePeersNudge_ChangesPromptBlock(t *testing.T)
 	addTestPeer(t, storage, repoPath)
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(WorkspacePeersNudgeFlagName, setting.(bool))
+		set(featureflags.WorkspacePeersNudgeFlagName, setting.(bool))
 		return WorkspacePeersBlockFor(t.Context(), storage, repoPath) != ""
 	}, false, true)
 }
@@ -152,7 +155,7 @@ func TestConfigSurfaceProof_WorktreeChangeDetection_ChangesWorktreeSetup(t *test
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(worktreeChangeDetectionFlagName, setting.(bool))
-		return session.WorktreeChangeDetectionEnabled()
+		return gitwt.WorktreeChangeDetectionEnabled()
 	}, false, true)
 }
 

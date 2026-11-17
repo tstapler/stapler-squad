@@ -2,7 +2,7 @@ package events
 
 import (
 	"context"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 )
 
@@ -11,7 +11,7 @@ func BenchmarkEventBusPublish(b *testing.B) {
 	bus := NewEventBus(100)
 	defer bus.Close()
 
-	testEvent := NewSessionCreatedEvent(&session.Instance{Title: "bench-test"})
+	testEvent := NewSessionCreatedEvent(&instance.Instance{Title: "bench-test"})
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -59,7 +59,7 @@ func BenchmarkEventBusPublishWithSubscribers(b *testing.B) {
 				}()
 			}
 
-			testEvent := NewSessionCreatedEvent(&session.Instance{Title: "bench-test"})
+			testEvent := NewSessionCreatedEvent(&instance.Instance{Title: "bench-test"})
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -86,7 +86,7 @@ func BenchmarkEventBusConcurrentPublish(b *testing.B) {
 		}
 	}()
 
-	testEvent := NewSessionCreatedEvent(&session.Instance{Title: "bench-test"})
+	testEvent := NewSessionCreatedEvent(&instance.Instance{Title: "bench-test"})
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -121,7 +121,7 @@ func BenchmarkEventBusSubscriberCount(b *testing.B) {
 
 // BenchmarkEventCreation benchmarks event constructor performance.
 func BenchmarkEventCreation(b *testing.B) {
-	testSession := &session.Instance{Title: "test"}
+	testSession := &instance.Instance{Title: "test"}
 
 	b.Run("SessionCreated", func(b *testing.B) {
 		b.ReportAllocs()
@@ -165,7 +165,7 @@ func BenchmarkEventBusEndToEnd(b *testing.B) {
 		}
 	}()
 
-	testEvent := NewSessionCreatedEvent(&session.Instance{Title: "bench-test"})
+	testEvent := NewSessionCreatedEvent(&instance.Instance{Title: "bench-test"})
 
 	b.ResetTimer()
 	b.ReportAllocs()

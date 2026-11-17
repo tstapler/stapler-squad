@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"time"
 )
 
@@ -36,8 +38,8 @@ var (
 type nudgeSeams struct {
 	settleWindow time.Duration
 	poll         time.Duration
-	tryLease     func(writer string) (*HeldLease, bool)
-	submit       func(ctx context.Context, inst paneSubmitter, lease *HeldLease, content string, pollInterval, maxWait time.Duration) error
+	tryLease     func(writer string) (*instance.HeldLease, bool)
+	submit       func(ctx context.Context, inst instance.PaneSubmitter, lease *instance.HeldLease, content string, pollInterval, maxWait time.Duration) error
 }
 
 // NudgeStalledAutonomousSession types autonomousStallNudgeText into inst after
@@ -45,7 +47,7 @@ type nudgeSeams struct {
 // claim must only touch storage. Returns ErrNudgeTargetNotIdle, ErrLeaseBusy,
 // ErrNudgeSlotUnavailable, ErrNudgeSubmitUncertain or ctx's error; on every
 // pre-claim error nothing was written and no slot was spent.
-func NudgeStalledAutonomousSession(ctx context.Context, inst *Instance, claim func() (bool, error)) error {
+func NudgeStalledAutonomousSession(ctx context.Context, inst *instance.Instance, claim func() (bool, error)) error {
 	if inst == nil {
 		return fmt.Errorf("nudge target session not found")
 	}
@@ -53,13 +55,13 @@ func NudgeStalledAutonomousSession(ctx context.Context, inst *Instance, claim fu
 		settleWindow: nudgeIdleSettleWindow,
 		poll:         nudgeIdleSettlePollInterval,
 		tryLease:     inst.TryTerminalWriteLease,
-		submit:       SubmitDriverContent,
+		submit:       instance.SubmitDriverContent,
 	})
 }
 
-func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, error), s nudgeSeams) error {
+func nudgeStalledWith(ctx context.Context, inst *instance.Instance, claim func() (bool, error), s nudgeSeams) error {
 	snap := inst.Snapshot()
-	if snap.Status != Active || snap.ArchivedAt != nil {
+	if snap.Status != domain.Active || snap.ArchivedAt != nil {
 		return fmt.Errorf("%w: %s (status %s)", ErrNudgeSessionNotActive, snap.UUID, snap.Status)
 	}
 	if err := CheckNudgeEligibleWithSettleWindowCtx(ctx, inst, s.settleWindow, s.poll); err != nil {
@@ -72,16 +74,16 @@ func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, e
 		return fmt.Errorf("nudge cancelled before taking the write lease: %w", err)
 	}
 
-	lease, ok := s.tryLease(LeaseWriterNudge)
+	lease, ok := s.tryLease(instance.LeaseWriterNudge)
 	if !ok {
-		return ErrLeaseBusy
+		return instance.ErrLeaseBusy
 	}
 	if err := ctx.Err(); err != nil {
 		lease.Release()
 		return fmt.Errorf("nudge cancelled before claiming a slot: %w", err)
 	}
 	// Status can change while waiting for the lease; the claim spends budget.
-	if snap := inst.Snapshot(); snap.Status != Active || snap.ArchivedAt != nil {
+	if snap := inst.Snapshot(); snap.Status != domain.Active || snap.ArchivedAt != nil {
 		lease.Release()
 		return fmt.Errorf("%w: %s (status %s)", ErrNudgeSessionNotActive, snap.UUID, snap.Status)
 	}
@@ -96,7 +98,7 @@ func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, e
 	}
 
 	// submit owns the lease from here and releases it on every path.
-	if err := s.submit(ctx, inst, lease, autonomousStallNudgeText, DefaultPaneSettlePollInterval, DefaultPaneSettleMaxWait); err != nil {
+	if err := s.submit(ctx, inst, lease, autonomousStallNudgeText, instance.DefaultPaneSettlePollInterval, instance.DefaultPaneSettleMaxWait); err != nil {
 		return fmt.Errorf("%w: %w", ErrNudgeSubmitUncertain, err)
 	}
 	return nil

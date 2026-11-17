@@ -5,20 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/webhookstore"
 )
 
 var (
-	scopeA = WebhookScope{PrincipalID: "principal-a", WorkspaceID: "ws-1"}
-	scopeB = WebhookScope{PrincipalID: "principal-b", WorkspaceID: "ws-1"}
+	scopeA = webhookstore.WebhookScope{PrincipalID: "principal-a", WorkspaceID: "ws-1"}
+	scopeB = webhookstore.WebhookScope{PrincipalID: "principal-b", WorkspaceID: "ws-1"}
 )
 
-func baseReconcileInput(scope WebhookScope, requestID string) WebhookReconcileInput {
-	return WebhookReconcileInput{
+func baseReconcileInput(scope webhookstore.WebhookScope, requestID string) webhookstore.WebhookReconcileInput {
+	return webhookstore.WebhookReconcileInput{
 		Scope:             scope,
 		RequestID:         requestID,
 		Fingerprint:       "fp-" + requestID,
@@ -28,7 +32,7 @@ func baseReconcileInput(scope WebhookScope, requestID string) WebhookReconcileIn
 		CompatTupleSHA256: "tuple-hash-1",
 		SecretEncrypted:   "enc-secret-1",
 		SecretDigest:      "digest-1",
-		Workflow: WebhookWorkflowSpec{
+		Workflow: webhookstore.WebhookWorkflowSpec{
 			WebhookSlug:     "gh-signal-main",
 			Name:            "gh-signal main",
 			Command:         "handle the event",
@@ -67,13 +71,13 @@ func TestReconcileWebhookRegistration_ExecutionTemplateOwnership(t *testing.T) {
 	first, err := r.ReconcileWebhookRegistration(ctx, in)
 	require.NoError(t, err)
 	assert.Equal(t, "review", first.ChangedWorkflow.InputTemplate)
-	for _, scope := range []WebhookScope{scopeB, {PrincipalID: scopeA.PrincipalID, WorkspaceID: "ws-2"}} {
+	for _, scope := range []webhookstore.WebhookScope{scopeB, {PrincipalID: scopeA.PrincipalID, WorkspaceID: "ws-2"}} {
 		hostile := in
 		hostile.Scope = scope
 		_, err := r.ReconcileWebhookRegistration(ctx, hostile)
-		require.ErrorIs(t, err, ErrWebhookSlugUnavailable)
+		require.ErrorIs(t, err, webhookstore.ErrWebhookSlugUnavailable)
 		_, err = r.InspectWebhookRegistration(ctx, scope, in.InstanceID)
-		require.ErrorIs(t, err, ErrNotFound)
+		require.ErrorIs(t, err, domain.ErrNotFound)
 	}
 	got, err := r.InspectWebhookRegistration(ctx, scopeA, in.InstanceID)
 	require.NoError(t, err)
@@ -92,7 +96,7 @@ func TestReconcileWebhookRegistration_ExecutionTemplateLegacyUpdate(t *testing.T
 	legacy.Workflow.Name = "renamed by legacy client"
 	updated, err := r.ReconcileWebhookRegistration(ctx, legacy)
 	require.NoError(t, err)
-	assert.Equal(t, WebhookOutcomeUpdated, updated.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeUpdated, updated.Outcome)
 	assert.Equal(t, first.Registration.Workflow.InputTemplate, updated.Registration.Workflow.InputTemplate)
 	assert.Equal(t, first.Registration.Workflow.SessionType, updated.Registration.Workflow.SessionType)
 	assert.Equal(t, first.Registration.Workflow.Model, updated.Registration.Workflow.Model)
@@ -109,7 +113,7 @@ func TestReconcileWebhookRegistration_should_CreateWebhookWorkflowAndRegistratio
 	res, err := r.ReconcileWebhookRegistration(ctx, baseReconcileInput(scopeA, "req-1"))
 	require.NoError(t, err)
 
-	assert.Equal(t, WebhookOutcomeCreated, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeCreated, res.Outcome)
 	assert.False(t, res.Replayed)
 	assert.EqualValues(t, 1, res.Registration.Version)
 	require.NotNil(t, res.ChangedWorkflow)
@@ -137,7 +141,7 @@ func TestReconcileWebhookRegistration_should_ReturnStoredResultWithoutMutating_W
 
 	assert.True(t, again.Replayed)
 	assert.Equal(t, first.Registration.RegistrationID, again.Registration.RegistrationID)
-	assert.Equal(t, WebhookOutcomeCreated, again.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeCreated, again.Outcome)
 	w, g, l := countRows(t, r)
 	assert.Equal(t, []int{1, 1, 1}, []int{w, g, l})
 }
@@ -154,7 +158,7 @@ func TestReconcileWebhookRegistration_should_RejectWithoutMutation_When_RequestI
 	other.Workflow.Name = "renamed"
 	_, err = r.ReconcileWebhookRegistration(ctx, other)
 
-	assert.ErrorIs(t, err, ErrIdempotencyKeyReused)
+	assert.ErrorIs(t, err, webhookstore.ErrIdempotencyKeyReused)
 	got, err := r.InspectWebhookRegistration(ctx, scopeA, "inst-1")
 	require.NoError(t, err)
 	assert.Equal(t, "gh-signal main", got.Workflow.Name)
@@ -171,7 +175,7 @@ func TestReconcileWebhookRegistration_should_ReturnConflictAndNotMutate_When_Exp
 	stale.Workflow.Name = "should not land"
 	_, err = r.ReconcileWebhookRegistration(ctx, stale)
 
-	var conflict *WebhookVersionConflictError
+	var conflict *webhookstore.WebhookVersionConflictError
 	require.True(t, errors.As(err, &conflict))
 	assert.EqualValues(t, 1, conflict.CurrentVersion)
 	got, err := r.InspectWebhookRegistration(ctx, scopeA, "inst-1")
@@ -195,7 +199,7 @@ func TestReconcileWebhookRegistration_should_UpdateAndBumpVersion_When_ExpectedV
 	res, err := r.ReconcileWebhookRegistration(ctx, upd)
 	require.NoError(t, err)
 
-	assert.Equal(t, WebhookOutcomeUpdated, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeUpdated, res.Outcome)
 	assert.EqualValues(t, 2, res.Registration.Version)
 	assert.Equal(t, "renamed", res.ChangedWorkflow.Name)
 	assert.False(t, res.ChangedWorkflow.Enabled)
@@ -214,7 +218,7 @@ func TestReconcileWebhookRegistration_should_RotateSecret_When_DigestDiffers(t *
 	res, err := r.ReconcileWebhookRegistration(ctx, upd)
 	require.NoError(t, err)
 
-	assert.Equal(t, WebhookOutcomeUpdated, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeUpdated, res.Outcome)
 	assert.Equal(t, "enc-secret-2", res.ChangedWorkflow.WebhookSecretEncrypted)
 }
 
@@ -229,7 +233,7 @@ func TestReconcileWebhookRegistration_should_ReportUnchangedWithoutVersionBump_W
 	res, err := r.ReconcileWebhookRegistration(ctx, same)
 	require.NoError(t, err)
 
-	assert.Equal(t, WebhookOutcomeUnchanged, res.Outcome)
+	assert.Equal(t, webhookstore.WebhookOutcomeUnchanged, res.Outcome)
 	assert.EqualValues(t, 1, res.Registration.Version)
 	assert.Nil(t, res.ChangedWorkflow, "an unchanged reconcile must not trigger a workflow-changed event")
 }
@@ -241,11 +245,11 @@ func TestInspectWebhookRegistration_should_ReturnNotFound_When_CallerScopeDoesNo
 	require.NoError(t, err)
 
 	_, errOtherPrincipal := r.InspectWebhookRegistration(ctx, scopeB, "inst-1")
-	_, errOtherWorkspace := r.InspectWebhookRegistration(ctx, WebhookScope{PrincipalID: scopeA.PrincipalID, WorkspaceID: "ws-2"}, "inst-1")
+	_, errOtherWorkspace := r.InspectWebhookRegistration(ctx, webhookstore.WebhookScope{PrincipalID: scopeA.PrincipalID, WorkspaceID: "ws-2"}, "inst-1")
 	_, errMissing := r.InspectWebhookRegistration(ctx, scopeA, "no-such-instance")
 
 	for _, e := range []error{errOtherPrincipal, errOtherWorkspace, errMissing} {
-		assert.ErrorIs(t, e, ErrNotFound)
+		assert.ErrorIs(t, e, domain.ErrNotFound)
 	}
 }
 
@@ -259,7 +263,7 @@ func TestReconcileWebhookRegistration_should_RefuseAndLeaveOwnerUntouched_When_F
 	hostile.Workflow.Name = "hijacked"
 	_, err = r.ReconcileWebhookRegistration(ctx, hostile)
 
-	assert.ErrorIs(t, err, ErrWebhookSlugUnavailable)
+	assert.ErrorIs(t, err, webhookstore.ErrWebhookSlugUnavailable)
 	got, err := r.InspectWebhookRegistration(ctx, scopeA, "inst-1")
 	require.NoError(t, err)
 	assert.Equal(t, "gh-signal main", got.Workflow.Name)
@@ -277,7 +281,7 @@ func TestReconcileWebhookRegistration_should_NeverAdoptOrModify_When_SlugBelongs
 
 	_, err = r.ReconcileWebhookRegistration(ctx, baseReconcileInput(scopeA, "req-1"))
 
-	assert.ErrorIs(t, err, ErrWebhookSlugUnavailable)
+	assert.ErrorIs(t, err, webhookstore.ErrWebhookSlugUnavailable)
 	after, err := r.Client.Workflow.Get(ctx, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "user's own", after.Name)
@@ -298,7 +302,7 @@ func TestReconcileWebhookRegistration_should_RefuseWithoutMutation_When_CompatTu
 	upd.Workflow.Name = "should not land"
 	_, err = r.ReconcileWebhookRegistration(ctx, upd)
 
-	assert.ErrorIs(t, err, ErrCompatTupleMismatch)
+	assert.ErrorIs(t, err, webhookstore.ErrCompatTupleMismatch)
 	got, err := r.InspectWebhookRegistration(ctx, scopeA, "inst-1")
 	require.NoError(t, err)
 	assert.Equal(t, "gh-signal main", got.Workflow.Name)
@@ -316,7 +320,7 @@ func TestReconcileWebhookRegistration_should_RefuseSlugChange_When_UpdatingExist
 	upd.Workflow.WebhookSlug = "a-new-slug"
 	_, err = r.ReconcileWebhookRegistration(ctx, upd)
 
-	assert.ErrorIs(t, err, ErrImmutableWebhookField)
+	assert.ErrorIs(t, err, webhookstore.ErrImmutableWebhookField)
 }
 
 func TestReconcileWebhookRegistration_should_ReportOrphaned_When_WorkflowWasDeletedOutOfBand(t *testing.T) {
@@ -331,8 +335,8 @@ func TestReconcileWebhookRegistration_should_ReportOrphaned_When_WorkflowWasDele
 	_, errReconcile := r.ReconcileWebhookRegistration(ctx, upd)
 	_, errInspect := r.InspectWebhookRegistration(ctx, scopeA, "inst-1")
 
-	assert.ErrorIs(t, errReconcile, ErrRegistrationOrphaned)
-	assert.ErrorIs(t, errInspect, ErrRegistrationOrphaned)
+	assert.ErrorIs(t, errReconcile, webhookstore.ErrRegistrationOrphaned)
+	assert.ErrorIs(t, errInspect, webhookstore.ErrRegistrationOrphaned)
 }
 
 func TestReconcileWebhookRegistration_should_ApplyExactlyOnce_When_SameRequestRacesConcurrently(t *testing.T) {
@@ -341,7 +345,7 @@ func TestReconcileWebhookRegistration_should_ApplyExactlyOnce_When_SameRequestRa
 	const racers = 12
 
 	var wg sync.WaitGroup
-	results := make([]*WebhookReconcileResult, racers)
+	results := make([]*webhookstore.WebhookReconcileResult, racers)
 	errs := make([]error, racers)
 	for i := 0; i < racers; i++ {
 		wg.Add(1)
@@ -383,7 +387,7 @@ func TestReconcileWebhookRegistration_should_AllowOnlyOneWinner_When_DifferentRe
 
 	winners, conflicts := 0, 0
 	for _, err := range errs {
-		var vc *WebhookVersionConflictError
+		var vc *webhookstore.WebhookVersionConflictError
 		switch {
 		case err == nil:
 			winners++
@@ -417,14 +421,34 @@ func TestIntegrationCredential_should_AuthenticateOnlyWhileActive_When_IssuedAnd
 	assert.NotContains(t, stored.TokenSha256, token, "the plaintext token must never be stored")
 
 	_, err = r.AuthenticateIntegrationToken(ctx, token+"x")
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	_, err = r.AuthenticateIntegrationToken(ctx, "")
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	_, err = r.IssueIntegrationCredential(ctx, info)
-	assert.ErrorIs(t, err, ErrConflict, "re-issuing must not silently rotate an existing principal")
+	assert.ErrorIs(t, err, domain.ErrConflict, "re-issuing must not silently rotate an existing principal")
 
 	require.NoError(t, r.RevokeIntegrationCredential(ctx, "gh-signal"))
 	_, err = r.AuthenticateIntegrationToken(ctx, token)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+// A constructor that sets Client but misses initStores would leave an embedded store
+// nil and panic only at the first call.
+func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(t *testing.T) {
+	t.Parallel()
+	seeded := NewTestEntRepository(t)
+	fromClient := NewEntRepositoryFromClient(seeded.Client)
+	opened, err := NewEntRepository(WithDatabasePath(filepath.Join(t.TempDir(), "sessions.db")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = opened.Close() })
+
+	for name, repo := range map[string]*EntRepository{"seeded": seeded, "from-client": fromClient, "opened": opened} {
+		v := reflect.ValueOf(repo).Elem()
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).Anonymous {
+				assert.False(t, v.Field(i).IsNil(), "%s: embedded %s is nil", name, v.Type().Field(i).Name)
+			}
+		}
+	}
 }

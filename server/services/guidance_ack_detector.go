@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // guidance_ack_detector.go decides whether a keystroke answer reached the agent
@@ -30,7 +30,7 @@ const (
 
 type ackStore interface {
 	SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error)
-	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*session.GuidanceRequestData, error)
+	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error)
 }
 
 // ackNotes moves the question's notification cards to match the delivery state:
@@ -173,7 +173,7 @@ func (e *ackEntry) presence(capture string, err error) (own bool, p dialogpresen
 	if e.Matches != nil {
 		return e.Matches(capture), dialogpresence.PaneShowsDialog(capture)
 	}
-	return session.DialogMatch(capture, e.Dialog), dialogpresence.PaneShowsDialog(capture)
+	return panereply.DialogMatch(capture, e.Dialog), dialogpresence.PaneShowsDialog(capture)
 }
 
 func (a *GuidanceAckDetector) sample(ctx context.Context, e ackEntry) {

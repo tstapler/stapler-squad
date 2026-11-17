@@ -16,12 +16,14 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-func makeTestInstance(title string) *session.Instance {
-	return &session.Instance{Title: title, Status: session.Active}
+func makeTestInstance(title string) *instance.Instance {
+	return &instance.Instance{Title: title, Status: domain.Active}
 }
 
 // newTestGitWorktree builds a GitWorktree value without touching the filesystem or running git.
@@ -107,7 +109,7 @@ const (
 )
 
 type claimFixture struct {
-	detector *session.HistoryFileDetector
+	detector *instance.HistoryFileDetector
 	dir      string
 	now      time.Time
 }
@@ -115,9 +117,9 @@ type claimFixture struct {
 func newClaimFixture(t *testing.T, repoPath string) *claimFixture {
 	t.Helper()
 	home := t.TempDir()
-	dir := filepath.Join(home, ".claude", "projects", session.ClaudeProjectDirName(repoPath))
+	dir := filepath.Join(home, ".claude", "projects", instance.ClaudeProjectDirName(repoPath))
 	require.NoError(t, os.MkdirAll(dir, 0755))
-	detector := session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, home)
+	detector := instance.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, home)
 	return &claimFixture{detector: detector, dir: dir, now: time.Now()}
 }
 

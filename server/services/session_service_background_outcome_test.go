@@ -11,11 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func addHiddenInstance(fix *forkTestFixture, title, uuid string, status session.Status) {
-	fix.poller.AddInstance(&session.Instance{
+func addHiddenInstance(fix *forkTestFixture, title, uuid string, status domain.Status) {
+	fix.poller.AddInstance(&instance.Instance{
 		Title: title, UUID: uuid, Status: status, Program: "claude", Path: "/tmp/test", Hidden: true,
 	})
 }
@@ -33,16 +35,16 @@ func TestListSessions_should_populateBackgroundOutcome_When_hiddenOnly_And_leave
 	fix := setupForkTestFixture(t)
 	ctx := context.Background()
 
-	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "outcome"})
+	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "outcome"})
 	require.NoError(t, err)
 	_, err = fix.storage.CreateItemSessionWithVerdict(ctx,
-		session.ItemSessionData{ItemID: item.ID, SessionUUID: "c0000000-0000-0000-0000-000000000001", SessionRole: session.SessionRoleReview},
-		session.ReviewVerdictData{OverallOutcome: "PASS"})
+		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "c0000000-0000-0000-0000-000000000001", SessionRole: instance.SessionRoleReview},
+		backlogdto.ReviewVerdictData{OverallOutcome: "PASS"})
 	require.NoError(t, err)
 
-	addHiddenInstance(fix, "done", "c0000000-0000-0000-0000-000000000001", session.Stopped)
-	addHiddenInstance(fix, "crashed", "c0000000-0000-0000-0000-000000000002", session.Crashed)
-	addHiddenInstance(fix, "bare", "c0000000-0000-0000-0000-000000000003", session.Stopped)
+	addHiddenInstance(fix, "done", "c0000000-0000-0000-0000-000000000001", domain.Stopped)
+	addHiddenInstance(fix, "crashed", "c0000000-0000-0000-0000-000000000002", domain.Crashed)
+	addHiddenInstance(fix, "bare", "c0000000-0000-0000-0000-000000000003", domain.Stopped)
 
 	only, err := fix.svc.ListSessions(ctx, connect.NewRequest(&sessionv1.ListSessionsRequest{HiddenOnly: true}))
 	require.NoError(t, err)
@@ -58,10 +60,10 @@ type countingOutcomeLookup struct {
 	lastLen    atomic.Int32
 }
 
-func (c *countingOutcomeLookup) ListItemSessionsBySessionUUIDs(_ context.Context, uuids []string) (map[string]session.ItemSessionSummary, error) {
+func (c *countingOutcomeLookup) ListItemSessionsBySessionUUIDs(_ context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error) {
 	c.batchCalls.Add(1)
 	c.lastLen.Store(int32(len(uuids)))
-	return map[string]session.ItemSessionSummary{}, nil
+	return map[string]backlogdto.ItemSessionSummary{}, nil
 }
 
 func TestListSessions_should_callBatchLookupOnce_When_40HiddenSessions(t *testing.T) {
@@ -70,7 +72,7 @@ func TestListSessions_should_callBatchLookupOnce_When_40HiddenSessions(t *testin
 	fake := &countingOutcomeLookup{}
 	fix.svc.outcomeLookup = fake
 	for i := 0; i < 40; i++ {
-		addHiddenInstance(fix, fmt.Sprintf("h-%02d", i), fmt.Sprintf("d0000000-0000-0000-0000-%012d", i), session.Stopped)
+		addHiddenInstance(fix, fmt.Sprintf("h-%02d", i), fmt.Sprintf("d0000000-0000-0000-0000-%012d", i), domain.Stopped)
 	}
 
 	resp, err := fix.svc.ListSessions(context.Background(), connect.NewRequest(&sessionv1.ListSessionsRequest{HiddenOnly: true}))

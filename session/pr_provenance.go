@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/deeplink"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -58,14 +59,14 @@ func ParsePRProvenanceComment(body string) (PRProvenance, bool) {
 // PRProvenanceSource builds the provenance comment for an item, or reports
 // false when this host cannot name itself in a deep link.
 type PRProvenanceSource interface {
-	PRProvenanceComment(item *BacklogItemData) (string, bool)
+	PRProvenanceComment(item *backlogdto.BacklogItemData) (string, bool)
 }
 
 // PRProvenanceComment implements PRProvenanceSource using the same host name the
 // recorder puts in claim deep links. It declines when that name is an IP
 // literal: claim deep links go only to enrolled peers, but this comment is
 // posted to a public PR, and must not publish a LAN address.
-func (r *ClaimIndexRecorder) PRProvenanceComment(item *BacklogItemData) (string, bool) {
+func (r *ClaimIndexRecorder) PRProvenanceComment(item *backlogdto.BacklogItemData) (string, bool) {
 	if item == nil || r.deepLinkHost == "" || net.ParseIP(strings.Trim(r.deepLinkHost, "[]")) != nil {
 		return "", false
 	}
@@ -84,7 +85,7 @@ func (s *Storage) SetPRProvenanceSource(src PRProvenanceSource) {
 
 // PRProvenanceComment returns the provenance comment for item, or false when no
 // source is wired or the source declines.
-func (s *Storage) PRProvenanceComment(item *BacklogItemData) (string, bool) {
+func (s *Storage) PRProvenanceComment(item *backlogdto.BacklogItemData) (string, bool) {
 	src := s.provenance.Load()
 	if src == nil {
 		return "", false

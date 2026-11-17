@@ -31,6 +31,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---------------------------------------------------------------------------
@@ -64,18 +66,18 @@ func createPRPendingItemWithActiveSession(t *testing.T, storage *session.Storage
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:    "PR-pending item with an active fix session",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusPRPending),
+		Status:   string(domain.BacklogStatusPRPending),
 		PrNumber: 42,
 		PrURL:    "https://github.com/example/repo/pull/42",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: activeSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	return item.ID
@@ -144,7 +146,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionS
 	reasons := openStuckReasons(t, svc)
 	assert.True(t, reasons[domain.StuckReasonRespawnBlockedActive])
 	assert.False(t, reasons[domain.StuckReasonSteerFailed])
-	requireItemStatus(t, storage, itemID, string(session.BacklogStatusPRPending))
+	requireItemStatus(t, storage, itemID, string(domain.BacklogStatusPRPending))
 }
 
 func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionProgramReportsNotLive(t *testing.T) {
@@ -170,7 +172,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_SessionP
 	}
 	assert.Empty(t, steerer.calls(), "must never attempt to steer a session SessionProgram reports as not live")
 	assert.True(t, openStuckReasons(t, svc)[domain.StuckReasonRespawnBlockedActive])
-	requireItemStatus(t, storage, itemID, string(session.BacklogStatusPRPending))
+	requireItemStatus(t, storage, itemID, string(domain.BacklogStatusPRPending))
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +228,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_NotReady
 	}
 	assert.Empty(t, steerer.calls(), "must never write fixContext into a session reported as not ready/busy")
 	assert.True(t, openStuckReasons(t, svc)[domain.StuckReasonRespawnBlockedActive])
-	requireItemStatus(t, storage, itemID, string(session.BacklogStatusPRPending))
+	requireItemStatus(t, storage, itemID, string(domain.BacklogStatusPRPending))
 }
 
 // ---------------------------------------------------------------------------
@@ -303,10 +305,10 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SessionUUIDChanged_ReSteersDespite
 	sessions, err := storage.ListItemSessions(context.Background(), itemID)
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sessions[0].ID, time.Now()))
-	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: activeSessionUUIDSecondary,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -401,7 +403,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteerFailure_ProducesWarningAndStu
 	assert.Contains(t, ev.NotificationTitle, "a merge conflict")
 	assert.Contains(t, ev.NotificationMessage, "a merge conflict")
 	assert.Contains(t, ev.NotificationMessage, deliverErr.Error())
-	requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+	requireItemStatus(t, svc.storage, itemID, string(domain.BacklogStatusPRPending))
 }
 
 // TestAutoReopenForPRFix_ActiveWorkSession_SuccessfulSteer_PublishesInfoNotificationAndResolvesRespawnBlockedActive
@@ -417,7 +419,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SuccessfulSteer_PublishesInfoNotif
 
 	// Simulate a prior degrade-path tick having left this row open.
 	_, err := svc.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonRespawnBlockedActive,
-		session.BacklogStatusPRPending, "previously skipped")
+		domain.BacklogStatusPRPending, "previously skipped")
 	require.NoError(t, err)
 
 	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
@@ -430,7 +432,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SuccessfulSteer_PublishesInfoNotif
 
 	reasons := openStuckReasons(t, svc)
 	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive], "a successful steer must resolve a stale respawn_blocked_active row")
-	requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+	requireItemStatus(t, svc.storage, itemID, string(domain.BacklogStatusPRPending))
 }
 
 func TestAutoReopenForPRFix_ActiveWorkSession_SteerFailure_ClaudeCodeProgram_NamesRemediationPath(t *testing.T) {
@@ -478,13 +480,13 @@ func TestAutoReopenForPRFix_ActiveWorkSession_MessageTruncated_When_FixContextEx
 		sb.WriteString("- integration-test-shard-line-that-is-reasonably-long\n")
 	}
 	fixContext := sb.String()
-	require.Greater(t, len(fixContext), session.MaxSteerMessageLength, "fixture must actually require truncation")
+	require.Greater(t, len(fixContext), instance.MaxSteerMessageLength, "fixture must actually require truncation")
 
 	require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, fixContext))
 
 	calls := steerer.calls()
 	require.Len(t, calls, 1)
-	assert.LessOrEqual(t, len(calls[0].message), session.MaxSteerMessageLength)
+	assert.LessOrEqual(t, len(calls[0].message), instance.MaxSteerMessageLength)
 	assert.True(t, strings.HasSuffix(calls[0].message, prShipSuffix), "the /github:pr-ship suffix must survive truncation")
 }
 
@@ -602,7 +604,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_NoTransitionBacklogItemStatusCall(
 		svc := NewBacklogService(storage, &mockSessionCreator{}, nil, nil, nil, nil)
 		itemID := createPRPendingItemWithActiveSession(t, storage, activeSessionUUIDPrimary)
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
-		requireItemStatus(t, storage, itemID, string(session.BacklogStatusPRPending))
+		requireItemStatus(t, storage, itemID, string(domain.BacklogStatusPRPending))
 	})
 
 	t.Run("delivered_steer", func(t *testing.T) {
@@ -610,7 +612,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_NoTransitionBacklogItemStatusCall(
 		svc, _, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
 		itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
-		requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+		requireItemStatus(t, svc.storage, itemID, string(domain.BacklogStatusPRPending))
 	})
 
 	t.Run("failed_steer", func(t *testing.T) {
@@ -619,7 +621,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_NoTransitionBacklogItemStatusCall(
 		itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 		steerer.steerErr[activeSessionUUIDPrimary] = errors.New("SendKeys failed: pty closed")
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
-		requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+		requireItemStatus(t, svc.storage, itemID, string(domain.BacklogStatusPRPending))
 	})
 
 	t.Run("dedup_suppressed", func(t *testing.T) {
@@ -628,7 +630,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_NoTransitionBacklogItemStatusCall(
 		itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))
-		requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+		requireItemStatus(t, svc.storage, itemID, string(domain.BacklogStatusPRPending))
 	})
 }
 
@@ -649,7 +651,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteerFailureResolvesStalePriorResp
 		svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
 		itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 		_, err := svc.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonRespawnBlockedActive,
-			session.BacklogStatusPRPending, "previously skipped")
+			domain.BacklogStatusPRPending, "previously skipped")
 		require.NoError(t, err)
 		steerer.steerErr[activeSessionUUIDPrimary] = errors.New("SendKeys failed: pty closed")
 
@@ -667,7 +669,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SteerFailureResolvesStalePriorResp
 		itemID := createPRPendingItemWithActiveSession(t, storage, activeSessionUUIDPrimary)
 		// Deliberately no SetSessionSteerer — the nil-steerer degrade path.
 		_, err := storage.MarkStuck(context.Background(), itemID, domain.StuckReasonSteerFailed,
-			session.BacklogStatusPRPending, "previous tick failed")
+			domain.BacklogStatusPRPending, "previous tick failed")
 		require.NoError(t, err)
 
 		require.NoError(t, svc.AutoReopenForPRFix(context.Background(), itemID, ciOnlyFixContext))

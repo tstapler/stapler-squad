@@ -6,7 +6,7 @@ import (
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -44,14 +44,14 @@ func (f *FakeTokenStore) Subscribe() <-chan *tokens.ParseResult {
 func (f *FakeTokenStore) Unsubscribe(_ <-chan *tokens.ParseResult) {}
 
 type FakeBacklogReader struct {
-	Entries []session.ItemSessionBacklogEntry
+	Entries []backlogdto.ItemSessionBacklogEntry
 	err     error
 	// Calls counts GetAllItemSessionsWithBacklogInfo invocations — see
 	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
 	Calls int
 }
 
-func (f *FakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
+func (f *FakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	f.Calls++
 	if f.err != nil {
 		return nil, f.err

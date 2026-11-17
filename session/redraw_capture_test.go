@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -33,11 +35,11 @@ func (m *redrawManager) CapturePaneContentRaw() (string, error) { return m.data,
 
 func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
 	t.Parallel()
-	for _, status := range []Status{Failed, PermanentlyFailed, Stopped, Crashed} {
+	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			inst := redrawInstance(&redrawManager{data: "final screen", ok: true}, status)
-			inst.started.Store(false)
+			inst.SetStartedForTest(false)
 			raw, err := inst.CapturePaneContentRaw()
 			require.NoError(t, err)
 			assert.Equal(t, "final screen", string(raw))
@@ -52,10 +54,10 @@ func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
 	}
 }
 
-func redrawInstance(mgr tymux.TymuxManager, status Status) *Instance {
-	inst := &Instance{Title: "redraw", UUID: "uuid-redraw", Status: status}
-	inst.processManager = NewTymuxBackend(mgr)
-	inst.started.Store(true)
+func redrawInstance(mgr tymux.TymuxManager, status domain.Status) *instance.Instance {
+	inst := &instance.Instance{Title: "redraw", UUID: "uuid-redraw", Status: status}
+	inst.SetProcessManagerForTest(NewTymuxBackend(mgr))
+	inst.MarkStarted()
 	return inst
 }
 
@@ -82,7 +84,7 @@ func TestTymuxBackend_CapturePaneRedraw_should_PassThroughEveryResult(t *testing
 func TestInstance_CapturePaneRedraw_should_ReturnFrameAndRecordAltScreen(t *testing.T) {
 	t.Parallel()
 	mgr := &redrawManager{data: "\x1b[?1049hredraw", altScreen: true, ok: true}
-	inst := redrawInstance(mgr, Running)
+	inst := redrawInstance(mgr, domain.Active)
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
 
@@ -96,7 +98,7 @@ func TestInstance_CapturePaneRedraw_should_ReturnFrameAndRecordAltScreen(t *test
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingAltScreen_When_BackendHasNoState(t *testing.T) {
 	t.Parallel()
 	mgr := &redrawManager{altScreen: true, ok: false} // older daemon: no Modes
-	inst := redrawInstance(mgr, Running)
+	inst := redrawInstance(mgr, domain.Active)
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
 
@@ -108,7 +110,7 @@ func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingAltScreen_When_
 
 func TestInstance_CapturePaneRedraw_should_PropagateCaptureError(t *testing.T) {
 	t.Parallel()
-	inst := redrawInstance(&redrawManager{ok: true, err: errors.New("daemon gone")}, Running)
+	inst := redrawInstance(&redrawManager{ok: true, err: errors.New("daemon gone")}, domain.Active)
 
 	_, ok, err := inst.CapturePaneRedraw(context.Background())
 
@@ -119,11 +121,11 @@ func TestInstance_CapturePaneRedraw_should_PropagateCaptureError(t *testing.T) {
 
 func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(t *testing.T) {
 	t.Parallel()
-	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, Running)
-	notStarted.started.Store(false)
-	cases := map[string]*Instance{
+	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, domain.Active)
+	notStarted.SetStartedForTest(false)
+	cases := map[string]*instance.Instance{
 		"not started": notStarted,
-		"paused":      redrawInstance(&redrawManager{ok: true}, Paused),
+		"paused":      redrawInstance(&redrawManager{ok: true}, domain.Paused),
 	}
 	for name, inst := range cases {
 		inst := inst
@@ -132,16 +134,16 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 			_, ok, err := inst.CapturePaneRedraw(context.Background())
 			assert.ErrorIs(t, err, streamhub.ErrSessionNotStarted)
 			assert.False(t, ok)
-			assert.Equal(t, 0, inst.processManager.(*TymuxBackend).mgr.(*redrawManager).calls)
+			assert.Equal(t, 0, inst.ProcessManagerForTest().(*TymuxBackend).mgr.(*redrawManager).calls)
 		})
 	}
 }
 
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingPane_When_BackendHasNoCapability(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: Running}
-	inst.processManager = &fakeSendKeysProcessManager{}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Active}
+	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
+	inst.MarkStarted()
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
 

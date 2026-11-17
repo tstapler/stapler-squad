@@ -8,7 +8,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // disabled is a func() bool that always reports the feature as off.
@@ -106,9 +107,9 @@ func TestGoalHandlers_FeatureDisabled(t *testing.T) {
 func TestBacklogHandlers_LiveToggleTakesEffectWithoutRestart(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:    "Live toggle test item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 1,
 	})
 	require.NoError(t, err)

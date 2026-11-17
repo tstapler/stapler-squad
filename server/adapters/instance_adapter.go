@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -52,12 +53,12 @@ func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.Pi
 // no blob reports why: "scanning" when a transcript is linked and awaiting its
 // first scan, otherwise "not_linked". supportsTranscript is only consulted for
 // the unlinked case, since it reads program config from disk.
-func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
+func artifactsToProto(a *domain.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
 	if a == nil {
 		if linked {
-			return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateScanning), TranscriptSupported: true}
+			return &sessionv1.SessionArtifacts{ScanState: string(domain.ScanStateScanning), TranscriptSupported: true}
 		}
-		return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
+		return &sessionv1.SessionArtifacts{ScanState: string(domain.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
 	}
 	return &sessionv1.SessionArtifacts{
 		PrUrls:              validUTF8All(a.PRURLs),
@@ -72,7 +73,7 @@ func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTr
 
 // InstanceToProto converts a session.Instance to a proto Session message.
 // workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
-func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *sessionv1.Session {
+func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *sessionv1.Session {
 	if inst == nil {
 		return nil
 	}
@@ -151,51 +152,11 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		RestartedFromSessionId: snap.RestartedFromSessionID,
 	}
 
-	// Retry state (session-retry-backoff), fields 76-80. Read directly from
-	// the instance (not the InstanceSnapshot atomic pointer, which predates
-	// this feature) via RetrySnapshot's race-free copy.
-	rs := inst.RetrySnapshot()
-	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
-	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
-	protoSession.LastFailureReason = rs.LastFailureReason
-	if !rs.NextRetryAt.IsZero() {
-		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
-	}
-	if len(rs.RetryHistory) > 0 {
-		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
-		for i, rec := range rs.RetryHistory {
-			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
-				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
-				Reason:    rec.Reason,
-				Timestamp: timestamppb.New(rec.Timestamp),
-			}
-		}
-	}
+	applyRetryState(protoSession, inst)
 
 	protoSession.Artifacts = artifactsToProto(snap.Artifacts, snap.HistoryFilePath != "", inst.SupportsTranscript)
 
-	// Convert git worktree data if available
-	wt, err := inst.GetGitWorktree()
-	if err == nil && wt != nil {
-		protoSession.GitWorktree = &sessionv1.GitWorktree{
-			RepoPath:      wt.GetRepoPath(),
-			WorktreePath:  wt.GetWorktreePath(),
-			BranchName:    wt.GetBranchName(),
-			BaseCommitSha: wt.GetBaseCommitSHA(),
-		}
-	}
-
-	// Convert diff stats if available
-	if inst.GetDiffStats() != nil {
-		stats := inst.GetDiffStats()
-		protoSession.DiffStats = &sessionv1.DiffStats{
-			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
-			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
-		}
-	}
-
-	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
-	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+	applyWorktreeAndDiff(protoSession, inst)
 
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
@@ -239,55 +200,9 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Exit reason — only meaningful when status == SESSION_STATUS_CRASHED.
 	protoSession.ExitReason = snap.ExitReason
 
-	// VNC / browser-passthrough state.
-	if vncMgr := inst.VNCManager(); vncMgr != nil {
-		vncState := vncMgr.State()
-		protoSession.VncState = &sessionv1.VNCState{
-			Status:                mapVNCStatus(vncState.Status),
-			DisplayNumber:         int32(vncState.DisplayNumber), //#nosec G115 -- X11 display number, always small
-			BrowserWindowDetected: vncState.BrowserWindowDetected,
-			// VncPassword intentionally omitted in list/watch paths — only exposed by GetSession.
-		}
-	}
+	applyBrowserStreamStates(protoSession, inst)
 
-	// CDP / browser-streaming state.
-	if cdpMgr := inst.CDPManager(); cdpMgr != nil {
-		cdpState := cdpMgr.State()
-		protoSession.CdpState = &sessionv1.CDPState{
-			Status: mapCDPStatus(cdpState.Status),
-		}
-	}
-
-	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
-	var statusInfo session.InstanceStatusInfo
-	if snap.Status == session.Active {
-		if mgr := inst.GetStatusManager(); mgr != nil {
-			statusInfo = mgr.GetStatus(inst)
-		}
-	}
-
-	// SubStatus: fine-grained activity state derived from terminal detection.
-	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
-	protoSession.SubStatus = toProtoSubStatusFromInfo(snap.Status, inst.GetRateLimitState(), statusInfo)
-
-	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
-	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
-		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
-		protoSession.DetectedContext = statusInfo.StatusContext
-	}
-
-	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
-	// verdict with enough samples exists (e.g. never for non-Claude sessions).
-	if snap.ContextHealth.Level != tokens.HealthUnknown {
-		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
-		protoSession.ContextHealthReason = snap.ContextHealth.Reason
-	}
-
-	// SubagentCount (field 75): count of background agents/shells/monitors from the
-	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
-	// already 0 by construction when the controller is inactive or status isn't
-	// WaitingForAgent, so a guard here would be a no-op.
-	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
+	applyStatusDetection(protoSession, inst, snap)
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
@@ -307,7 +222,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
 	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
 	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
-	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
+	if remoteTarget, ok := inst.GetExecutionTarget().(instance.RemoteExecutionTarget); ok {
 		protoSession.RemoteName = remoteTarget.Target().Name
 	}
 
@@ -319,9 +234,122 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		protoSession.PiExtensionHealth = resolver(protoSession.Id, snap.Program)
 	}
 
+	applySessionGoal(protoSession, inst)
+
+	return protoSession
+}
+
+// applyRetryState copies the session-retry-backoff fields (76-80).
+func applyRetryState(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// Retry state (session-retry-backoff), fields 76-80. Read directly from
+	// the instance (not the InstanceSnapshot atomic pointer, which predates
+	// this feature) via RetrySnapshot's race-free copy.
+	rs := inst.RetrySnapshot()
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
+	protoSession.LastFailureReason = rs.LastFailureReason
+	if !rs.NextRetryAt.IsZero() {
+		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
+	}
+	if len(rs.RetryHistory) > 0 {
+		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
+		for i, rec := range rs.RetryHistory {
+			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
+				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
+				Reason:    rec.Reason,
+				Timestamp: timestamppb.New(rec.Timestamp),
+			}
+		}
+	}
+}
+
+// applyWorktreeAndDiff copies git worktree, diff stats and the commits-ahead signal.
+func applyWorktreeAndDiff(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// Convert git worktree data if available
+	wt, err := inst.GetGitWorktree()
+	if err == nil && wt != nil {
+		protoSession.GitWorktree = &sessionv1.GitWorktree{
+			RepoPath:      wt.GetRepoPath(),
+			WorktreePath:  wt.GetWorktreePath(),
+			BranchName:    wt.GetBranchName(),
+			BaseCommitSha: wt.GetBaseCommitSHA(),
+		}
+	}
+
+	// Convert diff stats if available
+	if inst.GetDiffStats() != nil {
+		stats := inst.GetDiffStats()
+		protoSession.DiffStats = &sessionv1.DiffStats{
+			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
+		}
+	}
+
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+}
+
+// applyBrowserStreamStates copies the VNC and CDP browser-streaming state.
+func applyBrowserStreamStates(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// VNC / browser-passthrough state.
+	if vncMgr := inst.VNCManager(); vncMgr != nil {
+		vncState := vncMgr.State()
+		protoSession.VncState = &sessionv1.VNCState{
+			Status:                mapVNCStatus(vncState.Status),
+			DisplayNumber:         int32(vncState.DisplayNumber), //#nosec G115 -- X11 display number, always small
+			BrowserWindowDetected: vncState.BrowserWindowDetected,
+			// VncPassword intentionally omitted in list/watch paths — only exposed by GetSession.
+		}
+	}
+
+	// CDP / browser-streaming state.
+	if cdpMgr := inst.CDPManager(); cdpMgr != nil {
+		cdpState := cdpMgr.State()
+		protoSession.CdpState = &sessionv1.CDPState{
+			Status: mapCDPStatus(cdpState.Status),
+		}
+	}
+}
+
+// applyStatusDetection copies SubStatus, DetectedStatus/Context, ContextHealth and SubagentCount.
+func applyStatusDetection(protoSession *sessionv1.Session, inst *instance.Instance, snap *domain.InstanceSnapshot) {
+	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
+	var statusInfo instance.InstanceStatusInfo
+	if snap.Status == domain.Active {
+		if mgr := inst.GetStatusManager(); mgr != nil {
+			statusInfo = mgr.GetStatus(inst)
+		}
+	}
+
+	// SubStatus: fine-grained activity state derived from terminal detection.
+	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
+	protoSession.SubStatus = toProtoSubStatusFromInfo(snap.Status, inst.GetRateLimitState(), statusInfo)
+
+	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
+	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
+		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
+		protoSession.DetectedContext = statusInfo.StatusContext
+	}
+
+	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
+	// verdict with enough samples exists (e.g. never for non-Claude sessions).
+	if snap.ContextHealth.Level != domain.HealthUnknown {
+		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
+		protoSession.ContextHealthReason = snap.ContextHealth.Reason
+	}
+
+	// SubagentCount (field 75): count of background agents/shells/monitors from the
+	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
+	// already 0 by construction when the controller is inactive or status isn't
+	// WaitingForAgent, so a guard here would be a no-op.
+	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
+}
+
+// applySessionGoal copies the goal summary set via the set_session_goal MCP tool.
+func applySessionGoal(protoSession *sessionv1.Session, inst *instance.Instance) {
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {
-		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
+		tasksJSON, _ := instance.EncodeTasks(g.Tasks) // empty string on error is safe
 		protoSession.Goal = &sessionv1.SessionGoalSummary{
 			GoalText:   g.Goal,
 			Status:     g.Status,
@@ -331,8 +359,6 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 			UpdatedAt:  timestamppb.New(g.UpdatedAt),
 		}
 	}
-
-	return protoSession
 }
 
 // mapVNCStatus converts a vnc.VNCStatus to the proto VNCStatus enum.
@@ -372,8 +398,8 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 // toProtoSubStatusFromInfo derives the SubStatus proto enum from pre-computed status info.
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
-func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
-	if basicStatus != session.Active {
+func toProtoSubStatusFromInfo(basicStatus domain.Status, rateLimitState int, info instance.InstanceStatusInfo) sessionv1.SubStatus {
+	if basicStatus != domain.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
 	// Rate limit state takes precedence.
@@ -433,25 +459,25 @@ func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitSt
 // comment for why this is enforced at the code level here rather than via the
 // linter, which is deliberately disabled repo-wide for iota-typed switches with
 // intentional default arms).
-func StatusToProto(status session.Status) (sessionv1.SessionStatus, error) {
+func StatusToProto(status domain.Status) (sessionv1.SessionStatus, error) {
 	switch status {
-	case session.Active:
+	case domain.Active:
 		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, nil // wire value 1 (same as legacy RUNNING)
-	case session.Paused:
+	case domain.Paused:
 		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED, nil
-	case session.Creating:
+	case domain.Creating:
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING, nil
-	case session.Stopped:
+	case domain.Stopped:
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED, nil
-	case session.Hibernated:
+	case domain.Hibernated:
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, nil
-	case session.Restoring:
+	case domain.Restoring:
 		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING, nil
-	case session.Crashed:
+	case domain.Crashed:
 		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED, nil
-	case session.PermanentlyFailed:
+	case domain.PermanentlyFailed:
 		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED, nil
-	case session.Failed:
+	case domain.Failed:
 		return sessionv1.SessionStatus_SESSION_STATUS_FAILED, nil
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED, fmt.Errorf("adapters.StatusToProto: unrecognized session.Status %d", int(status))
@@ -463,7 +489,7 @@ func StatusToProto(status session.Status) (sessionv1.SessionStatus, error) {
 // (it should never happen — every session.Status value is handled above) and
 // mapped to UNSPECIFIED rather than propagated, matching this wrapper's
 // original no-error contract.
-func statusToProto(status session.Status) sessionv1.SessionStatus {
+func statusToProto(status domain.Status) sessionv1.SessionStatus {
 	proto, err := StatusToProto(status)
 	if err != nil {
 		log.Error("statusToProto: unrecognized session.Status", "status", int(status), "err", err)
@@ -498,13 +524,13 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 }
 
 // sessionTypeToProto converts session.SessionType to proto SessionType enum.
-func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
+func sessionTypeToProto(sessionType domain.SessionType) sessionv1.SessionType {
 	switch sessionType {
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
@@ -512,15 +538,15 @@ func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 }
 
 // reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
-func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+func reviveOutcomeToProto(outcome domain.ReviveOutcome) sessionv1.ReviveOutcome {
 	switch outcome {
-	case session.ReviveOutcomeResumeLive:
+	case domain.ReviveOutcomeResumeLive:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
-	case session.ReviveOutcomeResumeRecovered:
+	case domain.ReviveOutcomeResumeRecovered:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
-	case session.ReviveOutcomeFreshExpected:
+	case domain.ReviveOutcomeFreshExpected:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
-	case session.ReviveOutcomeFreshLostHistory:
+	case domain.ReviveOutcomeFreshLostHistory:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
 	default:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
@@ -530,45 +556,45 @@ func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome
 // ProtoToStatus converts proto SessionStatus enum to session.Status.
 // Legacy wire values from older clients (READY=2, NEEDS_APPROVAL=5, LOADING=3) are
 // mapped to the appropriate new lifecycle states.
-func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
+func ProtoToStatus(status sessionv1.SessionStatus) domain.Status {
 	switch status {
 	case sessionv1.SessionStatus_SESSION_STATUS_ACTIVE:
 		// Also handles RUNNING(1) which shares the same integer wire value.
-		return session.Active
+		return domain.Active
 	case 2: // SESSION_STATUS_READY — deprecated legacy wire value → Active
-		return session.Active
+		return domain.Active
 	case 5: // SESSION_STATUS_NEEDS_APPROVAL — deprecated legacy wire value → Active (sub-status only now)
-		return session.Active
+		return domain.Active
 	case 3: // SESSION_STATUS_LOADING — deprecated legacy wire value → Creating
-		return session.Creating
+		return domain.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_CREATING:
-		return session.Creating
+		return domain.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_PAUSED:
-		return session.Paused
+		return domain.Paused
 	case sessionv1.SessionStatus_SESSION_STATUS_STOPPED:
-		return session.Stopped
+		return domain.Stopped
 	case sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED:
-		return session.Hibernated
+		return domain.Hibernated
 	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
-		return session.Restoring
+		return domain.Restoring
 	case sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
 		// Collateral fix: this case was missing before session-retry-backoff
 		// touched this switch — a round-tripped CRASHED session silently fell
 		// to the default: below and reopened as Creating.
-		return session.Crashed
+		return domain.Crashed
 	case sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED:
-		return session.PermanentlyFailed
+		return domain.PermanentlyFailed
 	default:
-		return session.Creating // Default to Creating for unknown statuses
+		return domain.Creating // Default to Creating for unknown statuses
 	}
 }
 
 // instanceTypeToProto converts session.InstanceType to proto InstanceType enum.
-func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceType {
+func instanceTypeToProto(instanceType domain.InstanceType) sessionv1.InstanceType {
 	switch instanceType {
-	case session.InstanceTypeManaged:
+	case domain.InstanceTypeManaged:
 		return sessionv1.InstanceType_INSTANCE_TYPE_MANAGED
-	case session.InstanceTypeExternal:
+	case domain.InstanceTypeExternal:
 		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
@@ -576,7 +602,7 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 }
 
 // checksToProto converts the itemized GitHub statusCheckRollup into proto GithubCheckItem messages.
-func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
+func checksToProto(checks []domain.GitHubCheckItem) []*sessionv1.GithubCheckItem {
 	out := make([]*sessionv1.GithubCheckItem, len(checks))
 	for i, c := range checks {
 		out[i] = &sessionv1.GithubCheckItem{Name: c.Name, Context: c.Context, State: c.State, Status: c.Status, Conclusion: c.Conclusion}
@@ -585,7 +611,7 @@ func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
 }
 
 // reviewFeedbackToProto converts the itemized GitHub PR review list into proto GithubReviewFeedback messages.
-func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubReviewFeedback {
+func reviewFeedbackToProto(reviews []domain.GitHubReviewItem) []*sessionv1.GithubReviewFeedback {
 	out := make([]*sessionv1.GithubReviewFeedback, len(reviews))
 	for i, r := range reviews {
 		out[i] = &sessionv1.GithubReviewFeedback{Author: r.Author, State: r.State, Body: r.Body}
@@ -594,7 +620,7 @@ func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubRevie
 }
 
 // externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.
-func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
+func externalMetadataToProto(metadata *domain.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
 	if metadata == nil {
 		return nil
 	}

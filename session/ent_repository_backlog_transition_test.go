@@ -9,6 +9,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadyShippedSinceReview
@@ -31,9 +34,9 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-shipped item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -45,28 +48,28 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// Meanwhile, the item's real review session's PASS verdict ships it all
 	// the way to "done" — a different call path than the stale reopen in
 	// flight, with no knowledge of it.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &BacklogItemPrecondition{
-		ExpectedStatus: string(BacklogStatusReview),
-	}, TriggeredBySystem)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusReview),
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
-		ExpectedStatus: string(BacklogStatusPRPending),
-	}, TriggeredBySystem)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusPRPending),
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// The stale reopen attempt finally executes, using the precondition it
 	// captured before any of the above happened. It must be rejected — not
 	// silently applied on top of the now-shipped item.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
-		ExpectedStatus:    string(BacklogStatusReview),
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
-	}, TriggeredBySystem)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	}, instance.TriggeredBySystem)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusDone), final.Status, "item must remain done, not bounce back to in_progress")
+	assert.Equal(t, string(domain.BacklogStatusDone), final.Status, "item must remain done, not bounce back to in_progress")
 }
 
 // TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoWritersRaceConcurrently
@@ -83,9 +86,9 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "racing writers item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -94,18 +97,18 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	startBarrier.Add(1)
 	results := make(chan error, 2)
 
-	race := func(toStatus BacklogStatus) {
+	race := func(toStatus domain.BacklogStatus) {
 		defer wg.Done()
 		startBarrier.Wait()
-		_, txErr := repo.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &BacklogItemPrecondition{
-			ExpectedStatus: string(BacklogStatusReview),
-		}, TriggeredBySystem)
+		_, txErr := repo.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &backlogdto.BacklogItemPrecondition{
+			ExpectedStatus: string(domain.BacklogStatusReview),
+		}, instance.TriggeredBySystem)
 		results <- txErr
 	}
 
 	wg.Add(2)
-	go race(BacklogStatusDone)
-	go race(BacklogStatusInProgress)
+	go race(domain.BacklogStatusDone)
+	go race(domain.BacklogStatusInProgress)
 	startBarrier.Done()
 	wg.Wait()
 	close(results)
@@ -115,7 +118,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 		switch {
 		case txErr == nil:
 			successes++
-		case errors.Is(txErr, ErrPreconditionFailed):
+		case errors.Is(txErr, domain.ErrPreconditionFailed):
 			failures++
 		default:
 			t.Fatalf("unexpected error: %v", txErr)
@@ -126,7 +129,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Contains(t, []string{string(BacklogStatusDone), string(BacklogStatusInProgress)}, final.Status,
+	assert.Contains(t, []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusInProgress)}, final.Status,
 		"final status must be exactly one writer's intended toStatus, not a third bounced state")
 }
 
@@ -152,9 +155,9 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "utc timestamp regression item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, time.UTC, item.UpdatedAt.Location(), "a freshly created item's updated_at must be stored in UTC")
@@ -162,10 +165,10 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	// The exact scenario that broke: a caller builds a CAS precondition from
 	// a protobuf-Timestamp round trip (always UTC, e.g. timestamppb.New(t).AsTime()).
 	utcPrecondition := item.UpdatedAt.UTC()
-	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
-		ExpectedStatus:    string(BacklogStatusReview),
+	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &utcPrecondition,
-	}, TriggeredByUser)
+	}, instance.TriggeredByUser)
 	require.NoError(t, err, "a UTC-derived expected_updated_at must match the stored value's CAS check")
 	assert.Equal(t, time.UTC, updated.UpdatedAt.Location(), "updated_at must remain UTC after a transition")
 }

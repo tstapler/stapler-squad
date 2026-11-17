@@ -7,10 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func submitHarnessInstance(th *terminalHandlers) *session.Instance {
+func submitHarnessInstance(th *terminalHandlers) *instance.Instance {
 	return th.store.(*stubStore).instances[0]
 }
 
@@ -20,7 +20,7 @@ func TestMCPWriteTools_ShouldReturnRetryableWriteInProgressWithZeroWrites_WhenTh
 	t.Parallel()
 	th, pm := newSubmitHarness(t)
 	inst := submitHarnessInstance(th)
-	held, ok := inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 
 	calls := map[string]func() (map[string]interface{}, error){
@@ -53,7 +53,7 @@ func TestMCPWriteTools_ShouldReturnRetryableWriteInProgressWithZeroWrites_WhenTh
 	m, err := calls["write_to_session"]()
 	require.NoError(t, err)
 	assert.Equal(t, true, m["success"])
-	session.AssertLeaseFree(t, inst)
+	instance.AssertLeaseFree(t, inst)
 }
 
 // T-WL-04 (nudge half): a busy lease never consumes the dispatch's one nudge attempt.
@@ -62,10 +62,10 @@ func TestWriteNudge_ShouldNotConsumeTheNudgeAttempt_WhenTheLeaseIsBusy(t *testin
 	_, sessUUID := setupDiagnoseSession(t, storage)
 	dh := &diagnoseHandlers{storage: storage}
 	pm := &recordingPM{}
-	target := session.NewStartedInstanceForTest(t, "nudge-target", pm)
+	target := instance.NewStartedInstanceForTest(t, "nudge-target", pm)
 	ctx := context.Background()
 
-	held, ok := target.TryTerminalWriteLease(session.LeaseWriterDriver)
+	held, ok := target.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 	res := dh.writeNudge(ctx, sessUUID, target, "please continue")
 	require.NotNil(t, res)
@@ -75,6 +75,6 @@ func TestWriteNudge_ShouldNotConsumeTheNudgeAttempt_WhenTheLeaseIsBusy(t *testin
 	held.Release()
 	assert.Nil(t, dh.writeNudge(ctx, sessUUID, target, "please continue"),
 		"the attempt was not claimed while busy, so the retry is allowed and writes")
-	assert.Equal(t, []string{"please continue", session.EnterKeySequence}, pm.writes())
-	session.AssertLeaseFree(t, target)
+	assert.Equal(t, []string{"please continue", instance.EnterKeySequence}, pm.writes())
+	instance.AssertLeaseFree(t, target)
 }

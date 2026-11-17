@@ -9,9 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // newGateTimeoutTestFixture creates a real TransitionGate row (fromSlug ->
@@ -20,7 +25,7 @@ import (
 // and CreatedAt backdated by age — modeling InvokeCustomGateCheck's in-flight
 // row (session/gate_custom_check.go) at invocation time. Returns the item and
 // the gate's ID.
-func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug string, age time.Duration, expectedDuration, stalenessMargin time.Duration) (*session.BacklogItemData, uuid.UUID) {
+func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug string, age time.Duration, expectedDuration, stalenessMargin time.Duration) (*backlogdto.BacklogItemData, uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	client := storage.GetEntClient()
@@ -36,16 +41,16 @@ func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug st
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindCustom)).
+		SetKind(string(domain.GateKindCustom)).
 		SetStateful(true).
 		Save(ctx)
 	require.NoError(t, err)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Gate timeout test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -69,10 +74,10 @@ func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug st
 
 // TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_CustomCheckExceedsExpectedDurationPlusMargin
 // covers Story 2.4.4's Task 2.4.4d/validation.md scenario: a custom-check
-// invocation bounded by a LivenessDefinition{ExpectedDuration: 10m,
+// invocation bounded by a liveness.LivenessDefinition{ExpectedDuration: 10m,
 // StalenessMargin: 5m} that has been open 16m is caught by the same
 // reconcile* sweep infrastructure Epic 1.4 built, via a live
-// LivenessEngine.LivenessFor resolution for the gate's bound target stage —
+// liveness.LivenessEngine.LivenessFor resolution for the gate's bound target stage —
 // not a new detector.
 func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_CustomCheckExceedsExpectedDurationPlusMargin(t *testing.T) {
 	t.Parallel()
@@ -82,22 +87,22 @@ func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_Custom
 	er := storage.Repo
 
 	const toSlug = "gate-timeout-ready"
-	livenessRepo := NewEntLivenessRepository(storage.GetEntClient())
-	_, err := livenessRepo.Create(ctx, LivenessCreateInput{
+	livenessRepo := liveness.NewEntLivenessRepository(storage.GetEntClient())
+	_, err := livenessRepo.Create(ctx, liveness.LivenessCreateInput{
 		StageSlug: toSlug,
-		Definition: LivenessDefinition{
-			Kind:             LivenessKindDurationBudget,
+		Definition: liveness.LivenessDefinition{
+			Kind:             liveness.LivenessKindDurationBudget,
 			ExpectedDuration: 10 * time.Minute,
 			StalenessMargin:  5 * time.Minute,
 		},
 	})
 	require.NoError(t, err)
-	engine, err := NewCachingLivenessEngine(livenessRepo)
+	engine, err := liveness.NewCachingLivenessEngine(livenessRepo)
 	require.NoError(t, err)
 
 	item, gateID := newGateTimeoutTestFixture(t, storage, toSlug, 16*time.Minute, 10*time.Minute, 5*time.Minute)
 
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	listener := NewBacklogLifecycleListener(storage)
 	listener.livenessEngine = engine
 	listener.gateSatisfactionRepo = repo
@@ -106,7 +111,7 @@ func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_Custom
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
 	require.True(t, ok, "a 16m-old invocation must be marked StuckReasonGateTimeout under the 15m (10m+5m) threshold")
 	assert.Contains(t, row.Context, gateID.String())
 }
@@ -123,7 +128,7 @@ func TestReconcileCustomGateChecks_should_NotMarkStuck_When_CustomCheckWithinBud
 
 	item, _ := newGateTimeoutTestFixture(t, storage, "gate-within-budget", 2*time.Minute, 10*time.Minute, 5*time.Minute)
 
-	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	listener := NewBacklogLifecycleListener(storage)
 	listener.gateSatisfactionRepo = repo
 
@@ -131,7 +136,7 @@ func TestReconcileCustomGateChecks_should_NotMarkStuck_When_CustomCheckWithinBud
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
 	assert.False(t, ok, "a 2m-old invocation under a 15m threshold must not be flagged")
 }
 
@@ -160,7 +165,7 @@ func TestResolveCustomCheckGateContext_should_ReturnNotOK_When_NoWorkflowEngineW
 	defer cleanup()
 
 	listener := NewBacklogLifecycleListener(storage)
-	_, _, ok := listener.resolveCustomCheckGateContext(session.BacklogStatusInProgress, session.BacklogStatusReview)
+	_, _, ok := listener.resolveCustomCheckGateContext(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	assert.False(t, ok)
 }
 
@@ -176,10 +181,10 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 	ctx := context.Background()
 	client := storage.GetEntClient()
 
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
-	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(session.BacklogStatusInProgress))).Only(ctx)
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
+	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusInProgress))).Only(ctx)
 	require.NoError(t, err)
-	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(session.BacklogStatusReview))).Only(ctx)
+	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusReview))).Only(ctx)
 	require.NoError(t, err)
 	transition, err := client.StageTransition.Query().
 		Where(stagetransition.FromStageID(fromStage.ID), stagetransition.ToStageID(toStage.ID)).
@@ -187,22 +192,22 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindCustom)).
+		SetKind(string(domain.GateKindCustom)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"skill": "review-feasibility"}).
 		Save(ctx)
 	require.NoError(t, err)
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateRepo := stagecfg.NewEntGateSatisfactionRepository(client)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateRepo, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetWorkflowEngine(engine)
 
-	gateID, cfg, ok := listener.resolveCustomCheckGateContext(session.BacklogStatusInProgress, session.BacklogStatusReview)
+	gateID, cfg, ok := listener.resolveCustomCheckGateContext(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	require.True(t, ok)
 	assert.Equal(t, gate.ID, gateID)
 	assert.Equal(t, "review-feasibility", cfg.SkillID)
@@ -223,19 +228,19 @@ func TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_T
 	ctx := context.Background()
 	client := storage.GetEntClient()
 
-	gateID := newCustomCheckTestGate(t, storage)
-	item := newCustomCheckTestItem(t, storage, "runCustomGateCheckWithCaller wiring test")
+	gateID := blktest.NewCustomCheckTestGate(t, storage)
+	item := blktest.NewCustomCheckTestItem(t, storage, "runCustomGateCheckWithCaller wiring test")
 
-	repo := session.NewEntGateSatisfactionRepository(client)
+	repo := stagecfg.NewEntGateSatisfactionRepository(client)
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetGateSatisfactionRepository(repo)
 
-	caller := &fakeCustomCheckCaller{output: "Looks buildable.\n\nVERDICT: PASS"}
-	cfg := session.CustomCheckConfig{SkillID: "review-feasibility"}
+	caller := &blktest.FakeCustomCheckCaller{Output: "Looks buildable.\n\nVERDICT: PASS"}
+	cfg := domain.CustomCheckConfig{SkillID: "review-feasibility"}
 
-	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, session.BacklogStatusReady, item)
+	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, domain.BacklogStatusReady, item)
 
-	assert.True(t, caller.called, "InvokeCustomGateCheck must actually invoke the caller")
+	assert.True(t, caller.Called, "InvokeCustomGateCheck must actually invoke the caller")
 
 	record, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), gateID)
 	require.NoError(t, getErr)

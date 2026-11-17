@@ -22,8 +22,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // ---------------------------------------------------------------------------
@@ -227,7 +229,7 @@ func buildSteerMessage(program, fixContext string) string {
 	body := fixContext
 	// Reserve room for suffix + truncationPointer against fixContext
 	// alone, so both always fit even when fixContext itself must be cut.
-	budget := session.MaxSteerMessageLength - len(suffix) - len(truncationPointer)
+	budget := instance.MaxSteerMessageLength - len(suffix) - len(truncationPointer)
 	if budget < 0 {
 		budget = 0
 	}
@@ -274,14 +276,14 @@ func truncateUTF8Bytes(s string, maxBytes int) string {
 // steer the already-running session with fixContext instead of skipping the
 // respawn outright, falling back to the existing notify-only behavior
 // whenever it can't safely do so. Never calls TransitionBacklogItemStatus.
-func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, active *session.ItemSessionSummary, fixContext string) {
+func (s *BacklogService) steerActiveSessionForPRFix(ctx context.Context, itemID, itemTitle string, currentStatus domain.BacklogStatus, active *backlogdto.ItemSessionSummary, fixContext string) {
 	// Defense-in-depth, not an expected path (see Story 2.1.3's design note): a
 	// jules_work session has no tmux pane, so steering it would silently
 	// misbehave. By construction this can't happen today — JulesSessionPoller
 	// always ends the jules_work session before the item reaches pr_pending —
 	// but a future violation of that invariant must fail loudly here rather
 	// than attempt a tmux write that has nothing to write to.
-	if active.Role == session.SessionRoleJulesWork {
+	if active.Role == instance.SessionRoleJulesWork {
 		log.ErrorLog().Printf("[AutoReopenForPRFix] invariant violation: active session %s for item=%s is jules_work (should have ended before pr_pending) — refusing to steer", active.SessionUUID, itemID)
 		return
 	}
@@ -408,15 +410,15 @@ func (s *BacklogService) recordPRFixOutcome(ctx context.Context, itemID, outcome
 	if s == nil || s.storage == nil {
 		return
 	}
-	s.storage.RecordFlowMarkerForItemPR(ctx, itemID, session.FlowMarkerPRFixOutcome, outcome)
+	s.storage.RecordFlowMarkerForItemPR(ctx, itemID, markerstore.FlowMarkerPRFixOutcome, outcome)
 }
 
 // degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for
 // every branch that falls back to the existing notify-only behavior instead
 // of delivering a steer. "Blocked by active session" is never simultaneously
 // a failed-steer condition, so resolve any stale SteerFailed row first.
-func (s *BacklogService) degradeToRespawnBlocked(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID string) {
-	s.recordPRFixOutcome(ctx, itemID, session.PRFixOutcomeSkippedActive)
+func (s *BacklogService) degradeToRespawnBlocked(ctx context.Context, itemID, itemTitle string, currentStatus domain.BacklogStatus, activeSessionUUID string) {
+	s.recordPRFixOutcome(ctx, itemID, markerstore.PRFixOutcomeSkippedActive)
 	s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
 	s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
 }
@@ -466,11 +468,11 @@ func humanReadableReasonSet(sig reasonSignature) string {
 // never both open at once (BlockerChip shows only one). The failure branch
 // names a remediation path for a Claude Code session since a failed steer
 // otherwise leaves zero terminal signal for the operator to act on.
-func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID, message, program string, reason reasonSignature, deliverErr error) {
+func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID, itemTitle string, currentStatus domain.BacklogStatus, activeSessionUUID, message, program string, reason reasonSignature, deliverErr error) {
 	reasonPhrase := humanReadableReasonSet(reason)
 	if deliverErr == nil {
 		log.InfoLog().Printf("[AutoReopenForPRFix] steered active session %s for item %s", activeSessionUUID, itemID)
-		s.recordPRFixOutcome(ctx, itemID, session.PRFixOutcomeSteered)
+		s.recordPRFixOutcome(ctx, itemID, markerstore.PRFixOutcomeSteered)
 		s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
 		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
 		if s.eventBus == nil {

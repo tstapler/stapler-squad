@@ -1,11 +1,10 @@
 package session
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 
-	"modernc.org/sqlite"
+	"github.com/tstapler/stapler-squad/session/dbpool"
 )
 
 // withSeedURI makes NewEntRepository copy the database at uri (a fully
@@ -30,39 +29,12 @@ func withSeedURI(uri string) RepositoryOption {
 // neither is re-run (and EntSchemaCreateMu, which only serializes Atlas, is not
 // needed).
 func newSeededEntRepository(db *sql.DB, repo *EntRepository) (*EntRepository, error) {
-	if err := restoreFrom(db, repo.seedURI); err != nil {
+	if err := dbpool.RestoreFrom(db, repo.seedURI); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to load seed database: %w", err)
 	}
 	repo.Client, repo.driver = newInstrumentedEntClient(db, nil)
-	repo.watchGuidanceWrites(repo.Client)
+	repo.initStores()
+	repo.WatchGuidanceWrites()
 	return repo, nil
-}
-
-// restoreFrom copies the database at srcURI into db's single connection using
-// SQLite's online backup API (modernc's conn.NewRestore).
-func restoreFrom(db *sql.DB, srcURI string) error {
-	conn, err := db.Conn(context.Background())
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	return conn.Raw(func(dc any) error {
-		restorer, ok := dc.(interface {
-			NewRestore(srcURI string) (*sqlite.Backup, error)
-		})
-		if !ok {
-			return fmt.Errorf("sqlite driver connection %T does not support NewRestore", dc)
-		}
-		backup, err := restorer.NewRestore(srcURI)
-		if err != nil {
-			return err
-		}
-		// A negative page count copies everything in one step.
-		if _, err := backup.Step(-1); err != nil {
-			_ = backup.Finish()
-			return err
-		}
-		return backup.Finish()
-	})
 }

@@ -5,12 +5,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // pendingCall is a Bash tool_use waiting for its tool_result.
 type pendingCall struct {
 	seenAt     time.Time
-	cmd        *CommandArtifact // nil when the command matches no known pattern
+	cmd        *domain.CommandArtifact // nil when the command matches no known pattern
 	createPR   bool
 	head, base string
 }
@@ -93,16 +95,16 @@ func (f *scanFindings) addPRRecords(prURLs []string, call pendingCall, paired bo
 		if !ok {
 			continue
 		}
-		rec.Source, rec.FirstSeenAt = PRSourceMentioned, ts
+		rec.Source, rec.FirstSeenAt = domain.PRSourceMentioned, ts
 		if paired && call.createPR && i == 0 {
-			rec.Source, rec.Branch, rec.Base = PRSourceCreated, call.head, call.base
+			rec.Source, rec.Branch, rec.Base = domain.PRSourceCreated, call.head, call.base
 		}
 		f.records = append(f.records, rec)
 	}
 }
 
-func commandRecord(call pendingCall, result string) CommandRecord {
-	return CommandRecord{
+func commandRecord(call pendingCall, result string) domain.CommandRecord {
+	return domain.CommandRecord{
 		Type: call.cmd.Type, Command: call.cmd.Command, Detail: call.cmd.Detail,
 		Result: truncateBytes(Redact(strings.TrimSpace(result)), MaxResultBytes), FirstSeenAt: call.seenAt,
 	}

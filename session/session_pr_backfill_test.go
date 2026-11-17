@@ -7,13 +7,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
 )
 
 type legacySession struct {
@@ -41,18 +47,18 @@ func addLegacyItem(t *testing.T, repo *EntRepository, title, status string, numb
 
 func attachItemSession(t *testing.T, repo *EntRepository, itemID, sessionUUID string) {
 	t.Helper()
-	_, err := repo.CreateItemSession(context.Background(), ItemSessionData{ItemID: itemID, SessionUUID: sessionUUID, SessionRole: SessionRoleWork})
+	_, err := repo.CreateItemSession(context.Background(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 }
 
-func runBackfill(t *testing.T, repo *EntRepository) PRBackfillReport {
+func runBackfill(t *testing.T, repo *EntRepository) sessionpr.PRBackfillReport {
 	t.Helper()
-	rep, err := repo.runPRBackfill(context.Background(), nil)
+	rep, err := repo.RunBackfill(context.Background(), nil)
 	require.NoError(t, err)
 	return rep
 }
 
-func stateOf(t *testing.T, repo *EntRepository, ref PRRef) *ent.PullRequestState {
+func stateOf(t *testing.T, repo *EntRepository, ref domain.PRRef) *ent.PullRequestState {
 	t.Helper()
 	return reload(t, repo, ref)
 }
@@ -67,19 +73,19 @@ func TestBackfill_ShouldSeedFromWhatIsStored_WhenSessionHasLegacyPR(t *testing.T
 	rep := runBackfill(t, repo)
 
 	assert.Equal(t, 2, rep.CreatedSessionLinks)
-	terminal := stateOf(t, repo, mustPRRef(t, "", "acme", "app", 11))
+	terminal := stateOf(t, repo, fixturetest.MustPRRef(t, "", "acme", "app", 11))
 	assert.Equal(t, "unknown", terminal.State)
 	assert.True(t, terminal.Terminal, "terminal flag true seeds an unverified terminal row")
 	assert.Equal(t, "https://github.com/acme/app/pull/11", terminal.URL, "empty stored url is synthesized")
-	nonTerminal := stateOf(t, repo, mustPRRef(t, "", "acme", "app", 12))
+	nonTerminal := stateOf(t, repo, fixturetest.MustPRRef(t, "", "acme", "app", 12))
 	assert.Equal(t, "unknown", nonTerminal.State)
 	assert.False(t, nonTerminal.Terminal, "never a guessed open")
 
 	views, err := repo.ListBySessionUUIDs(ctx, []string{"u-term"})
 	require.NoError(t, err)
 	require.Len(t, views["u-term"], 1)
-	assert.Equal(t, PRRolePrimary, views["u-term"][0].Role)
-	assert.Equal(t, AttachSourceBackfill, views["u-term"][0].AttachSource)
+	assert.Equal(t, domain.PRRolePrimary, views["u-term"][0].Role)
+	assert.Equal(t, domain.AttachSourceBackfill, views["u-term"][0].AttachSource)
 
 	again := runBackfill(t, repo)
 	assert.Equal(t, 0, again.CreatedSessionLinks, "a second run creates nothing")
@@ -106,28 +112,18 @@ func TestBackfill_ShouldMergeFailClosed_WhenSessionAndItemShareAPR(t *testing.T)
 
 			runBackfill(t, repo)
 
-			row := stateOf(t, repo, mustPRRef(t, "", "acme", "app", n))
+			row := stateOf(t, repo, fixturetest.MustPRRef(t, "", "acme", "app", n))
 			assert.Equal(t, "unknown", row.State)
 			assert.Equal(t, tc.wantTerm, row.Terminal)
 		})
 	}
 }
 
-func TestMergeBackfillSeeds_ShouldBeIndependentOfOrder(t *testing.T) {
-	t.Parallel()
-	ref := mustPRRef(t, "", "acme", "app", 21)
-	term := prBackfillCandidate{ref: ref, terminal: true}
-	open := prBackfillCandidate{ref: ref, terminal: false}
-	assert.False(t, mergeBackfillSeeds([]prBackfillCandidate{term}, []prBackfillCandidate{open})[ref])
-	assert.False(t, mergeBackfillSeeds([]prBackfillCandidate{open}, []prBackfillCandidate{term})[ref])
-	assert.True(t, mergeBackfillSeeds([]prBackfillCandidate{term}, []prBackfillCandidate{term})[ref])
-}
-
 func TestBackfill_ShouldNotTopUpState_WhenRowAlreadyExists(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 31)
-	seedState(t, repo, ref, PRStateMerged, true)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 31)
+	seedState(t, repo, ref, domain.PRStateMerged, true)
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 31})
 
 	runBackfill(t, repo)
@@ -156,13 +152,13 @@ func TestBackfill_ShouldNotResurrectOrDuplicate_WhenDetachedOrAlreadyLinked(t *t
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref11 := mustPRRef(t, "", "acme", "app", 11)
+	ref11 := fixturetest.MustPRRef(t, "", "acme", "app", 11)
 	addLegacySession(t, repo, legacySession{title: "detached", uuid: "u-detached", owner: "acme", repo: "app", number: 11})
-	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("u-detached"), mustPRRef(t, "", "Acme", "App", 11))
+	_, err := repo.DeleteSessionPR(ctx, domain.SessionPROwner("u-detached"), fixturetest.MustPRRef(t, "", "Acme", "App", 11))
 	require.NoError(t, err)
 
 	addLegacySession(t, repo, legacySession{title: "linked", uuid: "u-linked", owner: "acme", repo: "app", number: 12})
-	upsertLink(t, repo, SessionPROwner("u-linked"), mustPRRef(t, "", "acme", "app", 12), AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u-linked"), fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceManual)
 
 	rep := runBackfill(t, repo)
 	assert.Equal(t, 1, rep.SkippedTombstoned)
@@ -173,7 +169,7 @@ func TestBackfill_ShouldNotResurrectOrDuplicate_WhenDetachedOrAlreadyLinked(t *t
 	assert.Empty(t, detached["u-detached"])
 	_ = ref11
 
-	primaries, err := repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID("u-linked"), sessionpr.Role("primary")).Count(ctx)
+	primaries, err := repo.Client.SessionPR.Query().Where(entsessionpr.SessionUUID("u-linked"), entsessionpr.Role("primary")).Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, primaries)
 }
@@ -184,18 +180,18 @@ func TestBackfill_ShouldImportAsFollowup_WhenSessionAlreadyHasAPrimary(t *testin
 	ctx := context.Background()
 	// Rollback case: the session has links (#11 primary) and the old binary wrote #12 to the legacy columns.
 	addLegacySession(t, repo, legacySession{title: "rolled-back", uuid: "u1", owner: "acme", repo: "app", number: 12})
-	upsertLink(t, repo, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", 11), AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
 
 	rep := runBackfill(t, repo)
 
 	assert.Equal(t, 1, rep.ImportedUnrepresented)
 	views, err := repo.ListBySessionUUIDs(ctx, []string{"u1"})
 	require.NoError(t, err)
-	roles := map[int]PRRole{}
+	roles := map[int]domain.PRRole{}
 	for _, v := range views["u1"] {
 		roles[v.Ref.Number()] = v.Role
 	}
-	assert.Equal(t, map[int]PRRole{11: PRRolePrimary, 12: PRRoleFollowup}, roles)
+	assert.Equal(t, map[int]domain.PRRole{11: domain.PRRolePrimary, 12: domain.PRRoleFollowup}, roles)
 }
 
 func TestBackfill_ShouldSeedItemsFromStatusWithoutGuessing(t *testing.T) {
@@ -213,9 +209,9 @@ func TestBackfill_ShouldSeedItemsFromStatusWithoutGuessing(t *testing.T) {
 	links, err := repo.ListByItem(ctx, done)
 	require.NoError(t, err)
 	require.Len(t, links, 1)
-	assert.Equal(t, AttachSourceBackfill, links[0].AttachSource)
+	assert.Equal(t, domain.AttachSourceBackfill, links[0].AttachSource)
 	for n, wantTerminal := range map[int]bool{21: true, 22: false, 30: false} {
-		row := stateOf(t, repo, mustPRRef(t, "", "acme", "app", n))
+		row := stateOf(t, repo, fixturetest.MustPRRef(t, "", "acme", "app", n))
 		assert.Equal(t, "unknown", row.State, "#%d", n)
 		assert.Equal(t, wantTerminal, row.Terminal, "#%d", n)
 	}
@@ -224,19 +220,19 @@ func TestBackfill_ShouldSeedItemsFromStatusWithoutGuessing(t *testing.T) {
 func TestParseItemPRRef_ShouldRejectNonHTTPScheme(t *testing.T) {
 	t.Parallel()
 	for _, u := range []string{"javascript://github.com/o/r/pull/5", "ftp://github.com/o/r/pull/5", "//github.com/o/r/pull/5"} {
-		_, err := ParseItemPRRef(u, 5)
-		assert.ErrorIs(t, err, ErrItemBadPRRef, u)
+		_, err := sessionpr.ParseItemPRRef(u, 5)
+		assert.ErrorIs(t, err, sessionpr.ErrItemBadPRRef, u)
 	}
 }
 
 func TestParseItemPRRef_ShouldUseURLHostAndRequireMatchingNumber(t *testing.T) {
 	t.Parallel()
-	ref, err := ParseItemPRRef("https://ghe.acme.io/acme/app/pull/7", 7)
+	ref, err := sessionpr.ParseItemPRRef("https://ghe.acme.io/acme/app/pull/7", 7)
 	require.NoError(t, err)
 	assert.Equal(t, "ghe.acme.io/acme/app#7", ref.String())
-	ref, err = ParseItemPRRef("https://github.com/Acme/App/pull/12", 12)
+	ref, err = sessionpr.ParseItemPRRef("https://github.com/Acme/App/pull/12", 12)
 	require.NoError(t, err)
-	assert.Equal(t, mustPRRef(t, "", "acme", "app", 12), ref)
+	assert.Equal(t, fixturetest.MustPRRef(t, "", "acme", "app", 12), ref)
 
 	for name, tc := range map[string]struct {
 		url string
@@ -247,8 +243,8 @@ func TestParseItemPRRef_ShouldUseURLHostAndRequireMatchingNumber(t *testing.T) {
 		"not a pull path": {"https://github.com/acme/app/issues/5", 5},
 		"no host":         {"acme/app/pull/5", 5},
 	} {
-		_, err := ParseItemPRRef(tc.url, tc.n)
-		assert.ErrorIs(t, err, ErrItemBadPRRef, name)
+		_, err := sessionpr.ParseItemPRRef(tc.url, tc.n)
+		assert.ErrorIs(t, err, sessionpr.ErrItemBadPRRef, name)
 	}
 }
 
@@ -259,8 +255,8 @@ func TestBackfill_ShouldCountPoisonedRowsAndStillImportHealthyOnes(t *testing.T)
 	addLegacySession(t, repo, legacySession{title: "healthy", uuid: "u-ok", owner: "acme", repo: "app", number: 1})
 	addLegacySession(t, repo, legacySession{title: "blank-owner", uuid: "u-bad", owner: "acme", repo: "   ", number: 2})
 	addLegacySession(t, repo, legacySession{title: "over-cap", uuid: "u-cap", owner: "acme", repo: "app", number: 900})
-	for n := 100; n < 100+maxSessionPRLinks; n++ {
-		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u-cap"), mustPRRef(t, "", "acme", "app", n), PRLink{Role: PRRoleFollowup, Source: AttachSourceManual})
+	for n := 100; n < 100+domain.MaxSessionPRLinks; n++ {
+		_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u-cap"), fixturetest.MustPRRef(t, "", "acme", "app", n), domain.PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourceManual})
 		require.NoError(t, err)
 	}
 	addLegacyItem(t, repo, "no-url", "done", 5, "")
@@ -283,12 +279,12 @@ func TestBackfill_ShouldNotRecreateSessionDerivedOrDetachedItemPR(t *testing.T) 
 	repo := newPRRepo(t)
 	ctx := context.Background()
 	url := "https://github.com/acme/app/pull/30"
-	ref := mustPRRef(t, "", "acme", "app", 30)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 30)
 
 	// #30 reachable only through the item's latest work session: no item-direct link, ever.
 	viaSession := addLegacyItem(t, repo, "via-session", "pr_pending", 30, url)
 	attachItemSession(t, repo, viaSession, "uuid-work")
-	upsertLink(t, repo, SessionPROwner("uuid-work"), ref, AttachSourceBranchDiscovery)
+	upsertLink(t, repo, domain.SessionPROwner("uuid-work"), ref, domain.AttachSourceBranchDiscovery)
 	runBackfill(t, repo)
 	runBackfill(t, repo)
 	links, err := repo.ListByItem(ctx, viaSession)
@@ -296,7 +292,7 @@ func TestBackfill_ShouldNotRecreateSessionDerivedOrDetachedItemPR(t *testing.T) 
 	assert.Empty(t, links)
 
 	// After the session link is detached, the legacy scalar still must not re-create it.
-	_, err = repo.DeleteSessionPR(ctx, SessionPROwner("uuid-work"), ref)
+	_, err = repo.DeleteSessionPR(ctx, domain.SessionPROwner("uuid-work"), ref)
 	require.NoError(t, err)
 	runBackfill(t, repo)
 	links, err = repo.ListByItem(ctx, viaSession)
@@ -323,7 +319,7 @@ func TestBackfill_ShouldResolveOneStateRow_WhenSessionAndItemSpellPRDifferentlyC
 
 	// A tombstone written for Acme/App#12 blocks the import for a second item.
 	other := addLegacyItem(t, repo, "other", "pr_pending", 12, "https://github.com/acme/app/pull/12")
-	_, err := repo.DeleteSessionPR(context.Background(), ItemPROwner(other), mustPRRef(t, "", "Acme", "App", 12))
+	_, err := repo.DeleteSessionPR(context.Background(), domain.ItemPROwner(other), fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	rep := runBackfill(t, repo)
 	assert.Equal(t, 0, rep.CreatedItemLinks)
@@ -358,10 +354,10 @@ func TestBackfill_ShouldReadOnlyCandidateRows_WhenFewSessionsHaveAPR(t *testing.
 	}
 	flush()
 
-	var cands []prBackfillCandidate
-	stmts := countStatements(t, repo, func() {
+	var cands []sessionpr.BackfillCandidate
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		cands, err = repo.collectSessionPRCandidates(ctx, &PRBackfillReport{})
+		cands, err = counted.CollectSessionPRCandidates(ctx, &sessionpr.PRBackfillReport{})
 		require.NoError(t, err)
 	})
 	assert.Len(t, cands, 40)
@@ -401,10 +397,10 @@ func TestBackfill_ShouldStayBounded_WhenManyItemsAreAlreadyRepresented(t *testin
 		require.NoError(t, repo.Client.SessionPR.CreateBulk(links...).Exec(ctx))
 	}
 
-	var rep PRBackfillReport
-	stmts := countStatements(t, repo, func() {
+	var rep sessionpr.PRBackfillReport
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		rep, err = repo.runPRBackfill(ctx, nil)
+		rep, err = counted.RunBackfill(ctx, nil)
 		require.NoError(t, err)
 	})
 	assert.Zero(t, rep.CreatedItemLinks+rep.CreatedSessionLinks, "everything is already represented")
@@ -416,7 +412,7 @@ func TestBackfill_ShouldCapWritesPerBoot_AndDeferTheRest(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	const total = maxBackfillWritesPerBoot + 500
+	const total = sessionpr.MaxBackfillWritesPerBoot + 500
 	for start := 0; start < total; start += 500 {
 		items := make([]*ent.BacklogItemCreate, 0, 500)
 		for i := start; i < min(start+500, total); i++ {
@@ -427,7 +423,7 @@ func TestBackfill_ShouldCapWritesPerBoot_AndDeferTheRest(t *testing.T) {
 	}
 
 	first := runBackfill(t, repo)
-	assert.Equal(t, maxBackfillWritesPerBoot, first.CreatedItemLinks)
+	assert.Equal(t, sessionpr.MaxBackfillWritesPerBoot, first.CreatedItemLinks)
 	assert.Equal(t, 500, first.Deferred)
 
 	second := runBackfill(t, repo)
@@ -442,7 +438,7 @@ type prMaintenanceClock struct {
 	tick   chan time.Time
 }
 
-func (f *prMaintenanceClock) config(hook prBackfillHook) prMaintenanceConfig {
+func (f *prMaintenanceClock) config(hook sessionpr.BackfillHook) prMaintenanceConfig {
 	f.tick = make(chan time.Time)
 	return prMaintenanceConfig{
 		sleep: func(_ context.Context, d time.Duration) error {
@@ -469,14 +465,14 @@ func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T)
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	addLegacySession(t, repo, legacySession{title: "has-links", uuid: "u1", owner: "acme", repo: "app", number: 12})
-	upsertLink(t, repo, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", 11), AttachSourceManual)
-	unverified := mustPRRef(t, "", "acme", "app", 40)
-	seedState(t, repo, unverified, PRStateUnknown, true)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceManual)
+	unverified := fixturetest.MustPRRef(t, "", "acme", "app", 40)
+	seedState(t, repo, unverified, domain.PRStateUnknown, true)
 
 	busy := errors.New("database is locked")
 	failures := 4
 	clock := &prMaintenanceClock{}
-	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error {
+	storage.runPRStartupMaintenance(ctx, clock.config(func(domain.PRRef) error {
 		if failures > 0 {
 			failures--
 			return busy
@@ -487,14 +483,14 @@ func TestMaintenance_ShouldRetryThenSwallow_AndImportOnTheNextTick(t *testing.T)
 	assert.Equal(t, []time.Duration{time.Second, 4 * time.Second, 16 * time.Second}, clock.sleeps, "three retries with backoff")
 	assert.Equal(t, int64(1), storage.PRMaintenanceFailures())
 	assert.Equal(t, 1, countLinks(t, repo), "no link from the failing candidate persisted")
-	assert.False(t, repo.prVerifyCountersTrusted.Load(), "counters stay untrusted until a pass succeeds")
+	assert.False(t, repo.VerifyCountersTrusted(), "counters stay untrusted until a pass succeeds")
 
 	clock.tick <- time.Now()        // the 5-minute ticker's next pass
 	storage.prMaintenance.wg.Wait() // the ticker stops itself after its first success
 	storage.StopPRMaintenance()
 
 	assert.Equal(t, 2, countLinks(t, repo), "the retry imported #12")
-	assert.True(t, repo.prVerifyCountersTrusted.Load())
+	assert.True(t, repo.VerifyCountersTrusted())
 }
 
 func TestMaintenance_ShouldStartNoTicker_WhenFirstPassSucceeds(t *testing.T) {
@@ -518,7 +514,7 @@ func TestMaintenance_ShouldStopTicker_WhenContextCancelled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := &prMaintenanceClock{}
-	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error { return errors.New("busy") }))
+	storage.runPRStartupMaintenance(ctx, clock.config(func(domain.PRRef) error { return errors.New("busy") }))
 	cancel()
 	storage.StopPRMaintenance()
 	assert.Equal(t, 0, countLinks(t, repo))
@@ -531,7 +527,7 @@ func TestMaintenance_ShouldNotCountFailure_WhenShutdownInterruptsBoot(t *testing
 
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := &prMaintenanceClock{}
-	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error {
+	storage.runPRStartupMaintenance(ctx, clock.config(func(domain.PRRef) error {
 		cancel() // SIGTERM arrives mid-pass
 		return errors.New("busy")
 	}))
@@ -543,10 +539,10 @@ func TestMaintenance_ShouldNotCountFailure_WhenShutdownInterruptsBoot(t *testing
 
 func TestMaintenance_ShouldResetVerifyCountersOnlyAfterImport(t *testing.T) {
 	storage, repo := newMaintenanceStorage(t)
-	ref := mustPRRef(t, "", "acme", "app", 40)
-	seedState(t, repo, ref, PRStateUnknown, true)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 40)
+	seedState(t, repo, ref, domain.PRStateUnknown, true)
 	for i := 0; i < 3; i++ {
-		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), PRObservationCountedFailure, "network"))
+		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), domain.PRObservationCountedFailure, "network"))
 		require.NoError(t, err)
 	}
 
@@ -559,10 +555,10 @@ func TestMaintenance_ShouldResetVerifyCountersOnlyAfterImport(t *testing.T) {
 func TestNewEntRepository_ShouldNotRunPRMaintenance(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 40)
-	seedState(t, repo, ref, PRStateUnknown, true)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 40)
+	seedState(t, repo, ref, domain.PRStateUnknown, true)
 	for i := 0; i < 3; i++ {
-		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), PRObservationCountedFailure, "network"))
+		_, err := repo.UpdatePullRequestState(context.Background(), ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), domain.PRObservationCountedFailure, "network"))
 		require.NoError(t, err)
 	}
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
@@ -584,7 +580,7 @@ func oldBinaryWritesLegacyNumber(t *testing.T, s *Storage, title string, n int) 
 		SetGithubPrNumber(n).SetGithubPrURL(fmt.Sprintf("https://github.com/acme/app/pull/%d", n)).Exec(context.Background()))
 }
 
-func rollbackSequence(t *testing.T, s *Storage, title string) *Instance {
+func rollbackSequence(t *testing.T, s *Storage, title string) *instance.Instance {
 	t.Helper()
 	require.NoError(t, s.RunPRStartupMaintenance(context.Background()))
 	inst := loadByTitle(t, s, title)
@@ -596,7 +592,7 @@ func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyO
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "rolled-back", "u-rb", "acme", "app", 0)
-	linkPR(t, storage, "u-rb", 11, PRRolePrimary, time.Now())
+	linkPR(t, storage, "u-rb", 11, domain.PRRolePrimary, time.Now())
 	oldBinaryWritesLegacyNumber(t, storage, "rolled-back", 12)
 	t.Cleanup(storage.StopPRMaintenance)
 	driftBefore := PRMirrorDriftCorrected()
@@ -605,24 +601,24 @@ func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyO
 
 	links, err := storage.Repo.ListBySessionUUIDs(context.Background(), []string{"u-rb"})
 	require.NoError(t, err)
-	byNumber := map[int]PRView{}
+	byNumber := map[int]domain.PRView{}
 	for _, v := range links["u-rb"] {
 		byNumber[v.Ref.Number()] = v
 	}
 	require.Contains(t, byNumber, 12, "the legacy-only PR must be imported before projection")
-	assert.Equal(t, PRRoleFollowup, byNumber[12].Role, "a session with a primary imports as followup")
-	assert.Equal(t, AttachSourceBackfill, byNumber[12].AttachSource)
-	assert.Equal(t, PRRolePrimary, byNumber[11].Role)
+	assert.Equal(t, domain.PRRoleFollowup, byNumber[12].Role, "a session with a primary imports as followup")
+	assert.Equal(t, domain.AttachSourceBackfill, byNumber[12].AttachSource)
+	assert.Equal(t, domain.PRRolePrimary, byNumber[11].Role)
 
 	snap := inst.Snapshot().GitHub
 	require.Len(t, snap.PRs, 2)
-	want, ok := ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
+	want, ok := instance.ProjectLegacyPRMirror(snap.PRs, inst.Snapshot().Branch)
 	require.True(t, ok)
 	row := sessionMirror(t, storage, "rolled-back")
 	assert.Equal(t, want.Number, row.GitHubPRNumber, "the stored columns read ActivePR of {11,12}")
 	assert.Equal(t, want.URL, row.GitHubPRURL)
 
-	corrected, _ := reconcilerFor(storage, []*Instance{inst}).RunOnce(context.Background())
+	corrected, _ := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 	assert.Zero(t, corrected, "the import is not drift")
 	assert.Equal(t, driftBefore, PRMirrorDriftCorrected())
 
@@ -634,8 +630,8 @@ func TestRollbackRedeploy_ShouldNotImportTombstonedValue_AndOverwriteItWithThePr
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "detached", "u-dt", "acme", "app", 0)
-	linkPR(t, storage, "u-dt", 11, PRRolePrimary, time.Now())
-	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-dt"), mustPRRef(t, "", "acme", "app", 12))
+	linkPR(t, storage, "u-dt", 11, domain.PRRolePrimary, time.Now())
+	_, err := storage.Repo.DeleteSessionPR(context.Background(), domain.SessionPROwner("u-dt"), fixturetest.MustPRRef(t, "", "acme", "app", 12))
 	require.NoError(t, err)
 	oldBinaryWritesLegacyNumber(t, storage, "detached", 12)
 	t.Cleanup(storage.StopPRMaintenance)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestUpdateBacklogItem_ShouldPersistShippedCheckConclusionAndApprovedCount_WhenPartialUpdateApplied
@@ -18,7 +19,7 @@ func TestUpdateBacklogItem_ShouldPersistShippedCheckConclusionAndApprovedCount_W
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "item for partial snapshot update",
 		PrURL:    "https://github.com/example/repo/pull/1",
 		PrNumber: 1,
@@ -27,7 +28,7 @@ func TestUpdateBacklogItem_ShouldPersistShippedCheckConclusionAndApprovedCount_W
 
 	checkConclusion := "success"
 	approvedCount := 2
-	_, err = repo.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, created.ID, backlogdto.BacklogItemUpdate{
 		ShippedCheckConclusion: &checkConclusion,
 		ShippedApprovedCount:   &approvedCount,
 	}, nil)
@@ -60,14 +61,14 @@ func TestUpdateBacklogItem_ShouldLeaveCheckConclusionUnchanged_WhenOnlySnapshotC
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item for capture-failed-only update",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "", created.ShippedCheckConclusion, "setup: zero-value baseline before the update")
 
 	captureFailed := true
-	_, err = repo.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, created.ID, backlogdto.BacklogItemUpdate{
 		ShippedSnapshotCaptureFailed: &captureFailed,
 	}, nil)
 	require.NoError(t, err)

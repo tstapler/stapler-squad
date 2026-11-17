@@ -6,10 +6,14 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // session_tagging_integration_test.go implements plan.md's Story 7.2.1: one test exercising
@@ -41,29 +45,29 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	engine := classifier.NewTaggingEngine()
-	// bugfixSeedRule (instance_actor_setters_test.go) mirrors SeedTaggingRules()'s seed-bugfix
+	// fixturetest.BugfixSeedRule (instance_actor_setters_test.go) mirrors SeedTaggingRules()'s seed-bugfix
 	// entry. neverMatchingRule seeds "Refactor" into the vocabulary without ever firing as a
 	// sync rule, so the later LLM step's ["Refactor"] response is in-vocabulary.
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule(), neverMatchingRule("seed-refactor", "Refactor")})
+	engine.ReplaceRules([]classifier.TaggingRule{fixturetest.BugfixSeedRule(), neverMatchingRule("seed-refactor", "Refactor")})
 	inst.SetTaggingEngine(engine)
 
 	// Given: creating/mutating onto a branch matching the seed rule applies "Bugfix"
 	// synchronously with rule provenance, zero manual tagging action.
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
 	require.Contains(t, inst.GetTags(), "Bugfix")
 	require.Equal(t, "seed-bugfix", inst.RuleTagProvenance["Bugfix"])
-	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
+	require.NotContains(t, inst.GetTags(), instance.UnclassifiedTag)
 
 	// When: the session is renamed off that branch, the sync fixpoint retracts "Bugfix".
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "main"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "main"})
 	require.NotContains(t, inst.GetTags(), "Bugfix", "rule-owned tag must be retracted once its branch condition no longer holds")
-	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
+	require.NotContains(t, inst.GetTags(), instance.UnclassifiedTag)
 
 	// And: one poller tick runs against a fake PoolClient that succeeds on the very first
 	// attempt with an in-vocabulary tag (batch envelope keyed by the instance title).
 	fake := &fakeTagPoolClient{response: `{"results":[{"name":` + strconv.Quote(t.Name()) + `,"tags":["Refactor"]}]}`}
 	poller := NewSessionTagClassificationPoller(fake, engine)
-	poller.SetInstances([]*Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 	poller.pollOnce()
 
 	// Then: the final tag state is exactly ["Refactor"] with LLM provenance, and
@@ -71,7 +75,7 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	tags := inst.GetTags()
 	assert.Equal(t, []string{"Refactor"}, tags)
 	assert.Equal(t, "llm", inst.RuleTagProvenance["Refactor"])
-	assert.NotContains(t, tags, UnclassifiedTag)
+	assert.NotContains(t, tags, instance.UnclassifiedTag)
 	assert.Equal(t, 1, fake.callCount(), "the LLM must be called exactly once")
 }
 
@@ -83,7 +87,7 @@ func TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_First
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Branch = "feature/x"
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.MutateForTest(func(*instance.Instance) {})
 
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules([]classifier.TaggingRule{neverMatchingRule("seed-feature", "Feature")})
@@ -93,7 +97,7 @@ func TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_First
 	// Cooldown disabled: the second tick must re-classify immediately after the branch
 	// change (this test proves Unclassified-drop coexistence, not the cooldown gate).
 	poller.config.MinReclassifyInterval = 0
-	poller.SetInstances([]*Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 
 	// First tick: the LLM call fails, so no tags are applied.
 	poller.pollOnce()

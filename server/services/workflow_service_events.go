@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -52,7 +54,7 @@ func (s *WorkflowService) watchWorkflows(
 		return connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow storage not available"))
 	}
 
-	done := TrackOpenStream("WatchWorkflows")
+	done := streammetrics.TrackOpenStream("WatchWorkflows")
 	defer done()
 
 	// Subscribe before building the snapshot/replay batch so no events are lost

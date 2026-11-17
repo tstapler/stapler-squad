@@ -5,51 +5,19 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
-
-func TestSessionEventKind_Should_NameEveryKindExhaustively_When_Enumerated(t *testing.T) {
-	t.Parallel()
-	seen := map[string]bool{}
-	for k := SessionEventKind(0); k < sessionEventKindCount; k++ {
-		switch k {
-		case SessionEventStatusChanged, SessionEventTurnEnded, SessionEventAttentionRaised,
-			SessionEventAttentionCleared, SessionEventAcknowledged, SessionEventNotificationSuppressed,
-			SessionEventLifecycleStarted, SessionEventLifecycleExited, SessionEventLifecycleStopped,
-			SessionEventApprovalResolved, SessionEventOutput:
-		default:
-			t.Fatalf("kind %d not handled: extend this switch and the name table", k)
-		}
-		name := k.String()
-		assert.NotEmpty(t, name)
-		assert.NotEqual(t, "unknown", name)
-		assert.False(t, seen[name], "duplicate name %q", name)
-		seen[name] = true
-	}
-	assert.Equal(t, "unknown", sessionEventKindCount.String())
-}
-
-func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
-	t.Parallel()
-	r := orNoopRecorder(nil)
-	r.RecordTurnEnded("demo", TurnEnded{})
-	r.RecordAttentionRaised("demo", ReasonTaskComplete)
-	r.RecordAttentionCleared("demo", ReasonTaskComplete)
-	r.RecordStatusChanged("demo", Running, Stopped)
-	r.RecordAcknowledged("demo", false)
-	r.RecordLifecycle("demo", EventStarted)
-	r.RecordNotificationSuppressed("demo", "x")
-	r.RecordApprovalResolved("demo", true)
-}
 
 // attentionCall is one RecordAttentionRaised/Cleared invocation.
 type attentionCall struct {
-	kind   SessionEventKind
+	kind   instance.SessionEventKind
 	title  string
-	reason AttentionReason
+	reason queue.AttentionReason
 }
 
 type attentionRecorder struct {
-	noopSessionEventRecorder
+	instance.NoopSessionEventRecorder
 	mu    sync.Mutex
 	calls []attentionCall
 }
@@ -60,18 +28,18 @@ func (r *attentionRecorder) add(c attentionCall) {
 	r.calls = append(r.calls, c)
 }
 
-func (r *attentionRecorder) RecordAttentionRaised(title string, reason AttentionReason) {
-	r.add(attentionCall{SessionEventAttentionRaised, title, reason})
+func (r *attentionRecorder) RecordAttentionRaised(title string, reason queue.AttentionReason) {
+	r.add(attentionCall{instance.SessionEventAttentionRaised, title, reason})
 }
 
-func (r *attentionRecorder) RecordAttentionCleared(title string, reason AttentionReason) {
-	r.add(attentionCall{SessionEventAttentionCleared, title, reason})
+func (r *attentionRecorder) RecordAttentionCleared(title string, reason queue.AttentionReason) {
+	r.add(attentionCall{instance.SessionEventAttentionCleared, title, reason})
 }
 
 func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenRemoved(t *testing.T) {
 	t.Parallel()
-	add := chainAdd(PriorityMedium, ReasonTaskComplete)
-	poller, inst := pollerFor(add, func(*Instance) {})
+	add := chainAdd(queue.PriorityMedium, queue.ReasonTaskComplete)
+	poller, inst := pollerFor(add, func(*instance.Instance) {})
 	rec := &attentionRecorder{}
 	poller.SetEventRecorder(rec)
 
@@ -80,8 +48,8 @@ func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenR
 	poller.checkSession(inst, nil)
 
 	want := []attentionCall{
-		{SessionEventAttentionRaised, "demo", ReasonTaskComplete},
-		{SessionEventAttentionCleared, "demo", ReasonTaskComplete},
+		{instance.SessionEventAttentionRaised, "demo", queue.ReasonTaskComplete},
+		{instance.SessionEventAttentionCleared, "demo", queue.ReasonTaskComplete},
 	}
 	assert.Equal(t, want, rec.calls)
 	_, queued := poller.queue.Get("demo")
@@ -90,7 +58,7 @@ func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenR
 
 func TestPoller_Should_RecordRaisedOnce_When_SameReasonIsReAdded(t *testing.T) {
 	t.Parallel()
-	poller, inst := pollerFor(chainAdd(PriorityMedium, ReasonTaskComplete), func(*Instance) {})
+	poller, inst := pollerFor(chainAdd(queue.PriorityMedium, queue.ReasonTaskComplete), func(*instance.Instance) {})
 	rec := &attentionRecorder{}
 	poller.SetEventRecorder(rec)
 

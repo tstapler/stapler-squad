@@ -16,7 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // T-CR-05: PermanentlyFailed already has a bus producer (EventBusNotifier.Notify
@@ -72,8 +72,8 @@ func TestStartupWindow_ShouldCountZeroIndexMissesBeforeLoadInstances_WhenNoSessi
 	assert.EqualValues(t, 0, gate.Metrics().Value(deliverygate.CounterIndexMiss), "no lookups before any producer runs")
 	assert.EqualValues(t, 0, gate.Metrics().Total(deliverygate.CounterUnresolved))
 
-	hidden := &session.Instance{Title: "restored-review", UUID: "restored-review-uuid", Hidden: true, Tags: []string{"backlog:review"}}
-	gate.SeedFromInstances([]*session.Instance{hidden}) // what BuildRuntimeDeps does after LoadInstances
+	hidden := &instance.Instance{Title: "restored-review", UUID: "restored-review-uuid", Hidden: true, Tags: []string{"backlog:review"}}
+	gate.SeedFromInstances([]*instance.Instance{hidden}) // what BuildRuntimeDeps does after LoadInstances
 
 	e.svc.onColdRestoreLostHistory(hidden)
 	e.svc.onRateLimitDetected(hidden, hidden.UUID, time.Time{})

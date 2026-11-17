@@ -31,6 +31,7 @@ go_library(
         "//executor",
         "//executor/safeexec",
         "//log",
+        "//session/domain",
         "//telemetry",
         "@com_github_gofrs_flock//:flock",
         "@com_github_google_uuid//:uuid",
@@ -77,4 +78,11 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Read by server/services' flag-registration guard, which resolves config.* flag-name consts from source.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
 )

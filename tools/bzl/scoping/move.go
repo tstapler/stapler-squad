@@ -294,10 +294,7 @@ func (m *mover) noteBoundary(p *packages.Package, sel, qual *ast.Ident, path str
 // symbol is qualified; a stay-behind file using a moved symbol is reported (the cluster must not be used by the core).
 // Every reference to an unexported package-level symbol is remembered so a later capitalisation reaches all of them.
 func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe *fileEdits, off func(token.Pos) int) {
-	obj := p.TypesInfo.Uses[id]
-	if obj == nil {
-		obj = p.TypesInfo.Defs[id]
-	}
+	obj, isDef := referencedObject(p, id)
 	decl := m.declFile(p, obj)
 	if decl == "" {
 		return
@@ -305,7 +302,7 @@ func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe 
 	if !id.IsExported() {
 		m.uses = append(m.uses, useRef{file: path, start: off(id.Pos()), end: off(id.End()), name: id.Name, declFile: decl})
 	}
-	if p.TypesInfo.Defs[id] != nil {
+	if isDef {
 		return
 	}
 	switch {
@@ -335,6 +332,35 @@ func (m *mover) originIdent(p *packages.Package, id *ast.Ident, path string, fe 
 	case !m.moved[path] && m.moved[decl]:
 		m.notes = append(m.notes, fmt.Sprintf("WARNING: %s (staying) uses moved symbol %s", filepath.Base(path), id.Name))
 	}
+}
+
+// referencedObject resolves id to the object it refers to and reports whether id is a declaration of it. An embedded
+// struct field (`struct{ T }`) is a definition for the type checker but a reference to the type T for the move.
+func referencedObject(p *packages.Package, id *ast.Ident) (obj types.Object, isDef bool) {
+	if obj = p.TypesInfo.Uses[id]; obj != nil {
+		return obj, false
+	}
+	obj = p.TypesInfo.Defs[id]
+	if typ := embeddedTypeName(obj); typ != nil {
+		return typ, false
+	}
+	return obj, obj != nil
+}
+
+// embeddedTypeName returns the type an embedded struct field names, or nil when obj is not an embedded field.
+func embeddedTypeName(obj types.Object) types.Object {
+	v, ok := obj.(*types.Var)
+	if !ok || !v.IsField() || !v.Embedded() {
+		return nil
+	}
+	t := v.Type()
+	if ptr, isPtr := t.(*types.Pointer); isPtr {
+		t = ptr.Elem()
+	}
+	if named, isNamed := t.(*types.Named); isNamed {
+		return named.Obj()
+	}
+	return nil
 }
 
 func (m *mover) apply() error {

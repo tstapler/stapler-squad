@@ -17,7 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -90,7 +90,7 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	require.NotNil(t, inst)
 
 	wait.RequireEventually(t, func() bool {
-		if session.Status(inst.GetStatus()) == session.Stopped {
+		if domain.Status(inst.GetStatus()) == domain.Stopped {
 			t.Fatalf("session reached Stopped before the fake claude recorded its argv: spawn failed")
 		}
 		_, statErr := os.Stat(argvOut)

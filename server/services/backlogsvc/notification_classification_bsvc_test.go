@@ -12,7 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestNotificationPushGateClassification is a table-driven regression test mirroring the
@@ -76,7 +78,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		svc.notifyRepeatedFailure(ctx, "item-1", "Item title", session.BacklogStatusInProgress, 3, "same test failure")
+		svc.notifyRepeatedFailure(ctx, "item-1", "Item title", domain.BacklogStatusInProgress, 3, "same test failure")
 
 		ev := svctest.RequireOneNotification(t, ch)
 		assert.Equal(t, "Auto-rework stopped — repeated failure", ev.NotificationTitle)
@@ -97,13 +99,13 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "Item idle 20m — over the 15m threshold",
-			Status: string(session.BacklogStatusReview),
+			Status: string(domain.BacklogStatusReview),
 		})
 		require.NoError(t, err)
-		_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
-			ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: session.SessionRoleWork,
+		_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
+			ItemID: item.ID, SessionUUID: "active-work-uuid", SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 		sessions, err := storage.ListItemSessions(ctx, item.ID)

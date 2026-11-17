@@ -17,9 +17,11 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -37,7 +39,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -50,11 +52,11 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 		}), nil
 	}
 
-	var lastWork *session.ItemSessionSummary
+	var lastWork *backlogdto.ItemSessionSummary
 	for i := range itemSessions {
 		// Ascending by CreatedAt (ListItemSessions' query order) — keep
 		// overwriting so this ends up holding the *most recent* work session.
-		if itemSessions[i].Role == session.SessionRoleWork {
+		if itemSessions[i].Role == instance.SessionRoleWork {
 			lastWork = &itemSessions[i]
 		}
 	}
@@ -100,7 +102,8 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 		}
 	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, prFixMainBranch, lastCommitSha)
+	defaultBranch := git.ResolveDefaultBranchName(item.RepoPath)
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, defaultBranch, lastCommitSha)
 	if mainErr != nil {
 		status.Error = fmt.Sprintf("failed to verify commit on main: %v", mainErr)
 		return connect.NewResponse(&sessionv1.GetBacklogItemShipStatusResponse{Status: status}), nil
@@ -117,7 +120,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
 	if wtErr == nil && wt.BranchName != "" {
 		status.BranchName = wt.BranchName
-		branchStatus, branchErr := git.BranchAheadBehind(item.RepoPath, wt.BranchName, prFixMainBranch)
+		branchStatus, branchErr := git.BranchAheadBehind(item.RepoPath, wt.BranchName, defaultBranch)
 		if branchErr != nil {
 			status.Error = fmt.Sprintf("failed to check branch status: %v", branchErr)
 		} else {

@@ -15,7 +15,8 @@ import (
 	quotalog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func newTestQuotaGate(cfg config.QuotaConfig, store *svctest.FakeTokenStore, poller *svctest.MockInstancePoller, ctrl *svctest.CountingFeatureController, bus *events.EventBus) *QuotaGate {
@@ -252,8 +253,8 @@ func TestReconcile_should_RepauseAndBypassCooldown_When_ManuallyReenabledWhileQu
 
 func TestForegroundSessionActive_should_ReturnTrue_When_NonBacklogSessionIsActive(t *testing.T) {
 	t.Parallel()
-	instances := []*session.Instance{
-		{Category: "", Status: session.Active},
+	instances := []*instance.Instance{
+		{Category: "", Status: domain.Active},
 	}
 	if !foregroundSessionActive(instances) {
 		t.Error("foregroundSessionActive = false, want true")
@@ -262,10 +263,10 @@ func TestForegroundSessionActive_should_ReturnTrue_When_NonBacklogSessionIsActiv
 
 func TestForegroundSessionActive_should_ReturnFalse_When_OnlyBacklogOwnedSessionsAreActive(t *testing.T) {
 	t.Parallel()
-	instances := []*session.Instance{
-		{Category: session.CategoryBacklog, Status: session.Active},
-		{Category: session.CategoryBacklog, Status: session.Active},
-		{Category: session.CategoryBacklog, Status: session.Active},
+	instances := []*instance.Instance{
+		{Category: instance.CategoryBacklog, Status: domain.Active},
+		{Category: instance.CategoryBacklog, Status: domain.Active},
+		{Category: instance.CategoryBacklog, Status: domain.Active},
 	}
 	if foregroundSessionActive(instances) {
 		t.Error("foregroundSessionActive = true, want false (all sessions are backlog-owned)")
@@ -274,8 +275,8 @@ func TestForegroundSessionActive_should_ReturnFalse_When_OnlyBacklogOwnedSession
 
 func TestShouldThrottleForeground_should_ExpireAfterDelay_When_NoForegroundActivityObservedForFullWindow(t *testing.T) {
 	t.Parallel()
-	poller := &svctest.MockInstancePoller{Instances: []*session.Instance{
-		{Category: "", Status: session.Active},
+	poller := &svctest.MockInstancePoller{Instances: []*instance.Instance{
+		{Category: "", Status: domain.Active},
 	}}
 	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)
@@ -441,8 +442,8 @@ func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccur
 // behavior: Disable() fires exactly once per pause.
 func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(t *testing.T) {
 	t.Parallel()
-	poller := &svctest.MockInstancePoller{Instances: []*session.Instance{
-		{Category: "", Status: session.Active},
+	poller := &svctest.MockInstancePoller{Instances: []*instance.Instance{
+		{Category: "", Status: domain.Active},
 	}}
 	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	bus := events.NewEventBus(10)

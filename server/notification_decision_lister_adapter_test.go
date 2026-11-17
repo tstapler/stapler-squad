@@ -25,7 +25,7 @@ func newTestNotificationHistoryStore(t *testing.T) *notifications.NotificationHi
 // TestNotificationDecisionListerAdapter_should_MapApprovalDecisionFromMetadata_When_RecordsExist
 // covers notificationDecisionListerAdapter.ListDecisionRecords' core mapping logic:
 // each notifications.NotificationRecord for the session becomes a
-// session.DecisionRecord carrying its NotificationType and the
+// summaries.DecisionRecord carrying its NotificationType and the
 // Metadata["approval_decision"] value (empty string when the key is absent).
 func TestNotificationDecisionListerAdapter_should_MapApprovalDecisionFromMetadata_When_RecordsExist(t *testing.T) {
 	store := newTestNotificationHistoryStore(t)

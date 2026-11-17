@@ -786,7 +786,7 @@ const perRepoObjectCacheSize = 12 * cache.MiByte
 
 // mmapIndexFeatureFlag is the feature-flag name gating gogitstore's
 // mmap-backed .idx loader — see server/services/feature_flag_service.go's
-// knownFeatureFlags and session/unfinished/design/mmap-activation-runbook.md.
+// the flag Specs and session/unfinished/design/mmap-activation-runbook.md.
 const mmapIndexFeatureFlag = "unfinished:mmap-index"
 
 // gogitstoreRegistry returns the shared gogitstore.Registry, creating it on

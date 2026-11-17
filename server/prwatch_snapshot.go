@@ -4,18 +4,18 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // prwatchSnapshots implements prwatch.PRSnapshotSource over live session
 // snapshots. It makes no network call.
 type prwatchSnapshots struct {
-	snapshots func() []*session.InstanceSnapshot
+	snapshots func() []*domain.InstanceSnapshot
 }
 
 var _ prwatch.PRSnapshotSource = (*prwatchSnapshots)(nil)
 
-func newPRWatchSnapshots(snapshots func() []*session.InstanceSnapshot) *prwatchSnapshots {
+func newPRWatchSnapshots(snapshots func() []*domain.InstanceSnapshot) *prwatchSnapshots {
 	return &prwatchSnapshots{snapshots: snapshots}
 }
 

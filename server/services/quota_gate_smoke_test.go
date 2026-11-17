@@ -9,7 +9,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateLimitDetectionFires
@@ -36,11 +37,11 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "smoke-test-session",
 		UUID:      "smoke-test-uuid",
 		Path:      "/tmp/test",
-		Status:    session.Active,
+		Status:    domain.Active,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -59,7 +60,7 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 	quotaGate := NewQuotaGate(
 		func() config.QuotaConfig { return cfg },
 		&svctest.FakeTokenStore{},
-		&svctest.MockInstancePoller{Instances: []*session.Instance{inst}},
+		&svctest.MockInstancePoller{Instances: []*instance.Instance{inst}},
 		backlogCtrl,
 		eventBus,
 	)

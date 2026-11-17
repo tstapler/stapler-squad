@@ -9,8 +9,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // The measured Spike S1c dialog as a hook sends it: Q1 single (Redis/Memcached/None), Q2 multi (A/B/C).
@@ -88,7 +88,7 @@ func TestRegisterQuestion_should_KeepATabbedAskViewOnly_WhenTheSenderIsUnverifie
 }
 
 func tabbedGuidance() OpenGuidance {
-	return OpenGuidance{Source: domain.QuestionSourceHook, Tabbed: []session.TabbedQuestion{
+	return OpenGuidance{Source: domain.QuestionSourceHook, Tabbed: []panereply.TabbedQuestion{
 		{Text: "Which cache?", Header: "Cache", Labels: []string{"Redis", "None"}},
 		{Text: "Which letters?", Header: "Letters", Labels: []string{"A", "B"}, MultiSelect: true},
 	}}
@@ -157,7 +157,7 @@ func TestBuildDescriptors_should_DegradeATabbedAnswer_WhenRemoteOrTheLayoutCanar
 	assert.Equal(t, unavailableReadOnly, local.Actions[0].UnavailableReason)
 }
 
-func tabbedRowOf(t *testing.T) *session.GuidanceRequestData {
+func tabbedRowOf(t *testing.T) *domain.GuidanceRequestData {
 	t.Helper()
 	env := newRouterEnv(t)
 	inst, _ := env.addTabbed("tabbed-row", nil)
@@ -228,7 +228,7 @@ func TestAckDetector_should_JudgeATabbedAnswerByItsTabBar_When_theDialogStaysOrL
 func TestAckDetector_should_RestoreATabbedSentRowWithItsTabBarMatcher(t *testing.T) {
 	e := newAckEnv(t)
 	row := tabbedRowOf(t)
-	e.store.sent = []*session.GuidanceRequestData{row}
+	e.store.sent = []*domain.GuidanceRequestData{row}
 	e.capture = tabbedFrames(t)[8]
 
 	e.det.Restore(context.Background())

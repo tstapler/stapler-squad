@@ -28,8 +28,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -122,7 +125,7 @@ func TestRehearsal_ShouldRecordCountsAndBudgets_WhenProductionDBCopyProvided(t *
 	assert.Zero(t, emptyAfter, "every seeded row carries a synthesized or stored URL")
 
 	start := time.Now()
-	report, err := repo.runPRBackfill(ctx, nil)
+	report, err := repo.RunBackfill(ctx, nil)
 	require.NoError(t, err)
 	rep.addDuration("maintenance_steady_state_pass_ms", time.Since(start))
 	rep.add("steady_state_created_session_links", report.CreatedSessionLinks)
@@ -172,8 +175,8 @@ func (r *rehearsalReport) flush() {
 type listTiming struct{ load, p99 time.Duration }
 
 // measureListPath times LoadInstances (the bulk load) and the p99 of one
-// list-request's work: converting every loaded instance's snapshot to the domain
-// Session, where PR views are read. It stands in for the ListSessions RPC.
+// list-request's work: reading every loaded instance's snapshot and its
+// active PR. It stands in for the ListSessions RPC.
 func measureListPath(t *testing.T, s *Storage) listTiming {
 	t.Helper()
 	start := time.Now()
@@ -182,14 +185,16 @@ func measureListPath(t *testing.T, s *Storage) listTiming {
 	load := time.Since(start)
 	for n := 0; n < rehearsalListWarmup; n++ {
 		for _, inst := range insts {
-			_ = InstanceToSession(inst)
+			snap := inst.Snapshot()
+			_ = domain.ActivePR(snap.GitHub.PRs, snap.Branch)
 		}
 	}
 	samples := make([]time.Duration, 0, rehearsalListSamples)
 	for n := 0; n < rehearsalListSamples; n++ {
 		begin := time.Now()
 		for _, inst := range insts {
-			_ = InstanceToSession(inst)
+			snap := inst.Snapshot()
+			_ = domain.ActivePR(snap.GitHub.PRs, snap.Branch)
 		}
 		samples = append(samples, time.Since(begin))
 	}
@@ -205,7 +210,7 @@ func rehearseTickerCancel(t *testing.T, repo *EntRepository, opts []goleak.Optio
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := &prMaintenanceClock{}
-	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error { return errors.New("database is locked") }))
+	storage.runPRStartupMaintenance(ctx, clock.config(func(domain.PRRef) error { return errors.New("database is locked") }))
 	require.Equal(t, int64(1), storage.PRMaintenanceFailures())
 	cancel()
 	storage.StopPRMaintenance()
@@ -222,7 +227,7 @@ func rehearseFaultedMaintenance(t *testing.T, repo *EntRepository) time.Duration
 	failures := 4
 	clock := &prMaintenanceClock{}
 	require.NoError(t, func() error {
-		storage.runPRStartupMaintenance(context.Background(), clock.config(func(PRRef) error {
+		storage.runPRStartupMaintenance(context.Background(), clock.config(func(domain.PRRef) error {
 			if failures > 0 {
 				failures--
 				return errors.New("database is locked")
@@ -238,7 +243,7 @@ func rehearseFaultedMaintenance(t *testing.T, repo *EntRepository) time.Duration
 	storage.prMaintenance.wg.Wait() // the ticker stops itself after its first success
 	elapsed := time.Since(start)
 	storage.StopPRMaintenance()
-	require.True(t, repo.prVerifyCountersTrusted.Load())
+	require.True(t, repo.VerifyCountersTrusted())
 	return elapsed
 }
 
@@ -289,7 +294,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 	items, err := repo.Client.BacklogItem.Query().Where(backlogitem.PrNumberGT(0)).Limit(size.itemsWithPR).All(ctx)
 	require.NoError(t, err)
 	for i, it := range items {
-		_, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: it.ID.String(), SessionUUID: uuids[i], SessionRole: SessionRoleWork})
+		_, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: it.ID.String(), SessionUUID: uuids[i], SessionRole: instance.SessionRoleWork})
 		require.NoError(t, err)
 	}
 }
@@ -300,7 +305,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 func syntheticSession(repo *EntRepository, i, withPR int) *ent.SessionCreate {
 	b := repo.Client.Session.Create().
 		SetTitle(fmt.Sprintf("syn-%05d", i)).SetUUID(fmt.Sprintf("syn-uuid-%05d", i)).
-		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(Paused))
+		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(domain.Paused))
 	if i >= withPR {
 		return b
 	}

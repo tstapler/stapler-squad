@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
@@ -19,16 +21,16 @@ func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
 			t.Parallel()
 			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 			old := now.Add(-time.Hour)
-			inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, InitialPromptSentAt: old}
+			inst := &instance.Instance{Title: t.Name(), Program: "pi", Status: domain.Active, InitialPromptSentAt: old}
 			inst.SetLastMeaningfulOutput(old)
-			source := NewPiStatusSource(inst.Title, nil)
-			source.status.Store(int32(status))
-			manager := NewInstanceStatusManager()
+			source := instance.NewPiStatusSource(inst.Title, nil)
+			source.SetStatusForTest(status)
+			manager := instance.NewInstanceStatusManager()
 			manager.RegisterPiStatusSource(inst.Title, source)
 			inst.SetStatusManager(manager)
 			attempt := newDriverAttempt(inst, "task", old)
-			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
-			if cont || ret || inst.Snapshot().Status != Active {
+			cont, ret := handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, now)
+			if cont || ret || inst.Snapshot().Status != domain.Active {
 				t.Fatalf("waiting status %v must not fail or skip approval handling", status)
 			}
 			if idle := attempt.idleDuration(now, old); idle != 0 {
@@ -45,29 +47,29 @@ func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
 			t.Parallel()
 			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 			old := now.Add(-time.Hour)
-			inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
+			inst := &instance.Instance{Title: t.Name(), Program: "pi", Status: domain.Active, Tags: []string{instance.TagBacklogWork}, InitialPromptSentAt: old}
 			inst.SetLastMeaningfulOutput(old)
-			source := NewPiStatusSource(inst.Title, nil)
-			source.status.Store(int32(status))
-			manager := NewInstanceStatusManager()
+			source := instance.NewPiStatusSource(inst.Title, nil)
+			source.SetStatusForTest(status)
+			manager := instance.NewInstanceStatusManager()
 			manager.RegisterPiStatusSource(inst.Title, source)
 			inst.SetStatusManager(manager)
 			attempt := newDriverAttempt(inst, "task", old)
 			attempt.nudgeSentAt = old
-			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+			cont, ret := handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, now)
 			if cont || ret || !attempt.nudgeSentAt.IsZero() || attempt.idleDuration(now, old) != 0 {
 				t.Fatal("approval waiting must pause both retry and nudge budgets")
 			}
-			source.status.Store(int32(detection.StatusProcessing))
-			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(time.Minute))
+			source.SetStatusForTest(detection.StatusProcessing)
+			_, ret = handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, now.Add(time.Minute))
 			if ret {
 				t.Fatal("resumed work must receive a fresh inactivity budget")
 			}
-			inst.RemoveTag(TagBacklogWork)
-			inst.processManager = &livenessPM{alive: false} // interactive: only a dead pane fails
+			inst.RemoveTag(instance.TagBacklogWork)
+			inst.SetProcessManagerForTest(&livenessPM{alive: false}) // interactive: only a dead pane fails
 			late := now.Add(driverInactivityTimeout + time.Second)
-			handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late) // first dead probe
-			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late.Add(deadPaneConfirmWindow))
+			handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, late) // first dead probe
+			_, ret = handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, late.Add(deadPaneConfirmWindow))
 			if !ret {
 				t.Fatal("genuine inactivity after resuming must still fail")
 			}
@@ -79,16 +81,16 @@ func TestDriverAttempt_BacklogIdleStillEscalates(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-time.Hour)
-	inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
+	inst := &instance.Instance{Title: t.Name(), Program: "pi", Status: domain.Active, Tags: []string{instance.TagBacklogWork}, InitialPromptSentAt: old}
 	inst.SetLastMeaningfulOutput(old)
-	source := NewPiStatusSource(inst.Title, nil)
-	source.status.Store(int32(detection.StatusIdle))
-	manager := NewInstanceStatusManager()
+	source := instance.NewPiStatusSource(inst.Title, nil)
+	source.SetStatusForTest(detection.StatusIdle)
+	manager := instance.NewInstanceStatusManager()
 	manager.RegisterPiStatusSource(inst.Title, source)
 	inst.SetStatusManager(manager)
 	attempt := newDriverAttempt(inst, "task", old)
-	cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
-	if !cont || ret || inst.Snapshot().Status != Active || attempt.nudgeSentAt.IsZero() {
+	cont, ret := handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, now)
+	if !cont || ret || inst.Snapshot().Status != domain.Active || attempt.nudgeSentAt.IsZero() {
 		t.Fatal("idle backlog work must retain its inactivity nudge policy")
 	}
 }
@@ -97,11 +99,11 @@ func TestDriverAttempt_StalePersistedPromptDoesNotImmediatelyEscalate(t *testing
 	t.Parallel()
 	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-time.Hour)
-	inst := &Instance{Title: "fresh-driver-stale-activity", Status: Active, InitialPromptSentAt: old}
+	inst := &instance.Instance{Title: "fresh-driver-stale-activity", Status: domain.Active, InitialPromptSentAt: old}
 	inst.SetLastMeaningfulOutput(old)
 	attempt := newDriverAttempt(inst, "task", now)
-	cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(2*time.Second))
-	if cont || ret || inst.Snapshot().Status != Active {
+	cont, ret := handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, now.Add(2*time.Second))
+	if cont || ret || inst.Snapshot().Status != domain.Active {
 		t.Fatalf("fresh driver immediately escalated stale persisted activity: continue=%v return=%v status=%v", cont, ret, inst.Snapshot().Status)
 	}
 }
@@ -128,10 +130,10 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{Title: tc.name, Status: Active, InitialPromptSentAt: tc.promptAt}
-			inst.processManager = &livenessPM{alive: false} // interactive escalation requires a dead pane
+			inst := &instance.Instance{Title: tc.name, Status: domain.Active, InitialPromptSentAt: tc.promptAt}
+			inst.SetProcessManagerForTest(&livenessPM{alive: false}) // interactive escalation requires a dead pane
 			if tc.backlog {
-				inst.Tags = []string{TagBacklogWork}
+				inst.Tags = []string{instance.TagBacklogWork}
 			}
 			if tc.archived {
 				inst.ArchivedAt = &now
@@ -141,14 +143,14 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 			attempt.nudgeSentAt = tc.nudgeAt
 			tickAt := now
 			if !tc.backlog { // interactive failure needs the pane dead across the confirm window
-				handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
+				handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, now)
 				tickAt = now.Add(deadPaneConfirmWindow)
 			}
-			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, tickAt)
+			cont, ret := handleInactivityTick(context.Background(), inst, "", instance.RetryPolicy{}, nil, &attempt, tickAt)
 			if cont || ret != (tc.wantEscalation || tc.archived) {
 				t.Errorf("loop signal=(%v,%v), want (false,%v)", cont, ret, tc.wantEscalation || tc.archived)
 			}
-			if failed := inst.Snapshot().Status == PermanentlyFailed; failed != tc.wantEscalation {
+			if failed := inst.Snapshot().Status == domain.PermanentlyFailed; failed != tc.wantEscalation {
 				t.Fatalf("escalated=%v, want %v", failed, tc.wantEscalation)
 			}
 		})
@@ -158,7 +160,7 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 func TestDriverAttempt_PromptDedupeIndependentOfRestart(t *testing.T) {
 	t.Parallel()
 	old := time.Date(2026, time.November, 3, 10, 0, 0, 0, time.UTC)
-	inst := &Instance{InitialPromptSentAt: old}
+	inst := &instance.Instance{InitialPromptSentAt: old}
 	for _, startedAt := range []time.Time{old.Add(time.Hour), old.Add(2 * time.Hour)} {
 		attempt := newDriverAttempt(inst, "task", startedAt)
 		if !attempt.sentInitial || !attempt.initialPromptSentAt.Equal(old) || !attempt.startedAt.Equal(startedAt) {
@@ -168,11 +170,11 @@ func TestDriverAttempt_PromptDedupeIndependentOfRestart(t *testing.T) {
 			t.Fatal("attempt changed persisted prompt timestamp")
 		}
 	}
-	unsent := newDriverAttempt(&Instance{}, "task", old)
+	unsent := newDriverAttempt(&instance.Instance{}, "task", old)
 	if unsent.sentInitial {
 		t.Fatal("unsent prompt must still be delivered")
 	}
-	noPrompt := newDriverAttempt(&Instance{}, "", old)
+	noPrompt := newDriverAttempt(&instance.Instance{}, "", old)
 	if !noPrompt.sentInitial || !noPrompt.initialPromptSentAt.Equal(old) {
 		t.Fatal("empty prompt must skip delivery")
 	}

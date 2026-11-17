@@ -16,6 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // mcpAwaitTerminalTimeout bounds create_session/create_session_for_pr's wait
@@ -121,7 +123,7 @@ type lifecycleResult struct {
 // openPRWarnings names the open or unknown PRs inst links, read from its Snapshot()
 // (never blocks; pause and stop are explicit actions on one named session). It logs one
 // structured line when there is something to warn about.
-func openPRWarnings(inst *session.Instance, action string) []string {
+func openPRWarnings(inst *instance.Instance, action string) []string {
 	refs := session.OpenPRRefs(inst.Snapshot().GitHub.PRs)
 	if len(refs) == 0 {
 		return nil
@@ -229,7 +231,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 			Session: &SessionDetail{SessionSummary: SessionSummary{
 				ID:     sessionID,
 				Title:  title,
-				Status: session.Creating.String(),
+				Status: domain.Creating.String(),
 			}},
 			StillCreating:  true,
 			ProgramWarning: programWarning,
@@ -267,7 +269,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 	// Persist the tag/injection changes above. The instance is Started() now
 	// (Active), so SaveInstances (unlike a Creating-status row) will not
 	// silently no-op this write.
-	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := lh.store.SaveInstances([]*instance.Instance{inst}); err != nil {
 		log.Error("mcp save instance failed after session creation", "title", title, "err", err)
 		return errResult(ErrInternalError, fmt.Sprintf("save session: %v", err), ""), nil
 	}
@@ -366,7 +368,7 @@ func mapCreateSessionRPCError(err error, title string) *mcpgo.CallToolResult {
 func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.CallToolResult {
 	switch {
 	case err == nil:
-		if outcome.Status == session.Failed {
+		if outcome.Status == domain.Failed {
 			return errResult(ErrSessionCreationFailed,
 				fmt.Sprintf("session creation failed: %s", outcome.FailureReason),
 				"Use get_session to inspect the session, or call create_session again to retry.")
@@ -391,7 +393,7 @@ func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.Call
 // worktree). Returns nil when it's safe to proceed (not a worktree session,
 // or no other live occupant), otherwise the CallToolResult to return
 // unchanged.
-func (lh *lifecycleHandlers) refuseIfWorktreeSharedWithOtherLiveSession(inst *session.Instance) *mcpgo.CallToolResult {
+func (lh *lifecycleHandlers) refuseIfWorktreeSharedWithOtherLiveSession(inst *instance.Instance) *mcpgo.CallToolResult {
 	err := lh.svc.RefuseIfWorktreeSharedWithOtherLiveSession(inst)
 	if err == nil {
 		return nil
@@ -417,7 +419,7 @@ func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToo
 		return findErr, nil
 	}
 
-	if inst.Status == session.Paused {
+	if inst.Status == domain.Paused {
 		return errResult("SESSION_ALREADY_PAUSED", fmt.Sprintf("session %q is already paused", sessionID), ""), nil
 	}
 
@@ -428,12 +430,12 @@ func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToo
 	warnings := openPRWarnings(inst, "pause_session")
 
 	// MCP tool pause is always user-initiated — record as manual.
-	inst.PauseReason = session.PauseReasonManual
+	inst.PauseReason = instance.PauseReasonManual
 	if err := inst.Pause(); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("pause session: %v", err), ""), nil
 	}
 
-	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := lh.store.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save: %v", err), ""), nil
 	}
 
@@ -453,7 +455,7 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 		return findErr, nil
 	}
 
-	if inst.Status != session.Paused {
+	if inst.Status != domain.Paused {
 		return errResult(ErrInvalidStatusTrans,
 			fmt.Sprintf("session %q is not paused (current status: %s)", sessionID, inst.Status),
 			"Only paused sessions can be resumed."), nil
@@ -465,7 +467,7 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 	}
 	services.RefreshInstanceHookProof(inst)
 
-	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := lh.store.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save: %v", err), ""), nil
 	}
 
@@ -526,7 +528,7 @@ func (lh *lifecycleHandlers) stopSession(ctx context.Context, req mcpgo.CallTool
 		}
 		warnings = openPRWarnings(inst, "stop_session")
 		// Hydrate for tmux access if the session is not paused (paused sessions have no tmux session).
-		if inst.Status != session.Paused && !inst.Started() {
+		if inst.Status != domain.Paused && !inst.Started() {
 			if startErr := inst.Start(false); startErr != nil {
 				log.Warn("mcp hydration failed for stop, attempting destroy anyway", "session", sessionID, "err", startErr)
 			}
@@ -604,7 +606,7 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 		inst.SetCategory(cat)
 	}
 
-	if err := lh.store.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := lh.store.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save: %v", err), ""), nil
 	}
 
@@ -617,10 +619,10 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 // ReviewQueuePoller to avoid spawning PTY processes as a side effect. Falls back to
 // LoadInstances() when the poller is not wired or the session is not in the poller.
 // Returns a non-nil *mcpgo.CallToolResult (error result) when not found or not started.
-func (lh *lifecycleHandlers) findAndHydrate(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func (lh *lifecycleHandlers) findAndHydrate(sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	// Try the live poller instance first — avoids LoadInstances() side effects.
 	if inst := lh.svc.FindLiveInstance(sessionID); inst != nil {
-		if !inst.Started() && inst.Status != session.Paused {
+		if !inst.Started() && inst.Status != domain.Paused {
 			if startErr := inst.Start(false); startErr != nil {
 				return nil, errResult(ErrInternalError,
 					fmt.Sprintf("hydrate session %q: %v", sessionID, startErr), "")
@@ -636,7 +638,7 @@ func (lh *lifecycleHandlers) findAndHydrate(sessionID string) (*session.Instance
 	}
 	for _, inst := range instances {
 		if inst.MatchesID(sessionID) {
-			if !inst.Started() && inst.Status != session.Paused {
+			if !inst.Started() && inst.Status != domain.Paused {
 				if startErr := inst.Start(false); startErr != nil {
 					return nil, errResult(ErrInternalError,
 						fmt.Sprintf("hydrate session %q: %v", sessionID, startErr), "")

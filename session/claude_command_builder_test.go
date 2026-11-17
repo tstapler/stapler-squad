@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 )
 
@@ -13,14 +14,14 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 	tests := []struct {
 		name          string
 		baseProgram   string
-		claudeSession *ClaudeSessionData
+		claudeSession *domain.ClaudeSessionData
 		expected      string
 		description   string
 	}{
 		{
 			name:        "claude command with valid session",
 			baseProgram: "claude",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: validSessionID,
 			},
 			expected:    "claude --resume 550e8400-e29b-41d4-a716-446655440000",
@@ -29,7 +30,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "claude command with flags and valid session",
 			baseProgram: "claude --model sonnet",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: validSessionID,
 			},
 			expected:    "claude --model sonnet --resume 550e8400-e29b-41d4-a716-446655440000",
@@ -38,7 +39,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "claude full path with valid session",
 			baseProgram: "/usr/local/bin/claude",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: validSessionID,
 			},
 			expected:    "/usr/local/bin/claude --resume 550e8400-e29b-41d4-a716-446655440000",
@@ -54,7 +55,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "claude command with empty session ID",
 			baseProgram: "claude",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: "",
 			},
 			expected:    "claude",
@@ -63,7 +64,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "claude command with invalid UUID",
 			baseProgram: "claude",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: invalidSessionID,
 			},
 			expected:    "claude",
@@ -72,7 +73,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "non-claude command with session data",
 			baseProgram: "aider --model ollama_chat/gemma3:1b",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: validSessionID,
 			},
 			expected:    "aider --model ollama_chat/gemma3:1b",
@@ -88,7 +89,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "mixed case claude command",
 			baseProgram: "Claude",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: validSessionID,
 			},
 			expected:    "Claude --resume 550e8400-e29b-41d4-a716-446655440000",
@@ -97,7 +98,7 @@ func TestClaudeCommandBuilder_Build(t *testing.T) {
 		{
 			name:        "claude in path with args",
 			baseProgram: "/home/user/.local/bin/claude --verbose",
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: validSessionID,
 			},
 			expected:    "/home/user/.local/bin/claude --verbose --resume 550e8400-e29b-41d4-a716-446655440000",
@@ -252,7 +253,7 @@ func TestIsValidUUID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := isValidUUID(tt.uuid)
+			result := domain.IsValidUUID(tt.uuid)
 
 			if result != tt.expected {
 				t.Errorf("%s\nUUID:     %s\nExpected: %v\nGot:      %v", tt.description, tt.uuid, tt.expected, result)
@@ -263,14 +264,14 @@ func TestIsValidUUID(t *testing.T) {
 
 // BenchmarkClaudeCommandBuilder_Build benchmarks the Build() method
 func BenchmarkClaudeCommandBuilder_Build(b *testing.B) {
-	validSession := &ClaudeSessionData{
+	validSession := &domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 	}
 
 	benchmarks := []struct {
 		name        string
 		baseProgram string
-		session     *ClaudeSessionData
+		session     *domain.ClaudeSessionData
 	}{
 		{
 			name:        "claude with session",

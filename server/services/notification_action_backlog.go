@@ -10,7 +10,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/notifications"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // notification_action_backlog.go delegates BACKLOG_DECISION choices to the
@@ -89,7 +91,7 @@ func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, curre
 	if !stringIn(from, current) {
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
 	}
-	ctx = WithTransitionCaller(ctx, session.CallerOperatorNotificationAction)
+	ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
 	_, err := b.Transitions.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId: d.ItemID, TargetStatus: target, ExpectedStatus: current, OverrideReason: d.Reason,
 	}))
@@ -150,8 +152,8 @@ func stringIn(set []string, v string) bool {
 
 // backlogStorage is the storage the production readers use.
 type backlogStorage interface {
-	GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error)
-	ListItemSessions(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
+	ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
 }
 
 type storageItemReader struct{ storage backlogStorage }
@@ -162,7 +164,7 @@ func NewItemStatusReader(s backlogStorage) ItemStatusReader { return storageItem
 func (r storageItemReader) ItemStatus(ctx context.Context, itemID string) (string, error) {
 	item, err := r.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return "", errItemNotFound
 		}
 		return "", fmt.Errorf("load backlog item: %w", err)
@@ -181,7 +183,7 @@ func (f storageSessionFinder) LatestWorkSession(ctx context.Context, itemID stri
 		return "", fmt.Errorf("list item sessions: %w", err)
 	}
 	for i := len(rows) - 1; i >= 0; i-- { // oldest first, so scan from the end
-		if rows[i].Role == string(session.SessionRoleWork) {
+		if rows[i].Role == string(instance.SessionRoleWork) {
 			return rows[i].SessionUUID, nil
 		}
 	}

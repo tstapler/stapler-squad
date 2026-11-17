@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // isolatedClassifierService builds a SessionService with config I/O redirected to a temp dir,
@@ -164,7 +165,7 @@ func (f *errTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKey
 }
 
 // reclassifyFixture registers one real session with a poller backed by client.
-func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (*SessionService, *session.Instance) {
+func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (*SessionService, *instance.Instance) {
 	t.Helper()
 	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 	poller := session.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
@@ -182,7 +183,7 @@ func TestTaggingClassifierService_should_ReturnTags_When_ReclassifySucceeds(t *t
 	resp, err := svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: title}))
 
 	require.NoError(t, err)
-	assert.Contains(t, resp.Msg.GetTags(), session.UnclassifiedTag)
+	assert.Contains(t, resp.Msg.GetTags(), instance.UnclassifiedTag)
 }
 
 func TestTaggingClassifierService_should_ReturnUnavailable_When_ReclassifyDegrades(t *testing.T) {

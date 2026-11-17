@@ -6,6 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // recordingItemChangePublisher is a minimal ItemChangePublisher test double
@@ -14,10 +17,10 @@ import (
 // (server/services.BacklogItemEventPublisher), which would introduce an
 // import of the session package back into itself.
 type recordingItemChangePublisher struct {
-	calls []BacklogItemChange
+	calls []backlogdto.BacklogItemChange
 }
 
-func (p *recordingItemChangePublisher) PublishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+func (p *recordingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
 	p.calls = append(p.calls, change)
 }
 
@@ -34,8 +37,14 @@ func TestStorageSetItemChangePublisher_should_forwardToConcreteEntRepository_Whe
 	publisher := &recordingItemChangePublisher{}
 	storage.SetItemChangePublisher(publisher)
 
-	er := storage.Repo
-	assert.Same(t, ItemChangePublisher(publisher), er.itemChangePublisher, "SetItemChangePublisher must forward to the concrete *EntRepository's field")
+	item, err := storage.Repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
+		Title:  "forwarding probe",
+		Status: string(domain.BacklogStatusReview),
+	})
+	require.NoError(t, err)
+	_, err = storage.Repo.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusDone, nil, instance.TriggeredBySystem)
+	require.NoError(t, err)
+	require.NotEmpty(t, publisher.calls, "SetItemChangePublisher must forward to the concrete *EntRepository")
 }
 
 // TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil confirms
@@ -49,19 +58,19 @@ func TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil(t *testi
 	defer cleanup()
 	ctx := context.Background()
 
-	require.Nil(t, repo.itemChangePublisher, "test setup: no publisher should be wired by default")
+	require.False(t, repo.Backlog.Hooks().PublisherBound(), "test setup: no publisher should be wired by default")
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item with no publisher wired",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
-		ExpectedStatus: string(BacklogStatusReview),
-	}, TriggeredBySystem)
-	require.NoError(t, err, "transition must succeed even though no ItemChangePublisher is wired")
-	assert.Equal(t, string(BacklogStatusDone), updated.Status)
+	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusReview),
+	}, instance.TriggeredBySystem)
+	require.NoError(t, err, "transition must succeed even though no backlogdto.ItemChangePublisher is wired")
+	assert.Equal(t, string(domain.BacklogStatusDone), updated.Status)
 }
 
-var _ ItemChangePublisher = (*recordingItemChangePublisher)(nil)
+var _ backlogdto.ItemChangePublisher = (*recordingItemChangePublisher)(nil)

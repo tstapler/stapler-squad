@@ -15,8 +15,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	ssent "github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/hook"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
@@ -81,7 +85,7 @@ func TestEntRepository_Update(t *testing.T) {
 
 	// Modify session
 	session.Branch = "feature-branch"
-	session.Status = Paused
+	session.Status = domain.Paused
 	session.Category = "Updated"
 
 	// Update session
@@ -92,7 +96,7 @@ func TestEntRepository_Update(t *testing.T) {
 	retrieved, err := repo.Get(ctx, session.Title)
 	require.NoError(t, err)
 	assert.Equal(t, "feature-branch", retrieved.Branch)
-	assert.Equal(t, Paused, retrieved.Status)
+	assert.Equal(t, domain.Paused, retrieved.Status)
 	assert.Equal(t, "Updated", retrieved.Category)
 }
 
@@ -129,7 +133,7 @@ func TestEntRepository_Delete_WithShells(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	_, err = repo.CreateShell(ctx, session.Title, ShellData{
+	err = repo.CreateShell(ctx, session.Title, domain.ShellData{
 		ID:              uuid.NewString(),
 		Name:            "shell-1",
 		Command:         "bash",
@@ -180,9 +184,9 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 
 	// Create sessions with different statuses
 	running := createTestSession("running-session")
-	running.Status = Running
+	running.Status = domain.Active
 	paused := createTestSession("paused-session")
-	paused.Status = Paused
+	paused.Status = domain.Paused
 
 	err := repo.Create(ctx, running)
 	require.NoError(t, err)
@@ -190,13 +194,13 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Query running sessions
-	runningSessions, err := repo.ListByStatus(ctx, Running)
+	runningSessions, err := repo.ListByStatus(ctx, domain.Active)
 	require.NoError(t, err)
 	assert.Len(t, runningSessions, 1)
 	assert.Equal(t, "running-session", runningSessions[0].Title)
 
 	// Query paused sessions
-	pausedSessions, err := repo.ListByStatus(ctx, Paused)
+	pausedSessions, err := repo.ListByStatus(ctx, domain.Paused)
 	require.NoError(t, err)
 	assert.Len(t, pausedSessions, 1)
 	assert.Equal(t, "paused-session", pausedSessions[0].Title)
@@ -239,7 +243,7 @@ func TestEntRepository_Worktree(t *testing.T) {
 
 	// Create session with worktree
 	session := createTestSession("worktree-session")
-	session.Worktree = GitWorktreeData{
+	session.Worktree = domain.GitWorktreeData{
 		RepoPath:      "/path/to/repo",
 		WorktreePath:  "/path/to/worktree",
 		SessionName:   "test-session",
@@ -269,7 +273,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 	ctx := context.Background()
 
 	session := createTestSession("list-with-options-worktree")
-	session.Worktree = GitWorktreeData{
+	session.Worktree = domain.GitWorktreeData{
 		RepoPath:      "/path/to/repo",
 		WorktreePath:  "/path/to/worktree",
 		SessionName:   "test-session",
@@ -284,7 +288,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
-	assert.Equal(t, GitWorktreeData{}, minimal[0].Worktree)
+	assert.Equal(t, domain.GitWorktreeData{}, minimal[0].Worktree)
 
 	// LoadOptions{LoadWorktree: true} should load it.
 	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadWorktree: true})
@@ -332,7 +336,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	ctx := context.Background()
 
 	session := createTestSession("list-with-options-diffstats")
-	session.DiffStats = DiffStatsData{
+	session.DiffStats = domain.DiffStatsData{
 		Added:   100,
 		Removed: 50,
 		Content: "diff content here",
@@ -344,7 +348,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
-	assert.Equal(t, DiffStatsData{}, minimal[0].DiffStats)
+	assert.Equal(t, domain.DiffStatsData{}, minimal[0].DiffStats)
 
 	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadDiffStats: true})
 	require.NoError(t, err)
@@ -412,12 +416,12 @@ func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
 	ctx := context.Background()
 
 	session := createTestSession("list-with-options-claude-session")
-	session.ClaudeSession = ClaudeSessionData{
+	session.ClaudeSession = domain.ClaudeSessionData{
 		ConversationUUID: "claude-123",
 		SquadSessionID:   "conv-456",
 		ProjectName:      "test-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach: true,
 		},
 		Metadata: map[string]string{
@@ -451,7 +455,7 @@ func TestEntRepository_DiffStats(t *testing.T) {
 
 	// Create session with diff stats
 	session := createTestSession("diffstats-session")
-	session.DiffStats = DiffStatsData{
+	session.DiffStats = domain.DiffStatsData{
 		Added:   100,
 		Removed: 50,
 		Content: "diff content here",
@@ -478,12 +482,12 @@ func TestEntRepository_ClaudeSession(t *testing.T) {
 
 	// Create session with Claude session data
 	session := createTestSession("claude-session")
-	session.ClaudeSession = ClaudeSessionData{
+	session.ClaudeSession = domain.ClaudeSessionData{
 		ConversationUUID: "claude-123",
 		SquadSessionID:   "conv-456",
 		ProjectName:      "test-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach:          true,
 			PreferredSessionName:  "my-session",
 			CreateNewOnMissing:    false,
@@ -649,7 +653,7 @@ func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 
-	byTitle := make(map[string]InstanceData)
+	byTitle := make(map[string]domain.InstanceData)
 	for _, d := range all {
 		byTitle[d.Title] = d
 	}
@@ -863,12 +867,12 @@ func TestTaggingRuleSchema_should_CreateIdempotently_When_SchemaCreateRunsTwice(
 	// Serialized via EntSchemaCreateMu — see its doc comment: Atlas has
 	// package-level state that races under t.Parallel() across independent
 	// clients.
-	EntSchemaCreateMu.Lock()
+	dbpool.EntSchemaCreateMu.Lock()
 	require.NoError(t, client.Schema.Create(ctx))
 
 	// Second Schema.Create call must be idempotent — no error, no duplicate index.
 	require.NoError(t, client.Schema.Create(ctx))
-	EntSchemaCreateMu.Unlock()
+	dbpool.EntSchemaCreateMu.Unlock()
 
 	// Sibling table remains intact and queryable — the additive table did not
 	// disturb it.
@@ -912,9 +916,9 @@ func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T)
 	data.UUID = "sess-uuid-1"
 	data.ClaudeSession.ConversationUUID = "conv-uuid-1"
 	require.NoError(t, repo.Create(ctx, data))
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "stamp item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stamp item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: SessionRoleWork})
+	_, err = repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.Delete(ctx, data.Title))
@@ -935,12 +939,12 @@ func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "ledger item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "ledger item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "headless-review-1",
-		SessionRole:      SessionRoleReview,
+		SessionRole:      instance.SessionRoleReview,
 		ConversationUUID: "conv-ledger-1",
 		EstimatedCostUsd: 1.23,
 	})
@@ -957,7 +961,7 @@ func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
 	require.Len(t, ledger, 1)
 	assert.Equal(t, "conv-ledger-1", ledger[0].ConversationUUID)
 	assert.Equal(t, "headless-review-1", ledger[0].SessionUUID)
-	assert.Equal(t, SessionRoleReview, ledger[0].SessionRole)
+	assert.Equal(t, instance.SessionRoleReview, ledger[0].SessionRole)
 	assert.Equal(t, item.ID, ledger[0].ItemID)
 	assert.Equal(t, "ledger item", ledger[0].ItemTitle)
 	assert.InDelta(t, 1.23, ledger[0].EstimatedCostUsd, 0.001)
@@ -975,12 +979,12 @@ func TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure(t *testin
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "rollback item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "rollback item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "headless-review-rollback",
-		SessionRole:      SessionRoleReview,
+		SessionRole:      instance.SessionRoleReview,
 		ConversationUUID: "conv-rollback-1",
 		EstimatedCostUsd: 4.56,
 	})
@@ -1026,7 +1030,7 @@ func TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique(t *testing.T) 
 	create := func() error {
 		return repo.Client.DeletedItemSessionCost.Create().
 			SetSessionUUID("dup-session-uuid").
-			SetSessionRole(SessionRoleReview).
+			SetSessionRole(instance.SessionRoleReview).
 			SetItemID("some-item-id").
 			SetItemTitle("some item").
 			SetEstimatedCostUsd(1).
@@ -1046,9 +1050,9 @@ func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "conv item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "conv item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: SessionRoleTriage})
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: instance.SessionRoleTriage})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.UpdateItemSessionConversationUUID(ctx, is.ID, "conv-triage-1"))

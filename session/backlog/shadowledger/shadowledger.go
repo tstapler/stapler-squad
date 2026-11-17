@@ -20,8 +20,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 const (
@@ -36,65 +37,65 @@ const (
 	labelerRefreshWindow = 30 * time.Second
 )
 
-func newClassLedger() *session.ClassLedger {
-	return &session.ClassLedger{
+func newClassLedger() *workflowengine.ClassLedger {
+	return &workflowengine.ClassLedger{
 		Calls: map[string]int64{}, Divergence: map[string]int64{}, NotCompared: map[string]int64{},
-		Edges: map[string]session.EdgeStats{}, ConfigSeen: map[string]int64{},
+		Edges: map[string]workflowengine.EdgeStats{}, ConfigSeen: map[string]int64{},
 	}
 }
 
-func ledgerCallKey(m session.EngineMethod, p session.CallPath) string {
+func ledgerCallKey(m workflowengine.EngineMethod, p workflowengine.CallPath) string {
 	return string(m) + "|" + string(p)
 }
 
-func ledgerDivergenceKey(m session.EngineMethod, c session.DivergenceClass, cfg string, p session.CallPath) string {
+func ledgerDivergenceKey(m workflowengine.EngineMethod, c workflowengine.DivergenceClass, cfg string, p workflowengine.CallPath) string {
 	return strings.Join([]string{string(m), string(c), cfg, string(p)}, "|")
 }
 
 func normalizeConfigLabel(l string) string {
-	if l == session.ConfigSeeded || l == session.ConfigEdited {
+	if l == workflowengine.ConfigSeeded || l == workflowengine.ConfigEdited {
 		return l
 	}
-	return session.ConfigUnlabeled
+	return workflowengine.ConfigUnlabeled
 }
 
 type liveEdge struct{ transition, read, diverge, skips atomic.Int64 }
 
 type shadowKey struct {
-	m session.EngineMethod
-	p session.CallPath
+	m workflowengine.EngineMethod
+	p workflowengine.CallPath
 }
 
 type divKey struct {
-	m session.EngineMethod
-	c session.DivergenceClass
+	m workflowengine.EngineMethod
+	c workflowengine.DivergenceClass
 	f string
-	p session.CallPath
+	p workflowengine.CallPath
 }
 
 var (
-	shadowMethods = []session.EngineMethod{session.MethodCanTransition, session.MethodAllowedTransitions, session.MethodPendingGates, session.MethodValidateGates}
-	shadowPaths   = []session.CallPath{session.PathTransition, session.PathRead}
-	shadowClasses = []session.DivergenceClass{session.ClassGraph, session.ClassGateMissing, session.ClassGateExtra, session.ClassErrorKind, session.ClassGuardNew}
-	ledgerClasses = []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem}
-	shadowConfigs = []string{session.ConfigSeeded, session.ConfigEdited, session.ConfigUnlabeled}
+	shadowMethods = []workflowengine.EngineMethod{workflowengine.MethodCanTransition, workflowengine.MethodAllowedTransitions, workflowengine.MethodPendingGates, workflowengine.MethodValidateGates}
+	shadowPaths   = []workflowengine.CallPath{workflowengine.PathTransition, workflowengine.PathRead}
+	shadowClasses = []workflowengine.DivergenceClass{workflowengine.ClassGraph, workflowengine.ClassGateMissing, workflowengine.ClassGateExtra, workflowengine.ClassErrorKind, workflowengine.ClassGuardNew}
+	ledgerClasses = []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem}
+	shadowConfigs = []string{workflowengine.ConfigSeeded, workflowengine.ConfigEdited, workflowengine.ConfigUnlabeled}
 )
 
 // ShadowLedgerRecorder implements ShadowRecorder and ObservationRecorder. The
 // call path touches atomics only; the mutex guards the divergence ring, which
 // is written only when a divergence occurs.
 type ShadowLedgerRecorder struct {
-	class session.CallerClass // the class the unclassed ShadowRecorder methods record into
+	class domain.CallerClass // the class the unclassed ShadowRecorder methods record into
 	dir   string
 	clock hostclaim.Clock
 	warn  func(format string, args ...any)
 
-	base session.ShadowLedger // loaded at start; never mutated afterwards
+	base workflowengine.ShadowLedger // loaded at start; never mutated afterwards
 
-	live map[session.CallerClass]*liveClass // fixed at construction, read-only after
+	live map[domain.CallerClass]*liveClass // fixed at construction, read-only after
 
 	mu    sync.Mutex // guards ring, start
-	ring  []session.ReproRecord
+	ring  []workflowengine.ReproRecord
 	start time.Time
 
 	flushMu     sync.Mutex
@@ -104,10 +105,10 @@ type ShadowLedgerRecorder struct {
 // liveClass is one class's in-process counters: atomics on the call path, a
 // mutex only for the rare per-caller divergence map.
 type liveClass struct {
-	calls       *session.CounterSet[shadowKey]
-	divergences *session.CounterSet[divKey]
-	notCompared *session.CounterSet[session.NotComparedReason]
-	configSeen  *session.CounterSet[string]
+	calls       *workflowengine.CounterSet[shadowKey]
+	divergences *workflowengine.CounterSet[divKey]
+	notCompared *workflowengine.CounterSet[workflowengine.NotComparedReason]
+	configSeen  *workflowengine.CounterSet[string]
 	edges       sync.Map // string -> *liveEdge
 	edgeCount   atomic.Int64
 	firstSample atomic.Int64
@@ -121,10 +122,10 @@ type liveClass struct {
 
 func newLiveClass() *liveClass {
 	return &liveClass{
-		calls:       session.NewCounterSet(crossShadowKeys()...),
-		divergences: session.NewCounterSet(crossDivKeys()...),
-		notCompared: session.NewCounterSet(session.NotComparedStatefulGate),
-		configSeen:  session.NewCounterSet(shadowConfigs...),
+		calls:       workflowengine.NewCounterSet(crossShadowKeys()...),
+		divergences: workflowengine.NewCounterSet(crossDivKeys()...),
+		notCompared: workflowengine.NewCounterSet(workflowengine.NotComparedStatefulGate),
+		configSeen:  workflowengine.NewCounterSet(shadowConfigs...),
 		callerDiv:   map[string]int64{},
 
 		callerEdgeDiv: map[string]int64{},
@@ -132,16 +133,16 @@ func newLiveClass() *liveClass {
 }
 
 var (
-	_ session.ShadowRecorder        = (*ShadowLedgerRecorder)(nil)
-	_ session.ClassedShadowRecorder = (*ShadowLedgerRecorder)(nil)
-	_ session.ObservationRecorder   = (*ShadowLedgerRecorder)(nil)
+	_ workflowengine.ShadowRecorder        = (*ShadowLedgerRecorder)(nil)
+	_ workflowengine.ClassedShadowRecorder = (*ShadowLedgerRecorder)(nil)
+	_ workflowengine.ObservationRecorder   = (*ShadowLedgerRecorder)(nil)
 )
 
 // ShadowRecorderOption customizes NewShadowLedgerRecorder.
 type ShadowRecorderOption func(*ShadowLedgerRecorder)
 
 // WithShadowClass sets the caller class this recorder writes (default operator).
-func WithShadowClass(c session.CallerClass) ShadowRecorderOption {
+func WithShadowClass(c domain.CallerClass) ShadowRecorderOption {
 	return func(r *ShadowLedgerRecorder) { r.class = c }
 }
 
@@ -166,9 +167,9 @@ func ShadowLedgerPath(dir string) string { return filepath.Join(dir, shadowLedge
 // starts fresh with a WARN) and records this binary's start time.
 func NewShadowLedgerRecorder(dir string, opts ...ShadowRecorderOption) *ShadowLedgerRecorder {
 	r := &ShadowLedgerRecorder{
-		class: session.ClassOperator, dir: dir, clock: hostclaim.RealClock{},
+		class: domain.ClassOperator, dir: dir, clock: hostclaim.RealClock{},
 		warn: func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
-		live: map[session.CallerClass]*liveClass{},
+		live: map[domain.CallerClass]*liveClass{},
 	}
 	for _, c := range ledgerClasses {
 		r.live[c] = newLiveClass()
@@ -184,7 +185,7 @@ func NewShadowLedgerRecorder(dir string, opts ...ShadowRecorderOption) *ShadowLe
 		r.base = r.load()
 	}
 	if r.base.Classes == nil {
-		r.base = session.ShadowLedger{Version: shadowLedgerVersion, Classes: map[string]*session.ClassLedger{}}
+		r.base = workflowengine.ShadowLedger{Version: shadowLedgerVersion, Classes: map[string]*workflowengine.ClassLedger{}}
 	}
 	return r
 }
@@ -215,7 +216,7 @@ func crossDivKeys() []divKey {
 
 // forClass returns the live counters for c; an empty or unknown class records
 // into the recorder's own class.
-func (r *ShadowLedgerRecorder) forClass(c session.CallerClass) (session.CallerClass, *liveClass) {
+func (r *ShadowLedgerRecorder) forClass(c domain.CallerClass) (domain.CallerClass, *liveClass) {
 	if lc := r.live[c]; lc != nil {
 		return c, lc
 	}
@@ -223,12 +224,12 @@ func (r *ShadowLedgerRecorder) forClass(c session.CallerClass) (session.CallerCl
 }
 
 // RecordShadowCall implements ShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordShadowCall(m session.EngineMethod, p session.CallPath) {
+func (r *ShadowLedgerRecorder) RecordShadowCall(m workflowengine.EngineMethod, p workflowengine.CallPath) {
 	r.RecordShadowCallFor(r.class, m, p)
 }
 
 // RecordShadowCallFor implements ClassedShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordShadowCallFor(class session.CallerClass, m session.EngineMethod, p session.CallPath) {
+func (r *ShadowLedgerRecorder) RecordShadowCallFor(class domain.CallerClass, m workflowengine.EngineMethod, p workflowengine.CallPath) {
 	_, lc := r.forClass(class)
 	lc.active.Store(true)
 	lc.calls.Inc(shadowKey{m, p})
@@ -238,24 +239,24 @@ func (r *ShadowLedgerRecorder) RecordShadowCallFor(class session.CallerClass, m 
 }
 
 // RecordDivergence implements ShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordDivergence(m session.EngineMethod, c session.DivergenceClass, config string, p session.CallPath) {
+func (r *ShadowLedgerRecorder) RecordDivergence(m workflowengine.EngineMethod, c workflowengine.DivergenceClass, config string, p workflowengine.CallPath) {
 	r.RecordDivergenceFor(r.class, m, c, config, p)
 }
 
 // RecordDivergenceFor implements ClassedShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordDivergenceFor(class session.CallerClass, m session.EngineMethod, c session.DivergenceClass, config string, p session.CallPath) {
+func (r *ShadowLedgerRecorder) RecordDivergenceFor(class domain.CallerClass, m workflowengine.EngineMethod, c workflowengine.DivergenceClass, config string, p workflowengine.CallPath) {
 	_, lc := r.forClass(class)
 	lc.active.Store(true)
 	lc.divergences.Inc(divKey{m, c, normalizeConfigLabel(config), p})
 }
 
 // RecordNotCompared implements ShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordNotCompared(reason session.NotComparedReason) {
+func (r *ShadowLedgerRecorder) RecordNotCompared(reason workflowengine.NotComparedReason) {
 	r.RecordNotComparedFor(r.class, reason)
 }
 
 // RecordNotComparedFor implements ClassedShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordNotComparedFor(class session.CallerClass, reason session.NotComparedReason) {
+func (r *ShadowLedgerRecorder) RecordNotComparedFor(class domain.CallerClass, reason workflowengine.NotComparedReason) {
 	_, lc := r.forClass(class)
 	lc.active.Store(true)
 	lc.notCompared.Inc(reason)
@@ -264,12 +265,12 @@ func (r *ShadowLedgerRecorder) RecordNotComparedFor(class session.CallerClass, r
 // RecordObservation implements ObservationRecorder: per-edge counts, the
 // window's config label, the per-caller divergence count and the redacted
 // repro ring, all in the observation's class section.
-func (r *ShadowLedgerRecorder) RecordObservation(o session.ShadowObservation) {
+func (r *ShadowLedgerRecorder) RecordObservation(o workflowengine.ShadowObservation) {
 	class, lc := r.forClass(o.CallerClass)
 	lc.active.Store(true)
 	lc.configSeen.Inc(normalizeConfigLabel(o.Config))
-	e := lc.edge(session.EdgeKey(o.From, o.To))
-	if o.Path == session.PathTransition {
+	e := lc.edge(workflowengine.EdgeKey(o.From, o.To))
+	if o.Path == workflowengine.PathTransition {
 		e.transition.Add(1)
 	} else {
 		e.read.Add(1)
@@ -284,10 +285,10 @@ func (r *ShadowLedgerRecorder) RecordObservation(o session.ShadowObservation) {
 	if o.Caller != "" {
 		lc.mu.Lock()
 		lc.callerDiv[string(o.Caller)+"|"+string(o.Class)]++
-		lc.callerEdgeDiv[string(o.Caller)+"|"+session.EdgeKey(o.From, o.To)+"|"+string(o.Class)]++
+		lc.callerEdgeDiv[string(o.Caller)+"|"+workflowengine.EdgeKey(o.From, o.To)+"|"+string(o.Class)]++
 		lc.mu.Unlock()
 	}
-	rec := session.ReproRecord{
+	rec := workflowengine.ReproRecord{
 		At: r.clock.Now().UTC(), Class: string(class), Method: string(o.Method), Path: string(o.Path),
 		From: string(o.From), To: string(o.To), ItemHash: o.ItemHash, Divergence: string(o.Class), Caller: string(o.Caller),
 		Config: normalizeConfigLabel(o.Config), Default: o.Default, Enforce: o.Enforce,
@@ -318,10 +319,10 @@ func (lc *liveClass) edge(key string) *liveEdge {
 
 // Snapshot merges the loaded ledger with this process's live counts. It is
 // read-only and safe to call concurrently with recording.
-func (r *ShadowLedgerRecorder) Snapshot() session.ShadowLedger {
-	out := session.ShadowLedger{
+func (r *ShadowLedgerRecorder) Snapshot() workflowengine.ShadowLedger {
+	out := workflowengine.ShadowLedger{
 		Version: shadowLedgerVersion, SavedAt: r.clock.Now().UTC(),
-		Classes: map[string]*session.ClassLedger{},
+		Classes: map[string]*workflowengine.ClassLedger{},
 	}
 	for k, v := range r.base.Classes {
 		out.Classes[k] = cloneClassLedger(v)
@@ -341,9 +342,9 @@ func (r *ShadowLedgerRecorder) Snapshot() session.ShadowLedger {
 	}
 
 	r.mu.Lock()
-	live := append([]session.ReproRecord(nil), r.ring...)
+	live := append([]workflowengine.ReproRecord(nil), r.ring...)
 	r.mu.Unlock()
-	repro := append(append([]session.ReproRecord(nil), r.base.Repro...), live...)
+	repro := append(append([]workflowengine.ReproRecord(nil), r.base.Repro...), live...)
 	if len(repro) > reproRingSize {
 		repro = repro[len(repro)-reproRingSize:]
 	}
@@ -352,8 +353,8 @@ func (r *ShadowLedgerRecorder) Snapshot() session.ShadowLedger {
 }
 
 // liveClassOrder lists the live classes in a stable order.
-func (r *ShadowLedgerRecorder) liveClassOrder() []session.CallerClass {
-	out := make([]session.CallerClass, 0, len(r.live))
+func (r *ShadowLedgerRecorder) liveClassOrder() []domain.CallerClass {
+	out := make([]domain.CallerClass, 0, len(r.live))
 	for c := range r.live {
 		out = append(out, c)
 	}
@@ -361,7 +362,7 @@ func (r *ShadowLedgerRecorder) liveClassOrder() []session.CallerClass {
 	return out
 }
 
-func (lc *liveClass) mergeInto(cl *session.ClassLedger) {
+func (lc *liveClass) mergeInto(cl *workflowengine.ClassLedger) {
 	for _, k := range lc.calls.Keys {
 		if n := lc.calls.Get(k); n > 0 {
 			cl.Calls[ledgerCallKey(k.m, k.p)] += n
@@ -419,7 +420,7 @@ func (lc *liveClass) mergeInto(cl *session.ClassLedger) {
 	}
 }
 
-func cloneClassLedger(c *session.ClassLedger) *session.ClassLedger {
+func cloneClassLedger(c *workflowengine.ClassLedger) *workflowengine.ClassLedger {
 	out := newClassLedger()
 	if c == nil {
 		return out
@@ -464,42 +465,42 @@ func capBinaryStarts(starts []time.Time) []time.Time {
 	return append([]time.Time{starts[0]}, starts[len(starts)-(maxBinaryStarts-1):]...)
 }
 
-func (r *ShadowLedgerRecorder) load() session.ShadowLedger {
+func (r *ShadowLedgerRecorder) load() workflowengine.ShadowLedger {
 	l, err := ReadShadowLedgerFile(ShadowLedgerPath(r.dir))
 	switch {
 	case err == nil:
 		return l
 	case errors.Is(err, os.ErrNotExist):
-		return session.ShadowLedger{}
+		return workflowengine.ShadowLedger{}
 	default:
 		r.warn("[ShadowLedger] ledger unusable, starting a new window: %v", err)
-		return session.ShadowLedger{}
+		return workflowengine.ShadowLedger{}
 	}
 }
 
 // ReadShadowLedgerFile reads and validates a ledger file; an oversized or
 // corrupt file is an error, never a partial ledger.
-func ReadShadowLedgerFile(path string) (session.ShadowLedger, error) {
+func ReadShadowLedgerFile(path string) (workflowengine.ShadowLedger, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return session.ShadowLedger{}, err
+		return workflowengine.ShadowLedger{}, err
 	}
 	if info.Size() > maxLedgerBytes {
-		return session.ShadowLedger{}, fmt.Errorf("ledger %s is %d bytes, over the %d byte cap", path, info.Size(), maxLedgerBytes)
+		return workflowengine.ShadowLedger{}, fmt.Errorf("ledger %s is %d bytes, over the %d byte cap", path, info.Size(), maxLedgerBytes)
 	}
 	data, err := os.ReadFile(path) // #nosec G304 -- the config dir's own ledger file
 	if err != nil {
-		return session.ShadowLedger{}, err
+		return workflowengine.ShadowLedger{}, err
 	}
-	var l session.ShadowLedger
+	var l workflowengine.ShadowLedger
 	if err := json.Unmarshal(data, &l); err != nil {
-		return session.ShadowLedger{}, fmt.Errorf("ledger %s is corrupt: %w", path, err)
+		return workflowengine.ShadowLedger{}, fmt.Errorf("ledger %s is corrupt: %w", path, err)
 	}
 	if l.Version != shadowLedgerVersion {
-		return session.ShadowLedger{}, fmt.Errorf("ledger %s has version %d, want %d", path, l.Version, shadowLedgerVersion)
+		return workflowengine.ShadowLedger{}, fmt.Errorf("ledger %s has version %d, want %d", path, l.Version, shadowLedgerVersion)
 	}
 	if l.Classes == nil {
-		l.Classes = map[string]*session.ClassLedger{}
+		l.Classes = map[string]*workflowengine.ClassLedger{}
 	}
 	return l, nil
 }
@@ -575,7 +576,7 @@ func NewConfigLabeler(fingerprint func() (string, error), clock hostclaim.Clock)
 	}
 	var cur atomic.Pointer[entry]
 	var refreshing atomic.Bool
-	seed := session.SeedFingerprint()
+	seed := workflowengine.SeedFingerprint()
 	return func() string {
 		e := cur.Load()
 		now := clock.Now()
@@ -586,14 +587,14 @@ func NewConfigLabeler(fingerprint func() (string, error), clock hostclaim.Clock)
 			if e != nil {
 				return e.label
 			}
-			return session.ConfigUnlabeled
+			return workflowengine.ConfigUnlabeled
 		}
 		defer refreshing.Store(false)
-		label := session.ConfigUnlabeled
+		label := workflowengine.ConfigUnlabeled
 		if fp, err := fingerprint(); err == nil {
-			label = session.ConfigEdited
+			label = workflowengine.ConfigEdited
 			if fp == seed {
-				label = session.ConfigSeeded
+				label = workflowengine.ConfigSeeded
 			}
 		}
 		cur.Store(&entry{label: label, expires: now.Add(labelerRefreshWindow)})

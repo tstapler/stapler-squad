@@ -19,6 +19,10 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -29,8 +33,8 @@ import (
 // directly instead of the baseContext() helper already used elsewhere in this file to guard
 // exactly this case.
 func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.T) {
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 	t.Cleanup(eventBus.Close)
@@ -39,7 +43,7 @@ func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.
 	// rqm.ctx is intentionally nil here — Start() is never called.
 
 	require.NotPanics(t, func() {
-		rqm.OnControllerStatusChange(&session.Instance{Title: "never-started"}, detection.DetectedStatus(0))
+		rqm.OnControllerStatusChange(&instance.Instance{Title: "never-started"}, detection.DetectedStatus(0))
 	})
 
 	// OnControllerStatusChange dispatches to a background goroutine; give it a moment to
@@ -51,8 +55,8 @@ func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {
 	// Setup components
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 	repo := session.NewTestEntRepository(t)
@@ -102,11 +106,11 @@ func TestReactiveQueueManagerIntegration(t *testing.T) {
 	drainEvents(eventCh, 100*time.Millisecond)
 
 	// Test 2: Add item to queue and verify event
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   "test-session-1",
 		SessionName: "Test Session",
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 		Context:     "Test context",
 	}
@@ -177,8 +181,8 @@ func TestReactiveQueueManagerIntegration(t *testing.T) {
 // Publishing a second event here creates duplicate notification cards in the UI.
 // All other reasons SHOULD publish to the EventBus for history/toast routing.
 func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 
@@ -190,10 +194,10 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	eventCh, _ := eventBus.Subscribe(ctx)
 
 	// ── Case 1: ReasonApprovalPending → NO EventBus event ──────────────────
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "session-approval",
-		Reason:     session.ReasonApprovalPending,
-		Priority:   session.PriorityHigh,
+		Reason:     queuepkg.ReasonApprovalPending,
+		Priority:   queuepkg.PriorityHigh,
 		DetectedAt: time.Now(),
 	})
 
@@ -205,10 +209,10 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	}
 
 	// ── Case 2: ReasonInputRequired → EventBus notification SHOULD fire ────
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "session-input",
-		Reason:     session.ReasonInputRequired,
-		Priority:   session.PriorityHigh,
+		Reason:     queuepkg.ReasonInputRequired,
+		Priority:   queuepkg.PriorityHigh,
 		DetectedAt: time.Now(),
 	})
 
@@ -222,10 +226,10 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	}
 
 	// ── Case 3: ReasonErrorState → EventBus notification SHOULD fire ────────
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "session-error",
-		Reason:     session.ReasonErrorState,
-		Priority:   session.PriorityMedium,
+		Reason:     queuepkg.ReasonErrorState,
+		Priority:   queuepkg.PriorityMedium,
 		DetectedAt: time.Now(),
 	})
 
@@ -257,10 +261,10 @@ func TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue(t *testing.T)
 
 	// Add a session to the queue.
 	const sessionID = "delete-target-session"
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:  sessionID,
-		Reason:     session.ReasonInputRequired,
-		Priority:   session.PriorityMedium,
+		Reason:     queuepkg.ReasonInputRequired,
+		Priority:   queuepkg.PriorityMedium,
 		DetectedAt: time.Now(),
 	})
 
@@ -300,10 +304,10 @@ func TestReactiveQueueManager_EventSessionArchived_RemovesFromQueue(t *testing.T
 	defer mgr.Stop()
 
 	const sessionID = "archive-target-session"
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:  sessionID,
-		Reason:     session.ReasonStale,
-		Priority:   session.PriorityLow,
+		Reason:     queuepkg.ReasonStale,
+		Priority:   queuepkg.PriorityLow,
 		DetectedAt: time.Now(),
 	})
 
@@ -336,8 +340,8 @@ func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 // TestReactiveQueueManagerMultipleClients tests multiple concurrent clients
 func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 	// Setup
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 	repo := session.NewTestEntRepository(t)
@@ -388,11 +392,11 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 	}
 
 	// Add item to queue
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   "test-multi-1",
 		SessionName: "Multi Test",
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityMedium,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now(),
 	}
 	queue.Add(item)
@@ -427,8 +431,8 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 // TestReactiveQueueManagerFiltering tests client-side filtering
 func TestReactiveQueueManagerFiltering(t *testing.T) {
 	// Setup
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 	repo := session.NewTestEntRepository(t)
@@ -460,7 +464,7 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	defer clientCancel()
 
 	filters := &WatchReviewQueueFilters{
-		PriorityFilter:    []session.Priority{session.PriorityHigh},
+		PriorityFilter:    []queuepkg.Priority{queuepkg.PriorityHigh},
 		InitialSnapshot:   false,
 		IncludeStatistics: false,
 	}
@@ -469,10 +473,10 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	defer reactiveQueueMgr.RemoveStreamClient(clientID)
 
 	// Add HIGH priority item - should be received
-	highItem := &session.ReviewItem{
+	highItem := &queuepkg.ReviewItem{
 		SessionID:  "high-priority",
-		Reason:     session.ReasonApprovalPending,
-		Priority:   session.PriorityHigh,
+		Reason:     queuepkg.ReasonApprovalPending,
+		Priority:   queuepkg.PriorityHigh,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(highItem)
@@ -485,10 +489,10 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	}
 
 	// Add LOW priority item - should NOT be received
-	lowItem := &session.ReviewItem{
+	lowItem := &queuepkg.ReviewItem{
 		SessionID:  "low-priority",
-		Reason:     session.ReasonIdleTimeout,
-		Priority:   session.PriorityLow,
+		Reason:     queuepkg.ReasonIdleTimeout,
+		Priority:   queuepkg.PriorityLow,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(lowItem)
@@ -506,8 +510,8 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 // TestReactiveQueueManagerEventTypes tests all event types
 func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	// Setup
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 	repo := session.NewTestEntRepository(t)
@@ -546,10 +550,10 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	defer reactiveQueueMgr.RemoveStreamClient(clientID)
 
 	// Test ItemAdded
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:  "test-events",
-		Priority:   session.PriorityMedium,
-		Reason:     session.ReasonInputRequired,
+		Priority:   queuepkg.PriorityMedium,
+		Reason:     queuepkg.ReasonInputRequired,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(item)
@@ -574,10 +578,10 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 // fixture for TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName as a
 // helper rather than a literal copy of the setup block already repeated across
 // this file's other ReactiveQueueManager tests.
-func newAutoResolvedRemovalTestFixture(t *testing.T) (*session.ReviewQueue, *session.ReviewQueuePoller, *events.EventBus, *session.InstanceStatusManager, *session.Storage) {
+func newAutoResolvedRemovalTestFixture(t *testing.T) (*queuepkg.ReviewQueue, *session.ReviewQueuePoller, *events.EventBus, *instance.InstanceStatusManager, *session.Storage) {
 	t.Helper()
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
 	repo := session.NewTestEntRepository(t)
@@ -625,16 +629,16 @@ func TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName(t *testing.T) {
 	eventCh, clientID := reactiveQueueMgr.AddStreamClient(clientCtx, filters)
 	defer reactiveQueueMgr.RemoveStreamClient(clientID)
 
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:  "test-auto-resolved",
-		Priority:   session.PriorityHigh,
-		Reason:     session.ReasonApprovalPending,
+		Priority:   queuepkg.PriorityHigh,
+		Reason:     queuepkg.ReasonApprovalPending,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(item)
 	waitForEvent(t, eventCh, "ItemAdded", 500*time.Millisecond)
 
-	queue.RemoveWithInfo("test-auto-resolved", session.AutoResolvedByRuleRemoval("auto_resolved_by_rule"))
+	queue.RemoveWithInfo("test-auto-resolved", queuepkg.AutoResolvedByRuleRemoval("auto_resolved_by_rule"))
 
 	event := waitForEvent(t, eventCh, "ItemRemoved", 500*time.Millisecond)
 	removed, ok := event.Event.(*sessionv1.ReviewQueueEvent_ItemRemoved)
@@ -663,8 +667,8 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	// Setup
-	queue := session.NewReviewQueue()
-	statusManager := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusManager := instance.NewInstanceStatusManager()
 	// Use a fast poll interval so event delivery isn't gated on the default 2s cycle.
 	benchPollerCfg := session.DefaultReviewQueuePollerConfig()
 	benchPollerCfg.PollInterval = 10 * time.Millisecond
@@ -709,10 +713,10 @@ func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		queue.Add(&session.ReviewItem{
+		queue.Add(&queuepkg.ReviewItem{
 			SessionID:  fmt.Sprintf("bench-%d", i),
-			Priority:   session.PriorityMedium,
-			Reason:     session.ReasonInputRequired,
+			Priority:   queuepkg.PriorityMedium,
+			Reason:     queuepkg.ReasonInputRequired,
 			DetectedAt: time.Now(),
 		})
 	}
@@ -756,8 +760,8 @@ func newReactiveQueueTestSetup(t *testing.T) (*ReactiveQueueManager, *session.Re
 		t.Fatalf("newReactiveQueueTestSetup: create storage: %v", err)
 	}
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
@@ -774,11 +778,11 @@ func TestOnItemAdded_NotificationUsesStableID(t *testing.T) {
 
 	const sessionTitle = "stelekit"
 	const sessionUUID = "aaaabbbb-1111-2222-3333-ffffffffffff"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: sessionTitle,
 		UUID:  sessionUUID,
 	}
-	poller.SetInstances([]*session.Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -786,11 +790,11 @@ func TestOnItemAdded_NotificationUsesStableID(t *testing.T) {
 
 	// OnItemAdded is the callback fired by the queue when the poller adds an item.
 	// ReviewItem.SessionID == inst.Title (the queue's key), as expected.
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonInputRequired,
-		Priority:    session.PriorityMedium,
+		Reason:      queuepkg.ReasonInputRequired,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now(),
 	}
 	mgr.OnItemAdded(item)
@@ -825,11 +829,11 @@ func TestOnItemAdded_NotificationFallsBackToTitleWhenNoMatch(t *testing.T) {
 	defer cancel()
 	eventCh, _ := bus.Subscribe(ctx)
 
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   "orphan-session",
 		SessionName: "orphan-session",
-		Reason:      session.ReasonIdleTimeout,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonIdleTimeout,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	}
 	mgr.OnItemAdded(item)
@@ -886,8 +890,8 @@ func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, 
 		t.Fatalf("newReactiveQueueTestSetupWithStorage: create storage: %v", err)
 	}
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queuepkg.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
@@ -899,7 +903,7 @@ func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, 
 // gateBusOn is the production wiring in miniature: a delivery gate (flag on or
 // off) installed as mgr's bus publish filter and its Slack/webhook gate, seeded
 // with insts. Hidden-session suppression is the gate's job, not the manager's.
-func gateBusOn(t *testing.T, mgr *ReactiveQueueManager, flagOn bool, insts ...*session.Instance) *deliverygate.Gate {
+func gateBusOn(t *testing.T, mgr *ReactiveQueueManager, flagOn bool, insts ...*instance.Instance) *deliverygate.Gate {
 	t.Helper()
 	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) {
 		return deliverygate.FlagSettings{Global: flagOn}, nil
@@ -922,9 +926,9 @@ func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "auto-create-pr item",
-		Status:       string(session.BacklogStatusInProgress),
+		Status:       string(domain.BacklogStatusInProgress),
 		Priority:     3,
 		AutoCreatePR: true,
 	})
@@ -934,7 +938,7 @@ func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
 
 	const sessionTitle = "widgets-work-session"
 	const sessionUUID = "cccc1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -942,14 +946,14 @@ func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
-	poller.SetInstances([]*session.Instance{inst})
+	inst := &instance.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*instance.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -983,9 +987,9 @@ func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/99"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "manual-pr item",
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 		Priority: 3,
 		// AutoCreatePR intentionally omitted — defaults to false.
 	})
@@ -995,7 +999,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
 
 	const sessionTitle = "manual-work-session"
 	const sessionUUID = "dddd1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1003,14 +1007,14 @@ func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
-	poller.SetInstances([]*session.Instance{inst})
+	inst := &instance.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*instance.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1051,15 +1055,15 @@ func TestMaybeAutoCreatePR_DoesNothing_When_SessionNotBacklogLinked(t *testing.T
 
 	const sessionTitle = "ad-hoc-session"
 	const sessionUUID = "eeee1111-2222-3333-4444-555566667777"
-	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
-	poller.SetInstances([]*session.Instance{inst})
+	inst := &instance.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*instance.Instance{inst})
 	// Deliberately no CreateBacklogItem / CreateItemSession call.
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1076,9 +1080,9 @@ func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/2"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "already-has-pr item",
-		Status:       string(session.BacklogStatusInProgress),
+		Status:       string(domain.BacklogStatusInProgress),
 		Priority:     3,
 		AutoCreatePR: true,
 	})
@@ -1088,7 +1092,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
 
 	const sessionTitle = "already-has-pr-session"
 	const sessionUUID = "ffff1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1096,14 +1100,14 @@ func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID, GitHubPRURL: "https://github.com/acme/widgets/pull/1"}
-	poller.SetInstances([]*session.Instance{inst})
+	inst := &instance.Instance{Title: sessionTitle, UUID: sessionUUID, GitHubPRURL: "https://github.com/acme/widgets/pull/1"}
+	poller.SetInstances([]*instance.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1120,9 +1124,9 @@ func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) 
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/3"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "not-yet-complete item",
-		Status:       string(session.BacklogStatusInProgress),
+		Status:       string(domain.BacklogStatusInProgress),
 		Priority:     3,
 		AutoCreatePR: true,
 	})
@@ -1132,7 +1136,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) 
 
 	const sessionTitle = "not-yet-complete-session"
 	const sessionUUID = "aaaa2222-3333-4444-5555-666677778888"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1140,14 +1144,14 @@ func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) 
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
-	poller.SetInstances([]*session.Instance{inst})
+	inst := &instance.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*instance.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1172,9 +1176,9 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/4"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "reason-changes-while-queued item",
-		Status:       string(session.BacklogStatusInProgress),
+		Status:       string(domain.BacklogStatusInProgress),
 		Priority:     3,
 		AutoCreatePR: true,
 	})
@@ -1184,7 +1188,7 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 
 	const sessionTitle = "reason-changes-while-queued-session"
 	const sessionUUID = "bbbb2222-3333-4444-5555-666677778888"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1192,26 +1196,26 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
-	poller.SetInstances([]*session.Instance{inst})
+	inst := &instance.Instance{Title: sessionTitle, UUID: sessionUUID}
+	poller.SetInstances([]*instance.Instance{inst})
 
 	// Item first enters the queue for an unrelated reason — exists==false,
 	// fires OnItemAdded, but Reason != TaskComplete so no trigger yet.
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonIdle,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonIdle,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
 	// Same session, same queue key, now transitions to TaskComplete while
 	// still present — exists==true, fires OnQueueUpdated, not OnItemAdded.
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1243,9 +1247,9 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "hidden-session backlog item",
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 		Priority: 3,
 	})
 	if err != nil {
@@ -1253,7 +1257,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 	}
 
 	const sessionUUID = "aaaa1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "review",
@@ -1261,22 +1265,22 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:  "review:153f8eac",
 		UUID:   sessionUUID,
 		Hidden: true,
 	}
-	poller.SetInstances([]*session.Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 	gateBusOn(t, mgr, true, inst)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "review:153f8eac",
-		Reason:     session.ReasonTaskComplete,
-		Priority:   session.PriorityLow,
+		Reason:     queuepkg.ReasonTaskComplete,
+		Priority:   queuepkg.PriorityLow,
 		DetectedAt: time.Now(),
 	})
 
@@ -1294,19 +1298,19 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t *testing.T) {
 	tests := []struct {
 		name   string
-		reason session.AttentionReason
+		reason queuepkg.AttentionReason
 	}{
-		{"ReasonIdle", session.ReasonIdle},
-		{"ReasonStale", session.ReasonStale},
+		{"ReasonIdle", queuepkg.ReasonIdle},
+		{"ReasonStale", queuepkg.ReasonStale},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title:    "hidden-session backlog item " + tc.name,
-				Status:   string(session.BacklogStatusInProgress),
+				Status:   string(domain.BacklogStatusInProgress),
 				Priority: 3,
 			})
 			if err != nil {
@@ -1314,7 +1318,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 			}
 
 			const sessionUUID = "aaaa1111-2222-3333-4444-555566667777"
-			if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+			if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: sessionUUID,
 				SessionRole: "review",
@@ -1322,22 +1326,22 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 				t.Fatalf("CreateItemSession: %v", err)
 			}
 
-			inst := &session.Instance{
+			inst := &instance.Instance{
 				Title:  "review:153f8eac",
 				UUID:   sessionUUID,
 				Hidden: true,
 			}
-			poller.SetInstances([]*session.Instance{inst})
+			poller.SetInstances([]*instance.Instance{inst})
 			gateBusOn(t, mgr, true, inst)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queuepkg.ReviewItem{
 				SessionID:  "review:153f8eac",
 				Reason:     tc.reason,
-				Priority:   session.PriorityLow,
+				Priority:   queuepkg.PriorityLow,
 				DetectedAt: time.Now(),
 			})
 
@@ -1360,9 +1364,9 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLinked(t *testing.T) {
 	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "visible-session backlog item",
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 		Priority: 3,
 	})
 	if err != nil {
@@ -1371,7 +1375,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLi
 
 	const sessionTitle = "widgets-work-session"
 	const sessionUUID = "bbbb1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1379,22 +1383,22 @@ func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLi
 		t.Fatalf("CreateItemSession: %v", err)
 	}
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:  sessionTitle,
 		UUID:   sessionUUID,
 		Hidden: false,
 	}
-	poller.SetInstances([]*session.Instance{inst})
+	poller.SetInstances([]*instance.Instance{inst})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1433,19 +1437,19 @@ loop:
 func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorStateOrTestsFailing(t *testing.T) {
 	tests := []struct {
 		name   string
-		reason session.AttentionReason
+		reason queuepkg.AttentionReason
 	}{
-		{"ReasonErrorState", session.ReasonErrorState},
-		{"ReasonTestsFailing", session.ReasonTestsFailing},
+		{"ReasonErrorState", queuepkg.ReasonErrorState},
+		{"ReasonTestsFailing", queuepkg.ReasonTestsFailing},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title:    "hidden-session-with-problem backlog item " + tc.name,
-				Status:   string(session.BacklogStatusInProgress),
+				Status:   string(domain.BacklogStatusInProgress),
 				Priority: 3,
 			})
 			if err != nil {
@@ -1453,7 +1457,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 			}
 
 			const sessionUUID = "cccc9999-2222-3333-4444-555566667777"
-			if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+			if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: sessionUUID,
 				SessionRole: "review",
@@ -1461,22 +1465,22 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 				t.Fatalf("CreateItemSession: %v", err)
 			}
 
-			inst := &session.Instance{
+			inst := &instance.Instance{
 				Title:  "review:hidden-problem",
 				UUID:   sessionUUID,
 				Hidden: true,
 			}
-			poller.SetInstances([]*session.Instance{inst})
+			poller.SetInstances([]*instance.Instance{inst})
 			gateBusOn(t, mgr, true, inst)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queuepkg.ReviewItem{
 				SessionID:  "review:hidden-problem",
 				Reason:     tc.reason,
-				Priority:   session.PriorityMedium,
+				Priority:   queuepkg.PriorityMedium,
 				DetectedAt: time.Now(),
 			})
 
@@ -1507,7 +1511,7 @@ type fakeSlackNotifierWiring struct {
 	gotDepth, gotThreshold              int
 }
 
-func (f *fakeSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+func (f *fakeSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *queuepkg.ReviewItem, dashboardURL string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.notifyReviewQueueItemCalls++
@@ -1555,11 +1559,11 @@ func TestOnItemAdded_InvokesNotifyReviewQueueItem_When_SlackNotifierWired(t *tes
 	fake := &fakeSlackNotifierWiring{}
 	mgr.SetSlackNotifier(fake)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   "sess-1",
 		SessionName: "sess-1",
-		Reason:      session.ReasonTestsFailing,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonTestsFailing,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1583,11 +1587,11 @@ func TestOnItemAdded_SkipsSlackNotifier_When_ReasonIsApprovalPending(t *testing.
 	fake := &fakeSlackNotifierWiring{}
 	mgr.SetSlackNotifier(fake)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   "sess-2",
 		SessionName: "sess-2",
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1626,7 +1630,7 @@ func (f *recordingSlackNotifierWiring) ping(path string) {
 	f.requestPaths = append(f.requestPaths, path)
 }
 
-func (f *recordingSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+func (f *recordingSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *queuepkg.ReviewItem, dashboardURL string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.notifyReviewQueueItemCalls++
@@ -1665,21 +1669,21 @@ func TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWo
 	// mgr.queue usage) — GetStatistics().TotalItems must reflect true queue
 	// depth when the crossing item's own OnItemAdded call reads it.
 	for i := 0; i < threshold-1; i++ {
-		mgr.queue.Add(&session.ReviewItem{
+		mgr.queue.Add(&queuepkg.ReviewItem{
 			SessionID:   fmt.Sprintf("filler-%d", i),
 			SessionName: fmt.Sprintf("filler-%d", i),
-			Reason:      session.ReasonTestsFailing,
-			Priority:    session.PriorityMedium,
+			Reason:      queuepkg.ReasonTestsFailing,
+			Priority:    queuepkg.PriorityMedium,
 			DetectedAt:  time.Now(),
 		})
 	}
 
 	// The crossing item: queue depth becomes exactly `threshold` once added.
-	crossingItem := &session.ReviewItem{
+	crossingItem := &queuepkg.ReviewItem{
 		SessionID:   "crossing-item",
 		SessionName: "crossing-item",
-		Reason:      session.ReasonTestsFailing,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonTestsFailing,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	}
 	mgr.queue.Add(crossingItem)
@@ -1708,8 +1712,8 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			repo := session.NewTestEntRepository(t)
 			storage, err := session.NewStorageWithRepository(repo)
 			require.NoError(t, err)
-			queue := session.NewReviewQueue()
-			statusMgr := session.NewInstanceStatusManager()
+			queue := queuepkg.NewReviewQueue()
+			statusMgr := instance.NewInstanceStatusManager()
 			poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 			bus := events.NewEventBus(32)
 			t.Cleanup(bus.Close)
@@ -1720,9 +1724,9 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			bus.SetPublishFilter(gate.PublishFilter())
 			mgr := NewReactiveQueueManager(queue, poller, bus, statusMgr, storage)
 
-			hidden := &session.Instance{Title: "review:lg08", UUID: "lg08-uuid", Status: session.Active, Hidden: true}
-			poller.SetInstances([]*session.Instance{hidden})
-			gate.SeedFromInstances([]*session.Instance{hidden})
+			hidden := &instance.Instance{Title: "review:lg08", UUID: "lg08-uuid", Status: domain.Active, Hidden: true}
+			poller.SetInstances([]*instance.Instance{hidden})
+			gate.SeedFromInstances([]*instance.Instance{hidden})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			eventCh, _ := bus.Subscribe(ctx)
@@ -1733,15 +1737,15 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 
 			// Layer 2: the determiner downgrades a routine Add for it to Skip.
 			determiner := session.NewDefaultStatusDeterminer(session.DefaultReviewQueuePollerConfig())
-			res := determiner.Determine(hidden, "", session.InstanceStatusInfo{
+			res := determiner.Determine(hidden, "", instance.InstanceStatusInfo{
 				IsControllerActive: true, ClaudeStatus: detection.StatusSuccess,
 			}, detection.NewStatusDetector(), session.DeterminerOptions{})
 			require.Equal(t, session.DetectionActionSkip, res.Action)
 
 			// Layer 3: handed the routine item anyway, only the gate decides.
-			for _, reason := range []session.AttentionReason{session.ReasonTaskComplete, session.ReasonIdle, session.ReasonStale} {
-				mgr.OnItemAdded(&session.ReviewItem{
-					SessionID: "review:lg08", Reason: reason, Priority: session.PriorityLow, DetectedAt: time.Now(),
+			for _, reason := range []queuepkg.AttentionReason{queuepkg.ReasonTaskComplete, queuepkg.ReasonIdle, queuepkg.ReasonStale} {
+				mgr.OnItemAdded(&queuepkg.ReviewItem{
+					SessionID: "review:lg08", Reason: reason, Priority: queuepkg.PriorityLow, DetectedAt: time.Now(),
 				})
 			}
 			// A sentinel published after the items bounds what the bus delivers.
@@ -1773,38 +1777,38 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) {
 	cases := []struct {
 		name     string
-		state    session.PRState
+		state    domain.PRState
 		head     string
 		wantRuns bool
 	}{
-		{"merged PR on an earlier branch lets a new one be created", session.PRStateMerged, "feat-a", true},
-		{"merged PR on this branch does not block either", session.PRStateMerged, "feat-b", true},
-		{"open PR on another branch does not block", session.PRStateOpen, "feat-a", true},
-		{"open PR on this branch short-circuits", session.PRStateOpen, "feat-b", false},
+		{"merged PR on an earlier branch lets a new one be created", domain.PRStateMerged, "feat-a", true},
+		{"merged PR on this branch does not block either", domain.PRStateMerged, "feat-b", true},
+		{"open PR on another branch does not block", domain.PRStateOpen, "feat-a", true},
+		{"open PR on this branch short-circuits", domain.PRStateOpen, "feat-b", false},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 			fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
 			mgr.SetOneShotRunner(fake)
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-				Title: "auto-create item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+				Title: "auto-create item", Status: string(domain.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
 			})
 			require.NoError(t, err)
 			sessionUUID := fmt.Sprintf("dddd1111-2222-3333-4444-55556666777%d", i)
-			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
 			require.NoError(t, err)
 
-			inst := &session.Instance{Title: "multi-pr-session", UUID: sessionUUID, Branch: "feat-b", GitHubOwner: "acme", GitHubRepo: "widgets"}
-			ref, err := session.NewPRRef("", "acme", "widgets", 11)
+			inst := &instance.Instance{Title: "multi-pr-session", UUID: sessionUUID, Branch: "feat-b", GitHubOwner: "acme", GitHubRepo: "widgets"}
+			ref, err := domain.NewPRRef("", "acme", "widgets", 11)
 			require.NoError(t, err)
-			require.NoError(t, inst.AttachPR(ref, session.AttachSourceBranchDiscovery,
-				session.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
-			poller.SetInstances([]*session.Instance{inst})
+			require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery,
+				domain.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
+			poller.SetInstances([]*instance.Instance{inst})
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queuepkg.ReviewItem{
 				SessionID: "multi-pr-session", SessionName: "multi-pr-session",
-				Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now(),
+				Reason: queuepkg.ReasonTaskComplete, Priority: queuepkg.PriorityLow, DetectedAt: time.Now(),
 			})
 
 			if !tc.wantRuns {
@@ -1825,17 +1829,17 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 
 // autoCreatePRSessionWithOpenPR sets up an AutoCreatePR-enabled session whose
 // Branch is empty and which already holds an open PR for branch feature-x.
-func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID string) (*ReactiveQueueManager, *fakeOneShotPRCreator, *session.ReviewItem) {
+func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID string) (*ReactiveQueueManager, *fakeOneShotPRCreator, *queuepkg.ReviewItem) {
 	t.Helper()
 	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/1"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "empty-branch item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "empty-branch item", Status: string(domain.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
 	require.NoError(t, err)
 
 	dir := t.TempDir()
@@ -1844,12 +1848,12 @@ func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID strin
 		require.NoError(t, gerr)
 		require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/feature-x")))
 	}
-	ref, err := session.NewPRRef("", "acme", "widgets", 1)
+	ref, err := domain.NewPRRef("", "acme", "widgets", 1)
 	require.NoError(t, err)
-	inst := &session.Instance{Title: "empty-branch", UUID: sessionUUID, Path: dir, HasPRLinks: true,
-		PRs: []session.PRView{{Ref: ref, State: session.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
-	poller.SetInstances([]*session.Instance{inst})
-	return mgr, fake, &session.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now()}
+	inst := &instance.Instance{Title: "empty-branch", UUID: sessionUUID, Path: dir, HasPRLinks: true,
+		PRs: []domain.PRView{{Ref: ref, State: domain.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
+	poller.SetInstances([]*instance.Instance{inst})
+	return mgr, fake, &queuepkg.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: queuepkg.ReasonTaskComplete, Priority: queuepkg.PriorityLow, DetectedAt: time.Now()}
 }
 
 func TestMaybeAutoCreatePR_ShouldFallBackToCheckedOutBranch_WhenSnapshotBranchEmpty(t *testing.T) {

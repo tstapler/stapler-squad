@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestReconcileSuspendedProcesses_ResumesProcessAndRemovesRecord_When_ProcessStillExists(t *testing.T) {
@@ -113,7 +114,7 @@ func TestReconcileSuspendedProcesses_LeavesProcessSuspended_When_CommittedInstan
 	t.Cleanup(func() { _ = session.ResumeOriginalProcess(pid) })
 
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{{Title: instanceID}},
+		instances: []domain.InstanceData{{Title: instanceID}},
 	}
 
 	if err := ReconcileSuspendedProcesses(context.Background(), suspended, store); err != nil {

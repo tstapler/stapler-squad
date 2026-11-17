@@ -128,6 +128,29 @@ func TestMoveLowerRepointsStayingFiles(t *testing.T) {
 	}
 }
 
+// TestMoveLowerQualifiesAnEmbeddedMovedType: a staying struct that embeds a moved type is re-pointed too, because an
+// embedded field is a definition for the type checker but a reference to the type for the move.
+func TestMoveLowerQualifiesAnEmbeddedMovedType(t *testing.T) {
+	if os.Getenv("TEST_TMPDIR") != "" {
+		t.Skip("needs the host go and git toolchains, unavailable in the Bazel sandbox")
+	}
+	root := t.TempDir()
+	write(t, root, "go.mod", "module example.com/m\n\ngo 1.21\n")
+	write(t, root, "core/core.go", "package core\n\ntype Wrapper struct{ Pipe }\n")
+	write(t, root, "core/pipe.go", "package core\n\ntype Pipe interface{ Send() }\n")
+	run(t, root, "git", "init", "-q")
+	run(t, root, "git", "add", ".")
+	run(t, root, "git", "commit", "-q", "-m", "init")
+	var out strings.Builder
+	if err := RunMove(MoveSpec{Root: root, FromDir: "core", ToDir: "core/pipe", Files: []string{"pipe.go"}, Lower: true}, &out); err != nil {
+		t.Fatalf("RunMove: %v\n%s", err, out.String())
+	}
+	run(t, root, "go", "build", "./...")
+	if body, _ := os.ReadFile(filepath.Join(root, "core/core.go")); !strings.Contains(string(body), "struct{ pipe.Pipe }") {
+		t.Fatalf("embedded moved type not re-pointed:\n%s", body)
+	}
+}
+
 func TestMoveLeavesStayingTestHelpersUnrenamedAndReportsATwin(t *testing.T) {
 	if os.Getenv("TEST_TMPDIR") != "" {
 		t.Skip("needs the host go and git toolchains, unavailable in the Bazel sandbox")

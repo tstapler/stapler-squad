@@ -10,6 +10,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // TestCreateSession_ThreadsEnvVars_WhenSetInRequest verifies that env_vars in the
@@ -23,8 +25,8 @@ func TestCreateSession_ThreadsEnvVars_WhenSetInRequest(t *testing.T) {
 	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire poller so FindLiveInstance works immediately after CreateSession.
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 

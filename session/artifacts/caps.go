@@ -3,6 +3,8 @@ package artifacts
 import (
 	"encoding/json"
 	"unicode/utf8"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Blob size bounds (pre-mortem #9): kinds are capped individually, oldest first,
@@ -21,19 +23,22 @@ const (
 
 	maxPRURLs     = 200
 	maxCommitSHAs = 300
+
+	maxExternalURLs = 50
+	maxCommands     = 30
 )
 
-var recordCaps = map[RecordKind]int{
-	KindPR: maxPRRecords, KindBranch: maxBranchRecords, KindCommit: maxCommitRecords,
-	KindIssue: maxIssueRecords, KindPlanDoc: maxPlanDocRecords, KindCILink: maxCILinkRecords,
-	KindCommand: maxCommandRecords,
+var recordCaps = map[domain.RecordKind]int{
+	domain.KindPR: maxPRRecords, domain.KindBranch: maxBranchRecords, domain.KindCommit: maxCommitRecords,
+	domain.KindIssue: maxIssueRecords, domain.KindPlanDoc: maxPlanDocRecords, domain.KindCILink: maxCILinkRecords,
+	domain.KindCommand: maxCommandRecords,
 }
 
 // enforceCaps bounds the blob in place: result text, per-kind counts, then total
 // size. Records are in discovery order, so the head of each kind is the oldest.
-func (b *SessionArtifactsBlob) enforceCaps() {
+func enforceCaps(b *domain.SessionArtifactsBlob) {
 	for i, r := range b.Records {
-		if c, ok := r.(CommandRecord); ok && len(c.Result) > MaxResultBytes {
+		if c, ok := r.(domain.CommandRecord); ok && len(c.Result) > MaxResultBytes {
 			c.Result = truncateBytes(c.Result, MaxResultBytes)
 			b.Records[i] = c
 		}
@@ -41,11 +46,11 @@ func (b *SessionArtifactsBlob) enforceCaps() {
 	b.PRURLs = capNewest(b.PRURLs, maxPRURLs)
 	b.CommitSHAs = capNewest(b.CommitSHAs, maxCommitSHAs)
 	b.Records = capKinds(b.Records)
-	for b.encodedSize() > MaxBlobBytes && b.dropOldestOfLargestKind() {
+	for encodedSize(b) > MaxBlobBytes && dropOldestOfLargestKind(b) {
 	}
 }
 
-func (b *SessionArtifactsBlob) encodedSize() int {
+func encodedSize(b *domain.SessionArtifactsBlob) int {
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return 0
@@ -54,12 +59,12 @@ func (b *SessionArtifactsBlob) encodedSize() int {
 }
 
 // capKinds keeps the newest records of each kind within its cap, preserving order.
-func capKinds(recs RecordList) RecordList {
-	counts := map[RecordKind]int{}
+func capKinds(recs domain.RecordList) domain.RecordList {
+	counts := map[domain.RecordKind]int{}
 	for _, r := range recs {
 		counts[r.Kind()]++
 	}
-	skip := map[RecordKind]int{}
+	skip := map[domain.RecordKind]int{}
 	for k, n := range counts {
 		if over := n - recordCaps[k]; over > 0 {
 			skip[k] = over
@@ -68,7 +73,7 @@ func capKinds(recs RecordList) RecordList {
 	if len(skip) == 0 {
 		return recs
 	}
-	out := make(RecordList, 0, len(recs))
+	out := make(domain.RecordList, 0, len(recs))
 	for _, r := range recs {
 		if skip[r.Kind()] > 0 {
 			skip[r.Kind()]--
@@ -82,9 +87,9 @@ func capKinds(recs RecordList) RecordList {
 // dropOldestOfLargestKind removes a tenth (at least one) of the oldest records
 // of the kind with the most records, falling back to the URL lists; it reports
 // whether it removed anything.
-func (b *SessionArtifactsBlob) dropOldestOfLargestKind() bool {
-	counts := map[RecordKind]int{}
-	var largest RecordKind
+func dropOldestOfLargestKind(b *domain.SessionArtifactsBlob) bool {
+	counts := map[domain.RecordKind]int{}
+	var largest domain.RecordKind
 	for _, r := range b.Records {
 		counts[r.Kind()]++
 		if counts[r.Kind()] > counts[largest] {
@@ -93,7 +98,7 @@ func (b *SessionArtifactsBlob) dropOldestOfLargestKind() bool {
 	}
 	if counts[largest] > 0 {
 		drop := max(1, counts[largest]/10)
-		out := make(RecordList, 0, len(b.Records))
+		out := make(domain.RecordList, 0, len(b.Records))
 		for _, r := range b.Records {
 			if r.Kind() == largest && drop > 0 {
 				drop--

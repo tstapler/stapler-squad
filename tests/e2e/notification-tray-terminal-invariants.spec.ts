@@ -40,7 +40,7 @@ test.describe('tray leaves the terminal untouched', () => {
       await installWebSocketSendCounter(page);
       await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
       await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
-      const textarea = page.getByRole('textbox', { name: 'Terminal input' });
+      const textarea = page.getByRole('textbox', { name: 'Terminal input' }).last();
       await expect(textarea).toBeAttached({ timeout: 20_000 });
       await expect.poll(async () => (await readTerminalFacts(page)).text, { timeout: 15_000 }).toContain(MARKER);
 

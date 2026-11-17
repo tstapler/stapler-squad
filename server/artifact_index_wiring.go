@@ -4,8 +4,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -24,8 +25,8 @@ func markListenerUp() { listenerUp.once.Do(func() { close(listenerUp.ch) }) }
 
 // indexScannedArtifacts keeps the artifact index current: a finished scan replaces
 // its session's documents, so a new result is searchable without a restart.
-func indexScannedArtifacts(instances func() []*session.Instance, idx *search.ArtifactIndex) func(string, *artifacts.SessionArtifactsBlob) {
-	return func(title string, blob *artifacts.SessionArtifactsBlob) {
+func indexScannedArtifacts(instances func() []*instance.Instance, idx *search.ArtifactIndex) func(string, *domain.SessionArtifactsBlob) {
+	return func(title string, blob *domain.SessionArtifactsBlob) {
 		for _, inst := range instances() {
 			if snap := inst.Snapshot(); snap.Title == title && snap.UUID != "" {
 				idx.Update(snap.UUID, blob)
@@ -37,7 +38,7 @@ func indexScannedArtifacts(instances func() []*session.Instance, idx *search.Art
 
 // buildArtifactIndexInBackground fills idx from the stored blobs the live
 // sessions carry, once ready is closed (or artifactIndexMaxWait passes).
-func buildArtifactIndexInBackground(instances func() []*session.Instance, idx *search.ArtifactIndex, ready <-chan struct{}) {
+func buildArtifactIndexInBackground(instances func() []*instance.Instance, idx *search.ArtifactIndex, ready <-chan struct{}) {
 	go func() {
 		select {
 		case <-ready:

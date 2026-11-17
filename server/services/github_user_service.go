@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -60,11 +62,11 @@ func NewGitHubUserService(cache *githubpkg.UserPRCache, enterpriseHosts []config
 // enterprise host. Returns "" for github.com (StartDeviceAuth falls back to
 // the default/env-var client_id in that case).
 func (s *GitHubUserService) clientIDForHost(host string) string {
-	if githubpkg.IsGitHubCom(host) {
+	if domain.IsGitHubCom(host) {
 		return ""
 	}
 	for _, h := range s.enterpriseHosts {
-		if githubpkg.NormalizeHost(h.Host) == host {
+		if domain.NormalizeHost(h.Host) == host {
 			return h.ClientID
 		}
 	}
@@ -153,7 +155,7 @@ func (s *GitHubUserService) StartGitHubDeviceAuth(
 	ctx context.Context,
 	req *connect.Request[sessionv1.StartGitHubDeviceAuthRequest],
 ) (*connect.Response[sessionv1.StartGitHubDeviceAuthResponse], error) {
-	host := githubpkg.NormalizeHost(req.Msg.Host)
+	host := domain.NormalizeHost(req.Msg.Host)
 	clientID := s.clientIDForHost(host)
 	da, err := githubpkg.StartDeviceAuth(ctx, host, clientID)
 	if err != nil {
@@ -192,7 +194,7 @@ func (s *GitHubUserService) PollGitHubDeviceAuth(
 	s.pendingMu.Unlock()
 	if !ok {
 		// Unknown device_code (e.g. server restarted mid-flow) — fall back to github.com.
-		pend = pendingDeviceAuth{host: githubpkg.NormalizeHost(""), clientID: ""}
+		pend = pendingDeviceAuth{host: domain.NormalizeHost(""), clientID: ""}
 	}
 
 	token, err := githubpkg.PollDeviceAuth(ctx, pend.host, pend.clientID, req.Msg.DeviceCode)
@@ -273,8 +275,8 @@ func (s *GitHubUserService) ListGitHubAccounts(
 	seen := make(map[string]bool, len(s.enterpriseHosts)+len(keychainAccounts))
 	hosts := make([]string, 0, len(s.enterpriseHosts)+len(keychainAccounts))
 	addHost := func(host string) {
-		host = githubpkg.NormalizeHost(host)
-		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+		host = domain.NormalizeHost(host)
+		if host == "" || domain.IsGitHubCom(host) || seen[host] {
 			return
 		}
 		seen[host] = true
@@ -304,7 +306,7 @@ func (s *GitHubUserService) AddGitHubAccountWithToken(
 	if token == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("token is required"))
 	}
-	host := githubpkg.NormalizeHost(req.Msg.Host)
+	host := domain.NormalizeHost(req.Msg.Host)
 
 	login, err := githubpkg.GetCurrentUserLoginWithToken(ctx, host, token)
 	if err != nil {
@@ -344,7 +346,7 @@ func (s *GitHubUserService) ListGitHubCLIHosts(
 
 	connected := make(map[string]bool)
 	for _, a := range s.cache.GetCachedAccounts() {
-		connected[githubpkg.NormalizeHost(a.Host)+"|"+a.Login] = true
+		connected[domain.NormalizeHost(a.Host)+"|"+a.Login] = true
 	}
 
 	hosts := make([]*sessionv1.GitHubCLIHost, 0, len(cliHosts))
@@ -369,7 +371,7 @@ func (s *GitHubUserService) AddGitHubAccountFromCLI(
 	ctx context.Context,
 	req *connect.Request[sessionv1.AddGitHubAccountFromCLIRequest],
 ) (*connect.Response[sessionv1.AddGitHubAccountWithTokenResponse], error) {
-	host := githubpkg.NormalizeHost(req.Msg.Host)
+	host := domain.NormalizeHost(req.Msg.Host)
 
 	token, err := githubpkg.GetCLIToken(ctx, host)
 	if err != nil || token == "" {

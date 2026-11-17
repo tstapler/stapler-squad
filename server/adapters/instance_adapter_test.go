@@ -5,18 +5,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -46,15 +46,15 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    session.ReviveOutcome
+		input    domain.ReviveOutcome
 		expected sessionv1.ReviveOutcome
 	}{
-		{"ResumeLive", session.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
-		{"ResumeRecovered", session.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
-		{"FreshExpected", session.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
-		{"FreshLostHistory", session.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
-		{"Unspecified", session.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
-		{"Unknown value defaults to Unspecified", session.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"ResumeLive", domain.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
+		{"ResumeRecovered", domain.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
+		{"FreshExpected", domain.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
+		{"FreshLostHistory", domain.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
+		{"Unspecified", domain.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"Unknown value defaults to Unspecified", domain.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
 	}
 
 	for _, tc := range tests {
@@ -72,7 +72,7 @@ func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
 // wire-format boundary a swapped reviveOutcomeToProto case would silently
 // corrupt without failing any other test.
 func TestInstanceToProto_ReviveOutcome(t *testing.T) {
-	inst := &session.Instance{LastReviveOutcome: session.ReviveOutcomeFreshLostHistory}
+	inst := &instance.Instance{LastReviveOutcome: domain.ReviveOutcomeFreshLostHistory}
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
@@ -92,7 +92,7 @@ func TestInstanceToProto_NilReturnsNil(t *testing.T) {
 // TestInstanceToProto_RateLimitEnabled verifies that the RateLimitEnabled field
 // is populated correctly from the Instance struct field.
 func TestInstanceToProto_RateLimitEnabled_DefaultTrue(t *testing.T) {
-	inst := &session.Instance{} // nil RateLimitAutoResume → defaults to true
+	inst := &instance.Instance{} // nil RateLimitAutoResume → defaults to true
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
@@ -104,7 +104,7 @@ func TestInstanceToProto_RateLimitEnabled_DefaultTrue(t *testing.T) {
 
 func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	disabled := false
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		RateLimitAutoResume: &disabled,
 	}
 	proto := InstanceToProto(inst, nil)
@@ -122,7 +122,7 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 // way that would panic or read garbage — statusInfo is the zero-value InstanceStatusInfo
 // in that path (see the "set unconditionally" comment on the SubagentCount assignment).
 func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
-	inst := &session.Instance{}
+	inst := &instance.Instance{}
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
@@ -136,7 +136,7 @@ func TestInstanceToProto_SubagentCount_DefaultZero(t *testing.T) {
 // instance's RemoteName proto field stays empty -- a local session's card
 // must never show the Epic 6.2 host badge.
 func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
-	inst := &session.Instance{} // ExecutionTarget nil → defaults to LocalTarget{}
+	inst := &instance.Instance{} // ExecutionTarget nil → defaults to LocalTarget{}
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
@@ -152,8 +152,8 @@ func TestInstanceToProto_RemoteName_EmptyForLocal(t *testing.T) {
 // badge (ssh-remote-workspaces Epic 6.2).
 func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
 	runner := tmux.NewSSHRunner(tmux.SSHTarget{Name: "prod-box", Addr: "prod-box.example.com:22"}, ssh.ClientConfig{})
-	target := session.NewRemoteExecutionTarget(session.RemoteTarget{Name: "prod-box"}, runner)
-	inst := &session.Instance{ExecutionTarget: target}
+	target := instance.NewRemoteExecutionTarget(instance.RemoteTarget{Name: "prod-box"}, runner)
+	inst := &instance.Instance{ExecutionTarget: target}
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
@@ -164,7 +164,7 @@ func TestInstanceToProto_RemoteName_SetForRemote(t *testing.T) {
 }
 
 func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
-	inst := &session.Instance{} // no controller → state is None
+	inst := &instance.Instance{} // no controller → state is None
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
@@ -180,14 +180,14 @@ func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 // ─── U-GO-35: TestInstanceToProto_includesGoalSummaryWhenSet ─────────────────
 
 func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
-	inst := &session.Instance{}
-	goal := &session.SessionGoalData{
+	inst := &instance.Instance{}
+	goal := &instance.SessionGoalData{
 		UUID:        "goal-uuid",
 		SessionUUID: "session-uuid",
 		Goal:        "test goal",
-		Status:      session.GoalStatusWorking,
-		Tasks: []session.TaskNode{
-			{ID: "t1", Title: "Task 1", Status: session.TaskStatusDone},
+		Status:      instance.GoalStatusWorking,
+		Tasks: []instance.TaskNode{
+			{ID: "t1", Title: "Task 1", Status: instance.TaskStatusDone},
 		},
 	}
 	inst.SetSessionGoalCached(goal)
@@ -202,8 +202,8 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 	if proto.Goal.GoalText != "test goal" {
 		t.Errorf("GoalText = %q, want %q", proto.Goal.GoalText, "test goal")
 	}
-	if proto.Goal.Status != session.GoalStatusWorking {
-		t.Errorf("Status = %q, want %q", proto.Goal.Status, session.GoalStatusWorking)
+	if proto.Goal.Status != instance.GoalStatusWorking {
+		t.Errorf("Status = %q, want %q", proto.Goal.Status, instance.GoalStatusWorking)
 	}
 	if proto.Goal.TasksTotal != 1 {
 		t.Errorf("TasksTotal = %d, want 1", proto.Goal.TasksTotal)
@@ -220,20 +220,20 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 // maps to SUB_STATUS_WAITING_FOR_AGENT in the toProtoSubStatusFromInfo switch.
 func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	// Verify the non-Active short-circuit: a non-Active instance always returns UNSPECIFIED.
-	got := toProtoSubStatusFromInfo(session.Paused, 0, session.InstanceStatusInfo{})
+	got := toProtoSubStatusFromInfo(domain.Paused, 0, instance.InstanceStatusInfo{})
 	if got != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 		t.Errorf("toProtoSubStatusFromInfo(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
 	}
 
 	// Verify the StatusWaitingForAgent → SUB_STATUS_WAITING_FOR_AGENT mapping.
-	item := &session.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
+	item := &queue.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
 	gotSubStatus := subStatusFromItem(item)
 	if gotSubStatus != sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT {
 		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_WAITING_FOR_AGENT", gotSubStatus)
 	}
 
 	// An Active instance with no controller (IsControllerActive=false) returns UNSPECIFIED.
-	gotActive := toProtoSubStatusFromInfo(session.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
+	gotActive := toProtoSubStatusFromInfo(domain.Active, 0, instance.InstanceStatusInfo{IsControllerActive: false})
 	if gotActive != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 		t.Logf("toProtoSubStatusFromInfo(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
 	}
@@ -265,13 +265,13 @@ func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
 
 	for _, status := range statuses {
 		t.Run(status.String(), func(t *testing.T) {
-			info := session.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
-			gotInstance := toProtoSubStatusFromInfo(session.Active, 0, info)
+			info := instance.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
+			gotInstance := toProtoSubStatusFromInfo(domain.Active, 0, info)
 			if gotInstance == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
 			}
 
-			item := &session.ReviewItem{ClaudeStatus: status}
+			item := &queue.ReviewItem{ClaudeStatus: status}
 			gotReviewQueue := subStatusFromItem(item)
 			if gotReviewQueue == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 				t.Errorf("subStatusFromItem(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
@@ -290,16 +290,16 @@ func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
 func TestStatusToProto_AllStates(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    session.Status
+		input    domain.Status
 		expected sessionv1.SessionStatus
 	}{
-		{"Active", session.Active, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
-		{"Creating", session.Creating, sessionv1.SessionStatus_SESSION_STATUS_CREATING},
-		{"Paused", session.Paused, sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
-		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
-		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
-		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
-		{"Crashed", session.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
+		{"Active", domain.Active, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
+		{"Creating", domain.Creating, sessionv1.SessionStatus_SESSION_STATUS_CREATING},
+		{"Paused", domain.Paused, sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
+		{"Stopped", domain.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
+		{"Hibernated", domain.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
+		{"Restoring", domain.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+		{"Crashed", domain.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
 	}
 
 	for _, tc := range tests {
@@ -319,7 +319,7 @@ func TestStatusToProto_AllStates(t *testing.T) {
 // Story 1.1.3's Failed arm: session.Failed maps to SESSION_STATUS_FAILED, not
 // UNSPECIFIED.
 func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
-	got, err := StatusToProto(session.Failed)
+	got, err := StatusToProto(domain.Failed)
 	if err != nil {
 		t.Fatalf("StatusToProto(Failed) returned unexpected error: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
 // the next new status value added to the FSM but not to this switch is caught
 // instead of repeating the exact gap this story closes.
 func TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized(t *testing.T) {
-	unrecognized := session.Status(99)
+	unrecognized := domain.Status(99)
 
 	got, err := StatusToProto(unrecognized)
 
@@ -350,15 +350,15 @@ func TestProtoToStatus_AllStates(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    sessionv1.SessionStatus
-		expected session.Status
+		expected domain.Status
 	}{
-		{"Active", sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, session.Active},
-		{"Creating", sessionv1.SessionStatus_SESSION_STATUS_CREATING, session.Creating},
-		{"Paused", sessionv1.SessionStatus_SESSION_STATUS_PAUSED, session.Paused},
-		{"Stopped", sessionv1.SessionStatus_SESSION_STATUS_STOPPED, session.Stopped},
-		{"Hibernated", sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, session.Hibernated},
-		{"Restoring", sessionv1.SessionStatus_SESSION_STATUS_RESTORING, session.Restoring},
-		{"Unknown defaults to Creating", sessionv1.SessionStatus(99), session.Creating},
+		{"Active", sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, domain.Active},
+		{"Creating", sessionv1.SessionStatus_SESSION_STATUS_CREATING, domain.Creating},
+		{"Paused", sessionv1.SessionStatus_SESSION_STATUS_PAUSED, domain.Paused},
+		{"Stopped", sessionv1.SessionStatus_SESSION_STATUS_STOPPED, domain.Stopped},
+		{"Hibernated", sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, domain.Hibernated},
+		{"Restoring", sessionv1.SessionStatus_SESSION_STATUS_RESTORING, domain.Restoring},
+		{"Unknown defaults to Creating", sessionv1.SessionStatus(99), domain.Creating},
 	}
 
 	for _, tc := range tests {
@@ -372,7 +372,7 @@ func TestProtoToStatus_AllStates(t *testing.T) {
 }
 
 func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
-	inst := &session.Instance{}
+	inst := &instance.Instance{}
 	// SessionGoal is nil by default.
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
@@ -384,10 +384,10 @@ func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 }
 
 func TestInstanceToProto_should_SetPinned_FromInstance(t *testing.T) {
-	if InstanceToProto(&session.Instance{}, nil).Pinned {
+	if InstanceToProto(&instance.Instance{}, nil).Pinned {
 		t.Error("zero-value instance must not be pinned")
 	}
-	if !InstanceToProto(&session.Instance{Pinned: true}, nil).Pinned {
+	if !InstanceToProto(&instance.Instance{Pinned: true}, nil).Pinned {
 		t.Error("expected Pinned=true to propagate")
 	}
 }
@@ -397,13 +397,13 @@ func TestInstanceToProto_should_SetPinned_FromInstance(t *testing.T) {
 // Instance.GitHubChecks/GitHubReviewFeedback/GitHubMergeable, matching the existing
 // sibling GitHub-status field GithubCheckConclusion.
 func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		GitHubCheckConclusion: "success",
-		GitHubChecks: []github.CheckItem{
+		GitHubChecks: []domain.GitHubCheckItem{
 			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
 			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
 		},
-		GitHubReviewFeedback: []github.ReviewItem{
+		GitHubReviewFeedback: []domain.GitHubReviewItem{
 			{Author: "alice", State: "APPROVED", Body: "LGTM"},
 			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
 		},
@@ -452,7 +452,7 @@ func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *tes
 // TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil verifies
 // the nil/empty case doesn't panic and produces empty (non-nil-required) slices.
 func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackNil(t *testing.T) {
-	inst := &session.Instance{}
+	inst := &instance.Instance{}
 
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
@@ -476,7 +476,7 @@ func TestInstanceToProto_should_ProduceEmptySlices_When_ChecksAndReviewFeedbackN
 // so the frontend provenance tooltip had no data to read. See ADR-002 tag-provenance data
 // model.
 func TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProvenance(t *testing.T) {
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Tags:              []string{"Bugfix", "Feature"},
 		RuleTagProvenance: map[string]string{"Bugfix": "seed-bugfix", "Feature": "llm"},
 	}
@@ -500,9 +500,9 @@ func TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProve
 // newWorktreeInstance builds an Instance whose worktree points at worktreePath.
 // A path never created on disk models a session whose worktree pause_session
 // removed while keeping the branch.
-func newWorktreeInstance(repoPath, worktreePath string) *session.Instance {
+func newWorktreeInstance(repoPath, worktreePath string) *instance.Instance {
 	const title = "worktree-session"
-	inst := &session.Instance{Title: title, Path: repoPath, Status: session.Active}
+	inst := &instance.Instance{Title: title, Path: repoPath, Status: domain.Active}
 	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(repoPath, worktreePath, title, "test-branch", "abc123"))
 	return inst
 }
@@ -555,9 +555,9 @@ func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
 }
 
 func TestInstanceToProto_PopulatesContextHealthFields(t *testing.T) {
-	li := session.NewLiveInstance(&session.Instance{})
+	li := instance.NewLiveInstance(&instance.Instance{})
 	t.Cleanup(li.Stop)
-	li.SetContextHealth(tokens.ContextHealthVerdict{Level: tokens.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
+	li.SetContextHealth(domain.ContextHealthVerdict{Level: domain.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
 
 	proto := InstanceToProto(li.Instance, nil)
 	require.NotNil(t, proto)
@@ -566,32 +566,32 @@ func TestInstanceToProto_PopulatesContextHealthFields(t *testing.T) {
 }
 
 func TestInstanceToProto_LeavesContextHealthUnspecifiedWhenNeverComputed(t *testing.T) {
-	proto := InstanceToProto(&session.Instance{}, nil)
+	proto := InstanceToProto(&instance.Instance{}, nil)
 	require.NotNil(t, proto)
 	require.Equal(t, sessionv1.ContextHealth_CONTEXT_HEALTH_UNSPECIFIED, proto.ContextHealth)
 	require.Equal(t, "", proto.ContextHealthReason)
 }
 
 func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t *testing.T) {
-	linkedInst := func(program string) *session.Instance {
-		inst := &session.Instance{Title: "t", Program: program}
+	linkedInst := func(program string) *instance.Instance {
+		inst := &instance.Instance{Title: "t", Program: program}
 		inst.SetHistoryInfo("uuid-1", "/projects/p/uuid-1.jsonl")
 		return inst
 	}
 	tests := []struct {
 		name          string
-		inst          *session.Instance
-		blob          *artifacts.SessionArtifactsBlob
+		inst          *instance.Instance
+		blob          *domain.SessionArtifactsBlob
 		wantState     string
 		wantSupported bool
 	}{
-		{"non-claude program has no transcript", &session.Instance{Title: "t", Program: "aider"}, nil, "not_linked", false},
-		{"claude not yet linked", &session.Instance{Title: "t", Program: "claude"}, nil, "not_linked", true},
+		{"non-claude program has no transcript", &instance.Instance{Title: "t", Program: "aider"}, nil, "not_linked", false},
+		{"claude not yet linked", &instance.Instance{Title: "t", Program: "claude"}, nil, "not_linked", true},
 		{"linked awaiting first scan", linkedInst("claude"), nil, "scanning", true},
-		{"scanned with nothing", linkedInst("claude"), &artifacts.SessionArtifactsBlob{ScanState: artifacts.ScanStateNoneFound}, "none_found", true},
-		{"scanned with data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateHasData}, "has_data", true},
-		{"failed keeps data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateFailed}, "failed", true},
-		{"legacy blob without state derives it", linkedInst("claude"), &artifacts.SessionArtifactsBlob{}, "none_found", true},
+		{"scanned with nothing", linkedInst("claude"), &domain.SessionArtifactsBlob{ScanState: domain.ScanStateNoneFound}, "none_found", true},
+		{"scanned with data", linkedInst("claude"), &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: domain.ScanStateHasData}, "has_data", true},
+		{"failed keeps data", linkedInst("claude"), &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: domain.ScanStateFailed}, "failed", true},
+		{"legacy blob without state derives it", linkedInst("claude"), &domain.SessionArtifactsBlob{}, "none_found", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -609,16 +609,16 @@ func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t
 
 func TestArtifactsToProto_ShouldMapEveryRecordKind_AndKeepV1Lists(t *testing.T) {
 	seen := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
-	blob := &artifacts.SessionArtifactsBlob{
+	blob := &domain.SessionArtifactsBlob{
 		PRURLs: []string{"https://github.com/acme/app/pull/12"},
-		Records: artifacts.RecordList{
-			artifacts.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: artifacts.PRSourceCreated, Branch: "feat-b", Base: "feat-a", FirstSeenAt: seen},
-			artifacts.BranchRecord{Name: "feat-b", Action: "created", FirstSeenAt: seen},
-			artifacts.CommitRecord{SHA: "1a2b3c4", Subject: "fix: x", Branch: "feat-b", FirstSeenAt: seen},
-			artifacts.IssueRecord{Owner: "acme", Repo: "app", Number: 45, Relation: "fixes", FirstSeenAt: seen},
-			artifacts.PlanDocRecord{Path: "project_plans/x/plan.md", FirstSeenAt: seen},
-			artifacts.CILinkRecord{URL: "https://github.com/acme/app/actions/runs/123", FirstSeenAt: seen},
-			artifacts.CommandRecord{Type: "git_commit", Command: "git commit", Result: "ok", FirstSeenAt: seen},
+		Records: domain.RecordList{
+			domain.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: domain.PRSourceCreated, Branch: "feat-b", Base: "feat-a", FirstSeenAt: seen},
+			domain.BranchRecord{Name: "feat-b", Action: "created", FirstSeenAt: seen},
+			domain.CommitRecord{SHA: "1a2b3c4", Subject: "fix: x", Branch: "feat-b", FirstSeenAt: seen},
+			domain.IssueRecord{Owner: "acme", Repo: "app", Number: 45, Relation: "fixes", FirstSeenAt: seen},
+			domain.PlanDocRecord{Path: "project_plans/x/plan.md", FirstSeenAt: seen},
+			domain.CILinkRecord{URL: "https://github.com/acme/app/actions/runs/123", FirstSeenAt: seen},
+			domain.CommandRecord{Type: "git_commit", Command: "git commit", Result: "ok", FirstSeenAt: seen},
 		},
 	}
 	got := artifactsToProto(blob, true, func() bool { return true })
@@ -639,7 +639,7 @@ func TestArtifactsToProto_ShouldMapEveryRecordKind_AndKeepV1Lists(t *testing.T) 
 }
 
 func TestArtifactsToProto_ShouldLeaveRecordsEmpty_WhenBlobIsV1(t *testing.T) {
-	got := artifactsToProto(&artifacts.SessionArtifactsBlob{PRURLs: []string{"u"}}, true, func() bool { return true })
+	got := artifactsToProto(&domain.SessionArtifactsBlob{PRURLs: []string{"u"}}, true, func() bool { return true })
 	require.Empty(t, got.GetRecords())
 	require.Equal(t, []string{"u"}, got.GetPrUrls())
 }

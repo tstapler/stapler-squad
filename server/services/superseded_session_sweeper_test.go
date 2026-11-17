@@ -11,6 +11,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // seedItemWithRounds creates an in_progress backlog item plus one work-role
@@ -20,18 +23,18 @@ import (
 // regression shape: rows persisted before a sweeper ever ran.
 func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []time.Time) (itemID string, sessionUUIDs []string) {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "multi-round item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
 	for i, createdAt := range createdAts {
 		uuid := "round-uuid-" + time.Duration(i).String()
-		is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid,
-			SessionRole: session.SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 		require.NoError(t, session.TestBackdateItemSessionCreatedAt(t, storage, is.ID, createdAt))
@@ -162,7 +165,7 @@ func TestSupersededSessionSweeper_should_SkipAlreadyArchived_WithoutPerSessionCh
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-3 * time.Hour), now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
 	archivedUUID, pendingUUID := uuids[0], uuids[1]
 	_, err := storage.GetEntClient().Session.Create().
-		SetTitle("already-archived").SetPath("/tmp/x").SetProgram("claude").SetStatus(int(session.Stopped)).
+		SetTitle("already-archived").SetPath("/tmp/x").SetProgram("claude").SetStatus(int(domain.Stopped)).
 		SetUUID(archivedUUID).SetArchivedAt(now).Save(t.Context())
 	require.NoError(t, err)
 

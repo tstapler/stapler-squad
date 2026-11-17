@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -170,13 +172,13 @@ func cliResponseToPRInfo(resp *ghPRResponse) *PRInfo {
 	approvedCount, changesReqCount := parseReviewCounts(resp.Reviews)
 	checkConclusion, checkStatus := getCheckConclusion(resp.StatusCheckRollup)
 
-	checks := make([]CheckItem, len(resp.StatusCheckRollup))
+	checks := make([]domain.GitHubCheckItem, len(resp.StatusCheckRollup))
 	for i, c := range resp.StatusCheckRollup {
-		checks[i] = CheckItem(c)
+		checks[i] = domain.GitHubCheckItem(c)
 	}
-	reviews := make([]ReviewItem, len(resp.Reviews))
+	reviews := make([]domain.GitHubReviewItem, len(resp.Reviews))
 	for i, r := range resp.Reviews {
-		reviews[i] = ReviewItem{Author: r.Author.Login, State: r.State, Body: r.Body}
+		reviews[i] = domain.GitHubReviewItem{Author: r.Author.Login, State: r.State, Body: r.Body}
 	}
 
 	return &PRInfo{

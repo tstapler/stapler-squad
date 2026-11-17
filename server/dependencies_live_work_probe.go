@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // wireLiveWorkProbe builds the one session.LiveWorkProbe and hands the same instance
@@ -27,7 +28,7 @@ func wireLiveWorkProbe(listener *backlog.BacklogLifecycleListener, backlog *back
 
 func assertLiveWorkProbeShared(listener *backlog.BacklogLifecycleListener, backlog *backlogsvc.BacklogService) error {
 	fromListener, fromService := listener.LiveWorkProbe(), backlog.LiveWorkProbe()
-	var fromGate session.LiveWorkProbe
+	var fromGate instance.LiveWorkProbe
 	if g := backlog.CleanupGate(); g != nil {
 		fromGate = g.Probe()
 	}

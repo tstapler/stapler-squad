@@ -17,8 +17,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -291,7 +291,7 @@ func TestInstanceIndexes_WhenSessionIsWorktree_ExpectKeyedByWorktreePath(t *test
 	t.Cleanup(cleanup)
 
 	const worktreePath = "/repo/../worktrees/instance-indexes-worktree"
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: "instance-indexes-worktree", Path: "/repo", Program: "claude",
 		UUID:           "44444444-4444-4444-4444-444444444444",
 		GitHubPRNumber: 42, GitHubPRURL: "https://github.com/o/r/pull/42", GitHubPRState: "open",
@@ -317,7 +317,7 @@ func TestInstanceIndexes_WhenSessionHasNoWorktree_ExpectKeyedByIdentityPath(t *t
 	svc, cleanup := setupUWSFixture(t)
 	t.Cleanup(cleanup)
 
-	inst := &session.Instance{Title: "no-worktree-instance", Path: "/repo/no-worktree", Program: "claude", UUID: "55555555-5555-5555-5555-555555555555"}
+	inst := &instance.Instance{Title: "no-worktree-instance", Path: "/repo/no-worktree", Program: "claude", UUID: "55555555-5555-5555-5555-555555555555"}
 	require.NoError(t, svc.storage.AddInstance(inst))
 
 	pathIdx, _ := svc.instanceIndexes()

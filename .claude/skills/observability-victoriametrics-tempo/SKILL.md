@@ -68,7 +68,7 @@ regex filter instead of listing the whole namespace.
 | `tmux_control_mode_pending_depth` | Histogram | (none) | same file | FIFO backlog depth at the moment a new command was enqueued. Normal is single digits; a documented prior incident (see `controlModeQueueBackpressureThreshold`'s doc comment, `session/tmux/tmux.go`) saw 107-115. |
 | `http.server.connections_open` | Observable gauge | — | `server/http_connection_metrics.go` | Live HTTP/1.1 connections (excludes hijacked/WebSocket). |
 | `http.server.connections_hijacked_total` | Observable counter | — | same file | Cumulative WebSocket upgrades. |
-| `rpc.server_streams.open` | Observable gauge | `method` | `server/services/watch_stream_metrics.go` | Long-lived stream count per RPC method — graph summed by `method` to see how many streams one browser tab holds open. |
+| `rpc.server_streams.open` | Observable gauge | `method` | `server/services/internal/streammetrics/watch_stream_metrics.go` | Long-lived stream count per RPC method — graph summed by `method` to see how many streams one browser tab holds open. |
 | `cgroup_memory_*` | Gauges/counters (Linux only) | — | `telemetry/cgroup_linux.go` | Live cgroup v2 memory pressure/limits. |
 | `safeexec.sigkill_escalations` | Counter | — | `executor/safeexec` | SIGKILL escalations after a SIGTERM was ignored. |
 

@@ -12,10 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_PublishItemChangedCalled
-// verifies PublishItemChanged converts a session.BacklogItemChange into an
+// verifies PublishItemChanged converts a backlogdto.BacklogItemChange into an
 // events.BacklogItemEventPayload and delivers it through a real EventBus
 // (Story 1.3.2 AC).
 func TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_PublishItemChangedCalled(t *testing.T) {
@@ -29,10 +32,10 @@ func TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_Publis
 	eventCh, _ := bus.Subscribe(ctx)
 
 	publisher := &BacklogItemEventPublisher{Bus: bus}
-	item := &session.BacklogItemData{ID: "item-123", Title: "test item"}
+	item := &backlogdto.BacklogItemData{ID: "item-123", Title: "test item"}
 
-	publisher.PublishItemChanged(item, session.BacklogItemChange{
-		Kind:      session.ChangeStatusTransition,
+	publisher.PublishItemChanged(item, backlogdto.BacklogItemChange{
+		Kind:      backlogdto.ChangeStatusTransition,
 		OldStatus: "review",
 		NewStatus: "done",
 	})
@@ -65,7 +68,7 @@ func TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_Publis
 // panickingChangeKind is a BacklogChangeKind value with no mapping in
 // mapBacklogChangeKind, used to force a panic inside PublishItemChanged's
 // payload-construction step without needing a separate test double type.
-const panickingChangeKind session.BacklogChangeKind = "not-a-real-kind"
+const panickingChangeKind backlogdto.BacklogChangeKind = "not-a-real-kind"
 
 // TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedPanics
 // verifies that a panic during payload construction (an unmapped
@@ -82,7 +85,7 @@ func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedP
 	eventCh, _ := bus.Subscribe(ctx)
 
 	publisher := &BacklogItemEventPublisher{Bus: bus}
-	item := &session.BacklogItemData{ID: "item-456"}
+	item := &backlogdto.BacklogItemData{ID: "item-456"}
 
 	func() {
 		defer func() {
@@ -90,7 +93,7 @@ func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedP
 				t.Fatalf("PublishItemChanged panic reached the caller (recover() failed to contain it): %v", r)
 			}
 		}()
-		publisher.PublishItemChanged(item, session.BacklogItemChange{Kind: panickingChangeKind})
+		publisher.PublishItemChanged(item, backlogdto.BacklogItemChange{Kind: panickingChangeKind})
 	}()
 
 	// No event should have been published — the panic happened before
@@ -109,7 +112,7 @@ func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedP
 // branch.
 func TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called(t *testing.T) {
 	t.Parallel()
-	got := mapBacklogChangeKind(session.ChangeActivityNoteAdded)
+	got := mapBacklogChangeKind(backlogdto.ChangeActivityNoteAdded)
 	if got != events.BacklogChangeActivityNoteAdded {
 		t.Fatalf("expected %s, got %s", events.BacklogChangeActivityNoteAdded, got)
 	}
@@ -121,9 +124,9 @@ func TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called(t *testing
 func TestBacklogItemEventPublisher_should_noOp_When_BusIsNil(t *testing.T) {
 	t.Parallel()
 	publisher := &BacklogItemEventPublisher{}
-	item := &session.BacklogItemData{ID: "item-789"}
+	item := &backlogdto.BacklogItemData{ID: "item-789"}
 
-	publisher.PublishItemChanged(item, session.BacklogItemChange{Kind: session.ChangeStatusTransition})
+	publisher.PublishItemChanged(item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeStatusTransition})
 	// No assertion beyond "did not panic" — reaching this line is the test.
 }
 
@@ -152,10 +155,10 @@ func TestEventBus_should_neverCrossDeliverBacklogEvents_When_TwoIndependentBusIn
 	// Publisher is wired to busA only, mirroring one workspace process's
 	// single per-process eventBus.
 	publisher := &BacklogItemEventPublisher{Bus: busA}
-	item := &session.BacklogItemData{ID: "item-isolation-1"}
+	item := &backlogdto.BacklogItemData{ID: "item-isolation-1"}
 
-	publisher.PublishItemChanged(item, session.BacklogItemChange{
-		Kind:      session.ChangeStatusTransition,
+	publisher.PublishItemChanged(item, backlogdto.BacklogItemChange{
+		Kind:      backlogdto.ChangeStatusTransition,
 		OldStatus: "in_progress",
 		NewStatus: "done",
 	})
@@ -192,13 +195,13 @@ func TestBacklogItemEventPublisher_should_notPanic_When_PublishingWithZeroSubscr
 	defer bus.Close()
 
 	publisher := &BacklogItemEventPublisher{Bus: bus}
-	item := &session.BacklogItemData{ID: "item-no-subscribers"}
+	item := &backlogdto.BacklogItemData{ID: "item-no-subscribers"}
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		publisher.PublishItemChanged(item, session.BacklogItemChange{
-			Kind:      session.ChangeStatusTransition,
+		publisher.PublishItemChanged(item, backlogdto.BacklogItemChange{
+			Kind:      backlogdto.ChangeStatusTransition,
 			OldStatus: "in_progress",
 			NewStatus: "done",
 		})
@@ -253,17 +256,17 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 	defer busB.Unsubscribe(subB)
 
 	// Mutate workspace A only.
-	item, err := repoA.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repoA.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "workspace A item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
 	storageA, err := session.NewStorageWithRepository(repoA)
 	require.NoError(t, err)
-	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
-		ExpectedStatus: string(session.BacklogStatusInProgress),
-	}, session.TriggeredBySystem)
+	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusInProgress),
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Positive confirmation: workspace A's own subscriber sees the event.
@@ -287,17 +290,17 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 	}
 }
 
-// TestEveryBacklogKindMapped fails when a session.BacklogChangeKind const is
+// TestEveryBacklogKindMapped fails when a backlogdto.BacklogChangeKind const is
 // added without a case in mapBacklogChangeKind (which would panic at publish
 // time and drop the event), and checks the wire kind keeps the same string so
 // wake triggers filter on it.
 func TestEveryBacklogKindMapped(t *testing.T) {
 	t.Parallel()
-	f, err := parser.ParseFile(token.NewFileSet(), "../../session/backlog_item_change.go", nil, 0)
+	f, err := parser.ParseFile(token.NewFileSet(), "../../session/domain/backlogdto/backlog_hooks.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var kinds []session.BacklogChangeKind
+	var kinds []backlogdto.BacklogChangeKind
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
 		if !ok || gd.Tok != token.CONST {
@@ -313,18 +316,18 @@ func TestEveryBacklogKindMapped(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				kinds = append(kinds, session.BacklogChangeKind(s))
+				kinds = append(kinds, backlogdto.BacklogChangeKind(s))
 			}
 		}
 	}
 	if len(kinds) == 0 {
-		t.Fatal("found no session.BacklogChangeKind constants; the parse is stale")
+		t.Fatal("found no backlogdto.BacklogChangeKind constants; the parse is stale")
 	}
 	for _, k := range kinds {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Errorf("session.BacklogChangeKind %q is not mapped by mapBacklogChangeKind: %v", k, r)
+					t.Errorf("backlogdto.BacklogChangeKind %q is not mapped by mapBacklogChangeKind: %v", k, r)
 				}
 			}()
 			if got := mapBacklogChangeKind(k); string(got) != string(k) {

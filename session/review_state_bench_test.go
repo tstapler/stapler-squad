@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 	"time"
 )
@@ -11,13 +12,13 @@ import (
 // fast path (ns != 0) allocates nothing. This is the hot path hit on every
 // review-queue poll tick for every active session.
 func TestGetTimeSinceLastMeaningfulOutput_ZeroAllocsHotPath(t *testing.T) {
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "bench-session",
 		UUID:      "bench-uuid",
 		CreatedAt: time.Now().Add(-5 * time.Minute),
 	}
 	// Seed the atomic shadow so the hot path (ns != 0) is taken.
-	inst.lastMeaningfulOutputNs = time.Now().Add(-1 * time.Second).UnixNano()
+	inst.StoreLastMeaningfulOutputNs(time.Now().Add(-1 * time.Second).UnixNano())
 
 	allocs := testing.AllocsPerRun(100, func() {
 		_ = inst.GetTimeSinceLastMeaningfulOutput()
@@ -31,12 +32,12 @@ func TestGetTimeSinceLastMeaningfulOutput_ZeroAllocsHotPath(t *testing.T) {
 
 func BenchmarkGetTimeSinceLastMeaningfulOutput_HotPath(b *testing.B) {
 	b.ReportAllocs()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "bench-session",
 		UUID:      "bench-uuid",
 		CreatedAt: time.Now().Add(-5 * time.Minute),
 	}
-	inst.lastMeaningfulOutputNs = time.Now().Add(-1 * time.Second).UnixNano()
+	inst.StoreLastMeaningfulOutputNs(time.Now().Add(-1 * time.Second).UnixNano())
 
 	b.ResetTimer()
 	for b.Loop() {
@@ -48,7 +49,7 @@ func BenchmarkGetTimeSinceLastMeaningfulOutput_HotPath(b *testing.B) {
 // (locked) path for completeness, so regressions in the lock path are visible too.
 func BenchmarkGetTimeSinceLastMeaningfulOutput_ColdPath(b *testing.B) {
 	b.ReportAllocs()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "bench-session",
 		UUID:      "bench-uuid",
 		CreatedAt: time.Now().Add(-5 * time.Minute),

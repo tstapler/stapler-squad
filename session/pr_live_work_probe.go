@@ -7,19 +7,22 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // LiveSnapshotSource returns the lock-free Snapshot() of a session that is live in
 // this process; ok is false when it is not tracked live. Implemented by the server
 // layer over the live instance registry.
 type LiveSnapshotSource interface {
-	LiveSnapshot(sessionUUID string) (snap *InstanceSnapshot, ok bool)
+	LiveSnapshot(sessionUUID string) (snap *domain.InstanceSnapshot, ok bool)
 }
 
 // InstanceDataReader is the storage read the probe falls back to for a session
 // that is not live. *Storage implements it.
 type InstanceDataReader interface {
-	FindInstanceDataByID(id string) (*InstanceData, error)
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 }
 
 // SnapshotLiveWorkProbe is the real LiveWorkProbe. Contract (owner-approved):
@@ -43,7 +46,7 @@ func NewSnapshotLiveWorkProbe(live LiveSnapshotSource, store InstanceDataReader)
 	return &SnapshotLiveWorkProbe{live: live, store: store, errSince: map[string]time.Time{}}
 }
 
-var _ LiveWorkProbe = (*SnapshotLiveWorkProbe)(nil)
+var _ instance.LiveWorkProbe = (*SnapshotLiveWorkProbe)(nil)
 
 // IsLive implements LiveWorkProbe.
 func (p *SnapshotLiveWorkProbe) IsLive(_ context.Context, sessionUUID string, now time.Time) (bool, error) {
@@ -52,11 +55,11 @@ func (p *SnapshotLiveWorkProbe) IsLive(_ context.Context, sessionUUID string, no
 	}
 	if snap, ok := p.live.LiveSnapshot(sessionUUID); ok && snap != nil {
 		p.clearErrorHold(sessionUUID)
-		live, capped := evaluateLiveWork(LiveWorkFactsFromSnapshot(snap), now, LiveWorkIdleWindow)
+		live, capped := instance.EvaluateLiveWork(LiveWorkFactsFromSnapshot(snap), now, instance.LiveWorkIdleWindow)
 		if capped {
 			liveWorkMetrics.count(LiveWorkResultCapWorking)
 			log.WarningLog().Printf("[LiveWork] session=%s Working with no meaningful change since %s: not live (%s cap)",
-				sessionUUID, snap.LastMeaningfulChangeAt.Format(time.RFC3339), liveWorkWorkingCap)
+				sessionUUID, snap.LastMeaningfulChangeAt.Format(time.RFC3339), instance.LiveWorkWorkingCap)
 		}
 		return live, nil
 	}
@@ -69,7 +72,7 @@ func (p *SnapshotLiveWorkProbe) IsLive(_ context.Context, sessionUUID string, no
 		return p.heldOnError(sessionUUID, now, err), nil
 	}
 	p.clearErrorHold(sessionUUID)
-	return IsLiveWork(liveWorkFactsFromData(data), now, LiveWorkIdleWindow), nil
+	return instance.IsLiveWork(liveWorkFactsFromData(data), now, instance.LiveWorkIdleWindow), nil
 }
 
 // heldOnError applies the error-hold cap: live until liveWorkErrorHoldCap after the
@@ -82,10 +85,10 @@ func (p *SnapshotLiveWorkProbe) heldOnError(sessionUUID string, now time.Time, e
 		p.errSince[sessionUUID] = now
 	}
 	p.mu.Unlock()
-	if now.Sub(since) >= liveWorkErrorHoldCap {
+	if now.Sub(since) >= instance.LiveWorkErrorHoldCap {
 		liveWorkMetrics.count(LiveWorkResultCapError)
 		log.WarningLog().Printf("[LiveWork] session=%s probe failing since %s (%v): not live (%s error-hold cap)",
-			sessionUUID, since.Format(time.RFC3339), err, liveWorkErrorHoldCap)
+			sessionUUID, since.Format(time.RFC3339), err, instance.LiveWorkErrorHoldCap)
 		return false
 	}
 	liveWorkMetrics.count(LiveWorkResultErrorHeld)
@@ -104,33 +107,33 @@ func (p *SnapshotLiveWorkProbe) clearErrorHold(sessionUUID string) {
 // Creating or Active session. TurnEnded means a turn end was recorded and nothing
 // meaningful changed after it: RecordTurnEnd touches LastMeaningfulChangeAt to the
 // same instant, so any later output, approval or status change makes it Working again.
-func LiveWorkFactsFromSnapshot(s *InstanceSnapshot) LiveWorkFacts {
-	unended := s.ArchivedAt == nil && (s.Status == Creating || s.Status == Active)
+func LiveWorkFactsFromSnapshot(s *domain.InstanceSnapshot) instance.LiveWorkFacts {
+	unended := s.ArchivedAt == nil && (s.Status == domain.Creating || s.Status == domain.Active)
 	lmca := s.LastMeaningfulChangeAt
 	if lmca.IsZero() {
 		lmca = s.CreatedAt
 	}
 	turnEnded := !s.TurnEnded.At.IsZero() && !s.LastMeaningfulChangeAt.After(s.TurnEnded.At)
-	return LiveWorkFacts{Unended: unended, Working: unended, TurnEnded: turnEnded, LastMeaningfulChangeAt: lmca}
+	return instance.LiveWorkFacts{Unended: unended, Working: unended, TurnEnded: turnEnded, LastMeaningfulChangeAt: lmca}
 }
 
 // liveWorkFactsFromData is the persisted fallback for a session that is not live
 // in this process: not Working (nothing is running to be mid-turn), so only a
 // recent output keeps it live.
-func liveWorkFactsFromData(d *InstanceData) LiveWorkFacts {
-	unended := d.ArchivedAt == nil && (d.Status == Creating || d.Status == Active)
-	return LiveWorkFacts{Unended: unended, LastMeaningfulChangeAt: d.LastMeaningfulOutput}
+func liveWorkFactsFromData(d *domain.InstanceData) instance.LiveWorkFacts {
+	unended := d.ArchivedAt == nil && (d.Status == domain.Creating || d.Status == domain.Active)
+	return instance.LiveWorkFacts{Unended: unended, LastMeaningfulChangeAt: d.LastMeaningfulOutput}
 }
 
 // CurrentRoundWorkSessions is the live-work subject of an item: its newest work
 // session. (The PR round walk skips sessions with no link or tombstone, which is
 // right for attributing PRs and wrong for liveness: the agent still working has
 // usually not opened a PR yet.)
-func CurrentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummary {
-	var newest *ItemSessionSummary
+func CurrentRoundWorkSessions(sessions []backlogdto.ItemSessionSummary) []backlogdto.ItemSessionSummary {
+	var newest *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		s := sessions[i]
-		if s.Role != SessionRoleWork || s.SessionUUID == "" {
+		if s.Role != instance.SessionRoleWork || s.SessionUUID == "" {
 			continue
 		}
 		if newest == nil || workSessionNewer(s, *newest) {
@@ -140,12 +143,12 @@ func CurrentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummar
 	if newest == nil {
 		return nil
 	}
-	return []ItemSessionSummary{*newest}
+	return []backlogdto.ItemSessionSummary{*newest}
 }
 
 // NewestWorkSession returns the live-work subject of an item as a slice: its newest
 // work session, or none.
-func NewestWorkSession(sessions []ItemSessionSummary) []ItemSessionSummary {
+func NewestWorkSession(sessions []backlogdto.ItemSessionSummary) []backlogdto.ItemSessionSummary {
 	return CurrentRoundWorkSessions(sessions)
 }
 
@@ -154,7 +157,7 @@ func NewestWorkSession(sessions []ItemSessionSummary) []ItemSessionSummary {
 // (RULE L). A nil probe, or a flag-off caller passing nil, skips nothing. A probe
 // error counts as live. skippedLive tells the sweep to leave the item unsettled
 // so it retries every pass.
-func SplitLiveCurrentRound(ctx context.Context, probe LiveWorkProbe, now time.Time, sessions []ItemSessionSummary) (archivable []ItemSessionSummary, skippedLive bool) {
+func SplitLiveCurrentRound(ctx context.Context, probe instance.LiveWorkProbe, now time.Time, sessions []backlogdto.ItemSessionSummary) (archivable []backlogdto.ItemSessionSummary, skippedLive bool) {
 	if probe == nil {
 		return sessions, false
 	}

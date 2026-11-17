@@ -10,17 +10,17 @@ import (
 )
 
 // ListWakeTriggersByStatus forwards to the repository.
-func (s *Storage) ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*WakeTriggerData, error) {
+func (s *Storage) ListWakeTriggersByStatus(ctx context.Context, statuses ...domain.WakeStatus) ([]*domain.WakeTriggerData, error) {
 	return s.Repo.ListWakeTriggersByStatus(ctx, statuses...)
 }
 
 // ListPeerGuidanceRequests forwards to the repository.
-func (s *Storage) ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*GuidanceRequestData, error) {
+func (s *Storage) ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*domain.GuidanceRequestData, error) {
 	return s.Repo.ListPeerGuidanceRequests(ctx, since)
 }
 
 // ListOpenPeerGuidanceRequests forwards to the repository.
-func (s *Storage) ListOpenPeerGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
+func (s *Storage) ListOpenPeerGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error) {
 	return s.Repo.ListOpenPeerGuidanceRequests(ctx)
 }
 

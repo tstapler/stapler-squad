@@ -11,7 +11,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -43,7 +42,7 @@ type GuidanceRequestResult struct {
 
 // guidanceRequestToResult converts the repository's plain data view into the
 // MCP tool result shape.
-func guidanceRequestToResult(d *session.GuidanceRequestData) GuidanceRequestResult {
+func guidanceRequestToResult(d *domain.GuidanceRequestData) GuidanceRequestResult {
 	res := GuidanceRequestResult{
 		MCPResult:    MCPResult{Success: true},
 		ID:           d.ID,
@@ -78,7 +77,7 @@ func guidanceRequestToResult(d *session.GuidanceRequestData) GuidanceRequestResu
 
 // parseGuidanceOptionsArg converts create_guidance_request's raw "options"
 // argument (a JSON array decoded to []any by the MCP framework) into the
-// JSON-encoded string session.CreateGuidanceRequestInput.Options expects.
+// JSON-encoded string domain.CreateGuidanceRequestInput.Options expects.
 func parseGuidanceOptionsArg(args map[string]any) string {
 	rawOpts, ok := args["options"].([]any)
 	if !ok || len(rawOpts) == 0 {
@@ -106,7 +105,7 @@ func parseGuidanceOptionsArg(args map[string]any) string {
 // function-length gate. Returns a non-nil *mcpgo.CallToolResult only on a
 // rejection (ownership failure or bad item_id); otherwise in is mutated
 // in place and the returned result is nil.
-func (h *backlogHandlers) applyGuidanceRequestScopeFields(ctx context.Context, args map[string]any, callerUUID string, in *session.CreateGuidanceRequestInput) *mcpgo.CallToolResult {
+func (h *backlogHandlers) applyGuidanceRequestScopeFields(ctx context.Context, args map[string]any, callerUUID string, in *domain.CreateGuidanceRequestInput) *mcpgo.CallToolResult {
 	switch in.Scope {
 	case domain.RequestScopeBacklogItem:
 		itemID, _ := args["item_id"].(string)
@@ -167,26 +166,26 @@ func (h *backlogHandlers) createGuidanceRequest(ctx context.Context, req mcpgo.C
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid question_type %q", args["question_type"]), "question_type must be one of: yes-no, multiple-choice, short-answer"), nil
 	}
 
-	in := session.CreateGuidanceRequestInput{
+	in := domain.CreateGuidanceRequestInput{
 		Scope:        scope,
 		QuestionText: questionText,
 		QuestionType: questionType,
 		Options:      parseGuidanceOptionsArg(args),
 		// TODO(phase 4): thread through config.GetGuidanceRequestPendingCap()
-		// once it lands; 0 falls back to session.DefaultGuidanceRequestPendingCap.
+		// once it lands; 0 falls back to domain.DefaultGuidanceRequestPendingCap.
 	}
 	if errRes := h.applyGuidanceRequestScopeFields(ctx, args, callerUUID, &in); errRes != nil {
 		return errRes, nil
 	}
 
-	var data *session.GuidanceRequestData
+	var data *domain.GuidanceRequestData
 	if payload.IsZero() {
 		data, err = h.storage.CreateGuidanceRequest(ctx, in)
 	} else {
 		data, err = h.createStructuredGuidanceRequest(ctx, in, payload)
 	}
 	if err != nil {
-		if errors.Is(err, session.ErrPendingCapExceeded) {
+		if errors.Is(err, domain.ErrPendingCapExceeded) {
 			return errResult(ErrPendingCapExceeded, err.Error(),
 				"Too many pending guidance requests for this scope — wait for an existing one to be answered, or re-ask the identical question text to dedup onto it instead of creating a new one."), nil
 		}
@@ -197,7 +196,7 @@ func (h *backlogHandlers) createGuidanceRequest(ctx context.Context, req mcpgo.C
 
 // createStructuredGuidanceRequest stores in with its validated payload through
 // the domain constructor, so the cross-field rules apply to agent questions too.
-func (h *backlogHandlers) createStructuredGuidanceRequest(ctx context.Context, in session.CreateGuidanceRequestInput, payload domain.QuestionPayload) (*session.GuidanceRequestData, error) {
+func (h *backlogHandlers) createStructuredGuidanceRequest(ctx context.Context, in domain.CreateGuidanceRequestInput, payload domain.QuestionPayload) (*domain.GuidanceRequestData, error) {
 	params := domain.GuidanceRequestParams{
 		Scope: in.Scope, SessionUUID: in.SessionUUID, QuestionText: in.QuestionText,
 		QuestionType: in.QuestionType, Options: in.Options, Payload: payload,
@@ -232,7 +231,7 @@ func (h *backlogHandlers) getGuidanceRequest(ctx context.Context, req mcpgo.Call
 	}
 	data, err := h.storage.GetGuidanceRequest(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("guidance request %q not found", idStr), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get guidance request: %v", err), ""), nil

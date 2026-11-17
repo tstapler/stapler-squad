@@ -235,10 +235,10 @@ go_test(
         "//internal/dirwatch",
         "//internal/fsevents",
         "//pkg/events",
-        "//session",
         "//session/git",
         "//session/git/native",
         "//session/gitwiring",
+        "//session/instance",
         "//session/unfinished/gogitstore",
         "//session/unfinished/internal/testrepo",
         "//session/unfinished/repostate",
@@ -269,4 +269,14 @@ go_test(
 exports_files(
     ["gogit_vcs_reader.go"],
     visibility = ["//session/unfinished/gogitstore:__pkg__"],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
 )

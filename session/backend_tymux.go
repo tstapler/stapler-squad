@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/qos"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -45,7 +46,7 @@ func NewTymuxBackend(mgr tymux.TymuxManager) *TymuxBackend {
 func (b *TymuxBackend) TymuxManager() tymux.TymuxManager { return b.mgr }
 
 // WireLaunch records the program tymuxd must spawn; without it tymuxd runs a bare $SHELL (BUG-113).
-func (b *TymuxBackend) WireLaunch(spec LaunchSpec) { b.mgr.SetCommand(spec.Command) }
+func (b *TymuxBackend) WireLaunch(spec instance.LaunchSpec) { b.mgr.SetCommand(spec.Command) }
 
 // AppendLaunchEnv forwards KEY=VALUE env to tymuxd's CreateSessionRequest.Env.
 // tymuxd persists it in plaintext session records, so never pass secrets.
@@ -53,13 +54,13 @@ func (b *TymuxBackend) AppendLaunchEnv(env ...string) { b.mgr.AppendEnv(env...) 
 
 // --- Lifecycle ---
 
-// ensureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
+// EnsureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
 // shared by Start and RestoreWithWorkDir (both need the identical
 // daemon-check-before-delegate contract; see Start's doc comment for why it
 // lives here and not in NewProcessManager). Wrapped in its own span/metric
 // (BUG-108) so a slow Start/RestoreWithWorkDir can be attributed to daemon
 // cold-start specifically, distinct from mgr.Start's own steady-state work.
-func (b *TymuxBackend) ensureDaemonReady() error {
+func (b *TymuxBackend) EnsureDaemonReady() error {
 	ctx, cancel := context.WithTimeout(context.Background(), tymuxColdStartTimeout)
 	defer cancel()
 	return withBackendOperationSpan(ctx, backendLabelTymux, "session.backend.tymux_daemon_ready", func() error {
@@ -81,7 +82,7 @@ func (b *TymuxBackend) ensureDaemonReady() error {
 // regress RPC latency.
 func (b *TymuxBackend) Start(dir string) error {
 	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.start", func() error {
-		if err := b.ensureDaemonReady(); err != nil {
+		if err := b.EnsureDaemonReady(); err != nil {
 			return fmt.Errorf("start: %w", err)
 		}
 		return b.mgr.Start(dir)
@@ -92,7 +93,7 @@ func (b *TymuxBackend) Start(dir string) error {
 // for the restore path.
 func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
 	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.restore", func() error {
-		if err := b.ensureDaemonReady(); err != nil {
+		if err := b.EnsureDaemonReady(); err != nil {
 			return fmt.Errorf("restore: %w", err)
 		}
 		return b.mgr.RestoreWithWorkDir(w)
@@ -125,13 +126,13 @@ func (b *TymuxBackend) DaemonSessionID() string { return b.mgr.PersistedSessionI
 
 // StoredSessionLive implements StoredSessionProber when the manager can probe by id.
 func (b *TymuxBackend) StoredSessionLive() bool {
-	p, ok := b.mgr.(StoredSessionProber)
+	p, ok := b.mgr.(instance.StoredSessionProber)
 	return ok && p.StoredSessionLive()
 }
 
 // ReleaseAdoptedSession implements AdoptedSessionReleaser when the manager can.
 func (b *TymuxBackend) ReleaseAdoptedSession() bool {
-	r, ok := b.mgr.(AdoptedSessionReleaser)
+	r, ok := b.mgr.(instance.AdoptedSessionReleaser)
 	return ok && r.ReleaseAdoptedSession()
 }
 
@@ -176,7 +177,7 @@ func (b *TymuxBackend) CapturePaneContentWithOptions(start, end string) (string,
 // SetPaneActivity makes TymuxBackend a PaneActivityHinter. It no-ops when the manager cannot send
 // the hint (older daemon or client), so callers never branch on backend or version.
 func (b *TymuxBackend) SetPaneActivity(ctx context.Context, activity qos.Activity) error {
-	h, ok := b.mgr.(PaneActivityHinter)
+	h, ok := b.mgr.(instance.PaneActivityHinter)
 	if !ok {
 		return nil
 	}
@@ -200,12 +201,12 @@ func (b *TymuxBackend) CapturePaneRedraw(ctx context.Context) (data string, altS
 // SupportsInStreamResync and ResyncInStream make TymuxBackend an InStreamResyncer when its
 // session manager can splice by sequence number (the real session; test fakes cannot).
 func (b *TymuxBackend) SupportsInStreamResync() bool {
-	r, ok := b.mgr.(InStreamResyncer)
+	r, ok := b.mgr.(instance.InStreamResyncer)
 	return ok && r.SupportsInStreamResync()
 }
 
 func (b *TymuxBackend) ResyncInStream(ctx context.Context) error {
-	r, ok := b.mgr.(InStreamResyncer)
+	r, ok := b.mgr.(instance.InStreamResyncer)
 	if !ok {
 		return errors.New("tymux backend: session manager cannot resync in-stream")
 	}
@@ -297,4 +298,4 @@ func (b *TymuxBackend) BackendRestarted() (restarted bool, since time.Time) {
 }
 
 // compile-time check that *TymuxBackend satisfies ProcessManager.
-var _ ProcessManager = (*TymuxBackend)(nil)
+var _ instance.ProcessManager = (*TymuxBackend)(nil)

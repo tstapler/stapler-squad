@@ -18,6 +18,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -33,7 +36,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -219,7 +224,7 @@ const withCursorSyncTimeout = 300 * time.Millisecond
 // distinguishes a confirmed "not in alt screen" from "never checked", so a
 // genuinely-not-alt-screen session pays one real tmux query here, never
 // repeatedly on every later connect/resize.
-func altScreenActiveForSnapshot(inst *session.Instance) bool {
+func altScreenActiveForSnapshot(inst *instance.Instance) bool {
 	if inst.GetAltScreenActive() {
 		return true
 	}
@@ -319,7 +324,7 @@ func waitForEvent(bus *events.EventBus, timeout time.Duration, match func(*event
 // Start()-completion path publishing that event (server/dependencies.go's
 // boot-time restart and reconcile loops were missing it — now fixed). Falls
 // back to a direct Started() check on timeout or a nil bus.
-func waitForInstanceStartedEvent(bus *events.EventBus, instance *session.Instance, timeout time.Duration) bool {
+func waitForInstanceStartedEvent(bus *events.EventBus, instance *instance.Instance, timeout time.Duration) bool {
 	if waitForEvent(bus, timeout, func(ev *events.Event) bool {
 		return ev.Type == events.EventSessionUpdated && ev.Session != nil &&
 			ev.Session.UUID == instance.UUID && ev.Session.Started()
@@ -409,14 +414,14 @@ type ConnectRPCWebSocketHandler struct {
 // instance, or nil when the attach is read-only (a hidden session). Read-only
 // is decided server-side from the instance snapshot; the client's own
 // read-only flag is never consulted.
-func (h *ConnectRPCWebSocketHandler) writerFor(instance *session.Instance) services.TerminalWriter {
+func (h *ConnectRPCWebSocketHandler) writerFor(instance *instance.Instance) services.TerminalWriter {
 	writer, _ := h.writerDecision(instance)
 	return writer
 }
 
 // writerDecision is writerFor plus whether a nil writer may become non-nil
 // later: true only when a tymux instance is not Active yet (see upgradableWriter).
-func (h *ConnectRPCWebSocketHandler) writerDecision(instance *session.Instance) (writer services.TerminalWriter, upgradable bool) {
+func (h *ConnectRPCWebSocketHandler) writerDecision(instance *instance.Instance) (writer services.TerminalWriter, upgradable bool) {
 	if blocked, recoverable := session.TerminalInputBlock(instance.Snapshot()); blocked {
 		return nil, recoverable
 	}
@@ -619,7 +624,7 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 	// tests pass a fakeSessionController instead, so this assertion fails
 	// (instance stays nil) there rather than panicking -- alt-screen
 	// tracking is simply skipped for those.
-	instance, _ := controller.(*session.Instance)
+	instance, _ := controller.(*instance.Instance)
 
 	// Unconditional on every exit path (including a future panic) — this is
 	// the other half of TryStartPump's CAS (session/streamhub/hub.go): a
@@ -662,7 +667,7 @@ func pumpControlModeOutputIntoHub(hub *streamhub.StreamHub, controller streamhub
 // flushing — mirrors the legacy per-connection coalesce loop's `select
 // {...; default: break coalesce}` pattern so a burst doesn't always pay
 // BatchWindow's full MaxBatchWindow ceiling latency.
-func drainControlModeUpdatesIntoHub(hub *streamhub.StreamHub, updates <-chan []byte, instance *session.Instance) {
+func drainControlModeUpdatesIntoHub(hub *streamhub.StreamHub, updates <-chan []byte, instance *instance.Instance) {
 	for data := range updates {
 		hub.OnRawOutput(data)
 		observeAltScreenIfInstance(instance, data)
@@ -673,7 +678,7 @@ func drainControlModeUpdatesIntoHub(hub *streamhub.StreamHub, updates <-chan []b
 
 // drainAlreadyAvailable consumes every frame immediately ready on updates
 // (non-blocking) into hub, without waiting for more to arrive.
-func drainAlreadyAvailable(hub *streamhub.StreamHub, updates <-chan []byte, instance *session.Instance) {
+func drainAlreadyAvailable(hub *streamhub.StreamHub, updates <-chan []byte, instance *instance.Instance) {
 	for {
 		select {
 		case more, ok := <-updates:
@@ -693,7 +698,7 @@ func drainAlreadyAvailable(hub *streamhub.StreamHub, updates <-chan []byte, inst
 // applies via ObserveAltScreenTransition. instance is nil in tests that pass
 // a fakeSessionController instead of a real *session.Instance to
 // pumpControlModeOutputIntoHub.
-func observeAltScreenIfInstance(instance *session.Instance, data []byte) {
+func observeAltScreenIfInstance(instance *instance.Instance, data []byte) {
 	if instance != nil {
 		instance.ObserveAltScreenTransition(data)
 	}
@@ -766,18 +771,18 @@ var hubCaptureRetryWindow = time.Second
 // waitForPaneContent polls CapturePaneContentRaw until deadline while the instance is still in a
 // transient state (i.e. a concurrent Instance.Resume() may be mid-restore), giving up
 // immediately once the status settles into one that means capture will never succeed.
-func waitForPaneContent(instance *session.Instance, deadline time.Time) (string, error) {
+func waitForPaneContent(instance *instance.Instance, deadline time.Time) (string, error) {
 	content, err := pollWhileResuming(instanceStatus(instance), deadline, services.CapturePollEvery, instance.CapturePaneContentRaw)
 	return string(content), err
 }
 
 // waitForFullStateFrame is waitForPaneContent for a backend's full-state redraw. ok is false when
 // the backend has none (the caller then runs the legacy text path) or the capture never succeeded.
-func waitForFullStateFrame(instance *session.Instance, deadline time.Time) (snapshotFrame, bool) {
+func waitForFullStateFrame(instance *instance.Instance, deadline time.Time) (snapshotFrame, bool) {
 	return pollFullStateFrame(instanceStatus(instance), deadline, services.CapturePollEvery, instance.CapturePaneRedraw)
 }
 
-func pollFullStateFrame(status func() session.Status, deadline time.Time, every time.Duration,
+func pollFullStateFrame(status func() domain.Status, deadline time.Time, every time.Duration,
 	redraw func(context.Context) (streamhub.FullStateSnapshot, bool, error)) (snapshotFrame, bool) {
 	type capture struct {
 		frame snapshotFrame
@@ -796,21 +801,21 @@ func pollFullStateFrame(status func() session.Status, deadline time.Time, every 
 	return c.frame, c.ok
 }
 
-func instanceStatus(instance *session.Instance) func() session.Status {
-	return func() session.Status { return instance.Snapshot().Status }
+func instanceStatus(instance *instance.Instance) func() domain.Status {
+	return func() domain.Status { return instance.Snapshot().Status }
 }
 
 // pollWhileResuming retries capture every interval until deadline while status reports a
 // transient state, giving up as soon as it reports one where capture will never succeed. It
 // always makes at least one attempt, even past deadline.
-func pollWhileResuming[T any](status func() session.Status, deadline time.Time, interval time.Duration, capture func() (T, error)) (T, error) {
+func pollWhileResuming[T any](status func() domain.Status, deadline time.Time, interval time.Duration, capture func() (T, error)) (T, error) {
 	for {
 		content, err := capture()
 		if err == nil {
 			return content, nil
 		}
 		switch status() {
-		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
+		case domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed:
 			return content, err
 		}
 		if time.Now().After(deadline) {
@@ -893,7 +898,7 @@ func (h *ConnectRPCWebSocketHandler) SetExternalSessionSupport(
 //
 // Returns the instance and a boolean indicating if it's an external session.
 // Returns nil, false if the session is not found in any source.
-func (h *ConnectRPCWebSocketHandler) resolveSession(sessionID string) (*session.Instance, bool) {
+func (h *ConnectRPCWebSocketHandler) resolveSession(sessionID string) (*instance.Instance, bool) {
 	// Priority 1: Check ReviewQueuePoller for managed sessions (fresh in-memory state)
 	// CRITICAL: Always check poller first - it has the live in-memory instances with active PTYs
 	// Fallback to storage would call LoadInstances() which RESTARTS all sessions!
@@ -977,7 +982,7 @@ func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, m
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
 	// it is always sent regardless of which code path streamTerminal takes.
-	streamDone := services.TrackOpenStream("StreamTerminal")
+	streamDone := streammetrics.TrackOpenStream("StreamTerminal")
 	err := h.streamTerminal(stream)
 	streamDone()
 	if err != nil {
@@ -1183,7 +1188,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 // capture-pane polling (STAPLER_SQUAD_USE_CONTROL_MODE=false), keeping shells
 // on the same low-latency event-driven pipeline as the main terminal by
 // default instead of falling back to capture-pane polling.
-func (h *ConnectRPCWebSocketHandler) routeShellStream(stream *connectWebSocketStream, instance *session.Instance, sessionID, shellID string) error {
+func (h *ConnectRPCWebSocketHandler) routeShellStream(stream *connectWebSocketStream, instance *instance.Instance, sessionID, shellID string) error {
 	stream.creation.End(false) // creation timing covers the hub path only
 	shellTmuxSessionName, ok := instance.GetShellTmuxSessionName(shellID)
 	if !ok {
@@ -1200,11 +1205,11 @@ func (h *ConnectRPCWebSocketHandler) routeShellStream(stream *connectWebSocketSt
 // controlModeStreamingFor reports whether a main terminal takes the hub/control-mode path.
 // The capture-pane fallback drives a tmux session by name (pipe-pane, send-keys), which a tymux
 // session does not have, so tymux ignores STAPLER_SQUAD_USE_CONTROL_MODE=false.
-func controlModeStreamingFor(controlModeEnv string, managed bool, backend session.ProcessManagerBackend) bool {
+func controlModeStreamingFor(controlModeEnv string, managed bool, backend domain.ProcessManagerBackend) bool {
 	if !managed {
 		return false
 	}
-	return backend == session.BackendTymux || controlModeEnv == "" || controlModeEnv == "true"
+	return backend == domain.BackendTymux || controlModeEnv == "" || controlModeEnv == "true"
 }
 
 // routeMainTerminalStream picks the streaming path for a main-session (non-shell)
@@ -1214,7 +1219,7 @@ func controlModeStreamingFor(controlModeEnv string, managed bool, backend sessio
 // since tmux's PTY belongs to `tmux attach-session`, not the actual process,
 // and only updates its buffer on pane-content change rather than streaming
 // continuously.
-func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebSocketStream, instance *session.Instance, sessionID string) error {
+func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebSocketStream, instance *instance.Instance, sessionID string) error {
 	snap := instance.Snapshot()
 	if controlModeStreamingFor(os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE"), snap.IsManaged, snap.Backend) {
 		// Resolved once per tmux session via StreamOwnershipLock.Resolve and cached
@@ -1241,10 +1246,10 @@ func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebS
 // (restartForRetry re-creates the worktree), and the wrapped error lets
 // sendEndStreamError give the browser a non-retriable code instead of burning
 // the reconnect budget against a directory that isn't coming back.
-func handleTmuxRestoreFailure(instance *session.Instance, restoreErr error) error {
+func handleTmuxRestoreFailure(instance *instance.Instance, restoreErr error) error {
 	if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
 		instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
-		instance.ForceStatus(session.PermanentlyFailed)
+		instance.ForceStatus(domain.PermanentlyFailed)
 	}
 	return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
 }
@@ -1258,7 +1263,7 @@ func handleTmuxRestoreFailure(instance *session.Instance, restoreErr error) erro
 // joining streamViaHub instead of proceeding as an independent legacy owner
 // (which would let this connection resize/capture the pane outside the
 // hub's single-owner pipeline).
-func (h *ConnectRPCWebSocketHandler) resolveControlModeOwnershipOrJoinHub(stream *connectWebSocketStream, instance *session.Instance) (sessionID, tmuxSessionName string, joinedHub bool, err error) {
+func (h *ConnectRPCWebSocketHandler) resolveControlModeOwnershipOrJoinHub(stream *connectWebSocketStream, instance *instance.Instance) (sessionID, tmuxSessionName string, joinedHub bool, err error) {
 	snap := instance.Snapshot()
 	sessionID = snap.Title
 	tmuxPrefix := snap.TmuxPrefix
@@ -1303,7 +1308,7 @@ func parseControlModeHandshake(stream *connectWebSocketStream) (*sessionv1.Curre
 // variant: a stale cached positive (still true after the session died) would
 // otherwise let control mode attach to a dead session and immediately
 // receive %exit.
-func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *session.Instance, sessionID string, streamer services.SessionStreamer) error {
+func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *instance.Instance, sessionID string, streamer services.SessionStreamer) error {
 	handled, err := instance.PrepareRetainedTerminalView(context.Background())
 	if err != nil {
 		return err
@@ -1389,7 +1394,7 @@ func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer services.T
 // than failing immediately: the frontend's loading spinner stays up until the
 // first WS message arrives, so withholding that message turns a misleading
 // "stopped" flash into a visible "still resuming" wait.
-func (h *ConnectRPCWebSocketHandler) captureAndSendInitialSnapshot(stream *connectWebSocketStream, instance *session.Instance, sessionID string) (fullState bool, err error) {
+func (h *ConnectRPCWebSocketHandler) captureAndSendInitialSnapshot(stream *connectWebSocketStream, instance *instance.Instance, sessionID string) (fullState bool, err error) {
 	deadline := time.Now().Add(cmp.Or(h.firstPaintBudget, firstPaintMaxWait))
 	// A full-state redraw is captured fresh on every attach, never via the snapshot cache: the
 	// cache holds text only, and a redraw also carries the modes/title/scroll-region a new
@@ -1437,7 +1442,7 @@ func sendFullStateFrame(stream *connectWebSocketStream, sessionID string, frame 
 // live session, and replaying these in a fresh xterm.js terminal causes
 // garbled output because the positions assume a prior terminal state that no
 // longer exists — colors (SGR) are preserved, only positioning is removed.
-func sendInitialSnapshotContent(stream *connectWebSocketStream, instance *session.Instance, sessionID, initialContent string) error {
+func sendInitialSnapshotContent(stream *connectWebSocketStream, instance *instance.Instance, sessionID, initialContent string) error {
 	fullContent := withCursorSync(ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(initialContent)), instance)
 	terminalData := newTerminalOutputData(sessionID, fullContent, altScreenActiveForSnapshot(instance))
 
@@ -1527,7 +1532,7 @@ func buildInitialScrollbackResponse(sessionID string, sbData []byte, sbStats scr
 // - Native tmux feature (not a hack)
 //
 // See: https://github.com/tmux/tmux/wiki/Control-Mode
-func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSocketStream, instance *session.Instance) error {
+func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSocketStream, instance *instance.Instance) error {
 	stream.creation.End(false) // creation timing covers the hub path only
 	sessionID, tmuxSessionName, joinedHub, err := h.resolveControlModeOwnershipOrJoinHub(stream, instance)
 	if joinedHub {
@@ -1723,7 +1728,7 @@ type controlModeResizeCoalescerParams struct {
 	// writer is nil for a read-only attach; nothing is then resized.
 	writer         services.TerminalWriter
 	stream         *connectWebSocketStream
-	instance       *session.Instance
+	instance       *instance.Instance
 	sessionID      string
 	doneChan       chan struct{}
 	resizeCh       chan resizeReq
@@ -1878,7 +1883,7 @@ func (h *ConnectRPCWebSocketHandler) sendPostResizeSnapshot(p controlModeResizeC
 // closure that captured too many locals to pass as bare parameters.
 type controlModeOutputForwarderParams struct {
 	stream          *connectWebSocketStream
-	instance        *session.Instance
+	instance        *instance.Instance
 	sessionID       string
 	updateChan      <-chan []byte
 	doneChan        chan struct{}
@@ -1980,7 +1985,7 @@ func (h *ConnectRPCWebSocketHandler) forwardOneControlModeFrame(p controlModeOut
 // escape-code parser, re-fetching escapeParser lazily through the pointer if
 // it was nil at goroutine start (the controller may start after the
 // WebSocket connection was established).
-func tapEscapeAnalytics(instance *session.Instance, escapeParser **analytics.EscapeCodeParser, buf []byte) {
+func tapEscapeAnalytics(instance *instance.Instance, escapeParser **analytics.EscapeCodeParser, buf []byte) {
 	if *escapeParser == nil {
 		*escapeParser = instance.GetEscapeParser()
 	}
@@ -2044,7 +2049,7 @@ func signalQuiescence(ch chan<- struct{}) {
 // sendExitContentOnClose sends the session's captured exit content, if any,
 // so the user sees the error instead of a blank terminal when the
 // control-mode subscription channel closes because the session itself exited.
-func sendExitContentOnClose(stream *connectWebSocketStream, instance *session.Instance, sessionID string) {
+func sendExitContentOnClose(stream *connectWebSocketStream, instance *instance.Instance, sessionID string) {
 	exitContent := instance.GetExitContent()
 	if len(exitContent) == 0 {
 		return
@@ -2125,7 +2130,7 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // to serve capture/resize traffic — this confirms a real PTY attached before
 // treating it (and the self-heal decision in ensureHubInstanceStarted that
 // depends on it) as alive.
-func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Instance, sessionID string) (processAlive bool, err error) {
+func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *instance.Instance, sessionID string) (processAlive bool, err error) {
 	return h.ensureHubBackendAliveCtx(context.Background(), instance, sessionID, termlat.Labels{})
 }
 
@@ -2133,7 +2138,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Ins
 // disconnects mid-attach stops waiting on the daemon and frees its attach slot. Each step is
 // timed under labels (attach_prepare, attach_alive_check, attach_restore) so a slow attach_open
 // can be pinned on one of them.
-func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *session.Instance, sessionID string, labels termlat.Labels) (processAlive bool, err error) {
+func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *instance.Instance, sessionID string, labels termlat.Labels) (processAlive bool, err error) {
 	prepareStart := time.Now()
 	handled, prepErr := instance.PrepareRetainedTerminalView(ctx)
 	termlat.Default.Record(termlat.StageAttachPrepare, labels, time.Since(prepareStart))
@@ -2174,7 +2179,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Contex
 // MarkStartedIfTmuxAlive's doc comment for why "proceeding anyway" here
 // previously meant an endless ErrSessionNotStarted retry loop on every
 // capture/resize.
-func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.Instance, sessionID string, processAlive bool) {
+func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *instance.Instance, sessionID string, processAlive bool) {
 	if instance.Started() {
 		return
 	}
@@ -2182,7 +2187,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 	// flight) can still become started and are the only states MarkStartedIfTmuxAlive
 	// heals. Any other status (e.g. PermanentlyFailed with tmux alive) will never
 	// publish a Started event, so waiting just adds startupWaitTimeout to every connect.
-	if status := instance.GetLifecycleStatus(); status != session.Creating && status != session.Active {
+	if status := instance.GetLifecycleStatus(); status != domain.Creating && status != domain.Active {
 		log.Info("[streamViaHub] instance not started and not starting, attaching without waiting", "session", sessionID, "status", status.String())
 		return
 	}
@@ -2209,7 +2214,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 // err is the result of the legacy fallback (nil on success, non-nil if it
 // too failed). done=false means ownership resolved hub-owned as expected —
 // hub is the created/retrieved *StreamHub and err is always nil.
-func (h *ConnectRPCWebSocketHandler) resolveHubOrJoinLegacy(stream *connectWebSocketStream, instance *session.Instance, sessionID, tmuxSessionName string) (hub *streamhub.StreamHub, done bool, err error) {
+func (h *ConnectRPCWebSocketHandler) resolveHubOrJoinLegacy(stream *connectWebSocketStream, instance *instance.Instance, sessionID, tmuxSessionName string) (hub *streamhub.StreamHub, done bool, err error) {
 	hub, hubErr := HubRegistry.GetOrCreate(tmuxSessionName, streamhub.TapName(sessionID), instance)
 	if hubErr == nil {
 		return hub, false, nil
@@ -2263,7 +2268,7 @@ type hubSubscriberAttachment struct {
 	// capability that casts no resize vote and sends no input.
 	writer          services.TerminalWriter
 	stream          *connectWebSocketStream
-	instance        *session.Instance
+	instance        *instance.Instance
 	sessionID       string
 	tmuxSessionName string
 	currentPaneReq  *sessionv1.CurrentPaneRequest
@@ -2334,7 +2339,7 @@ func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.Su
 // no future event to ever clear it. A capture that still fails after a short
 // retry paints blank rather than failing the connection, since live frames
 // would otherwise reconnect-loop on a session whose output works.
-func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSocketStream, hub *streamhub.StreamHub, subscriberID streamhub.SubscriberID, instance *session.Instance, sessionID string) error {
+func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSocketStream, hub *streamhub.StreamHub, subscriberID streamhub.SubscriberID, instance *instance.Instance, sessionID string) error {
 	return hub.FirstPaint(subscriberID, func() error {
 		return h.writeHubInitialSnapshot(stream, instance, sessionID)
 	})
@@ -2342,7 +2347,7 @@ func (h *ConnectRPCWebSocketHandler) sendHubInitialSnapshot(stream *connectWebSo
 
 // writeHubInitialSnapshot captures and writes the first snapshot; sendHubInitialSnapshot runs it
 // inside the hub's FirstPaint ordering.
-func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebSocketStream, instance *session.Instance, sessionID string) error {
+func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebSocketStream, instance *instance.Instance, sessionID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), fullStateCaptureTimeout)
 	defer cancel()
 	if frame, ok := fullStateFrame(ctx, instance); ok {
@@ -2398,7 +2403,7 @@ func (h *ConnectRPCWebSocketHandler) writeHubInitialSnapshot(stream *connectWebS
 // exclusive to the legacy path pending later phases of this plan; this
 // function's job is a correct, working PathHubOwned path behind a
 // default-off flag, not full feature parity yet.
-func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream, instance *session.Instance) error {
+func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream, instance *instance.Instance) error {
 	// connCtx is scoped to this WebSocket connection's lifetime, not a fixed
 	// background timeout — it's threaded into every hub.RequestResize call
 	// below so an upstream disconnect cancels an in-flight resize's
@@ -2505,20 +2510,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	var resizes latestResize
 	// Resizes run on the slow lane, so a keystroke typed after one must be ordered behind the
 	// pane resize (not behind its repaint capture) by the gate.
-	inputGate := newInputOrderGate(func(data []byte) {
-		writer := upWriter.Writer()
-		if writer == nil {
-			return
-		}
-		keystrokeDelivery{
-			instance:    instance,
-			latency:     &stream.latency,
-			bookkeeper:  bookkeeper,
-			logPrefix:   "[streamViaHub]",
-			tmuxSession: tmuxSessionName,
-			tmuxSocket:  snap.TmuxServerSocket,
-		}.deliver(writer, data)
-	})
+	inputGate := newHubInputGate(stream, instance, upWriter, bookkeeper, tmuxSessionName, snap.TmuxServerSocket)
 	runInputReadLoop(inputReadLoopParams{
 		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
@@ -2584,6 +2576,25 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	default:
 		return nil
 	}
+}
+
+// newHubInputGate returns the gate that delivers keystrokes through the hub's
+// current up-writer, dropping them once the writer has been closed.
+func newHubInputGate(stream *connectWebSocketStream, inst *instance.Instance, upWriter *upgradableWriter, bookkeeper *inputBookkeeper, tmuxSessionName, tmuxSocket string) *inputOrderGate {
+	return newInputOrderGate(func(data []byte) {
+		writer := upWriter.Writer()
+		if writer == nil {
+			return
+		}
+		keystrokeDelivery{
+			instance:    inst,
+			latency:     &stream.latency,
+			bookkeeper:  bookkeeper,
+			logPrefix:   "[streamViaHub]",
+			tmuxSession: tmuxSessionName,
+			tmuxSocket:  tmuxSocket,
+		}.deliver(writer, data)
+	})
 }
 
 // parseInputFrameOrStop parses one raw WebSocket message into a TerminalData
@@ -2842,9 +2853,9 @@ func currentResyncOptionsFor(writer services.TerminalWriter) ResyncOptions {
 // instead of duplicated across each of handleCurrentPaneRequest's call sites.
 func currentResyncOptions() ResyncOptions {
 	return ResyncOptions{
-		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(services.TerminalResyncSkipStaleDimensionSlowpathFlagName),
-		UseFastLane:                config.LoadConfig().GetFeatureFlagWithDefault(services.TerminalResyncExecGateFastLaneFlagName, services.FeatureFlagDefault(services.TerminalResyncExecGateFastLaneFlagName)),
-		EchoResyncID:               config.LoadConfig().GetFeatureFlag(services.TerminalResyncCorrelationIDFlagName),
+		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName),
+		UseFastLane:                config.LoadConfig().GetFeatureFlagWithDefault(featureflags.TerminalResyncExecGateFastLaneFlagName, services.FeatureFlagDefault(featureflags.TerminalResyncExecGateFastLaneFlagName)),
+		EchoResyncID:               config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName),
 	}
 }
 
@@ -3268,7 +3279,7 @@ type scrollbackRequestParams struct {
 	// writer is nil for a read-only attach: ForwardScroll types PageUp into the
 	// pane, so it is skipped and the tmux-native scrollback path answers.
 	writer          services.TerminalWriter
-	instance        *session.Instance
+	instance        *instance.Instance
 	subscriberCount int
 	hub             *streamhub.StreamHub // nil on PathLegacyPerConnection
 	startLine       string
@@ -3314,8 +3325,8 @@ func scrollbackResultForRequest(p scrollbackRequestParams) (ScrollbackResult, er
 	// failure into the tmux-native fallback -- a solo PathLegacyPerConnection
 	// session would show a real (mis-scrolled) tmux capture instead of the
 	// "isn't available for this session yet" toast, never a BLOCKED response.
-	if p.writer != nil && config.LoadConfig().GetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName) {
-		if _, gateFailure, _ := session.AppScrollGate(p.instance, p.subscriberCount); gateFailure != session.ScrollGateNoCapability {
+	if p.writer != nil && config.LoadConfig().GetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName) {
+		if _, gateFailure, _ := instance.AppScrollGate(p.instance, p.subscriberCount); gateFailure != instance.ScrollGateNoCapability {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			outcome, blockedReason, content, ferr := p.instance.ForwardScroll(ctx, p.subscriberCount, p.hub)
 			cancel()
@@ -3461,7 +3472,7 @@ func handleCurrentPaneRequestFrame(
 
 // answerCurrentPane answers a mid-stream current-pane request, tagging a NotFound as
 // errSessionGone only once the backend confirms the session is gone (a restarting daemon is not).
-func answerCurrentPane(ctx context.Context, sessionID string, instance *session.Instance, req *sessionv1.CurrentPaneRequest, writer services.TerminalWriter) (*sessionv1.TerminalOutput, error) {
+func answerCurrentPane(ctx context.Context, sessionID string, instance *instance.Instance, req *sessionv1.CurrentPaneRequest, writer services.TerminalWriter) (*sessionv1.TerminalOutput, error) {
 	out, err := handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptionsFor(writer))
 	if definitivelyGone(err, instance.IsBackendProcessAlive) {
 		return nil, wrapSessionGone(err)
@@ -3539,7 +3550,7 @@ func writeCurrentPaneResponse(stream *connectWebSocketStream, sessionID string, 
 
 	envelopeFlags := byte(0)
 	payload := respBytes
-	if config.LoadConfig().GetFeatureFlag(services.TerminalResyncCompressionFlagName) {
+	if config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncCompressionFlagName) {
 		compressed, wasCompressed, compressErr := protocol.CompressEnvelopeIfLarge(respBytes, terminalResyncCompressionThresholdBytes)
 		if compressErr != nil {
 			log.ForSession(sessionID).Warn("failed to compress current pane response, sending uncompressed", "err", compressErr)
@@ -3655,7 +3666,7 @@ type capturePaneTarget struct {
 // directly (never the parent's) and, since it has its own live PTY, is
 // treated like a managed session for capture/resize/redraw purposes even when
 // the parent Instance isn't managed.
-func resolveCapturePaneTarget(instance *session.Instance, snap *session.InstanceSnapshot, shellTmuxSessionName string, writer services.TerminalWriter) capturePaneTarget {
+func resolveCapturePaneTarget(instance *instance.Instance, snap *domain.InstanceSnapshot, shellTmuxSessionName string, writer services.TerminalWriter) capturePaneTarget {
 	isShellStream := shellTmuxSessionName != ""
 
 	var tmuxSessionName string
@@ -3740,7 +3751,7 @@ func forceCapturePaneRedrawNudge(stream *connectWebSocketStream, target panePTY,
 // back to the streamer's cached snapshot on failure) or fetches from the
 // streamer (for an external session) the initial pane content, and sends it
 // to the client as the canonical initial snapshot.
-func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *session.Instance, cpt capturePaneTarget, streamer *session.ExternalTmuxStreamer) error {
+func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *instance.Instance, cpt capturePaneTarget, streamer *session.ExternalTmuxStreamer) error {
 	var initialContent string
 	switch {
 	case cpt.effectiveManaged:
@@ -3791,7 +3802,7 @@ func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName str
 // forwards each full-content update onto a buffered channel (dropping
 // content if the channel is full, to avoid blocking the streamer), and
 // returns that channel plus the consumer key for later RemoveConsumer.
-func registerCapturePaneConsumer(instance *session.Instance, streamer *session.ExternalTmuxStreamer, sessionID string) (outputChan chan string, consumerKey string) {
+func registerCapturePaneConsumer(instance *instance.Instance, streamer *session.ExternalTmuxStreamer, sessionID string) (outputChan chan string, consumerKey string) {
 	outputChan = make(chan string, 100)
 	consumer := func(content string) {
 		instance.UpdateTerminalTimestamps(content, true)
@@ -3811,8 +3822,8 @@ type capturePaneStreamParams struct {
 	// are then dropped and no tmux subprocess is ever started for this attach.
 	writer              services.TerminalWriter
 	stream              *connectWebSocketStream
-	instance            *session.Instance
-	snap                *session.InstanceSnapshot
+	instance            *instance.Instance
+	snap                *domain.InstanceSnapshot
 	cpt                 capturePaneTarget
 	streamer            *session.ExternalTmuxStreamer
 	doneChan            chan struct{}
@@ -4037,7 +4048,7 @@ func handleCapturePaneCurrentPaneRequest(p capturePaneStreamParams, req *session
 // 3. Works identically for managed sessions (prefix "staplersquad_<name>") and external sessions
 //
 // This function polls tmux's pane buffer at regular intervals and sends content deltas to clients.
-func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWebSocketStream, instance *session.Instance, shellTmuxSessionName string) error {
+func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWebSocketStream, instance *instance.Instance, shellTmuxSessionName string) error {
 	// Lock-free snapshot for all direct Instance field reads in this handler.
 	// Method calls (MarkViewed, ResizePTY, etc.) and write paths are left as-is.
 	snap := instance.Snapshot()

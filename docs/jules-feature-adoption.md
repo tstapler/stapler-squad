@@ -10,7 +10,7 @@ ranked by leverage, extending existing services rather than inventing parallel o
 ## Already shipped
 
 - **Plan-before-execute gate.** `BacklogItem.plan_approved` / `plan_artifacts_path`,
-  `TransitionGuard` (`session/backlog.go`), `BacklogService.ApprovePlan`, and the
+  `TransitionGuard` (`session/domain/backlog.go`), `BacklogService.ApprovePlan`, and the
   `GateVerdictBox`/`Approve Plan` UI in `BacklogItemDetail.tsx` already implement
   this end-to-end — a `ready` item can't spawn a session until its plan is approved
   or `skip_planning` is set. Verified via existing Go tests

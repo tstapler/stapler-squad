@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ErrSteerPaneOwnership marks a SteerFailed caused by the pre-write pane
@@ -76,14 +76,14 @@ func (o SteerOutcome) String() string {
 // The nil hooks are production behavior; tests inject fakes and a clock.
 type guardedSteerState struct {
 	guard      SessionNudgeGuard
-	ready      func(*session.Instance) notReadyReason
-	verifyPane func(context.Context, *session.Instance) error
-	write      func(context.Context, *session.Instance, string) error
+	ready      func(*instance.Instance) notReadyReason
+	verifyPane func(context.Context, *instance.Instance) error
+	write      func(context.Context, *instance.Instance, string) error
 }
 
 // instanceReadyForSteer is the single idle gate shared by IsReadyForSteer and
 // SteerInstanceGuarded. Anything that cannot be confirmed idle is not ready.
-func (s *SessionService) instanceReadyForSteer(inst *session.Instance) notReadyReason {
+func (s *SessionService) instanceReadyForSteer(inst *instance.Instance) notReadyReason {
 	if h := s.guardedSteer.ready; h != nil {
 		return h(inst)
 	}
@@ -108,7 +108,7 @@ func (s *SessionService) instanceReadyForSteer(inst *session.Instance) notReadyR
 
 // InstanceReadyForSteer implements PRNudger: true only when the shared idle
 // gate confirms inst is safe to write to.
-func (s *SessionService) InstanceReadyForSteer(inst *session.Instance) bool {
+func (s *SessionService) InstanceReadyForSteer(inst *instance.Instance) bool {
 	return s.instanceReadyForSteer(inst) == notReadyNone
 }
 
@@ -118,7 +118,7 @@ func (s *SessionService) InstanceReadyForSteer(inst *session.Instance) bool {
 // verified unconditionally and immediately before the write because
 // steerInternal does not do it itself (tmux-name collision, ce71ad1a).
 // Not-delivered outcomes other than SteerFailed return a nil error.
-func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session.Instance, sig, msg string) (SteerOutcome, error) {
+func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instance.Instance, sig, msg string) (SteerOutcome, error) {
 	if inst == nil {
 		return SteerNotTracked, nil
 	}
@@ -156,7 +156,7 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 
 	verify := s.guardedSteer.verifyPane
 	if verify == nil {
-		verify = session.VerifyPaneOwnershipBeforeWrite
+		verify = instance.VerifyPaneOwnershipBeforeWrite
 	}
 	if err := verify(ctx, inst); err != nil {
 		release(false)
@@ -168,7 +168,7 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *session
 		write = s.steerInternal
 	}
 	if err := write(ctx, inst, msg); err != nil {
-		if errors.Is(err, session.ErrLeaseBusy) {
+		if errors.Is(err, instance.ErrLeaseBusy) {
 			// Another writer holds the pane: nothing reached it, so no failure
 			// cooldown (same as the not-ready paths above).
 			s.guardedSteer.guard.abandon(id)

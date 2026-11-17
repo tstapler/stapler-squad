@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestDestroy_CallsPiExtensionHealthForgetter_ForPiSession covers the
@@ -13,16 +14,16 @@ import (
 // production) with that session's stable ID, so its tracker entry doesn't
 // leak for the life of the process.
 func TestDestroy_CallsPiExtensionHealthForgetter_ForPiSession(t *testing.T) {
-	t.Cleanup(func() { SetPiExtensionHealthForgetter(nil) })
+	t.Cleanup(func() { instance.SetPiExtensionHealthForgetter(nil) })
 
 	var gotSessionID string
 	var calls int
-	SetPiExtensionHealthForgetter(func(sessionID string) {
+	instance.SetPiExtensionHealthForgetter(func(sessionID string) {
 		calls++
 		gotSessionID = sessionID
 	})
 
-	inst := &Instance{Title: "pi-session", UUID: "sess-pi-1", Program: "pi"}
+	inst := &instance.Instance{Title: "pi-session", UUID: "sess-pi-1", Program: "pi"}
 
 	require.NoError(t, inst.Destroy())
 
@@ -34,12 +35,12 @@ func TestDestroy_CallsPiExtensionHealthForgetter_ForPiSession(t *testing.T) {
 // against calling the forgetter (a no-op, but still a wasted call) on every
 // non-pi session's destroy.
 func TestDestroy_DoesNotCallPiExtensionHealthForgetter_ForNonPiSession(t *testing.T) {
-	t.Cleanup(func() { SetPiExtensionHealthForgetter(nil) })
+	t.Cleanup(func() { instance.SetPiExtensionHealthForgetter(nil) })
 
 	var calls int
-	SetPiExtensionHealthForgetter(func(string) { calls++ })
+	instance.SetPiExtensionHealthForgetter(func(string) { calls++ })
 
-	inst := &Instance{Title: "claude-session", UUID: "sess-claude-1", Program: "claude"}
+	inst := &instance.Instance{Title: "claude-session", UUID: "sess-claude-1", Program: "claude"}
 
 	require.NoError(t, inst.Destroy())
 
@@ -50,10 +51,10 @@ func TestDestroy_DoesNotCallPiExtensionHealthForgetter_ForNonPiSession(t *testin
 // other tests in this package, and any deployment that never calls
 // SetPiExtensionHealthForgetter).
 func TestDestroy_NilForgetter_NoPanic(t *testing.T) {
-	t.Cleanup(func() { SetPiExtensionHealthForgetter(nil) })
-	SetPiExtensionHealthForgetter(nil)
+	t.Cleanup(func() { instance.SetPiExtensionHealthForgetter(nil) })
+	instance.SetPiExtensionHealthForgetter(nil)
 
-	inst := &Instance{Title: "pi-session-2", UUID: "sess-pi-2", Program: "pi"}
+	inst := &instance.Instance{Title: "pi-session-2", UUID: "sess-pi-2", Program: "pi"}
 
 	require.NotPanics(t, func() {
 		require.NoError(t, inst.Destroy())

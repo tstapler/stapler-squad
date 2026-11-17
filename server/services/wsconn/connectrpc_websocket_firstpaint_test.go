@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -61,9 +63,9 @@ const (
 	testText   = "plain text screen"
 )
 
-func firstPaintInstance(t *testing.T, pane *paneFake) *session.Instance {
+func firstPaintInstance(t *testing.T, pane *paneFake) *instance.Instance {
 	t.Helper()
-	return session.NewStartedInstanceForTest(t, "first-paint", session.NewTymuxBackend(pane))
+	return instance.NewStartedInstanceForTest(t, "first-paint", session.NewTymuxBackend(pane))
 }
 
 func readOutput(t *testing.T, conn *websocket.Conn) *sessionv1.TerminalOutput {
@@ -84,7 +86,7 @@ func newFirstPaintHandler() *ConnectRPCWebSocketHandler {
 }
 
 // lastMeaningful is when the instance last recorded meaningful output (zero if never).
-func lastMeaningful(inst *session.Instance) time.Time { return inst.LastMeaningfulOutputTime() }
+func lastMeaningful(inst *instance.Instance) time.Time { return inst.LastMeaningfulOutputTime() }
 
 func TestCaptureAndSendInitialSnapshot_should_SendRedrawVerbatim_AndNotCacheIt(t *testing.T) {
 	stream, conn, cleanup := createTestWebSocketPair(t)
@@ -212,7 +214,7 @@ func TestHandleCurrentPaneRequest_should_SendRedraw_ThroughRealInstance(t *testi
 func TestPollFullStateFrame_should_TryOnce_When_DeadlineAlreadyPassed(t *testing.T) {
 	t.Parallel()
 	var calls int
-	frame, ok := pollFullStateFrame(func() session.Status { return session.Active }, time.Now().Add(-time.Second), time.Millisecond,
+	frame, ok := pollFullStateFrame(func() domain.Status { return domain.Active }, time.Now().Add(-time.Second), time.Millisecond,
 		func(context.Context) (streamhub.FullStateSnapshot, bool, error) {
 			calls++
 			return streamhub.FullStateSnapshot{}, false, errors.New("resuming")
@@ -226,7 +228,7 @@ func TestPollFullStateFrame_should_TryOnce_When_DeadlineAlreadyPassed(t *testing
 func TestPollFullStateFrame_should_RetryWhileResumingThenSucceed(t *testing.T) {
 	t.Parallel()
 	var calls int
-	frame, ok := pollFullStateFrame(func() session.Status { return session.Active }, time.Now().Add(5*time.Second), time.Millisecond,
+	frame, ok := pollFullStateFrame(func() domain.Status { return domain.Active }, time.Now().Add(5*time.Second), time.Millisecond,
 		func(context.Context) (streamhub.FullStateSnapshot, bool, error) {
 			calls++
 			if calls < 3 {
@@ -243,7 +245,7 @@ func TestPollFullStateFrame_should_RetryWhileResumingThenSucceed(t *testing.T) {
 func TestPollFullStateFrame_should_GiveUpImmediately_When_StatusIsTerminal(t *testing.T) {
 	t.Parallel()
 	var calls int
-	_, ok := pollFullStateFrame(func() session.Status { return session.Paused }, time.Now().Add(time.Hour), time.Hour,
+	_, ok := pollFullStateFrame(func() domain.Status { return domain.Paused }, time.Now().Add(time.Hour), time.Hour,
 		func(context.Context) (streamhub.FullStateSnapshot, bool, error) {
 			calls++
 			return streamhub.FullStateSnapshot{}, false, streamhub.ErrSessionNotStarted

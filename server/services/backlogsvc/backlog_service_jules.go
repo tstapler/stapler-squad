@@ -20,7 +20,8 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SetJulesDispatcher wires the Jules dispatch backend used by DispatchToJules.
@@ -72,7 +73,7 @@ func (s *BacklogService) DispatchToJules(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -83,7 +84,7 @@ func (s *BacklogService) DispatchToJules(
 		return nil, classifyJulesDispatchError(dispatchErr)
 	}
 
-	sessionUUID := services.JulesSessionUUIDPrefix + string(sessionName)
+	sessionUUID := domain.JulesSessionUUIDPrefix + string(sessionName)
 	summary, err := s.storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	if err != nil {
 		// The dispatch itself already succeeded (item transitioned, billed
@@ -92,7 +93,7 @@ func (s *BacklogService) DispatchToJules(
 		// with what we know rather than erroring an already-successful call.
 		log.WarningLog().Printf("[DispatchToJules] item=%s session=%s: failed to read back item session: %v", item.ID, sessionName, err)
 		return connect.NewResponse(&sessionv1.DispatchToJulesResponse{
-			ItemSession: &sessionv1.ItemSession{SessionUuid: sessionUUID, SessionRole: string(session.SessionRoleJulesWork)},
+			ItemSession: &sessionv1.ItemSession{SessionUuid: sessionUUID, SessionRole: string(instance.SessionRoleJulesWork)},
 		}), nil
 	}
 
@@ -121,7 +122,7 @@ func classifyJulesDispatchError(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s: %w", julesUnconfiguredMessage, err))
 	case errors.Is(err, jules.ErrJulesSourceNotRegistered),
 		errors.Is(err, services.ErrJulesDispatchInFlight),
-		errors.Is(err, session.ErrUnresolvedBlockers):
+		errors.Is(err, domain.ErrUnresolvedBlockers):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, jules.ErrJulesRateLimited), errors.Is(err, jules.ErrJulesTransient):
 		return connect.NewError(connect.CodeUnavailable, err)

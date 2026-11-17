@@ -12,6 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -58,8 +61,8 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_RetryA
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -91,8 +94,8 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_Sessio
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -128,8 +131,8 @@ func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPer
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -159,7 +162,7 @@ func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPer
 	// (see pipelineEventuallyTimeout's doc comment in
 	// session_creation_pipeline_test.go for the same pattern/root cause).
 	wait.RequireEventually(t, func() bool {
-		return session.Status(inst.GetStatus()) == session.Active
+		return domain.Status(inst.GetStatus()) == domain.Active
 	}, 10*time.Second, 10*time.Millisecond, "session should reach Active before the test forces PermanentlyFailed")
 	// Simulate a session that has exhausted its automated retries and is
 	// sitting in the terminal give-up state RetryNow must be able to revive.

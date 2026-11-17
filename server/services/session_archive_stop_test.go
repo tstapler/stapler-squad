@@ -12,6 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -36,7 +39,7 @@ func TestArchiveSession_SetsStatusStopped(t *testing.T) {
 
 	snap := inst.Snapshot()
 	assert.NotNil(t, snap.ArchivedAt, "expected ArchivedAt to be set")
-	assert.Equal(t, session.Stopped, snap.Status, "expected Status to transition to Stopped when archiving")
+	assert.Equal(t, domain.Stopped, snap.Status, "expected Status to transition to Stopped when archiving")
 }
 
 // waitForSessionArchivedEvent blocks until an EventSessionArchived with the given session
@@ -90,20 +93,20 @@ func TestArchiveSession_PublishesSessionArchivedEvent(t *testing.T) {
 // into fix.poller, returning the loaded (storage-backed) *session.Instance — the
 // add+load+find+addInstanceToPoller boilerplate shared by the ArchiveSessionByUUID tests
 // below, which all need a live, storage-backed instance to archive.
-func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title string) *session.Instance {
+func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title string) *instance.Instance {
 	t.Helper()
-	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+	require.NoError(t, fix.storage.AddInstance(&instance.Instance{
 		Title:     title,
 		UUID:      uuid,
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))
 	loaded, err := fix.storage.LoadInstances()
 	require.NoError(t, err)
-	var liveInst *session.Instance
+	var liveInst *instance.Instance
 	for _, li := range loaded {
 		if li.Title == title {
 			liveInst = li
@@ -128,7 +131,7 @@ func TestArchiveSessionByUUID_SetsStatusStopped(t *testing.T) {
 
 	snap := liveInst.Snapshot()
 	assert.NotNil(t, snap.ArchivedAt, "expected ArchivedAt to be set")
-	assert.Equal(t, session.Stopped, snap.Status, "expected Status to transition to Stopped when archiving by UUID")
+	assert.Equal(t, domain.Stopped, snap.Status, "expected Status to transition to Stopped when archiving by UUID")
 }
 
 // TestArchiveSessionByUUID_PublishesSessionArchivedEvent verifies ArchiveSessionByUUID
@@ -166,11 +169,11 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "not-in-poller",
 		UUID:      "test-uuid-not-in-poller",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -189,7 +192,7 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 	data, err := fix.storage.FindInstanceDataByID("test-uuid-not-in-poller")
 	require.NoError(t, err)
 	assert.NotNil(t, data.ArchivedAt, "expected ArchivedAt to be set via the storage fallback")
-	assert.Equal(t, session.Stopped, data.Status, "expected Status to transition to Stopped via the storage fallback")
+	assert.Equal(t, domain.Stopped, data.Status, "expected Status to transition to Stopped via the storage fallback")
 
 	// Confirms EventSessionArchived publishes on this storage-fallback branch specifically,
 	// not just the live-instance branch TestArchiveSessionByUUID_PublishesSessionArchivedEvent covers.
@@ -204,8 +207,8 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 func TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageIsNil(t *testing.T) {
 	t.Parallel()
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 
 	// Construct SessionService directly (not via NewSessionService) so this test only

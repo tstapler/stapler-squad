@@ -5,10 +5,10 @@ load("@rules_go//go:def.bzl", "GoArchive", "go_context")
 def _impl(ctx):
     go = go_context(ctx)
     weave = ctx.attr.mode == "weave"
-    out = ctx.actions.declare_file(ctx.label.name + ("" if weave else ".tar"))
+    out = ctx.actions.declare_file(ctx.label.name + {"weave": "", "modcache": ".tar", "otelc": ".bin"}[ctx.attr.mode])
     closure = depset(transitive = [x[GoArchive].transitive for x in ctx.attr.libs]).to_list()
     srcs = [f for d in closure if d.importpath.startswith("github.com/tstapler/stapler-squad") for f in list(d.srcs) + list(d._embedsrcs) if f.is_source]
-    groups = [("--overlay", ctx.files.overlay), ("--src", srcs), ("--gen", ctx.files.gen), ("--ent", ctx.files.ent), ("--web", ctx.files.web), ("--stage", ctx.files.stage), ("--tag", ctx.attr.go_tags), ("--modcache", ctx.files.modcache), ("--status", [ctx.info_file] if weave else []), ("--target", [go.mode.goos + "/" + go.mode.goarch] if weave else [])]
+    groups = [("--overlay", ctx.files.overlay), ("--src", srcs), ("--gen", ctx.files.gen), ("--ent", ctx.files.ent), ("--web", ctx.files.web), ("--stage", ctx.files.stage), ("--tag", ctx.attr.go_tags), ("--modcache", ctx.files.modcache), ("--otelc", ctx.files.otelc), ("--status", [ctx.info_file] if weave else []), ("--target", [go.mode.goos + "/" + go.mode.goarch] if weave else [])]
     args = ctx.actions.args().use_param_file("@%s", use_always = True).set_param_file_format("multiline")
     args.add_all([ctx.attr.mode, go.sdk.go, out])
     files = []
@@ -18,8 +18,8 @@ def _impl(ctx):
     sdk = depset([go.sdk.go, go.sdk.root_file] + files, transitive = [go.sdk.libs, go.sdk.srcs, go.sdk.tools, go.sdk.headers])
 
     # tag-reason: modcache fetch needs the network, go.sum-verified; the weave is sandboxed and remote-cacheable; no per-issue tracker yet, placeholder (#1423)
-    reqs = {"no-remote-exec": "1"} if weave else {"requires-network": "1"}
-    ctx.actions.run(executable = ctx.file.script, arguments = [args], outputs = [out], inputs = sdk, execution_requirements = reqs, mnemonic = "OtelWeaveHermetic" if weave else "OtelModcache")
+    reqs = {"requires-network": "1"} if ctx.attr.mode == "modcache" else {"no-remote-exec": "1"}
+    ctx.actions.run(executable = ctx.file.script, arguments = [args], outputs = [out], inputs = sdk, execution_requirements = reqs, mnemonic = {"weave": "OtelWeaveHermetic", "modcache": "OtelModcache", "otelc": "OtelcBuild"}[ctx.attr.mode])
     return DefaultInfo(files = depset([out]), executable = out)  # executable only satisfies the rule type; the modcache tar is never run
 
 otel_weave_hermetic = rule(
@@ -29,8 +29,13 @@ otel_weave_hermetic = rule(
         "gen": attr.label_list(allow_files = True),
         "go_tags": attr.string_list(),
         "libs": attr.label_list(providers = [GoArchive]),
-        "mode": attr.string(default = "weave", values = ["weave", "modcache"]),
-        "modcache": attr.label(allow_single_file = True),
+        "mode": attr.string(default = "weave", values = ["weave", "modcache", "otelc"]),
+        # Platform-independent, so also pinned to the exec configuration: one network download shared by every weave
+        # instead of one per target configuration (linux plus each windows arch).
+        "modcache": attr.label(allow_single_file = True, cfg = "exec"),
+        # The otelc toolexec binary, built once in the exec configuration so every weave (linux and both
+        # windows arches) shares it instead of recompiling otelc and its dependencies from a cold GOCACHE.
+        "otelc": attr.label(allow_single_file = True, cfg = "exec"),
         "overlay": attr.label(default = "//tools/bzl/otel_overlay:overlay", allow_files = True),
         "script": attr.label(allow_single_file = True, default = "//tools/bzl:otel_weave_hermetic.sh"),
         "stage": attr.label_list(allow_files = True),

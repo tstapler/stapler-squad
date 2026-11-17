@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"sync"
 )
 
@@ -24,7 +25,7 @@ type BacklogController struct {
 	keyFunc  func() ([]byte, error)
 
 	// workflowEngine, when set, is handed to every SyncLoop Enable creates.
-	workflowEngine WorkflowEngine
+	workflowEngine domain.WorkflowEngine
 
 	// syncLoop is the currently running sync loop; nil when disabled.
 	syncLoop   *SyncLoop
@@ -49,7 +50,7 @@ func NewBacklogController(
 
 // SetWorkflowEngine sets the engine given to SyncLoops created by later Enable
 // calls; call it before Enable. nil keeps the SyncLoop default.
-func (c *BacklogController) SetWorkflowEngine(engine WorkflowEngine) {
+func (c *BacklogController) SetWorkflowEngine(engine domain.WorkflowEngine) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.workflowEngine = engine
@@ -57,7 +58,7 @@ func (c *BacklogController) SetWorkflowEngine(engine WorkflowEngine) {
 
 // SyncLoopWorkflowEngine returns the engine of the running SyncLoop (nil when
 // the feature is disabled). Exposed for the production-wiring test.
-func (c *BacklogController) SyncLoopWorkflowEngine() WorkflowEngine {
+func (c *BacklogController) SyncLoopWorkflowEngine() domain.WorkflowEngine {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.syncLoop == nil {

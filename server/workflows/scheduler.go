@@ -8,6 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
@@ -57,7 +61,7 @@ type triggerRateLimiterGate interface {
 // Scheduler manages cron-based workflow execution.
 type Scheduler struct {
 	c          *cron.Cron
-	repo       session.WorkflowRepository
+	repo       stagecfg.WorkflowRepository
 	sessionSvc SessionServiceInterface
 	eventBus   *events.EventBus
 	mu         sync.Mutex
@@ -82,7 +86,7 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a new WorkflowScheduler.
-func NewScheduler(repo session.WorkflowRepository, sessionSvc SessionServiceInterface, eventBus *events.EventBus) *Scheduler {
+func NewScheduler(repo stagecfg.WorkflowRepository, sessionSvc SessionServiceInterface, eventBus *events.EventBus) *Scheduler {
 	return &Scheduler{
 		c: cron.New(
 			cron.WithParser(cron.NewParser(
@@ -337,14 +341,14 @@ func deriveWorkflowSessionTitle(wf *ent.Workflow, arg string) string {
 	if trimmed == "" {
 		return defaultWorkflowSessionTitle(wf)
 	}
-	ref, err := session.ParseGitHubURLWithHosts(trimmed, enterpriseHostnames(config.LoadConfig().GetGitHubEnterpriseHosts()))
+	ref, err := instance.ParseGitHubURLWithHosts(trimmed, enterpriseHostnames(config.LoadConfig().GetGitHubEnterpriseHosts()))
 	if err != nil {
 		return defaultWorkflowSessionTitle(wf)
 	}
 	switch ref.Type {
-	case session.GitHubRefTypePR:
+	case instance.GitHubRefTypePR:
 		return fmt.Sprintf("%s/%s#%d", ref.Owner, ref.Repo, ref.PRNumber)
-	case session.GitHubRefTypeBranch:
+	case instance.GitHubRefTypeBranch:
 		return fmt.Sprintf("%s/%s:%s", ref.Owner, ref.Repo, ref.Branch)
 	default:
 		return fmt.Sprintf("%s/%s", ref.Owner, ref.Repo)
@@ -492,7 +496,7 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p firePar
 		}
 	}
 
-	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
+	sessionType := sessionTypeToProto(domain.SessionType(wf.SessionType))
 
 	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID and
 	// append it to the program via the shared helper (session.ResolveExecutorProgram),
@@ -554,7 +558,7 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p firePar
 	// propagated — it must never turn an otherwise-successful fire into an error.
 	if s.repo != nil {
 		now := time.Now()
-		if _, updErr := s.repo.Update(ctx, wf.ID, session.WorkflowUpdateInput{LastFiredAt: &now}); updErr != nil {
+		if _, updErr := s.repo.Update(ctx, wf.ID, stagecfg.WorkflowUpdateInput{LastFiredAt: &now}); updErr != nil {
 			log.Warn("[WorkflowScheduler] failed to update last_fired_at", "slug", wf.Slug, "err", updErr)
 		}
 	}
@@ -687,17 +691,17 @@ func ValidateCronExpression(expr string) error {
 }
 
 // sessionTypeToProto converts a session.SessionType string to the proto enum.
-func sessionTypeToProto(st session.SessionType) sessionv1.SessionType {
+func sessionTypeToProto(st domain.SessionType) sessionv1.SessionType {
 	switch st {
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
-	case session.SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT
-	case session.SessionTypeOneOff:
+	case domain.SessionTypeOneOff:
 		return sessionv1.SessionType_SESSION_TYPE_ONE_OFF
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED

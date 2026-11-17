@@ -13,6 +13,7 @@ import (
 
 // The ports exist so server/services can depend on server/wakes (or a func
 // type of its own) without a cycle; the reverse import must never appear.
+// It also stays off package session (E3: wake DTOs live in session/domain).
 func TestPackageDirection_should_NotImportServicesOrMCP(t *testing.T) {
 	t.Parallel()
 	testenv.SkipGoListUnderBazel(t)
@@ -22,8 +23,9 @@ func TestPackageDirection_should_NotImportServicesOrMCP(t *testing.T) {
 	for _, forbidden := range []string{
 		"github.com/tstapler/stapler-squad/server/services",
 		"github.com/tstapler/stapler-squad/server/mcp",
+		"github.com/tstapler/stapler-squad/session",
 	} {
 		require.NotContains(t, deps, forbidden)
 	}
-	require.Contains(t, deps, "github.com/tstapler/stapler-squad/session", "sanity: the list includes real dependencies")
+	require.Contains(t, deps, "github.com/tstapler/stapler-squad/session/domain", "sanity: the list includes real dependencies")
 }

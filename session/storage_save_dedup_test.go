@@ -11,6 +11,8 @@ import (
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func countSessionUpdates(t *testing.T, storage *Storage) *atomic.Int64 {
@@ -36,17 +38,17 @@ func TestSaveInstances_Should_SkipWrite_When_InstanceUnchanged(t *testing.T) {
 	require.NoError(t, storage.AddInstance(inst))
 	updates := countSessionUpdates(t, storage)
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	afterFirst := updates.Load()
 	require.Positive(t, afterFirst, "first save after add must write")
 
 	for i := 0; i < 5; i++ {
-		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+		require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	}
 	assert.Equal(t, afterFirst, updates.Load(), "saves of an unchanged instance must not write")
 
 	inst.SetNote("changed")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	assert.Greater(t, updates.Load(), afterFirst, "a changed instance must write")
 }
 
@@ -66,7 +68,7 @@ func TestSaveInstances_Should_SkipWrite_When_ReloadedInstanceUnchanged(t *testin
 		loaded, err := storage.LoadInstances()
 		require.NoError(t, err)
 		require.Len(t, loaded, 1)
-		loaded[0].started.Store(true)
+		loaded[0].MarkStarted()
 		require.NoError(t, storage.SaveInstances(loaded))
 	}
 	reloadAndSave() // first reload normalises legacy fields (category -> tags) and may write
@@ -88,7 +90,7 @@ func BenchmarkSaveInstances_AllUnchanged(b *testing.B) {
 	storage, err := NewStorageWithRepository(repo)
 	require.NoError(b, err)
 
-	instances := make([]*Instance, 0, 224)
+	instances := make([]*instance.Instance, 0, 224)
 	for i := 0; i < 224; i++ {
 		inst := newTestInstance(fmt.Sprintf("bench-%03d", i))
 		require.NoError(b, storage.AddInstance(inst))
@@ -115,7 +117,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.persist(InstanceData{Title: "t"}, func(updateSkip) bool {
+		f.persist(domain.InstanceData{Title: "t"}, func(updateSkip) bool {
 			close(inWrite)
 			<-release
 			return true
@@ -136,7 +138,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 func TestWriteRow_Should_ForgetAfterWrite(t *testing.T) {
 	t.Parallel()
 	s := &Storage{}
-	data := InstanceData{Title: "t"}
+	data := domain.InstanceData{Title: "t"}
 	s.saved.persist(data, func(updateSkip) bool { return true })
 
 	err := s.writeRow("t", func() error {
@@ -162,9 +164,9 @@ func TestUpdateInstanceLastUserResponse_Should_KeepProcessingGrace(t *testing.T)
 	inst := newTestInstance("dedup-grace")
 	require.NoError(t, storage.AddInstance(inst))
 	inst.ProcessingGraceUntil = time.Now().Add(time.Hour).Truncate(time.Millisecond)
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	require.NoError(t, storage.UpdateInstanceLastUserResponse(inst.Title, time.Now()))
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -182,15 +184,15 @@ func TestUpdateInstanceIfEpoch_Should_OnlyForgetMatchingSession(t *testing.T) {
 	a, b := newTestInstance("dedup-epoch-a"), newTestInstance("dedup-epoch-b")
 	require.NoError(t, storage.AddInstance(a))
 	require.NoError(t, storage.AddInstance(b))
-	require.NoError(t, storage.SaveInstances([]*Instance{a, b}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{a, b}))
 
-	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, Stopped, "x")
+	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, domain.Stopped, "x")
 	require.NoError(t, err)
 	updates := countSessionUpdates(t, storage)
 
-	require.NoError(t, storage.SaveInstances([]*Instance{b}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{b}))
 	assert.Zero(t, updates.Load(), "an unrelated session must still be skipped")
-	require.NoError(t, storage.SaveInstances([]*Instance{a}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{a}))
 	assert.Positive(t, updates.Load(), "the session the epoch write touched must be re-saved")
 }
 
@@ -202,13 +204,13 @@ func TestAssignSessionsToProject_Should_ForceResave(t *testing.T) {
 
 	inst := newTestInstance("dedup-project")
 	require.NoError(t, storage.AddInstance(inst))
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	_, err := storage.CreateProject(context.Background(), ProjectData{ID: "proj-dedup", Name: "proj-dedup"})
 	require.NoError(t, err)
 	require.NoError(t, storage.AssignSessionsToProject(context.Background(), "proj-dedup", []string{inst.Title}))
 	updates := countSessionUpdates(t, storage)
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	assert.Positive(t, updates.Load(), "re-save after a project assignment must not be skipped")
 }
 
@@ -221,19 +223,19 @@ func TestSaveInstances_Should_WriteAgain_When_RowChangedByDirectWriter(t *testin
 
 	inst := newTestInstance("dedup-direct")
 	require.NoError(t, storage.AddInstance(inst))
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	updates := countSessionUpdates(t, storage)
 
 	require.NoError(t, storage.UpdateInstanceArtifacts(inst.Title, "blob"))
 	afterDirect := updates.Load()
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	assert.Greater(t, updates.Load(), afterDirect, "re-save after a direct row write must not be skipped")
 }
 
 // DiffStats.Content is json:"-" yet persisted, so the fingerprint must cover it.
 func TestFingerprintInstanceData_Should_Differ_When_OnlyDiffContentDiffers(t *testing.T) {
 	t.Parallel()
-	a := InstanceData{Title: "t"}
+	a := domain.InstanceData{Title: "t"}
 	b := a
 	a.DiffStats.Content = "-old line"
 	b.DiffStats.Content = "-new line"
@@ -250,16 +252,16 @@ func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *tes
 
 	inst := newTestInstance("dedup-recreate")
 	require.NoError(t, storage.AddInstance(inst))
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	require.NoError(t, storage.DeleteInstance(inst.Title))
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	got, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, got, 1, "an unchanged instance deleted from storage must be re-created by the next save")
 }
 
-func recordSkip(f *savedFingerprints, data InstanceData, ok bool) updateSkip {
+func recordSkip(f *savedFingerprints, data domain.InstanceData, ok bool) updateSkip {
 	var got updateSkip
 	f.persist(data, func(skip updateSkip) bool { got = skip; return ok })
 	return got
@@ -268,7 +270,7 @@ func recordSkip(f *savedFingerprints, data InstanceData, ok bool) updateSkip {
 func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	base := InstanceData{Title: "t", Tags: []string{"b", "a"}, DiffStats: DiffStatsData{Added: 1, Content: "x"}}
+	base := domain.InstanceData{Title: "t", Tags: []string{"b", "a"}, DiffStats: domain.DiffStatsData{Added: 1, Content: "x"}}
 	recordSkip(&f, base, true)
 
 	scalar := base
@@ -296,7 +298,7 @@ func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
 func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	base := domain.InstanceData{Title: "t", Tags: []string{"a"}}
 	recordSkip(&f, base, true)
 
 	changed := base
@@ -310,7 +312,7 @@ func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
 func TestPersist_Should_WriteEverything_When_TitleUnseen(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	assert.Equal(t, updateSkip{}, recordSkip(&f, InstanceData{Title: "new"}, true))
+	assert.Equal(t, updateSkip{}, recordSkip(&f, domain.InstanceData{Title: "new"}, true))
 }
 
 // End to end: skipping unchanged sections must not lose a changed one.
@@ -323,12 +325,12 @@ func TestSaveInstances_Should_PersistChangedSections_When_OthersSkipped(t *testi
 	require.NoError(t, storage.AddInstance(inst))
 	inst.Tags = []string{"one"}
 	inst.UpdatedAt = time.Now()
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	inst.Path = "/tmp/changed" // session column only: tags/diff skipped
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	inst.Tags = []string{"one", "two"} // tags only
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -340,7 +342,7 @@ func TestSaveInstances_Should_PersistChangedSections_When_OthersSkipped(t *testi
 func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	base := domain.InstanceData{Title: "t", Tags: []string{"a"}}
 	recordSkip(&f, base, true)
 
 	bad := base

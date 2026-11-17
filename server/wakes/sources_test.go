@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type fakeSessions struct {
@@ -190,7 +190,7 @@ func TestSchedule_should_RefuseSessionState_When_TargetIsInAnotherWorkspace(t *t
 	require.NoError(t, r.scheduleAs("owner-1", domain.SessionStateSpec{SessionUUID: "owner-1", State: "idle"}), "itself")
 }
 
-func (s *sourceRig) schedule(spec domain.WakeSpec, payload string) *session.WakeTriggerData {
+func (s *sourceRig) schedule(spec domain.WakeSpec, payload string) *domain.WakeTriggerData {
 	s.t.Helper()
 	action, err := domain.NewWakeAction(domain.WakeActionSteerText, payload)
 	require.NoError(s.t, err)
@@ -230,10 +230,10 @@ func TestBacklogSource_should_FireStatusReached_When_EventCarriesTargetStatus(t 
 	r.eventually(func() bool { return len(r.d.index.lookup(domain.WakeTriggerBacklogEvent, itemX)) == 1 })
 
 	other := &events.Event{Type: events.EventBacklogItemChanged, BacklogItemPayload: &events.BacklogItemEventPayload{
-		Kind: events.BacklogChangeStatusTransition, NewStatus: "in_progress", Item: &session.BacklogItemData{ID: itemX}}}
+		Kind: events.BacklogChangeStatusTransition, NewStatus: "in_progress", Item: &backlogdto.BacklogItemData{ID: itemX}}}
 	r.bus.Publish(other)
 	hit := &events.Event{Type: events.EventBacklogItemChanged, BacklogItemPayload: &events.BacklogItemEventPayload{
-		Kind: events.BacklogChangeStatusTransition, NewStatus: "review", Item: &session.BacklogItemData{ID: itemX}}}
+		Kind: events.BacklogChangeStatusTransition, NewStatus: "review", Item: &backlogdto.BacklogItemData{ID: itemX}}}
 	r.bus.Publish(hit)
 
 	r.eventually(r.delivered(row.ID))

@@ -13,9 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/flow"
+	"github.com/tstapler/stapler-squad/session/flowstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 func TestEntFlowReader_should_ReturnResolvedAndOpenRows_When_StuckIntervals(t *testing.T) {
@@ -34,7 +37,7 @@ func TestEntFlowReader_should_ReturnResolvedAndOpenRows_When_StuckIntervals(t *t
 		require.NoError(t, err)
 	}
 
-	got, err := NewEntFlowReader(c).StuckIntervals(ctx)
+	got, err := newFlowReader(c).StuckIntervals(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 12)
 	open := 0
@@ -55,7 +58,7 @@ func TestEntFlowReader_should_ReturnRawTitle_When_ItemTitleIsLongWithNewline(t *
 	title := strings.Repeat("x", 249) + "\n" + strings.Repeat("y", 250)
 	item := seedFlowItem(t, c, title)
 
-	got, err := NewEntFlowReader(c).Items(context.Background(), []flow.ItemID{flow.ItemID(item.String()), flow.ItemID(uuid.NewString()), "not-a-uuid"})
+	got, err := newFlowReader(c).Items(context.Background(), []flow.ItemID{flow.ItemID(item.String()), flow.ItemID(uuid.NewString()), "not-a-uuid"})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, title, got[0].Title)
@@ -79,10 +82,10 @@ func TestEntFlowReader_should_NotReferenceSanitizer_When_ReadingTitles(t *testin
 
 func TestEntFlowReader_should_ReturnBuiltInStagesInPipelineOrder_When_DefaultEngine(t *testing.T) {
 	t.Parallel()
-	got, err := NewEntFlowReader(nil).Stages(context.Background())
+	got, err := newFlowReader(nil).Stages(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, BuiltInStageOrder, got)
-	require.Contains(t, got, BacklogStatusRefining)
+	require.Equal(t, workflowengine.BuiltInStageOrder, got)
+	require.Contains(t, got, domain.BacklogStatusRefining)
 }
 
 func TestPipelineStages_should_PlaceCustomStageAtConfiguredPosition_When_ConfiguredEngine(t *testing.T) {
@@ -95,19 +98,19 @@ func TestPipelineStages_should_PlaceCustomStageAtConfiguredPosition_When_Configu
 		_, err := client.StageTransition.Create().SetFromStageID(from.ID).SetToStageID(to.ID).SetEnabled(true).Save(ctx)
 		require.NoError(t, err)
 	}
-	stage := func(s BacklogStatus) *ent.BacklogStage {
+	stage := func(s domain.BacklogStatus) *ent.BacklogStage {
 		st, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(s))).Only(ctx)
 		require.NoError(t, err)
 		return st
 	}
-	edge(stage(BacklogStatusReview), qa)
-	edge(qa, stage(BacklogStatusPRPending))
+	edge(stage(domain.BacklogStatusReview), qa)
+	edge(qa, stage(domain.BacklogStatusPRPending))
 	require.NoError(t, engine.InvalidateCache(ctx))
 
-	got := PipelineStages(engine)
-	want := []BacklogStatus{
-		BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued, BacklogStatusInProgress,
-		BacklogStatusReview, "qa", BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived,
+	got := flowstore.PipelineStages(engine)
+	want := []domain.BacklogStatus{
+		domain.BacklogStatusIdea, domain.BacklogStatusRefining, domain.BacklogStatusReady, domain.BacklogStatusQueued, domain.BacklogStatusInProgress,
+		domain.BacklogStatusReview, "qa", domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.BacklogStatusArchived,
 	}
 	require.Equal(t, want, got)
 }
@@ -158,7 +161,7 @@ func TestStuckReader_should_UnionEpisodesWithLegacyAndNormalizeUtc_When_CaptureS
 	epEnd := epOpen.Add(2 * time.Hour)
 	seedStuckEpisode(t, c, cc, "bouncing", epOpen, &epEnd)
 
-	got, err := NewEntFlowReader(c).StuckIntervals(ctx)
+	got, err := newFlowReader(c).StuckIntervals(ctx)
 	require.NoError(t, err)
 
 	type key struct {
@@ -194,7 +197,7 @@ func TestStuckReader_should_ReportEpisodeDriftInputs_When_StuckCapture(t *testin
 	}
 	seedStuckRow(t, c, seedFlowItem(t, c, "pre"), "bouncing", capture.Add(-48*time.Hour), nil) // pre-capture open row is excluded
 
-	got, err := NewEntFlowReader(c).StuckCapture(ctx)
+	got, err := newFlowReader(c).StuckCapture(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, flow.StuckCapture{CaptureSince: capture, OpenEpisodes: 3, OpenStateRows: 4}, got)
 	assert.Equal(t, 1, got.Drift())
@@ -207,7 +210,7 @@ func TestStuckReader_should_FallBackToLegacyOnly_When_EpisodeTableMissingOrEmpty
 	ctx := context.Background()
 	first := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	seedStuckRow(t, c, seedFlowItem(t, c, "x"), "bouncing", first, nil)
-	r := NewEntFlowReader(c)
+	r := newFlowReader(c)
 
 	got, err := r.StuckIntervals(ctx)
 	require.NoError(t, err)

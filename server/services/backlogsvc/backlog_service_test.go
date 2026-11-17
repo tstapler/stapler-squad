@@ -22,9 +22,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -155,12 +160,12 @@ type fakeGitHubResolver struct {
 	err       error
 }
 
-func (f *fakeGitHubResolver) resolve(input string) (string, *session.GitHubRef, error) {
+func (f *fakeGitHubResolver) resolve(input string) (string, *instance.GitHubRef, error) {
 	f.calls = append(f.calls, input)
 	if f.err != nil {
 		return "", nil, f.err
 	}
-	return f.localPath, &session.GitHubRef{}, nil
+	return f.localPath, &instance.GitHubRef{}, nil
 }
 
 // mockSessionCreator records CreateDirectorySession calls for inspection.
@@ -269,14 +274,14 @@ func (m *mockSessionSteerer) calls() []mockSteerCall {
 
 // fakeAutonomousDriverStarter records StartAutonomousDriverForInstance calls for inspection.
 type fakeAutonomousDriverStarter struct {
-	calls []*session.Instance
+	calls []*instance.Instance
 }
 
-func (f *fakeAutonomousDriverStarter) StartAutonomousDriverForInstance(inst *session.Instance) {
+func (f *fakeAutonomousDriverStarter) StartAutonomousDriverForInstance(inst *instance.Instance) {
 	f.calls = append(f.calls, inst)
 }
 
-func (f *fakeAutonomousDriverStarter) StartAutonomousDriverWithTimeout(inst *session.Instance, _ time.Duration) {
+func (f *fakeAutonomousDriverStarter) StartAutonomousDriverWithTimeout(inst *instance.Instance, _ time.Duration) {
 	f.calls = append(f.calls, inst)
 }
 
@@ -299,14 +304,14 @@ type mockCreateCall struct {
 	// tests can inspect post-return mutations (e.g. SetCategory) that the
 	// production code performs on the instance after CreateDirectorySession/
 	// CreateWorktreeSession returns it.
-	inst *session.Instance
+	inst *instance.Instance
 	// programOverride captures the trailing programOverride argument (Epic 2.4) so
 	// tests can assert a work-stage executor override reached instance creation via
 	// this same call, rather than a later SwitchProgram/Restart-style call.
 	programOverride string
 }
 
-func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts services.SessionSpawnOptions) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path string, opts services.SessionSpawnOptions) (*instance.Instance, error) {
 	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
@@ -335,7 +340,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path stri
 	if program == "" {
 		program = "claude"
 	}
-	inst := &session.Instance{Title: title, Path: path, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	inst := &instance.Instance{Title: title, Path: path, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        path,
@@ -352,7 +357,7 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, path stri
 
 // CreateWorktreeSession records the call to the same calls slice as CreateDirectorySession,
 // using worktreePath as the session path (that's where files are written before spawn).
-func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts services.SessionSpawnOptions) (*session.Instance, error) {
+func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktreePath string, opts services.SessionSpawnOptions) (*instance.Instance, error) {
 	title, prompt, tags, oneShot, programOverride := opts.Title, opts.Prompt, opts.Tags, opts.OneShot, opts.ProgramOverride
 	_, contextErr := os.Stat(filepath.Join(worktreePath, ".backlog-context.md"))
 	_, slashErr := os.Stat(filepath.Join(worktreePath, ".claude", "commands", "backlog", "status.md"))
@@ -375,7 +380,7 @@ func (m *mockSessionCreator) CreateWorktreeSession(_ context.Context, _, worktre
 	if program == "" {
 		program = "claude"
 	}
-	inst := &session.Instance{Title: title, Path: worktreePath, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
+	inst := &instance.Instance{Title: title, Path: worktreePath, Program: program, UUID: fmt.Sprintf("mock-session-%d", len(m.calls))}
 	m.calls = append(m.calls, mockCreateCall{
 		title:                       title,
 		path:                        worktreePath,
@@ -595,7 +600,7 @@ func TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit(t *testing.T) 
 	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "New Title", refetched.Title)
-	assert.True(t, session.ContainsModifiedField(session.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
+	assert.True(t, domain.ContainsModifiedField(domain.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
 		"UserModifiedFields must contain \"title\" after a genuine title edit, got %q", refetched.UserModifiedFields)
 }
 
@@ -625,9 +630,9 @@ func TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged(t *testing
 	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 5, refetched.Priority)
-	modified := session.ParseUserModifiedFields(refetched.UserModifiedFields)
-	assert.True(t, session.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
-	assert.False(t, session.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
+	modified := domain.ParseUserModifiedFields(refetched.UserModifiedFields)
+	assert.True(t, domain.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
+	assert.False(t, domain.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
 }
 
 // ─── ListBacklogItems ─────────────────────────────────────────────────────────
@@ -881,13 +886,13 @@ func TestListBacklogItems_DefaultView_ShowsDoneButHidesArchived(t *testing.T) {
 // BacklogItem's optional pipeline_mode field (Story 1.4.5).
 func TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMode(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:           "item-1",
 		Title:        "item using quick mode",
 		PipelineMode: "quick",
 	}
 
-	p := backlogItemToProto(item, session.NewDefaultWorkflowEngine(), nil)
+	p := backlogItemToProto(item, workflowengine.NewDefaultWorkflowEngine(), nil)
 
 	require.NotNil(t, p.PipelineMode)
 	assert.Equal(t, "quick", *p.PipelineMode)
@@ -903,14 +908,14 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 	t.Parallel()
 	note := "auto-reopened after FAIL verdict"
 	activityCreatedAt := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:    "item-1",
 		Title: "item with audit history",
-		StatusEvents: []session.BacklogStatusEventData{
+		StatusEvents: []backlogdto.BacklogStatusEventData{
 			{ID: "ev-1", FromStatus: "review", ToStatus: "in_progress", TriggeredBy: "system", Note: &note},
 			{ID: "ev-2", FromStatus: "ready", ToStatus: "in_progress", TriggeredBy: "user"},
 		},
-		ProgressNotes: []session.ProgressNoteData{
+		ProgressNotes: []backlogdto.ProgressNoteData{
 			{ID: "pn-1", CriterionIndex: 0, Note: "implemented the dedent fix", Status: "done"},
 		},
 		// [validation.md Gap 2 / Epic 8.7] proves the OTHER read path — the
@@ -918,12 +923,12 @@ func TestBacklogItemToProto_should_IncludeAuditTrail_When_StatusEventsAndProgres
 		// mapper chain — actually carries ActivityNotes, distinct from
 		// get_backlog_item's rendering (Epic 8.6), which never touches this
 		// mapper at all.
-		ActivityNotes: []session.ActivityNoteData{
+		ActivityNotes: []backlogdto.ActivityNoteData{
 			{ID: "an-1", Message: "posted via post_backlog_update", AuthorSessionUUID: "sess-9", AuthorSessionTitle: "Helper", CreatedAt: activityCreatedAt},
 		},
 	}
 
-	p := backlogItemToProto(item, session.NewDefaultWorkflowEngine(), nil)
+	p := backlogItemToProto(item, workflowengine.NewDefaultWorkflowEngine(), nil)
 
 	require.Len(t, p.StatusEvents, 2)
 	require.NotNil(t, p.StatusEvents[0].Note)
@@ -959,22 +964,22 @@ func TestBacklogItemToProto_should_PopulateAllowedTransitions_When_ItemIsOnCusto
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, storage.GetEntClient()))
 
-	stageRepo := session.NewEntStageConfigRepository(storage.GetEntClient())
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	stageRepo := stagecfg.NewEntStageConfigRepository(storage.GetEntClient())
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(storage.GetEntClient())
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
-	fromStage, err := stageRepo.CreateStage(ctx, session.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
+	fromStage, err := stageRepo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-review", Name: "Design Review", Enabled: true})
 	require.NoError(t, err)
-	toStage, err := stageRepo.CreateStage(ctx, session.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
+	toStage, err := stageRepo.CreateStage(ctx, stagecfg.StageCreateInput{Slug: "design-approved", Name: "Design Approved", Enabled: true})
 	require.NoError(t, err)
-	_, err = stageRepo.CreateTransition(ctx, session.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
+	_, err = stageRepo.CreateTransition(ctx, stagecfg.TransitionCreateInput{FromStageSlug: fromStage.Slug, ToStageSlug: toStage.Slug, Enabled: true})
 	require.NoError(t, err)
 	require.NoError(t, engine.InvalidateCache(ctx))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item on a custom stage",
 		Status: "design-review",
 	})
@@ -1029,18 +1034,18 @@ func TestGetBacklogItem_should_EmitBudgetWarningLogLine_When_LiveCostCrossesThre
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	threshold := 5.00
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:                  "item with an over-budget live work session",
-		Status:                 string(session.BacklogStatusInProgress),
+		Status:                 string(domain.BacklogStatusInProgress),
 		Priority:               3,
 		CostBudgetThresholdUsd: &threshold,
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "work-session-over-budget",
-		SessionRole:      string(session.SessionRoleWork),
+		SessionRole:      string(instance.SessionRoleWork),
 		EstimatedCostUsd: 5.20,
 	})
 	require.NoError(t, err)
@@ -1074,25 +1079,25 @@ func TestCheckWorkStageBudget_should_NeverLog_When_ThresholdIsNil(t *testing.T) 
 // entirely, unlike GetBacklogItem (backed by backlogItemToProto). AllowedTransitions
 // is a pure function of status, so summary and full protos must always agree.
 func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyStatus(t *testing.T) {
-	statuses := []session.BacklogStatus{
-		session.BacklogStatusIdea,
-		session.BacklogStatusRefining,
-		session.BacklogStatusReady,
-		session.BacklogStatusQueued,
-		session.BacklogStatusInProgress,
-		session.BacklogStatusReview,
-		session.BacklogStatusPRPending,
-		session.BacklogStatusDone,
-		session.BacklogStatusArchived,
+	statuses := []domain.BacklogStatus{
+		domain.BacklogStatusIdea,
+		domain.BacklogStatusRefining,
+		domain.BacklogStatusReady,
+		domain.BacklogStatusQueued,
+		domain.BacklogStatusInProgress,
+		domain.BacklogStatusReview,
+		domain.BacklogStatusPRPending,
+		domain.BacklogStatusDone,
+		domain.BacklogStatusArchived,
 	}
 
 	for _, status := range statuses {
 		t.Run(string(status), func(t *testing.T) {
-			engine := session.NewDefaultWorkflowEngine()
-			summary := &session.BacklogItemSummary{ID: "item-1", Status: status}
+			engine := workflowengine.NewDefaultWorkflowEngine()
+			summary := &backlogdto.BacklogItemSummary{ID: "item-1", Status: status}
 			summaryProto := backlogItemSummaryToProto(summary, engine, nil)
 
-			full := &session.BacklogItemData{ID: "item-1", Status: string(status)}
+			full := &backlogdto.BacklogItemData{ID: "item-1", Status: string(status)}
 			fullProto := backlogItemToProto(full, engine, nil)
 
 			assert.Equal(t, fullProto.AllowedTransitions, summaryProto.AllowedTransitions)
@@ -1116,20 +1121,20 @@ func TestBacklogItemSummaryToProto_should_SetAllowedTransitions_When_ItemHasAnyS
 // AllowedTransitions (#585) — summary and full protos must agree on every
 // field a card action derives from.
 func TestBacklogItemSummaryToProto_should_SetPlanGatingFields(t *testing.T) {
-	summary := &session.BacklogItemSummary{
+	summary := &backlogdto.BacklogItemSummary{
 		ID:                  "item-1",
-		Status:              session.BacklogStatusReady,
+		Status:              domain.BacklogStatusReady,
 		SkipPlanning:        true,
 		PlanApproved:        true,
 		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
 		PlanRejectionReason: "needs more detail",
 	}
-	engine := session.NewDefaultWorkflowEngine()
+	engine := workflowengine.NewDefaultWorkflowEngine()
 	summaryProto := backlogItemSummaryToProto(summary, engine, nil)
 
-	full := &session.BacklogItemData{
+	full := &backlogdto.BacklogItemData{
 		ID:                  "item-1",
-		Status:              string(session.BacklogStatusReady),
+		Status:              string(domain.BacklogStatusReady),
 		SkipPlanning:        true,
 		PlanApproved:        true,
 		PlanArtifactsPath:   "/repo/.stapler-squad/plans/item-1",
@@ -1189,7 +1194,7 @@ func TestApprovePlan_PlanArtifactsPathDeletedAfterTriage_ReturnsDistinctErrorMes
 	itemID := createResp.Msg.Item.Id
 
 	deletedPath := filepath.Join(t.TempDir(), "already-deleted")
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &deletedPath,
 	}, nil)
 	require.NoError(t, err)
@@ -1224,7 +1229,7 @@ func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	// os.Stat check in ApprovePlan requires the path to exist on disk.
 	artifactsPath := t.TempDir()
 	planApproved := false
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
 		PlanApproved:      &planApproved,
 	}, nil)
@@ -1255,7 +1260,7 @@ func TestApprovePlan_ClearsExistingRejectionReason(t *testing.T) {
 	itemID := createResp.Msg.Item.Id
 
 	artifactsPath := t.TempDir()
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
 	}, nil)
 	require.NoError(t, err)
@@ -1293,7 +1298,7 @@ func TestRejectPlan_HappyPath_SetsReasonAndTimestamp(t *testing.T) {
 	itemID := createResp.Msg.Item.Id
 
 	artifactsPath := t.TempDir()
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
 	}, nil)
 	require.NoError(t, err)
@@ -1404,7 +1409,7 @@ func TestRejectPlan_PlanArtifactsPathDeletedAfterTriage_ReturnsFailedPreconditio
 	itemID := createResp.Msg.Item.Id
 
 	deletedPath := filepath.Join(t.TempDir(), "already-deleted")
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &deletedPath,
 	}, nil)
 	require.NoError(t, err)
@@ -1439,7 +1444,7 @@ func TestRejectPlan_ClearsExistingApproval(t *testing.T) {
 	itemID := createResp.Msg.Item.Id
 
 	artifactsPath := t.TempDir()
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
 	}, nil)
 	require.NoError(t, err)
@@ -1464,7 +1469,7 @@ func TestRejectPlan_ClearsExistingApproval(t *testing.T) {
 
 	// Move the item to ready so the spawn-gate precondition check below is the
 	// planning gate itself, not the earlier status gate.
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
@@ -1486,16 +1491,16 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "rejected item sent back to idea",
-		Status:   string(session.BacklogStatusReady),
+		Status:   string(domain.BacklogStatusReady),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)
 
 	artifactsPath := t.TempDir()
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
 	}, nil)
 	require.NoError(t, err)
@@ -1664,7 +1669,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 
 	// 5b. Backlog work sessions must be categorized "Backlog" so they group
 	// correctly in the session list UI instead of falling into "Uncategorized".
-	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+	assert.Equal(t, instance.CategoryBacklog, creator.calls[0].inst.Category,
 		"backlog work session should have Category == Backlog")
 
 	// 6. Item should have advanced to in_progress after spawn.
@@ -1784,12 +1789,12 @@ func TestSpawnSessionFromItem_Reopen_SetsBacklogCategory(t *testing.T) {
 	// SpawnSessionFromItem below takes the isReopen=true branch.
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReady),
+		TargetStatus: string(domain.BacklogStatusReady),
 	}))
 	require.NoError(t, err)
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusInProgress),
+		TargetStatus: string(domain.BacklogStatusInProgress),
 	}))
 	require.NoError(t, err)
 
@@ -1799,9 +1804,9 @@ func TestSpawnSessionFromItem_Reopen_SetsBacklogCategory(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	assert.Contains(t, creator.calls[0].tags, session.TagBacklogRevision,
+	assert.Contains(t, creator.calls[0].tags, instance.TagBacklogRevision,
 		"reopen spawn should carry the revision tag")
-	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+	assert.Equal(t, instance.CategoryBacklog, creator.calls[0].inst.Category,
 		"backlog revision-reopen session should have Category == Backlog")
 }
 
@@ -1887,7 +1892,7 @@ func TestSpawnSessionFromItem_should_RecordBaseCommitSha_In_ProtoResponse(t *tes
 	require.NoError(t, err)
 	require.Len(t, creator.calls, 1)
 
-	head, err := backlog.GetGitHeadSHA(creator.calls[0].path)
+	head, err := pipeline.GetGitHeadSHA(creator.calls[0].path)
 	require.NoError(t, err)
 
 	resp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
@@ -2298,7 +2303,7 @@ func TestSpawnSessionFromItem_WIPLimit_CountsLiveReviewSessions(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       reviewID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 	require.Equal(t, testWIPCap, 2, "test assumes the default cap of 2; update the fixture if this changes")
@@ -2334,16 +2339,16 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 
 	// Simulate a work session that died without ever calling UpdateItemSessionEnded —
 	// same shape as the live bug (created hours ago, EndedAt still nil).
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "dead-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// TransitionBacklogItemStatus above already moved the item to "ready"; put it back
 	// to "in_progress" the way a real reopen scenario would leave it (dead session, but
 	// item still shows as actively worked).
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Before the fix, this would fail with CodeAlreadyExists forever.
@@ -2357,7 +2362,7 @@ func TestSpawnSessionFromItem_TombstonesDeadWorkSession_AllowsRespawn(t *testing
 	for _, is := range sessions {
 		if is.SessionUUID == "dead-work-session-uuid" {
 			deadEnded = is.EndedAt != nil
-		} else if is.Role == string(session.SessionRoleWork) {
+		} else if is.Role == string(instance.SessionRoleWork) {
 			newOpen = is.EndedAt == nil
 		}
 	}
@@ -2389,13 +2394,13 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with stale-but-alive work session")
 
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2410,7 +2415,7 @@ func TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWor
 	for _, is := range sessions {
 		if is.SessionUUID == "stale-work-session-uuid" {
 			staleEnded = is.EndedAt != nil
-		} else if is.Role == string(session.SessionRoleWork) {
+		} else if is.Role == string(instance.SessionRoleWork) {
 			newOpen = is.EndedAt == nil
 		}
 	}
@@ -2451,10 +2456,10 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a stale round and an unrelated wrongly-tombstoned-but-alive round")
 
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "unrelated-wrongly-tombstoned",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	unrelated, err := storage.ListItemSessions(t.Context(), itemID)
@@ -2462,13 +2467,13 @@ func TestRemediateStaleWorkSession_should_StillBlockOnUnrelatedConfirmedLiveRoun
 	require.Len(t, unrelated, 1)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), unrelated[0].ID, time.Now().Add(-time.Hour)))
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2500,13 +2505,13 @@ func TestRemediateStaleWorkSession_should_Defer_When_AutomatedRetryAlreadyPendin
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with a session already mid-automated-retry")
 
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	remediateErr := svc.RemediateStaleWorkSession(t.Context(), itemID)
@@ -2547,13 +2552,13 @@ func TestRemediateStaleWorkSession_should_EndSessionBeforeKillingPane_When_Activ
 	svctest.InitGitRepoWithCommit(t, repoPath)
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with stale-but-alive work session")
 
-	createdIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	createdIS, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	var (
@@ -2607,10 +2612,10 @@ func TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress(t *te
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item that already moved on")
 
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "stale-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// Left in "ready" (createReadyItemForSpawn's terminal status), not
@@ -2639,13 +2644,13 @@ func TestSpawnSessionFromItem_LiveWorkSession_StillBlocksSpawn(t *testing.T) {
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
 	itemID := createReadyItemForSpawn(t, svc, repoPath, "item with live work session")
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "live-work-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -2715,7 +2720,7 @@ func TestSpawnSessionFromItem_ConcurrentSpawns_OnlyOneWorkSessionCreated(t *test
 	require.NoError(t, err)
 	openWork := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork && is.EndedAt == nil {
+		if is.Role == instance.SessionRoleWork && is.EndedAt == nil {
 			openWork++
 		}
 	}
@@ -2744,14 +2749,14 @@ func TestSpawnSessionFromItem_ReopenKillsEndedWorkSessionPane(t *testing.T) {
 	// Simulate a normally-completed prior work session (round 1): EndedAt set, the way
 	// handleReviewSessionExited leaves it once a review verdict is processed.
 	endedAt := time.Now().Add(-time.Hour)
-	priorSession, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	priorSession, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "round-1-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorSession.ID, endedAt))
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{ItemId: itemID}))
@@ -2787,17 +2792,17 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	// matching the pattern used elsewhere in this file for ApprovePlan tests.
 	artifactsPath := t.TempDir()
 	planApproved := true
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
 		PlanApproved:      &planApproved,
 	}, nil)
 	require.NoError(t, err)
 
 	// A prior, already-ended session for this item.
-	priorIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	priorIS, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "prior-session-uuid",
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorIS.ID, time.Now().Add(-time.Hour)))
@@ -2808,7 +2813,7 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 	// AttachSessionToItem's storage.LoadInstances() lookup.
 	sessionDir := t.TempDir()
 	const attachUUID = "attach-session-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "attach-target",
 		UUID:  attachUUID,
 		Path:  sessionDir,
@@ -2817,7 +2822,7 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 		// match, not a live process, and a real restore attempt is slow/unreliable
 		// in CI (no claude binary, no real tmux server) even if it eventually
 		// succeeds locally.
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -2874,11 +2879,11 @@ func TestAttachSessionToItem_RejectsWhenSessionPathIsItemSharedRepoCheckout(t *t
 	// The hazard: a session whose Path IS the item's own RepoPath, not a
 	// dedicated worktree or directory.
 	const attachUUID = "shared-checkout-session-uuid"
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title:     "shared-checkout-session",
 		UUID:      attachUUID,
 		Path:      repoPath,
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -2893,7 +2898,7 @@ func TestAttachSessionToItem_RejectsWhenSessionPathIsItemSharedRepoCheckout(t *t
 
 	fetched, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusIdea), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusIdea), fetched.Status,
 		"a rejected attach must not transition the item or leave a dangling ItemSession")
 
 	sessions, err := storage.ListItemSessions(t.Context(), itemID)
@@ -3022,19 +3027,19 @@ func TestTriggerReReview_MissingRepoPath_ReturnsFailedPrecondition(t *testing.T)
 	// Transition: idea → ready → in_progress → review.
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReady),
+		TargetStatus: string(domain.BacklogStatusReady),
 	}))
 	require.NoError(t, err)
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusInProgress),
+		TargetStatus: string(domain.BacklogStatusInProgress),
 	}))
 	require.NoError(t, err)
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 
@@ -3070,19 +3075,19 @@ func TestTriggerReReview_HappyPath_NoSessionCreator_ReturnsPlaceholder(t *testin
 	// Transition through states to reach review.
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReady),
+		TargetStatus: string(domain.BacklogStatusReady),
 	}))
 	require.NoError(t, err)
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusInProgress),
+		TargetStatus: string(domain.BacklogStatusInProgress),
 	}))
 	require.NoError(t, err)
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 
@@ -3130,9 +3135,9 @@ func TestTriggerReReview_HeadlessPassAutoTransitionsToDone(t *testing.T) {
 	itemID := createResp.Msg.Item.Id
 
 	for _, status := range []string{
-		string(session.BacklogStatusReady),
-		string(session.BacklogStatusInProgress),
-		string(session.BacklogStatusReview),
+		string(domain.BacklogStatusReady),
+		string(domain.BacklogStatusInProgress),
+		string(domain.BacklogStatusReview),
 	} {
 		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:       itemID,
@@ -3148,7 +3153,7 @@ func TestTriggerReReview_HeadlessPassAutoTransitionsToDone(t *testing.T) {
 
 	updated, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), updated.Msg.Item.Status,
+	assert.Equal(t, string(domain.BacklogStatusDone), updated.Msg.Item.Status,
 		"PASS verdict from headless re-review should auto-transition item to done")
 }
 
@@ -3190,8 +3195,8 @@ func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t 
 	itemID := createResp.Msg.Item.Id
 
 	for _, status := range []string{
-		string(session.BacklogStatusReady),
-		string(session.BacklogStatusInProgress),
+		string(domain.BacklogStatusReady),
+		string(domain.BacklogStatusInProgress),
 	} {
 		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:       itemID,
@@ -3211,7 +3216,7 @@ func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t 
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 
@@ -3222,7 +3227,7 @@ func TestTriggerReReview_HeadlessPassWithUnshippedCode_StaysInReviewForShipPR(t 
 
 	updated, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), updated.Msg.Item.Status,
+	assert.Equal(t, string(domain.BacklogStatusReview), updated.Msg.Item.Status,
 		"PASS verdict with unshipped work-session code and no PR must stay in review for the Ship PR action, not silently transition to done")
 }
 
@@ -3249,17 +3254,17 @@ func TestTriggerReReview_SetsBacklogCategory(t *testing.T) {
 	// Transition through states to reach review.
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReady),
+		TargetStatus: string(domain.BacklogStatusReady),
 	}))
 	require.NoError(t, err)
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusInProgress),
+		TargetStatus: string(domain.BacklogStatusInProgress),
 	}))
 	require.NoError(t, err)
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 
@@ -3269,7 +3274,7 @@ func TestTriggerReReview_SetsBacklogCategory(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, creator.calls, 1)
-	assert.Equal(t, session.CategoryBacklog, creator.calls[0].inst.Category,
+	assert.Equal(t, instance.CategoryBacklog, creator.calls[0].inst.Category,
 		"re-review session should have Category == Backlog")
 }
 
@@ -3294,17 +3299,17 @@ func setupItemInReview(t *testing.T, svc *BacklogService, repoPath string) strin
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReady),
+		TargetStatus: string(domain.BacklogStatusReady),
 	}))
 	require.NoError(t, err)
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusInProgress),
+		TargetStatus: string(domain.BacklogStatusInProgress),
 	}))
 	require.NoError(t, err)
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       itemID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 	return itemID
@@ -3339,12 +3344,12 @@ func TestTriggerReReview_EmptyDiff_UsesWorkDirAndCodebaseAccessPrompt(t *testing
 	call := pool.firstCall()
 	assert.Equal(t, repoDir, call.workDir, "empty-diff re-review must be granted WorkDir access to the codebase")
 	assert.Equal(t, headless.CodebaseReadAllowedTools, call.allowedTools)
-	assert.Equal(t, session.PermissionModeBypassPermissions, call.permissionMode)
+	assert.Equal(t, instance.PermissionModeBypassPermissions, call.permissionMode)
 	assert.Equal(t, headless.HeadlessReviewSystemPromptWithCodebaseAccess(), call.systemPrompt)
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictPass, outcome)
+	assert.Equal(t, domain.ReviewVerdictPass, outcome)
 }
 
 // TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt is a wiring-level test
@@ -3359,23 +3364,23 @@ func TestTriggerReReview_EmptyDiff_ContextExtrasReachPrompt(t *testing.T) {
 	repoDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "marker.txt"), []byte("x"), 0o644))
 
-	createdItem, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	createdItem, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:              "Context extras re-review test",
 		Description:        "Add OAuth2 login support end to end",
 		AcceptanceCriteria: `[{"index":0,"text":"test","status":"pending"}]`,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           repoDir,
 	})
 	require.NoError(t, err)
 	itemID := createdItem.ID
 
 	// A prior review session+verdict — must surface in "## Prior Review Attempts".
-	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: "prior-review-1",
-		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictUnverifiable,
+		SessionRole: instance.SessionRoleReview,
+	}, backlogdto.ReviewVerdictData{
+		OverallOutcome: domain.ReviewVerdictUnverifiable,
 		Summary:        "prior attempt could not locate satisfying evidence",
 	})
 	require.NoError(t, err)
@@ -3477,17 +3482,17 @@ func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewS
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	pmRepo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	_, err := pmRepo.Create(t.Context(), session.PipelineModeCreateInput{
+	pmRepo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	_, err := pmRepo.Create(t.Context(), stagecfg.PipelineModeCreateInput{
 		Slug:    "strong-review",
 		Name:    "Strong Review",
 		Enabled: true,
-		StageExecutors: map[session.StageRole]session.PipelineStageExecutor{
-			session.StageRoleReview: {Model: "family:opus"},
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleReview: {Model: "family:opus"},
 		},
 	})
 	require.NoError(t, err)
-	engine, err := backlog.NewPipelineEngine(pmRepo)
+	engine, err := pipeline.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -3505,7 +3510,7 @@ func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewS
 	}))
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
-	for _, target := range []session.BacklogStatus{session.BacklogStatusReady, session.BacklogStatusInProgress, session.BacklogStatusReview} {
+	for _, target := range []domain.BacklogStatus{domain.BacklogStatusReady, domain.BacklogStatusInProgress, domain.BacklogStatusReview} {
 		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:       itemID,
 			TargetStatus: string(target),
@@ -3529,7 +3534,7 @@ func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewS
 	require.NoError(t, listErr)
 	reviewSession := sessions[len(sessions)-1]
 	assert.Equal(t, "claude-opus-4-8", reviewSession.ResolvedModel)
-	assert.Equal(t, backlog.ComputeExecutorHash("", "family:opus"), reviewSession.ExecutorSnapshotHash,
+	assert.Equal(t, pipeline.ComputeExecutorHash("", "family:opus"), reviewSession.ExecutorSnapshotHash,
 		"ExecutorSnapshotHash must hash the RAW unresolved alias, not the resolved concrete model ID")
 	assert.Empty(t, reviewSession.ConfiguredProgram, "no fallback occurred for the claude program")
 	assert.Empty(t, reviewSession.ExecutorFallbackReason)
@@ -3592,7 +3597,7 @@ func TestTriggerReReview_CodebaseReadTimeout_RecordsUnverifiableNotFail(t *testi
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(context.Background(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a codebase-read timeout must degrade to UNVERIFIABLE, never be recorded as FAIL")
+	assert.Equal(t, domain.ReviewVerdictUnverifiable, outcome, "a codebase-read timeout must degrade to UNVERIFIABLE, never be recorded as FAIL")
 }
 
 // TestTriggerReReview_CodebaseReadEmptyToolReads_DowngradesPassToUnverifiable verifies
@@ -3616,7 +3621,7 @@ func TestTriggerReReview_CodebaseReadEmptyToolReads_DowngradesPassToUnverifiable
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a PASS with no tool_reads evidence on the codebase-read path must be downgraded")
+	assert.Equal(t, domain.ReviewVerdictUnverifiable, outcome, "a PASS with no tool_reads evidence on the codebase-read path must be downgraded")
 }
 
 // TestTriggerReReview_CodebaseReadFabricatedToolReadsPath_DowngradesPassToUnverifiable
@@ -3640,7 +3645,7 @@ func TestTriggerReReview_CodebaseReadFabricatedToolReadsPath_DowngradesPassToUnv
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a PASS citing a fabricated tool_reads path must be downgraded")
+	assert.Equal(t, domain.ReviewVerdictUnverifiable, outcome, "a PASS citing a fabricated tool_reads path must be downgraded")
 }
 
 // TestTriggerReReview_CapabilitySelfCheckFails_RecordsUnverifiableWithoutAttemptingCodebaseReadCall
@@ -3670,7 +3675,7 @@ func TestTriggerReReview_CapabilitySelfCheckFails_RecordsUnverifiableWithoutAtte
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictUnverifiable, outcome, "a failed capability self-check must degrade the re-review to UNVERIFIABLE")
+	assert.Equal(t, domain.ReviewVerdictUnverifiable, outcome, "a failed capability self-check must degrade the re-review to UNVERIFIABLE")
 }
 
 // TestResolveACSnapshot_MergesLiveNoteIntoStaleWorkSessionSnapshot verifies that
@@ -3680,29 +3685,29 @@ func TestTriggerReReview_CapabilitySelfCheckFails_RecordsUnverifiableWithoutAtte
 // reviewer a stale, note-less AC list.
 func TestResolveACSnapshot_MergesLiveNoteIntoStaleWorkSessionSnapshot(t *testing.T) {
 	t.Parallel()
-	staleSnapshot := session.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"pending"}]`)
-	liveAC := session.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"done","note":"finished via report_progress"}]`)
+	staleSnapshot := domain.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"pending"}]`)
+	liveAC := domain.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"done","note":"finished via report_progress"}]`)
 
-	workSession := &session.ItemSessionSummary{AcSnapshot: staleSnapshot}
+	workSession := &backlogdto.ItemSessionSummary{AcSnapshot: staleSnapshot}
 
 	result := resolveACSnapshot(workSession, liveAC)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "finished via report_progress", result[0].Note)
-	assert.Equal(t, session.AcStatusDone, result[0].Status)
+	assert.Equal(t, domain.AcStatusDone, result[0].Status)
 }
 
 // TestResolveACSnapshot_NoWorkSession_ReturnsLiveAC verifies the live AC criteria
 // are returned unchanged when there is no work session snapshot to merge against.
 func TestResolveACSnapshot_NoWorkSession_ReturnsLiveAC(t *testing.T) {
 	t.Parallel()
-	liveAC := session.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"done","note":"live note"}]`)
+	liveAC := domain.AcCriteriaJSON(`[{"index":0,"text":"Do the thing","status":"done","note":"live note"}]`)
 
 	result := resolveACSnapshot(nil, liveAC)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "live note", result[0].Note)
-	assert.Equal(t, session.AcStatusDone, result[0].Status)
+	assert.Equal(t, domain.AcStatusDone, result[0].Status)
 }
 
 // ─── T-11: Auto-triage, double-trigger guard, itemSessionToProto ─────────────
@@ -3759,10 +3764,10 @@ func TestTriggerTriage_DoubleTriggerGuard(t *testing.T) {
 	itemID := createResp.Msg.Item.Id
 
 	// Manually insert a triage ItemSession with no ended_at (simulates a running triage).
-	is, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: liveUUID,
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 	// Mark it as started so the orphan guard treats it as genuinely live.
@@ -3785,18 +3790,18 @@ func TestItemSessionToProto_MapsTriageResult(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 
 	// Create a backing item so we can create an ItemSession.
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:    "proto mapping test",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 	}
 	item, err := storage.CreateBacklogItem(t.Context(), itemData)
 	require.NoError(t, err)
 
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "00000000-0000-0000-0000-000000000002",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	}
 	is, isErr := storage.CreateItemSession(t.Context(), isData)
 	require.NoError(t, isErr)
@@ -3825,18 +3830,18 @@ func TestItemSessionToProto_MapsTriageResult(t *testing.T) {
 func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:    "invalid json test",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 	}
 	item, err := storage.CreateBacklogItem(t.Context(), itemData)
 	require.NoError(t, err)
 
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "00000000-0000-0000-0000-000000000003",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	}
 	is, isErr := storage.CreateItemSession(t.Context(), isData)
 	require.NoError(t, isErr)
@@ -3858,11 +3863,11 @@ func TestItemSessionToProto_HandlesInvalidTriageResultJSON(t *testing.T) {
 // errSessionCreator always returns an error from CreateDirectorySession and CreateWorktreeSession.
 type errSessionCreator struct{ err error }
 
-func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ services.SessionSpawnOptions) (*session.Instance, error) {
+func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _ string, _ services.SessionSpawnOptions) (*instance.Instance, error) {
 	return nil, e.err
 }
 
-func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ services.SessionSpawnOptions) (*session.Instance, error) {
+func (e *errSessionCreator) CreateWorktreeSession(_ context.Context, _, _ string, _ services.SessionSpawnOptions) (*instance.Instance, error) {
 	return nil, e.err
 }
 
@@ -3891,9 +3896,9 @@ func TestTriggerTriage_NilPool(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "triage test",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -3917,9 +3922,9 @@ func TestTriggerTriage_Success(t *testing.T) {
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "headless triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: repoPath,
 	})
@@ -3929,12 +3934,12 @@ func TestTriggerTriage_Success(t *testing.T) {
 		ItemId: item.ID,
 	}))
 	require.NoError(t, trigErr)
-	assert.Equal(t, string(session.SessionRoleTriage), resp.Msg.ItemSession.SessionRole)
+	assert.Equal(t, string(instance.SessionRoleTriage), resp.Msg.ItemSession.SessionRole)
 
 	// Goroutine runs asynchronously — poll until item transitions to "ready".
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after headless triage completes")
 
 	// Verify the pool was called with the right feature key and working directory.
@@ -3970,9 +3975,9 @@ func TestTriggerTriage_Success_PersistsConversationUUID(t *testing.T) {
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "headless triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: repoPath,
 	})
@@ -4010,9 +4015,9 @@ func TestTriggerTriage_RunsInIsolatedWorktree_When_RepoPathIsARealGitRepo(t *tes
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "isolated worktree triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: repoPath,
 	})
@@ -4058,9 +4063,9 @@ func TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo(t 
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir() // deliberately not git-initialized
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "non-git repo_path triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: repoPath,
 	})
@@ -4109,9 +4114,9 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "sdd mode triage item",
-		Status:       string(session.BacklogStatusIdea),
+		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     repoPath,
 		PipelineMode: session.DefaultSDDPipelineModeSlug,
@@ -4340,10 +4345,10 @@ func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesT
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "assessed priority item",
-		Status:   string(session.BacklogStatusIdea),
-		Priority: session.DefaultBacklogPriority,
+		Status:   string(domain.BacklogStatusIdea),
+		Priority: domain.DefaultBacklogPriority,
 		RepoPath: repoPath,
 	})
 	require.NoError(t, err)
@@ -4355,7 +4360,7 @@ func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesT
 
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
 
 	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
@@ -4376,11 +4381,11 @@ func TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmits
 	svc.SetHeadlessPool(pool)
 
 	repoPath := t.TempDir()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "pre-set priority item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 2,
-		Category: string(session.BacklogCategoryChore),
+		Category: string(domain.BacklogCategoryChore),
 		RepoPath: repoPath,
 	})
 	require.NoError(t, err)
@@ -4392,13 +4397,13 @@ func TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmits
 
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
 
 	updated, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, updated.Priority, "an omitted priority must not clobber the item's existing priority")
-	assert.Equal(t, string(session.BacklogCategoryChore), updated.Category, "an omitted item_category must not clobber the item's existing category")
+	assert.Equal(t, string(domain.BacklogCategoryChore), updated.Category, "an omitted item_category must not clobber the item's existing category")
 }
 
 // TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick verifies the
@@ -4429,9 +4434,9 @@ func TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick(t *t
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:            "auto-spawn triage item",
-		Status:           string(session.BacklogStatusIdea),
+		Status:           string(domain.BacklogStatusIdea),
 		Priority:         3,
 		RepoPath:         repoPath,
 		AutoSpawnSession: true,
@@ -4449,7 +4454,7 @@ func TestTriggerTriage_AutoSpawnSession_SpawnsWorkSessionWithoutManualClick(t *t
 	// test, so checking creator.calls alone races with the transition that follows it.
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusInProgress)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusInProgress)
 	}, 20*time.Second, 50*time.Millisecond, "auto-spawn must carry the item all the way to in_progress, not leave it sitting at ready")
 
 	assert.Len(t, creator.calls, 1, "a work session should be auto-spawned once triage completes")
@@ -4468,9 +4473,9 @@ func TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn(t *
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "manual-spawn triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: repoPath,
 		// AutoSpawnSession left at its zero value (false).
@@ -4489,7 +4494,7 @@ func TestTriggerTriage_AutoSpawnSessionFalse_LeavesItemAtReadyForManualSpawn(t *
 	// 5s window) even though it only does one worktree cycle — widen to match.
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 20*time.Second, 50*time.Millisecond)
 
 	assert.Empty(t, creator.calls, "no session should be spawned without the opt-in toggle")
@@ -4528,7 +4533,7 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), itemID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusInProgress)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusInProgress)
 	}, 20*time.Second, 50*time.Millisecond, "auto-handoff must carry the sdd-mode item all the way to in_progress")
 
 	assert.Len(t, creator.calls, 1, "a work session should be auto-spawned for the sdd+auto_spawn_session combination")
@@ -4554,9 +4559,9 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	eventBus := events.NewEventBus(64)
 	svc.SetEventBus(eventBus)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "persist failure test item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4572,7 +4577,7 @@ func TestTriggerTriage_PersistFailurePublishesNotification(t *testing.T) {
 	require.NoError(t, trigErr)
 
 	// Move the item off 'idea' while the delayed headless call is still in flight.
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	release()
 
@@ -4599,7 +4604,7 @@ wait:
 	// The item must remain wherever the test left it (review) — not silently ready.
 	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, loadErr)
-	assert.Equal(t, string(session.BacklogStatusReview), updated.Status)
+	assert.Equal(t, string(domain.BacklogStatusReview), updated.Status)
 }
 
 // TestTriggerTriage_RefineWithFeedback: a second TriggerTriage call with feedback
@@ -4613,9 +4618,9 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "refine me",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4628,7 +4633,7 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 	require.NoError(t, trigErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
 
 	// Refine with feedback.
@@ -4642,7 +4647,7 @@ func TestTriggerTriage_RefineWithFeedback(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "refine should make a second headless call")
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "refine should mark item ready again")
 
 	// The refine prompt embeds the prior result and the feedback text.
@@ -4670,9 +4675,9 @@ func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "refine after approval",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4684,7 +4689,7 @@ func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
 	require.NoError(t, trigErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
 
 	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{
@@ -4700,7 +4705,7 @@ func TestTriggerTriage_RefineWithFeedback_ResetsPlanApproved(t *testing.T) {
 	require.NoError(t, refineErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && !updated.PlanApproved
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady) && !updated.PlanApproved
 	}, 5*time.Second, 50*time.Millisecond, "refine completion should reset plan_approved to false")
 }
 
@@ -4716,9 +4721,9 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "refine after rejection",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4730,7 +4735,7 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 	require.NoError(t, trigErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond, "initial triage should mark item ready")
 
 	rejectResp, err := svc.RejectPlan(t.Context(), connect.NewRequest(&sessionv1.RejectPlanRequest{
@@ -4748,7 +4753,7 @@ func TestTriggerTriage_RefineWithFeedback_ClearsRejectionReason(t *testing.T) {
 	require.NoError(t, refineErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady) && updated.PlanRejectionReason == ""
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady) && updated.PlanRejectionReason == ""
 	}, 5*time.Second, 50*time.Millisecond, "refine completion should clear plan_rejection_reason")
 
 	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
@@ -4766,9 +4771,9 @@ func TestTriggerTriage_RefineWithFeedback_RequiresPriorResult(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "no prior triage",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4791,9 +4796,9 @@ func TestTriggerTriage_HeadlessPoolError(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "error triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4813,7 +4818,7 @@ func TestTriggerTriage_HeadlessPoolError(t *testing.T) {
 	// Item must stay in idea status.
 	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, loadErr)
-	assert.Equal(t, string(session.BacklogStatusIdea), updated.Status)
+	assert.Equal(t, string(domain.BacklogStatusIdea), updated.Status)
 }
 
 // TestTriggerTriage_AlreadyExists_LiveSession: a live (non-headless) triage session blocks re-trigger.
@@ -4826,19 +4831,19 @@ func TestTriggerTriage_AlreadyExists_LiveSession(t *testing.T) {
 	svc.SetHeadlessPool(pool)
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "blocked triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)
 
 	// Create an open triage session that reports as live (non-headless UUID).
-	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "live-triage-uuid",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 
@@ -4859,19 +4864,19 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "orphan triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)
 
 	// Inject a stale open headless triage session (simulates a server restart).
-	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-00000000-dead-beef-0000-000000000000",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 
@@ -4885,7 +4890,7 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 	// Wait for the new goroutine to complete and item to reach ready.
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
@@ -4907,9 +4912,9 @@ func TestTriggerTriage_AlreadyExists_LiveHeadlessSession(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "live headless triage item",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -4917,10 +4922,10 @@ func TestTriggerTriage_AlreadyExists_LiveHeadlessSession(t *testing.T) {
 
 	// Open headless triage session, exactly like the genuinely-still-running case:
 	// no EndedAt, headless-prefixed UUID.
-	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, isErr := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-11111111-live-0000-000000000000",
-		SessionRole: string(session.SessionRoleTriage),
+		SessionRole: string(instance.SessionRoleTriage),
 	})
 	require.NoError(t, isErr)
 
@@ -4962,10 +4967,10 @@ func (f *fakeSourcePlugin) Fetch(_ context.Context, cfg session.PluginConfig, cu
 	return f.items, cursor, nil
 }
 
-func (f *fakeSourcePlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
-	return session.BacklogItemData{
+func (f *fakeSourcePlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
+	return backlogdto.BacklogItemData{
 		Title:      item.Title,
-		Status:     string(session.BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: item.ExternalID,
 		SourceID:   sourceID,
 	}
@@ -5006,7 +5011,7 @@ func TestTriggerSync_SucceedsWhenFeatureEnabledCheckReturnsTrue(t *testing.T) {
 	svc.SetPluginRegistry(registry)
 	svc.SetSyncFeatureEnabledCheck(func() bool { return true })
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Source",
 		Enabled:     true,
@@ -5069,7 +5074,7 @@ func TestTriggerSync_SucceedsAndCreatesItems(t *testing.T) {
 	registry.Register(plugin)
 	svc.SetPluginRegistry(registry)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Source",
 		Enabled:     true,
@@ -5102,10 +5107,10 @@ func TestTriggerSync_DecryptsTokenThroughServiceLayer(t *testing.T) {
 	key := make([]byte, 32)
 	svc.SetSyncKeyFunc(func() ([]byte, error) { return key, nil })
 
-	encToken, err := session.EncryptToken(key, "plaintext-token")
+	encToken, err := domain.EncryptToken(key, "plaintext-token")
 	require.NoError(t, err)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Encrypted Source",
 		Enabled:     true,
@@ -5129,7 +5134,7 @@ func TestTriggerSync_PropagatesFetchError(t *testing.T) {
 	registry.Register(plugin)
 	svc.SetPluginRegistry(registry)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Source",
 		Enabled:     true,
@@ -5171,7 +5176,7 @@ func TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    "fake_source",
 		DisplayName: "Never Synced",
 		Enabled:     true,
@@ -5192,7 +5197,7 @@ func TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    "fake_source",
 		DisplayName: "Chatty Source",
 		Enabled:     true,

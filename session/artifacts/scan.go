@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 )
@@ -36,7 +38,7 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 		// First sight, the flagged version bump, or a different session now owns the file: scan it all.
 		pos = scanstate.Position{}
 	default:
-		version = normalizeVersion(prev.version) // incremental: the file's older bytes keep their version
+		version = domain.NormalizeScanVersion(prev.version) // incremental: the file's older bytes keep their version
 	}
 	ae.scanFrom(filePath, fi, title, sub, pos, version)
 }
@@ -111,8 +113,8 @@ func (ae *ArtifactExtractor) commitScan(filePath, title string, sub, full bool, 
 // scanFindings accumulates what one scan pass extracted.
 type scanFindings struct {
 	prURLs, commitSHAs, externalURLs []string
-	commands                         []CommandArtifact
-	records                          []ArtifactRecord
+	commands                         []domain.CommandArtifact
+	records                          []domain.ArtifactRecord
 	pending                          map[string]pendingCall // tool_use id -> call awaiting its result
 }
 

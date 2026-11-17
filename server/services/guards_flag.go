@@ -9,7 +9,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // hiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary
@@ -22,7 +23,7 @@ const hiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
 // guardsFlagAuditPolicy: off loosens, so it is audited durably before it is
 // persisted; it is also the hatch for a faulty sink, so it is never refused
 // when the sink is down (fallback record only). On is a tightening flip.
-var guardsFlagAuditPolicy = FlagAuditPolicy{
+var guardsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 	Loosening:   func(enabled bool) bool { return !enabled },
 	EscapeHatch: true,
 }
@@ -85,7 +86,7 @@ func (g *guardBypassState) note() (warn bool) {
 // steer to a non-qualifying hidden target goes through (guards off). With the
 // sink down the write is refused: the flag exists to restore the review
 // composer, not to open writes to triage, diagnose and other sessions blind.
-func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *session.Instance, msg string) (AuditLine, error) {
+func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) (AuditLine, error) {
 	line := s.steerAuditLine(withSteerRequestFacts(ctx, d.facts), inst, msg)
 	line.Kind = auditKindGuardBypass
 	line.Phase = auditPhaseRequest

@@ -5,8 +5,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -135,7 +135,7 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 
 // createInitialSnapshotEvent creates a SessionCreated event for initial snapshot.
 // This is used when a client first connects to WatchSessions to receive current state.
-func createInitialSnapshotEvent(instance *session.Instance) *sessionv1.SessionEvent {
+func createInitialSnapshotEvent(instance *instance.Instance) *sessionv1.SessionEvent {
 	return &sessionv1.SessionEvent{
 		Timestamp: timestamppb.Now(),
 		Event: &sessionv1.SessionEvent_SessionCreated{

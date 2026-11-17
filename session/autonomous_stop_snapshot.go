@@ -7,8 +7,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -67,8 +69,8 @@ type stopSource interface {
 }
 
 type instanceStopSource struct {
-	inst       *Instance
-	controller *ClaudeController
+	inst       *instance.Instance
+	controller *claudectl.ClaudeController
 }
 
 func (s instanceStopSource) Status() (detection.DetectedStatus, string) {
@@ -164,6 +166,6 @@ func readStopSnapshot(ctx context.Context, src stopSource) domain.StopSnapshot {
 // CaptureInstanceStopSnapshot reads inst once for a restart path that has no
 // driver (stale-work remediation, dead-pane respawn). It never blocks past
 // timeout (<=0 means stopCaptureTimeout); failures land in CaptureErr.
-func CaptureInstanceStopSnapshot(inst *Instance, timeout time.Duration) domain.StopSnapshot {
+func CaptureInstanceStopSnapshot(inst *instance.Instance, timeout time.Duration) domain.StopSnapshot {
 	return captureStopSnapshot(instanceStopSource{inst: inst, controller: inst.GetController()}, timeout)
 }

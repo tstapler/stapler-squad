@@ -10,9 +10,10 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Typed result codes of the wake and peer-help tools (plan Story 4.5). They
@@ -74,11 +75,11 @@ var identityGatedTools = map[string][]callerRole{
 // with no link, or any role not listed, is a work session.
 func roleOfItemSession(role string) callerRole {
 	switch role {
-	case session.SessionRoleTriage:
+	case instance.SessionRoleTriage:
 		return roleTriage
-	case session.SessionRoleReview:
+	case instance.SessionRoleReview:
 		return roleReview
-	case session.SessionRoleDiagnose:
+	case instance.SessionRoleDiagnose:
 		return roleDiagnose
 	default:
 		return roleWork
@@ -107,6 +108,12 @@ func withCallerIdentityGate(g *callerIdentityGate, tool string, handler identity
 	if !ok {
 		panic(fmt.Sprintf("withCallerIdentityGate: %q has no row in identityGatedTools", tool))
 	}
+	return withCallerIdentityGateRoles(g, tool, allowed, handler)
+}
+
+// withCallerIdentityGateRoles is withCallerIdentityGate with the allowed roles
+// passed at registration, so a new tool needs no row in identityGatedTools.
+func withCallerIdentityGateRoles(g *callerIdentityGate, tool string, allowed []callerRole, handler identityHandler) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		caller, verified := verifiedCallerSessionUUID(ctx)
 		if !verified {
@@ -150,28 +157,15 @@ func rawTypedError(e typedError) *mcpgo.CallToolResult {
 
 // roleLookupFrom resolves a role from a backlog-link read. Only "no link" means
 // a work session; any other error yields roleUnknown, which no tool allows.
-func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)) callerRoleLookup {
+func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)) callerRoleLookup {
 	return func(ctx context.Context, sessionUUID string) callerRole {
 		link, err := get(ctx, sessionUUID)
 		switch {
-		case errors.Is(err, session.ErrNotFound):
+		case errors.Is(err, domain.ErrNotFound):
 			return roleWork
 		case err != nil:
 			return roleUnknown
 		}
 		return roleOfItemSession(link.Role)
 	}
-}
-
-// registerIdentityGatedTools registers the wake, peer-help and owner-action tools behind
-// one identity gate whose role lookup reads the caller's backlog link.
-func registerIdentityGatedTools(s *mcpserver.MCPServer, storage *session.Storage, bus *events.EventBus) {
-	gate := &callerIdentityGate{
-		metrics: wakes.NewMetrics(),
-		roleOf:  roleLookupFrom(storage.GetItemSessionBySessionUUID),
-	}
-	registerWakeTools(s, newWakeHandlers(gate))
-	peerHelp := newPeerHelpHandlers(gate, storage, bus)
-	registerPeerHelpTools(s, peerHelp)
-	registerOwnerActionTools(s, peerHelp)
 }

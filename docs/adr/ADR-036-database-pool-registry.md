@@ -25,7 +25,7 @@ exhaustion). So WAL is already true in practice; what is missing is enforcement 
 | `sessions.db` | `session.NewEntRepository` (`session/ent_repository.go:178`, `ent_client_instrumented.go:48`); `dbobs` names `ent`, `ent-read` (`dbsplit`) | 1 / 4 (`STAPLER_SQUAD_DB_READ_CONNS`) | WAL, busy_timeout 5 s, FK, auto_vacuum=incremental, ent time compat; `synchronous=NORMAL` only if #1289 merges |
 | `analytics.db` | `analytics.OpenAnalyticsDBWithDriver` (`server/analytics/db.go:34`), `dbobs` name `analytics` | 1 / 0 | WAL, NORMAL, FK, busy_timeout 5 s, `wal_autocheckpoint=1000`, auto_vacuum=incremental; no ent time compat |
 | `internal/storage/sqlite.go` `NewSQLiteStore` | no caller (grep finds none outside its file) | n/a | dead code |
-| Foreign / ad hoc: `opencode_adapter.go`, `agy_adapter.go`, `capacity_monitor.go:770`, `database_service.go:236,251,362`, `workflow_engine_replay.go:125`, `scripts/soak` | `sql.Open("sqlite", ...)` via `internal/sqlitedsn` | short-lived | various; opencode/agy files belong to other tools and are opened read-only |
+| Foreign / ad hoc: `session/historyadapters/opencode_adapter.go`, `session/historyadapters/agy_adapter.go`, `capacity_monitor.go:770`, `database_service.go:236,251,362`, `workflow_engine_replay.go:125`, `scripts/soak` | `sql.Open("sqlite", ...)` via `internal/sqlitedsn` | short-lived | various; opencode/agy files belong to other tools and are opened read-only |
 
 Everything else (workflow ledger, claims, audit, tokens, backlog, context history) is in `sessions.db` through one ent client
 (`session/contexthistory/store.go` takes the state `*ent.Client`). Both ent-managed files run `Schema.Create` for the full
@@ -73,7 +73,7 @@ join connects them.
 
 | Cluster | Tables | Evidence |
 |---|---|---|
-| Session graph | `sessions`, `worktrees`, `diff_stats`, `tags`+`session_tags`, `claude_sessions`, `claude_metadata`, `shells`, `projects` | edges Session->{Worktree,DiffStats,Tag,ClaudeSession,Shell}, Project->Session; one tx touches Session+ClaudeSession+ClaudeMetadata+DiffStats+Shell+Worktree (`ent_repository.go:863`), Project+Session (`:2211`), Session+Worktree (`worktree_consistency_sweep.go:652`) |
+| Session graph | `sessions`, `worktrees`, `diff_stats`, `tags`+`session_tags`, `claude_sessions`, `claude_metadata`, `shells`, `projects` | edges Session->{Worktree,DiffStats,Tag,ClaudeSession,Shell}, Project->Session; one tx touches Session+ClaudeSession+ClaudeMetadata+DiffStats+Shell+Worktree (`ent_repository.go:863`), Project+Session (`:2211`), Session+Worktree (`session/wtconsistency/sweep.go:652`) |
 | Backlog | `backlog_items`, `item_sessions`, `review_verdicts`, `backlog_status_events`, `backlog_stuck_states`, `backlog_progress_notes`, `backlog_activity_notes`, `backlog_item_dependencies`, `guidance_requests`, `item_sources`, `source_sync_events`, `deleted_item_session_costs` | edges BacklogItem->each child; item delete tx touches BacklogItem+DeletedItemSessionCost+ItemSession+ReviewVerdict (`ent_repository_backlog.go:1668`); `storage_backlog.go:917` ItemSession+ReviewVerdict |
 | Stage graph | `backlog_stages`, `stage_transitions`, `transition_gates`, `gate_satisfaction_records`, `stage_liveness_definitions` | edges among them; stage CRUD tx also writes `backlog_items` (`ent_stage_config_repository.go:547`); `StageConfigFingerprint` (`workflow_stage_seed.go:255-268`) reads stages, transitions, gates and liveness definitions in one function, so liveness stays with the stage graph in the Backlog cluster |
 
@@ -92,7 +92,7 @@ output not committed); the empty table is left in place.
 | `escape` (file `analytics.db`) | `escape_events` | batch writer; 7-day retention |
 | `analytics_events` | `analytics_events` | `analytics` provider |
 | `workflow` | `workflows`, `trigger_fire_events`, `webhook_registrations`, `webhook_request_ledgers`, `pipeline_modes` | tx single-table (`ent_repository_webhook_registration.go:184`, `ent_repository_webhook_lifecycle.go:58`); `workflow_id` is a plain UUID, same DB so unchanged |
-| `wake` | `wake_triggers` | all tx single-table (`ent_repository_wake*.go`); `owner_session_uuid` string |
+| `wake` | `wake_triggers` | all tx single-table (`session/wakestore/*.go`); `owner_session_uuid` string |
 | `credentials` | `integration_credentials` | secrets; own file for blast radius and 0600 perms |
 | `errors` | `error_events` | none |
 | stay in `core` until justified | `session_goals`, `session_summaries`, `handoff_summaries`, `dismissed_findings`, `tagging_rules`, `tagging_rule_fires`, `approval_rules` | keyed by `session_id`/`session_uuid`/`rule_id` strings, no FKs; tiny and low write, so moving buys little |

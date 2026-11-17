@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -21,13 +21,13 @@ import (
 // reached" -- decisive because AppScrollGate(nil, ...) panics immediately.
 func TestFeatureFlagService_should_ToggleForwardingBehaviorForNextRequestOnly_When_UpdateFeatureFlagCalledMidSession(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName, true))
 	assertScrollbackRequestReachesAppScrollGate(t, "native")
 
 	// Flip the flag mid-session, the same live-settable path UpdateFeatureFlag
 	// drives (never an env var/restart gate, per this repo's rollout-flag
 	// convention).
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName, false))
 	assertScrollbackRequestSkipsAppScrollGate(t)
 }
 

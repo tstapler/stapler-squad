@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"strings"
 )
 
@@ -21,19 +22,13 @@ var ErrPromptUndeliverable = errors.New("prompt cannot be delivered to the pane 
 // constraint: Keys is written in chunks (sendKeysChunked), never truncated.
 type DriverPrompt struct{ keys string }
 
-// cleanDriverPromptText drops NUL bytes (tmux drops them unpredictably) and
-// surrounding whitespace. Empty means "fall back to driverInitialPrompt".
-func cleanDriverPromptText(s string) string {
-	return strings.TrimSpace(strings.ReplaceAll(s, "\x00", ""))
-}
-
 // ParseDriverPrompt turns prompt text into keystrokes. Text with a control byte
 // (newline, tab, ESC, ...) goes in a bracketed paste so it arrives as text, not
 // as Enter or a key chord; plain printable text is typed as is. Text containing
 // the paste terminator is refused, since it would end the paste early and let
 // the rest act as keystrokes.
 func ParseDriverPrompt(s string) (DriverPrompt, error) {
-	text := cleanDriverPromptText(s)
+	text := instance.CleanDriverPromptText(s)
 	if strings.Contains(text, bracketedPasteEnd) {
 		return DriverPrompt{}, fmt.Errorf("%w: contains the bracketed-paste terminator ESC[201~", ErrPromptUndeliverable)
 	}

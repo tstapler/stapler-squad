@@ -32,6 +32,7 @@ var reviewedDynamicIDForms = map[string]string{
 	"resolvedSessionID":    "SendNotification's resolved UUID, else the raw hook id",
 	"is.BacklogItemID":     "backlog item id (item_id stamp: NotASession)",
 	"item.ID":              "backlog item id (item_id stamp: NotASession)",
+	"st.Item.ID":           "backlog item id (item_id stamp: NotASession)",
 	"itemID":               "backlog item id (item_id stamp: NotASession)",
 	"quotaGateNotifierKey": "constant \"backlog-quota-gate\" (in the system set)",
 }

@@ -121,6 +121,7 @@ ready-bazel-guards: ## Bazel repo guardrails: .bazelignore, BUILD paths, .bazelr
 	bash scripts/hooks/pre-push-no-force_test.sh
 	bash tools/bzl/check-pkg-mapping.sh
 	bash tools/bzl/check-wrappers.sh
+	go run ./tools/bzl/scandata .
 
 # ---- build and test wrappers (Epic 8). Under BUILD_SYSTEM=make the Makefile's legacy recipes apply; under
 # BUILD_SYSTEM=bazel the rules below replace them. Descriptions live on the legacy rules in Makefile (help

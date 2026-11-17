@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestNewEntRepository_RestartDoesNotAlterStatusValuesAbove4 guards against a
@@ -29,7 +30,7 @@ func TestNewEntRepository_RestartDoesNotAlterStatusValuesAbove4(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")
 	ctx := context.Background()
 
-	statuses := []Status{Creating, Active, Paused, Stopped, Hibernated, Crashed, PermanentlyFailed, Failed}
+	statuses := []domain.Status{domain.Creating, domain.Active, domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed, domain.PermanentlyFailed, domain.Failed}
 
 	// "Restart" 1: create one session per status value.
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))

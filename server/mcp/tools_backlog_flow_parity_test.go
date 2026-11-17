@@ -13,15 +13,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/session/flow"
 	"google.golang.org/protobuf/proto"
 )
 
 // The three entry points take the flow service as a trailing variadic option.
 var (
-	_ func(...CoreOption) *services.BacklogFlowService = FlowServiceFromOptions
-	_                                                  = NewHTTPHandler
+	_ func(...CoreOption) *backlogflow.BacklogFlowService = FlowServiceFromOptions
+	_                                                     = NewHTTPHandler
 )
 
 func TestNewCore_should_ReturnUnavailableOrData_When_WithFlowServiceAbsentOrPresent(t *testing.T) {
@@ -36,7 +36,7 @@ func TestNewCore_should_ReturnUnavailableOrData_When_WithFlowServiceAbsentOrPres
 	require.NoError(t, err)
 	assert.Equal(t, ErrUnavailable, parseResult(t, res)["error"].(map[string]any)["code"])
 
-	svc := services.NewFlowServiceFromStorage(storage)
+	svc := backlogflow.NewFlowServiceFromStorage(storage)
 	with := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, nil, WithFlowService(svc))
 	res, err = with.GetTool("get_flow_summary").Handler(context.Background(), makeToolReq(map[string]any{"window_days": float64(7), "sections": []any{"tiles"}}))
 	require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestNewCore_should_RegisterFlowToolsOnlyInsideBacklogFlagAndStorage(t *test
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	store := &stubStore{}
-	svc := services.NewFlowServiceFromStorage(storage)
+	svc := backlogflow.NewFlowServiceFromStorage(storage)
 	flowTools := []string{
 		"get_flow_summary", "compare_flow_windows", "list_flow_drilldown",
 		"list_flow_deadlock_candidates", "list_flow_thrash_episodes", "get_item_flow_timeline",
@@ -78,7 +78,7 @@ func TestNewCore_should_RegisterFlowToolsOnlyInsideBacklogFlagAndStorage(t *test
 func TestNewHTTPHandler_should_AcceptFlowServiceOption(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
-	svc := services.NewFlowServiceFromStorage(storage)
+	svc := backlogflow.NewFlowServiceFromStorage(storage)
 
 	h := NewHTTPHandler(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil, WithFlowService(svc))
 
@@ -89,7 +89,7 @@ func TestNewHTTPHandler_should_AcceptFlowServiceOption(t *testing.T) {
 
 func rpcJSON(t *testing.T, msg proto.Message) map[string]any {
 	t.Helper()
-	raw, err := services.FlowJSONOptions().Marshal(msg)
+	raw, err := backlogflow.FlowJSONOptions().Marshal(msg)
 	require.NoError(t, err)
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(raw, &out))
@@ -98,7 +98,7 @@ func rpcJSON(t *testing.T, msg proto.Message) map[string]any {
 
 func TestFlowTools_should_EqualProtojsonOfRpc_When_SameFakeSummarizer(t *testing.T) {
 	t.Parallel()
-	svc := services.NewBacklogFlowService(&liveShapedAgg{})
+	svc := backlogflow.NewBacklogFlowService(&liveShapedAgg{})
 	h := &flowHandlers{svc: svc}
 	rpc, err := svc.GetFlowSummary(context.Background(), connect.NewRequest(&sessionv1.GetFlowSummaryRequest{WindowDays: 30}))
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestFlowTools_should_DifferFromRpcOnlyInNamedSanitizedFields_When_TitlesAnd
 	s.Anomalies.Items.Items[0].Title = "bell\x07 and\ttab\x00 control chars"
 	s.Review.Meta = flow.SectionMeta{Status: flow.SectionPartial, Error: injection + strings.Repeat("e", 500)}
 	s.Notes.Notes = []string{injection + strings.Repeat("n", 500)}
-	svc := services.NewBacklogFlowService(&fakeFlowAgg{summary: s})
+	svc := backlogflow.NewBacklogFlowService(&fakeFlowAgg{summary: s})
 	h := &flowHandlers{svc: svc}
 	rpc, err := svc.GetFlowSummary(context.Background(), connect.NewRequest(&sessionv1.GetFlowSummaryRequest{WindowDays: 30}))
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func diffPaths(path string, a, b any, out *[]string) {
 
 func TestFlowTools_should_ReportTruncationNotWholeSet_When_OverLimitFixture(t *testing.T) {
 	t.Parallel()
-	svc := services.NewBacklogFlowService(&liveShapedAgg{})
+	svc := backlogflow.NewBacklogFlowService(&liveShapedAgg{})
 	h := &flowHandlers{svc: svc}
 
 	_, thrash := callFlowTool(t, h.listFlowThrashEpisodes, map[string]any{})

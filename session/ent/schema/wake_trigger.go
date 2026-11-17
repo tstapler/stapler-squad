@@ -14,7 +14,7 @@ import (
 // and delivering are separate facts: a row is claimed by a guarded UPDATE and
 // only a confirmed pane write sets delivered_at. Transitions between status
 // values are validated in Go by domain.WakeStatus (see
-// session/ent_repository_wake.go); the schema stores strings, like the other
+// session/wakestore/wake.go); the schema stores strings, like the other
 // enums in this package.
 type WakeTrigger struct {
 	ent.Schema

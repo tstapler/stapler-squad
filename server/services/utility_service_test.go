@@ -11,6 +11,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // --------------------------------------------------------------------------
@@ -24,8 +27,8 @@ func setupUtilityService() *UtilityService {
 func setupUtilityServiceWithPollerFixture() (*UtilityService, *session.ReviewQueuePoller) {
 	svc := setupUtilityService()
 
-	queue := session.NewReviewQueue()
-	statusMgr := session.NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -89,12 +92,12 @@ func TestGetLogs_WithUUID_MatchingInstance(t *testing.T) {
 	svc, poller := setupUtilityServiceWithPollerFixture()
 
 	const testUUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	poller.SetInstances([]*session.Instance{
+	poller.SetInstances([]*instance.Instance{
 		{
 			UUID:    testUUID,
 			Title:   "my-resolved-session",
 			Path:    "/tmp/test",
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 		},
 	})
@@ -133,11 +136,11 @@ func TestGetLogs_WithTitle_FindsLogByTitle(t *testing.T) {
 	t.Parallel()
 	svc, poller := setupUtilityServiceWithPollerFixture()
 
-	poller.SetInstances([]*session.Instance{
+	poller.SetInstances([]*instance.Instance{
 		{
 			Title:   "title-session",
 			Path:    "/tmp/test",
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 		},
 	})

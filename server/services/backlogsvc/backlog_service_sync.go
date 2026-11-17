@@ -16,8 +16,11 @@ import (
 	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // defaultTriggerSyncTimeout bounds a single manual TriggerSync RPC call. The
@@ -48,18 +51,18 @@ func (s *BacklogService) AttachSessionToItem(
 	// 2. Load and validate item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	if item.Status != string(session.BacklogStatusIdea) &&
-		item.Status != string(session.BacklogStatusReady) &&
-		item.Status != string(session.BacklogStatusInProgress) {
+	if item.Status != string(domain.BacklogStatusIdea) &&
+		item.Status != string(domain.BacklogStatusReady) &&
+		item.Status != string(domain.BacklogStatusInProgress) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q, %q, or %q status to attach a session, got %q",
-				session.BacklogStatusIdea, session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status))
+				domain.BacklogStatusIdea, domain.BacklogStatusReady, domain.BacklogStatusInProgress, item.Status))
 	}
 
 	// 3. Reject attaching a session whose working directory is the item's own
@@ -106,10 +109,10 @@ func (s *BacklogService) AttachSessionToItem(
 
 	// 5. Create ItemSession. ClaimantHostID is the attaching process's own
 	// identity (s.cfg), never derived from req.Msg or the attached session.
-	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:         item.ID,
 		SessionUUID:    req.Msg.SessionUuid,
-		SessionRole:    session.SessionRoleWork,
+		SessionRole:    instance.SessionRoleWork,
 		BranchName:     attachedBranchName,
 		AcSnapshot:     acSnapshot,
 		ClaimantHostID: s.claimantHostID(),
@@ -127,11 +130,11 @@ func (s *BacklogService) AttachSessionToItem(
 				worktreePath := inst.GetEffectiveRootDir()
 				// Write synchronously under mutex to prevent concurrent write races.
 				s.worktreeMu.Lock()
-				if wErr := backlog.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
+				if wErr := pipeline.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 				}
-				if wErr := backlog.WriteBacklogContextFile(item, attachPriorSessions, worktreePath); wErr != nil {
+				if wErr := pipeline.WriteBacklogContextFile(item, attachPriorSessions, worktreePath); wErr != nil {
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
 				}
@@ -139,14 +142,15 @@ func (s *BacklogService) AttachSessionToItem(
 				// Capture pre-work HEAD SHA so the review gate can diff base..HEAD
 				// across all commits the agent makes (same as SpawnSessionFromItem step 12b) —
 				// into BaseCommitSha, never LastCommitSha (see SetItemSessionBaseCommit).
-				if baseSHA, shaErr := backlog.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
-					_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
+				if baseSHA := s.stampBaseCommit(ctx, baseCommitStamp{
+					Caller: "AttachSessionToItem", Item: item, Session: is, Dir: worktreePath, RaisesNotification: true,
+				}); baseSHA != "" {
 					inst.SetDirBaseSHA(baseSHA)
 				}
 				// Persist synchronously so the review gate's worktree lookup (by session
 				// UUID) doesn't race the next periodic SaveInstances sweep — same fix as
 				// SpawnSessionFromItem.
-				if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
+				if saveErr := s.storage.SaveInstances([]*instance.Instance{inst}); saveErr != nil {
 					log.WarningLog().Printf("[AttachSessionToItem] failed to persist instance immediately after attach item=%s session=%s: %v", item.ID, inst.UUID, saveErr)
 				}
 				break
@@ -156,10 +160,10 @@ func (s *BacklogService) AttachSessionToItem(
 
 	// 7. Transition item to in_progress (only if the state machine permits it; a
 	// non-edge is a silent skip, not a denial, so it is checked before the gate).
-	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress, session.BuildStageConfigSnapshotFallback(item)) {
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerAttachSessionToItem, ItemID: item.ID, To: session.BacklogStatusInProgress,
-			TriggeredBy: session.TriggeredBySystem, Unconditional: true,
+	if s.engine.CanTransition(domain.BacklogStatus(item.Status), domain.BacklogStatusInProgress, backlogdto.BuildStageConfigSnapshotFallback(item)) {
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerAttachSessionToItem, ItemID: item.ID, To: domain.BacklogStatusInProgress,
+			TriggeredBy: instance.TriggeredBySystem, Unconditional: true,
 		}); transErr != nil {
 			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
 			// Same shape as SpawnSessionFromItem's fresh-spawn path: a real
@@ -210,7 +214,7 @@ func (s *BacklogService) TriggerSync(
 	defer cancel()
 
 	if err := sl.SyncByID(syncCtx, req.Msg.SourceId); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("sync failed: %w", err))
@@ -291,7 +295,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 			Item:           backlogItemToProto(existing, s.engine, s.buildCostLookup()),
 			AlreadyExisted: true,
 		}), nil
-	} else if !errors.Is(lookupErr, session.ErrNotFound) {
+	} else if !errors.Is(lookupErr, domain.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check for existing import: %w", lookupErr))
 	}
 
@@ -317,11 +321,11 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		}
 	}
 
-	created, err := s.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, err := s.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        issue.Title,
 		Description:  issue.Body,
-		Priority:     session.DefaultBacklogPriority,
-		Status:       string(session.BacklogStatusIdea),
+		Priority:     domain.DefaultBacklogPriority,
+		Status:       string(domain.BacklogStatusIdea),
 		RepoPath:     repoPath,
 		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
 		ExternalID:   strconv.Itoa(ref.IssueNumber),

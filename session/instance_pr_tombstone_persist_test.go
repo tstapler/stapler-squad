@@ -4,8 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // A tombstoned attach is dropped from memory, which can zero the legacy scalars;
@@ -18,13 +21,13 @@ func TestPersistPRAttach_ShouldClearStoredLegacyNumber_WhenTombstonedAttachLeave
 	require.NoError(t, storage.PersistPRMirror(inst.UUID, "https://github.com/acme/app/pull/7", 7, false))
 	inst.GitHubPRNumber, inst.GitHubPRURL = 7, "https://github.com/acme/app/pull/7"
 
-	ref := mustPRRef(t, "", "acme", "app", 13)
-	_, err := storage.Repo.UpsertSessionPR(ctx, SessionPROwner(inst.UUID), ref, PRLink{Source: AttachSourceManual})
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 13)
+	_, err := storage.Repo.UpsertSessionPR(ctx, domain.SessionPROwner(inst.UUID), ref, domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
-	_, err = storage.Repo.DeleteSessionPR(ctx, SessionPROwner(inst.UUID), ref)
+	_, err = storage.Repo.DeleteSessionPR(ctx, domain.SessionPROwner(inst.UUID), ref)
 	require.NoError(t, err)
 
-	require.NoError(t, inst.AttachPR(ref, AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 
 	require.Zero(t, inst.Snapshot().GitHub.GitHubPRNumber, "memory cleared by the tombstone drop")
 	got := sessionMirror(t, storage, "pr-session")

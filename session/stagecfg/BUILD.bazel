@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "stagecfg",
+    srcs = [
+        "ent_gate_satisfaction_repository.go",
+        "ent_pipeline_mode_repository.go",
+        "ent_stage_config_repository.go",
+        "ent_workflow_repository.go",
+        "gate_satisfaction_repository.go",
+        "pipeline_mode_executor.go",
+        "pipeline_mode_repository.go",
+        "stage_config_repository.go",
+        "stage_definition.go",
+        "workflow_repository.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/stagecfg",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:backlogstage",
+        "//tools/bzl/ent:gatesatisfactionrecord",
+        "//tools/bzl/ent:pipelinemode",
+        "//tools/bzl/ent:predicate",
+        "//tools/bzl/ent:stagetransition",
+        "//tools/bzl/ent:transitiongate",
+        "//tools/bzl/ent:workflow",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":stagecfg",
+    visibility = ["//visibility:public"],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

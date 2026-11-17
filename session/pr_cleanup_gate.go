@@ -8,6 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // CleanupStatus is the result class of one terminal-item cleanup attempt.
@@ -85,9 +89,9 @@ type GateOptions struct {
 
 // CleanupGateSource is the storage slice the gate reads; *Storage implements it.
 type CleanupGateSource interface {
-	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error)
-	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error)
-	FindInstanceDataByID(id string) (*InstanceData, error)
+	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
+	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error)
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 }
 
 // PRCleanupGate decides whether a backlog-driven path may remove an item's
@@ -97,23 +101,23 @@ type CleanupGateSource interface {
 // clause, only with the multi-PR scope on and a probe wired).
 type PRCleanupGate struct {
 	src         CleanupGateSource
-	probe       LiveWorkProbe
+	probe       instance.LiveWorkProbe
 	liveEnabled func() bool
 	now         func() time.Time
 }
 
 // NewPRCleanupGate builds the gate. A nil probe or a false liveEnabled disables
 // the live clause (today's behavior).
-func NewPRCleanupGate(src CleanupGateSource, probe LiveWorkProbe, liveEnabled func() bool) *PRCleanupGate {
+func NewPRCleanupGate(src CleanupGateSource, probe instance.LiveWorkProbe, liveEnabled func() bool) *PRCleanupGate {
 	return &PRCleanupGate{src: src, probe: probe, liveEnabled: liveEnabled, now: time.Now}
 }
 
 // Probe returns the live-work probe the gate holds (for the wiring assertion).
-func (g *PRCleanupGate) Probe() LiveWorkProbe { return g.probe }
+func (g *PRCleanupGate) Probe() instance.LiveWorkProbe { return g.probe }
 
 // Blocked reports whether removal must be withheld for sessions, with the reason
 // naming each holding owner. Any lookup error blocks (fail closed).
-func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []ItemSessionSummary, opts GateOptions) (CleanupBlock, bool) {
+func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []backlogdto.ItemSessionSummary, opts GateOptions) (CleanupBlock, bool) {
 	if reasons := g.prReasons(ctx, sessions); len(reasons) > 0 {
 		return CleanupBlock{Reason: strings.Join(reasons, "; ")}, true
 	}
@@ -132,11 +136,11 @@ func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []ItemSessionSumma
 	return CleanupBlock{}, false
 }
 
-func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []ItemSessionSummary) []string {
+func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.ItemSessionSummary) []string {
 	var uuids []string
 	itemIDs := map[string]struct{}{}
 	for _, s := range sessions {
-		if s.SessionUUID == "" || s.Role != SessionRoleWork {
+		if s.SessionUUID == "" || s.Role != instance.SessionRoleWork {
 			continue
 		}
 		uuids = append(uuids, s.SessionUUID)
@@ -155,7 +159,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []ItemSessionSum
 	for _, id := range uuids {
 		d, derr := g.src.FindInstanceDataByID(id)
 		if errors.Is(derr, ErrInstanceDataNotFound) {
-			d = &InstanceData{UUID: id}
+			d = &domain.InstanceData{UUID: id}
 		} else if derr != nil {
 			return append(reasons, fmt.Sprintf("session %s: unreadable: %v", id, derr))
 		}
@@ -184,7 +188,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []ItemSessionSum
 // OwnPRsBlockReason is the ordered PR decision for one session's own links (first
 // match wins); "" means they permit deleting its worktree. rows are its link views.
 // Shared by the cleanup gate and the retention sweeper so they cannot disagree.
-func OwnPRsBlockReason(d InstanceData, rows []PRView) string {
+func OwnPRsBlockReason(d domain.InstanceData, rows []domain.PRView) string {
 	switch {
 	case len(rows) == 0 && d.GitHubPRNumber == 0:
 		return ""
@@ -196,7 +200,7 @@ func OwnPRsBlockReason(d InstanceData, rows []PRView) string {
 		}
 		return "legacy PR number with no link and no terminal flag"
 	}
-	if !PRsAllTerminal(rows, d.GitHubPRNumber) {
+	if !instance.PRsAllTerminal(rows, d.GitHubPRNumber) {
 		return "a linked PR is open, unknown or unverified"
 	}
 	if d.GitHubPRNumber > 0 && !LegacyNumberRepresented(d, rows) && !LegacyOnlyPRSafe(d) {
@@ -208,7 +212,7 @@ func OwnPRsBlockReason(d InstanceData, rows []PRView) string {
 // ItemGuardBlockReason is the item-level counterpart: an item any of whose
 // item-direct PRs is not terminal, whose scalar PR number no link represents, or
 // that has no evidence at all (ok false) holds its sessions. "" means no hold.
-func ItemGuardBlockReason(itemID string, g ItemGuardView, ok bool) string {
+func ItemGuardBlockReason(itemID string, g domain.ItemGuardView, ok bool) string {
 	switch {
 	case !ok:
 		return "no PR evidence for item " + itemID
@@ -225,8 +229,8 @@ func ItemGuardBlockReason(itemID string, g ItemGuardView, ok bool) string {
 
 // OpenPRRefs returns the refs of the views that are not terminal (open, unknown or
 // unverified), for the warnings on intentionally ungated removals.
-func OpenPRRefs(views []PRView) []PRRef {
-	var open []PRRef
+func OpenPRRefs(views []domain.PRView) []domain.PRRef {
+	var open []domain.PRRef
 	for _, v := range views {
 		if !v.Terminal() {
 			open = append(open, v.Ref)
@@ -237,7 +241,7 @@ func OpenPRRefs(views []PRView) []PRRef {
 
 // OpenPRsOfSession lists the open or unknown PR refs a session links, read-only,
 // for the warnings on intentionally ungated removals (T5.4.5). Never blocks.
-func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string) ([]PRRef, error) {
+func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string) ([]domain.PRRef, error) {
 	views, err := g.src.ListSessionPRViewsByUUIDs(ctx, []string{sessionUUID})
 	if err != nil {
 		return nil, err

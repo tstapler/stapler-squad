@@ -1,58 +1,21 @@
 package session
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
-
-// checkTmuxAvailable skips the test if tmux is not installed.
-func checkTmuxAvailable(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not available on this system")
-	}
-}
-
-// coldRestoreSocket returns a unique tmux server socket name for cold-restore
-// tests and registers a t.Cleanup that kills the isolated server on test exit.
-// The PID is embedded in the name so TestMain's PID-aware sweep can reap this
-// socket on the next run if the current run was killed with SIGKILL.
-func coldRestoreSocket(t *testing.T) string {
-	t.Helper()
-	name := fmt.Sprintf("test_coldrestore_%d_%d", os.Getpid(), time.Now().UnixNano())
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
-	})
-	return name
-}
-
-// stubClaudeBinary writes an executable "claude" stub (a plain `sleep 300`
-// script) to a temp dir and returns its path. Using this as Instance.Program
-// (instead of the literal string "claude") keeps isClaude()'s basename match
-// — so buildLaunchCommand embeds --resume — while guaranteeing the tmux pane
-// can actually exec something that stays alive: the real claude CLI is not
-// installed on CI runners, only on a developer machine that happens to have
-// it in PATH, and a pane whose command exits almost instantly makes
-// TmuxAlive() a race against remain-on-exit instead of a reliable check.
-func stubClaudeBinary(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "claude")
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nsleep 300\n"), 0o755))
-	return path
-}
 
 // TestColdRestore_WithUUID verifies that when the tmux session is dead and a
 // Claude conversation UUID is present, Start(false) performs a cold restore by
@@ -64,18 +27,18 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -89,7 +52,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	// branch logs "Cold restoring with --resume". The --resume flag itself is only
 	// appended by ClaudeCommandBuilder for Program="claude"; that is unit-tested
 	// separately in claude_command_builder_test.go.
-	inst.SetClaudeSession(&ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
 	})
@@ -109,7 +72,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold restore")
 	// DoesSessionExist slow path has a 3s timeout; deadline must exceed that to guarantee
 	// at least one successful check before the Eventually deadline fires.
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
@@ -123,18 +86,18 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -157,7 +120,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold start")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold start")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold start")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
 }
 
@@ -168,7 +131,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 // ordering); otherwise the file keeps its natural write-time mtime.
 func writeJSONLFixture(t *testing.T, homeDir, projectPath, uuid string, modTime time.Time) string {
 	t.Helper()
-	dir := filepath.Join(homeDir, ".claude", "projects", ClaudeProjectDirName(projectPath))
+	dir := filepath.Join(homeDir, ".claude", "projects", instance.ClaudeProjectDirName(projectPath))
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, uuid+".jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("{}"), 0o644))
@@ -191,19 +154,19 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 	fakeHome := t.TempDir()
 
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
-		Program:          stubClaudeBinary(t),
-		SessionType:      SessionTypeDirectory,
+		Program:          fixturetest.StubClaudeBinary(t),
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -215,11 +178,11 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	// Inject a fake home dir and pre-write a conversation JSONL for this
 	// instance's project path, as if a previous run had captured one. Uses a
 	// no-open-files mock inspector (not nil) because Start's post-launch
-	// tryExtractConversationUUID call re-runs once tmux is alive, hitting the
+	// TryExtractConversationUUID call re-runs once tmux is alive, hitting the
 	// PID fast path — a nil inspector would panic there. Same convention as
 	// history_linker_test.go's "no open files → always falls through to
 	// DetectByPath" mocks.
-	inst.historyDetector = NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome)
+	inst.WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
 	writeJSONLFixture(t, fakeHome, inst.Path, fixtureUUID, time.Time{})
 
@@ -237,7 +200,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold restore")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 
 	assert.Contains(t, inst.LaunchCommand, "--resume", "launch command must embed --resume when a same-path JSONL was recoverable")
@@ -251,12 +214,12 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 // 300` tmux session on an isolated prefix/socket — the fixture shared by
 // every real-tmux restore test below (hot restore and the one-shot revive
 // regression test), so the live-pane session shape is defined once.
-func sleepInstanceOptions(title, tmpDir, prefix, socket string) InstanceOptions {
-	return InstanceOptions{
+func sleepInstanceOptions(title, tmpDir, prefix, socket string) instance.InstanceOptions {
+	return instance.InstanceOptions{
 		Title:            title,
 		Path:             tmpDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       prefix,
 		TmuxServerSocket: socket,
@@ -268,15 +231,15 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-hot-%d", time.Now().UnixNano())
 	tmpDir := t.TempDir()
-	socket := coldRestoreSocket(t)
+	socket := fixturetest.ColdRestoreSocket(t)
 	prefix := fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
 	// First instance: create and start normally to put a live tmux session in place.
-	inst1, cleanup1, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	inst1, cleanup1, err := instance.NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	defer func() {
 		if cleanupErr := cleanup1(); cleanupErr != nil {
@@ -298,7 +261,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 
 	// Second instance: same title/socket — simulates an instance reloaded from storage
 	// while the original tmux session is still alive.
-	inst2, cleanup2, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	inst2, cleanup2, err := instance.NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	defer func() {
 		if cleanupErr := cleanup2(); cleanupErr != nil {
@@ -318,7 +281,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	}()
 
 	assert.True(t, inst2.Started(), "inst2 must be marked as started after hot restore")
-	assert.Equal(t, Running, inst2.Status, "inst2 status must be Running after hot restore")
+	assert.Equal(t, domain.Active, inst2.Status, "inst2 status must be Running after hot restore")
 }
 
 // TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHasLiveTmuxPane
@@ -327,7 +290,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 // session, already archived at the item level but with its own ArchivedAt
 // left nil (an orphaned pre-item_sessions-linkage row), was recreated roughly
 // every 60s for hours. The Stopped-branch "secretly still alive" probe in
-// fromInstanceData (session/instance_serialization.go) saw the tmux pane
+// instanceFromData (session/instance_serialization.go) saw the tmux pane
 // still running (remain-on-exit keeps a dead pane around, see that probe's
 // doc comment) and flipped Stopped -> Active -> Start(false), contradicting
 // session_driver.go's handleStoppedStatus, which already treats a one-shot
@@ -339,41 +302,41 @@ func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHas
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	t.Run("oneshot_review_tag_stays_stopped", func(t *testing.T) {
 		t.Parallel()
-		assertStoppedReloadOutcome(t, []string{"backlog:review"}, Stopped, true)
+		assertStoppedReloadOutcome(t, []string{"backlog:review"}, domain.Stopped, true)
 	})
 
 	t.Run("non_oneshot_control_revives_to_active", func(t *testing.T) {
 		t.Parallel()
-		assertStoppedReloadOutcome(t, nil, Active, false)
+		assertStoppedReloadOutcome(t, nil, domain.Active, false)
 	})
 }
 
 // assertStoppedReloadOutcome starts a real, long-running tmux session, then
 // reloads it from a Stopped/unarchived InstanceData carrying the given tags
-// — the same shape LoadInstances feeds fromInstanceData's "secretly still
+// — the same shape LoadInstances feeds instanceFromData's "secretly still
 // alive" probe — and asserts the resulting status/started flags. A live pane
 // (not a mock) so the assertion exercises the actual IsAlive()/
 // PaneExitStatus() probe the production respawn loop hit.
-func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus Status, wantStarted bool) {
+func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus domain.Status, wantStarted bool) {
 	t.Helper()
 	inst, title, tmpDir, prefix, socket := newLiveSleepInstance(t)
 
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive before restore")
 
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:            title,
 		Path:             tmpDir,
-		Status:           Stopped,
+		Status:           domain.Stopped,
 		Program:          "sleep 300",
 		TmuxPrefix:       prefix,
 		TmuxServerSocket: socket,
 		Tags:             tags,
 	}
-	restored, err := FromInstanceDataDeferred(data)
+	restored, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	assert.Equal(t, wantStatus, restored.Snapshot().Status)
@@ -384,14 +347,14 @@ func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus Status, 
 // program on an isolated socket/prefix and registers its teardown, returning
 // the live Instance plus the identifiers needed to reload it via
 // InstanceData (title, path, tmux prefix, tmux socket).
-func newLiveSleepInstance(t *testing.T) (inst *Instance, title, tmpDir, prefix, socket string) {
+func newLiveSleepInstance(t *testing.T) (inst *instance.Instance, title, tmpDir, prefix, socket string) {
 	t.Helper()
 	title = fmt.Sprintf("test-oneshot-revive-%d", time.Now().UnixNano())
 	tmpDir = t.TempDir()
-	socket = coldRestoreSocket(t)
+	socket = fixturetest.ColdRestoreSocket(t)
 	prefix = fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
-	inst, cleanup, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
+	inst, cleanup, err := instance.NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
 	require.NoError(t, err)
 	t.Cleanup(func() { logTeardownErr(t, "cleanup", cleanup()) })
 
@@ -450,7 +413,7 @@ func TestIsStaleResumeExit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, isStaleResumeExit("claude", tt.content))
+			assert.Equal(t, tt.want, instance.IsStaleResumeExit("claude", tt.content))
 		})
 	}
 }
@@ -462,7 +425,7 @@ func TestIsStaleResumeExit(t *testing.T) {
 // resuming a conversation the user explicitly discarded — while a JSONL written
 // AFTER the clear (e.g. a new conversation, later interrupted again) is still
 // recovered normally, proving the guard is one-sided rather than a permanent
-// recovery kill switch. No live tmux needed: tryExtractConversationUUID's PID
+// recovery kill switch. No live tmux needed: TryExtractConversationUUID's PID
 // fast path is skipped (bare Instance, pm() has no session), so it goes
 // straight to the DetectByPath fallback.
 func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
@@ -490,20 +453,18 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			fakeHome := t.TempDir()
 			clearedAt := time.Now()
 
-			inst := &Instance{
-				Title:           "test-clearedat-guard",
-				Path:            tmpDir,
-				SessionType:     SessionTypeDirectory,
-				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
-				historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
-			}
+			inst := (&instance.Instance{
+				Title:       "test-clearedat-guard",
+				Path:        tmpDir,
+				SessionType: domain.SessionTypeDirectory,
+			}).WithConversationClearedAtForTest(clearedAt).WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 
-			inst.tryExtractConversationUUID()
+			inst.TryExtractConversationUUID()
 
 			gotUUID := ""
-			if inst.claudeSession != nil {
-				gotUUID = inst.claudeSession.ConversationUUID
+			if inst.GetClaudeSession() != nil {
+				gotUUID = inst.GetClaudeSession().ConversationUUID
 			}
 			assert.Equal(t, tt.wantUUID, gotUUID, tt.wantReason)
 		})
@@ -520,7 +481,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 // conversationOwnershipGuard closure with the same "skip self, skip dead,
 // require both UUID and path to match" contract the real implementation
 // documents (worktree-envvars-hijack plan.md, Story 1.4.2). These tests exist
-// to prove tryExtractConversationUUID's own calling contract -- that it
+// to prove TryExtractConversationUUID's own calling contract -- that it
 // invokes the guard with the detected candidate UUID and effective path, and
 // correctly no-ops when told the conversation is owned by another live
 // session -- not to re-verify ConversationOwnedByOtherLiveSession's own
@@ -569,27 +530,26 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 
 	writeJSONLFixture(t, fakeHome, sharedPath, conversationUUID, time.Time{})
 
-	instB := &Instance{
-		Title:           "session-b",
-		UUID:            "session-b-uuid",
-		Path:            sharedPath,
-		SessionType:     SessionTypeDirectory,
-		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
-	}
+	instB := (&instance.Instance{
+		Title:       "session-b",
+		UUID:        "session-b-uuid",
+		Path:        sharedPath,
+		SessionType: domain.SessionTypeDirectory,
+	}).WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
 		simulatedLiveInstance{uuid: sessionAUUID, conversationUUID: conversationUUID, path: sharedPath, alive: true},
 	))
 
-	instB.tryExtractConversationUUID()
+	instB.TryExtractConversationUUID()
 
-	assert.Nil(t, instB.claudeSession, "B must not silently adopt A's still-live conversation UUID via the path-shared DetectByPath fallback")
+	assert.Nil(t, instB.GetClaudeSession(), "B must not silently adopt A's still-live conversation UUID via the path-shared DetectByPath fallback")
 }
 
 // TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfRecovery
 // is worktree-envvars-hijack Task 1.4.2b's ColdRestore self-recovery
 // regression test (pre-mortem Failure #4, P2). A session undergoing
 // ColdRestore reuses its own, already-registered *Instance object to call
-// tryExtractConversationUUID with no ClaudeConversationUUID set yet -- the
+// TryExtractConversationUUID with no ClaudeConversationUUID set yet -- the
 // guard's sibling registry here contains only this same instance's own
 // record, proving the inst.UUID == selfUUID exclusion actually lets it
 // re-adopt its own conversation rather than treating its own record as
@@ -602,19 +562,18 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 
 	writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, time.Time{})
 
-	inst := &Instance{
-		Title:           "cold-restore-self-recovery",
-		UUID:            "cold-restore-self-uuid",
-		Path:            tmpDir,
-		SessionType:     SessionTypeDirectory,
-		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
-	}
+	inst := (&instance.Instance{
+		Title:       "cold-restore-self-recovery",
+		UUID:        "cold-restore-self-uuid",
+		Path:        tmpDir,
+		SessionType: domain.SessionTypeDirectory,
+	}).WithHistoryDetectorForTest(instance.NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,
 		simulatedLiveInstance{uuid: inst.UUID, conversationUUID: fixtureUUID, path: tmpDir, alive: true},
 	))
 
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
-	require.NotNil(t, inst.claudeSession, "ColdRestore self-recovery must not be blocked by the ownership guard")
-	assert.Equal(t, fixtureUUID, inst.claudeSession.ConversationUUID, "must successfully re-adopt its own JSONL's conversation UUID")
+	require.NotNil(t, inst.GetClaudeSession(), "ColdRestore self-recovery must not be blocked by the ownership guard")
+	assert.Equal(t, fixtureUUID, inst.GetClaudeSession().ConversationUUID, "must successfully re-adopt its own JSONL's conversation UUID")
 }

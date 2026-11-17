@@ -16,6 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 var errSpawnBoom = errors.New("tmux exploded")
@@ -76,7 +78,7 @@ func countEventsWithNote(t *testing.T, storage *session.Storage, itemID, note st
 	return n
 }
 
-func openSpawnFailedRow(t *testing.T, storage *session.Storage, itemID string) (session.OpenStuckStateData, bool) {
+func openSpawnFailedRow(t *testing.T, storage *session.Storage, itemID string) (backlogdto.OpenStuckStateData, bool) {
 	t.Helper()
 	row, ok, err := storage.OpenStuckState(t.Context(), itemID, domain.StuckReasonSpawnFailed)
 	require.NoError(t, err)
@@ -252,7 +254,7 @@ func TestNotifyDequeueSpawnParked_TextDependsOnWhetherRetriesStop(t *testing.T) 
 	itemID := newReadyItemWithRepo(t, svc, "text")
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	_, err = storage.MarkStuck(t.Context(), itemID, domain.StuckReasonSpawnFailed, session.BacklogStatusReady, "c")
+	_, err = storage.MarkStuck(t.Context(), itemID, domain.StuckReasonSpawnFailed, domain.BacklogStatusReady, "c")
 	require.NoError(t, err)
 
 	message := func(attempts int32) string {
@@ -412,7 +414,7 @@ func TestRecordDequeueSpawnFailure_UnappliedMarkStuckOpensNoRowAndNoHold(t *test
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
 
-	svc.recordDequeueSpawnFailure(t.Context(), *item, session.BacklogStatusQueued /* item is ready */, errSpawnBoom)
+	svc.recordDequeueSpawnFailure(t.Context(), *item, domain.BacklogStatusQueued /* item is ready */, errSpawnBoom)
 
 	_, ok := openSpawnFailedRow(t, storage, itemID)
 	assert.False(t, ok)
@@ -563,7 +565,7 @@ func TestTransitionBacklogItemStatus_SpawnBackoffClearScopedToUser(t *testing.T)
 	t.Run("agent keeps the backoff", func(t *testing.T) {
 		t.Parallel()
 		svc, storage, itemID := setup(t)
-		require.NoError(t, move(services.WithTransitionActor(t.Context(), session.TriggeredByAgent), svc, itemID))
+		require.NoError(t, move(services.WithTransitionActor(t.Context(), instance.TriggeredByAgent), svc, itemID))
 		_, ok := openSpawnFailedRow(t, storage, itemID)
 		assert.True(t, ok)
 	})

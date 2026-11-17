@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // TestDefaultStatusDeterminer_Determine verifies the pure detection logic of DefaultStatusDeterminer.
@@ -17,84 +20,84 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 	tests := []struct {
 		name         string
 		content      string
-		statusInfo   InstanceStatusInfo
-		instSetup    func(inst *Instance) // optional additional setup on the instance
+		statusInfo   instance.InstanceStatusInfo
+		instSetup    func(inst *instance.Instance) // optional additional setup on the instance
 		wantAction   DetectionAction
 		checkAction  bool // set to true to assert wantAction
-		wantReason   AttentionReason
-		wantPriority Priority
+		wantReason   queue.AttentionReason
+		wantPriority queue.Priority
 	}{
 		// --- Controller-active path ---
 		{
 			name: "active_controller_needs_approval",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusNeedsApproval,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonApprovalPending,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonApprovalPending,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name: "active_controller_needs_approval_via_pending_approvals_count",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusUnknown,
 				PendingApprovals:   1,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonApprovalPending,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonApprovalPending,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name: "active_controller_input_required",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusInputRequired,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonInputRequired,
-			wantPriority: PriorityMedium,
+			wantReason:   queue.ReasonInputRequired,
+			wantPriority: queue.PriorityMedium,
 		},
 		{
 			name: "active_controller_error",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusError,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonErrorState,
-			wantPriority: PriorityUrgent,
+			wantReason:   queue.ReasonErrorState,
+			wantPriority: queue.PriorityUrgent,
 		},
 		{
 			name: "active_controller_tests_failing",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusTestsFailing,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonTestsFailing,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonTestsFailing,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name: "active_controller_task_complete",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusSuccess,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonTaskComplete,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonTaskComplete,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name: "active_controller_idle_active_returns_remove",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusUnknown,
 				IdleState:          detection.IdleStateInfo{State: detection.IdleStateActive},
@@ -104,26 +107,26 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		},
 		{
 			name: "active_controller_idle_timeout_adds_idle",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusUnknown,
 				IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonIdle,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonIdle,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name: "active_controller_waiting_state_skips",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: true,
 				ClaudeStatus:       detection.StatusUnknown,
 				IdleState:          detection.IdleStateInfo{State: detection.IdleStateWaiting},
 			},
 			// No stale output → DetectionActionSkip (unless staleness kicks in)
 			// Use a fresh LastMeaningfulOutput so staleness doesn't fire.
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
 			},
 			checkAction: true,
@@ -134,23 +137,23 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		{
 			name:    "no_controller_approval_in_terminal",
 			content: "Yes, allow reading /etc/hosts\nYes, allow once",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonApprovalPending,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonApprovalPending,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name:    "no_controller_content_does_not_panic",
 			content: "? Do you want to continue",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
 			// Smoke test: detection depends on patterns, just verify no panic.
 			// checkAction is false — don't assert specific action.
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 				inst.UpdatedAt = time.Now()
 			},
@@ -158,11 +161,11 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		{
 			name:    "no_controller_generic_content_smoke_test",
 			content: "Error: command not found",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
 			// Smoke test — verify no panic. checkAction is false.
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 				inst.UpdatedAt = time.Now()
 			},
@@ -170,11 +173,11 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		{
 			name:    "no_controller_active_status_smoke_test",
 			content: "esc to interrupt\n⏺ Recording",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
 			// Smoke test — verify no panic. checkAction is false.
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 			},
 		},
@@ -186,10 +189,10 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			// queued as ReasonIdle while Claude is actively compacting.
 			name:    "no_controller_compacting_removes_not_idle",
 			content: "✻ Compacting conversation… (esc to interrupt)",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				// UpdatedAt in the past would trigger basicIdleThreshold if the
 				// status switch didn't short-circuit first — proves the fix, not
 				// just the absence of a panic.
@@ -202,26 +205,26 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		{
 			name:    "no_controller_empty_content_idle_after_threshold",
 			content: "",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				// UpdatedAt in the past → triggers basicIdleThreshold
 				inst.UpdatedAt = time.Now().Add(-10 * time.Second)
 				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonIdle,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonIdle,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name:    "no_controller_fresh_session_skip",
 			content: "",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				// UpdatedAt just now → below basicIdleThreshold, no staleness
 				inst.UpdatedAt = time.Now()
 				inst.LastMeaningfulOutput = time.Now()
@@ -234,10 +237,10 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		{
 			name:    "stale_session_adds_stale_reason",
 			content: "",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				// Set LastMeaningfulOutput far in the past (beyond StalenessThreshold=5m,
 				// recalibrated from an undocumented 2m — ADR-001-staleness-threshold-recalibration.md)
 				inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
@@ -245,8 +248,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonStale,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonStale,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			// ADR-001 boundary case: 3 min since output must NOT be flagged stale
@@ -257,10 +260,10 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			// mask what this case is actually testing.
 			name:    "session_stale_under_new_5min_threshold_does_not_flag",
 			content: "",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				inst.LastMeaningfulOutput = time.Now().Add(-3 * time.Minute)
 				inst.UpdatedAt = time.Now()
 			},
@@ -273,25 +276,25 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			// fresh for the same reason as above.
 			name:    "session_stale_over_new_5min_threshold_flags",
 			content: "",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				inst.LastMeaningfulOutput = time.Now().Add(-6 * time.Minute)
 				inst.UpdatedAt = time.Now()
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonStale,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonStale,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name:    "acknowledged_stale_session_skips_stale",
 			content: "",
-			statusInfo: InstanceStatusInfo{
+			statusInfo: instance.InstanceStatusInfo{
 				IsControllerActive: false,
 			},
-			instSetup: func(inst *Instance) {
+			instSetup: func(inst *instance.Instance) {
 				// Output is old, but user acknowledged AFTER output → both the stale flag
 				// and the no-controller idle fallback are suppressed (Epic 1.2:
 				// suppressedByAck guards both Idle sites, not just Stale).
@@ -307,12 +310,12 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{
+			inst := &instance.Instance{
 				Title:  "test-session",
 				UUID:   "test-uuid",
-				Status: Running,
+				Status: domain.Active,
 			}
-			inst.started.Store(true)
+			inst.MarkStarted()
 			// Set a sensible default so staleness doesn't fire unexpectedly
 			if inst.LastMeaningfulOutput.IsZero() {
 				inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
@@ -355,12 +358,12 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusNeedsApproval,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateActive},
@@ -371,7 +374,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add (approval takes priority over idle-active), got %v", result.Action)
 	}
-	if result.Reason != ReasonApprovalPending {
+	if result.Reason != queue.ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending, got %v", result.Reason)
 	}
 }
@@ -383,13 +386,13 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	customContext := "tool use blocked by policy xyz"
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusNeedsApproval,
 		StatusContext:      customContext,
@@ -409,12 +412,12 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusNeedsApproval,
 		StatusContext:      "",
@@ -433,12 +436,12 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusInputRequired,
 	}
@@ -448,10 +451,10 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
 	}
-	if result.Reason != ReasonInputRequired {
+	if result.Reason != queue.ReasonInputRequired {
 		t.Errorf("expected ReasonInputRequired, got %v", result.Reason)
 	}
-	if result.Priority != PriorityMedium {
+	if result.Priority != queue.PriorityMedium {
 		t.Errorf("expected PriorityMedium, got %v", result.Priority)
 	}
 }
@@ -462,12 +465,12 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusError,
 	}
@@ -477,10 +480,10 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
 	}
-	if result.Reason != ReasonErrorState {
+	if result.Reason != queue.ReasonErrorState {
 		t.Errorf("expected ReasonErrorState, got %v", result.Reason)
 	}
-	if result.Priority != PriorityUrgent {
+	if result.Priority != queue.PriorityUrgent {
 		t.Errorf("expected PriorityUrgent, got %v", result.Priority)
 	}
 }
@@ -492,13 +495,13 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	// Fresh output — below staleness threshold and idle threshold
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusUnknown,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateWaiting},
@@ -521,14 +524,14 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	newHiddenInstance := func() *Instance {
-		inst := &Instance{
+	newHiddenInstance := func() *instance.Instance {
+		inst := &instance.Instance{
 			Title:  "review:153f8eac",
 			UUID:   "aaaa1111-2222-3333-4444-555566667777",
-			Status: Running,
+			Status: domain.Active,
 			Hidden: true,
 		}
-		inst.started.Store(true)
+		inst.MarkStarted()
 		return inst
 	}
 
@@ -538,7 +541,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
 
-		statusInfo := InstanceStatusInfo{
+		statusInfo := instance.InstanceStatusInfo{
 			IsControllerActive: true,
 			ClaudeStatus:       detection.StatusSuccess,
 		}
@@ -556,7 +559,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
 
-		statusInfo := InstanceStatusInfo{
+		statusInfo := instance.InstanceStatusInfo{
 			IsControllerActive: true,
 			ClaudeStatus:       detection.StatusUnknown,
 			IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
@@ -577,7 +580,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		inst.UpdatedAt = time.Now().Add(-10 * time.Minute)
 		inst.SyncAtomicTimestamps()
 
-		statusInfo := InstanceStatusInfo{
+		statusInfo := instance.InstanceStatusInfo{
 			IsControllerActive: false,
 		}
 
@@ -596,7 +599,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
 
-		statusInfo := InstanceStatusInfo{
+		statusInfo := instance.InstanceStatusInfo{
 			IsControllerActive: true,
 			ClaudeStatus:       detection.StatusError,
 		}
@@ -606,7 +609,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		if result.Action != DetectionActionAdd {
 			t.Errorf("expected Add for Hidden instance with ReasonErrorState (safety net), got %v", result.Action)
 		}
-		if result.Reason != ReasonErrorState {
+		if result.Reason != queue.ReasonErrorState {
 			t.Errorf("expected ReasonErrorState, got %v", result.Reason)
 		}
 	})
@@ -617,7 +620,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 		inst.SyncAtomicTimestamps()
 
-		statusInfo := InstanceStatusInfo{
+		statusInfo := instance.InstanceStatusInfo{
 			IsControllerActive: true,
 			ClaudeStatus:       detection.StatusTestsFailing,
 		}
@@ -627,7 +630,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		if result.Action != DetectionActionAdd {
 			t.Errorf("expected Add for Hidden instance with ReasonTestsFailing (safety net), got %v", result.Action)
 		}
-		if result.Reason != ReasonTestsFailing {
+		if result.Reason != queue.ReasonTestsFailing {
 			t.Errorf("expected ReasonTestsFailing, got %v", result.Reason)
 		}
 	})
@@ -641,13 +644,13 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: false,
 	}
 
@@ -656,10 +659,10 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add for approval content without controller, got %v", result.Action)
 	}
-	if result.Reason != ReasonApprovalPending {
+	if result.Reason != queue.ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending, got %v", result.Reason)
 	}
-	if result.Priority != PriorityHigh {
+	if result.Priority != queue.PriorityHigh {
 		t.Errorf("expected PriorityHigh, got %v", result.Priority)
 	}
 }
@@ -679,13 +682,13 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_Sti
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.UpdatedAt = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	statusInfo := instance.InstanceStatusInfo{IsControllerActive: false}
 	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector, DeterminerOptions{})
 
 	if result.ClaudeStatus != detection.StatusWaitingForAgent {
@@ -707,13 +710,13 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughT
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
 	inst.UpdatedAt = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	statusInfo := instance.InstanceStatusInfo{IsControllerActive: false}
 	result := determiner.Determine(inst, waitingForAgentFooterContent, statusInfo, detector, DeterminerOptions{})
 
 	if result.ClaudeStatus != detection.StatusWaitingForAgent {
@@ -726,7 +729,7 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughT
 	// are old enough to also cross the separate terminal-staleness threshold (5m default,
 	// checked later in Determine) — either reason confirms the fix: the session fell through
 	// to a time-based add instead of being unconditionally removed.
-	if result.Reason != ReasonIdle && result.Reason != ReasonStale {
+	if result.Reason != queue.ReasonIdle && result.Reason != queue.ReasonStale {
 		t.Errorf("expected ReasonIdle or ReasonStale from the time-based fallback, got %v", result.Reason)
 	}
 }
@@ -740,13 +743,13 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_RecentlyUpdated_Remov
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.UpdatedAt = time.Now().Add(-2 * time.Minute)
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusWaitingForAgent,
 	}
@@ -768,13 +771,13 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_Stale_FallsThroughToI
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
 	inst.UpdatedAt = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusWaitingForAgent,
 	}
@@ -785,7 +788,7 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_Stale_FallsThroughToI
 	}
 	// Reason is ReasonIdle or ReasonStale depending on which threshold fires first — either
 	// confirms the fix: the session fell through instead of being unconditionally removed.
-	if result.Reason != ReasonIdle && result.Reason != ReasonStale {
+	if result.Reason != queue.ReasonIdle && result.Reason != queue.ReasonStale {
 		t.Errorf("expected ReasonIdle or ReasonStale from the fallback, got %v", result.Reason)
 	}
 }
@@ -799,8 +802,8 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 
 	t0 := time.Now().Add(-30 * time.Second)
 	inst.LastMeaningfulOutput = t0
@@ -808,7 +811,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	inst.LastAcknowledged = t0.Add(1 * time.Second) // acked after output, via "skip"
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{IsControllerActive: false}
+	statusInfo := instance.InstanceStatusInfo{IsControllerActive: false}
 	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
 	if result.Action != DetectionActionSkip {
@@ -827,7 +830,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add once new output un-suppresses the session, got %v", result.Action)
 	}
-	if result.Reason != ReasonIdle {
+	if result.Reason != queue.ReasonIdle {
 		t.Errorf("expected ReasonIdle, got %v", result.Reason)
 	}
 }
@@ -840,8 +843,8 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 
 	t0 := time.Now().Add(-30 * time.Second)
 	inst.LastMeaningfulOutput = t0
@@ -849,7 +852,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 	inst.LastAcknowledged = t0.Add(1 * time.Second) // acked after output, via "skip"
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusUnknown,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
@@ -872,7 +875,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add once new output un-suppresses the session, got %v", result.Action)
 	}
-	if result.Reason != ReasonIdle {
+	if result.Reason != queue.ReasonIdle {
 		t.Errorf("expected ReasonIdle, got %v", result.Reason)
 	}
 }
@@ -887,8 +890,8 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "test", UUID: "uuid", Status: domain.Active}
+	inst.MarkStarted()
 
 	t0 := time.Now().Add(-30 * time.Second)
 	inst.LastMeaningfulOutput = t0
@@ -898,7 +901,7 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 	inst.LastAcknowledged = t0.Add(1 * time.Second)
 	inst.SyncAtomicTimestamps()
 
-	statusInfo := InstanceStatusInfo{
+	statusInfo := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusNeedsApproval,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},
@@ -906,10 +909,10 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 
 	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
-	if result.Reason != ReasonApprovalPending {
+	if result.Reason != queue.ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending (idle-suppression branch must be unreachable), got %v", result.Reason)
 	}
-	if result.Priority != PriorityHigh {
+	if result.Priority != queue.PriorityHigh {
 		t.Errorf("expected PriorityHigh, got %v", result.Priority)
 	}
 	if result.Action != DetectionActionAdd {
@@ -930,20 +933,20 @@ func TestDetermine_HiddenGateReadsSnapshot_NoRaceWithWriter(t *testing.T) {
 	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
-	inst := &Instance{Title: "review:race", UUID: "bbbb1111-2222-3333-4444-555566667777", Status: Running}
-	inst.started.Store(true)
+	inst := &instance.Instance{Title: "review:race", UUID: "bbbb1111-2222-3333-4444-555566667777", Status: domain.Active}
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps()
-	SetHiddenForTest(t, inst, false)
+	instance.SetHiddenForTest(t, inst, false)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for i := 0; i < 200; i++ {
-			SetHiddenForTest(t, inst, i%2 == 0)
+			instance.SetHiddenForTest(t, inst, i%2 == 0)
 		}
 	}()
-	statusInfo := InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: detection.StatusSuccess}
+	statusInfo := instance.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: detection.StatusSuccess}
 	for i := 0; i < 200; i++ {
 		determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 	}

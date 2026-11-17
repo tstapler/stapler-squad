@@ -10,12 +10,15 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // attachPRSet fills the item detail's pull_requests (the derived set) and pr_holds
 // (why cleanup is held). Detail responses only: list responses never carry holds (K11).
 // Off unless reader:backlog is on, so flag off the fields stay empty.
-func (s *BacklogService) attachPRSet(ctx context.Context, p *sessionv1.BacklogItem, item *session.BacklogItemData) {
+func (s *BacklogService) attachPRSet(ctx context.Context, p *sessionv1.BacklogItem, item *backlogdto.BacklogItemData) {
 	if !s.cleanup.scopeOn() {
 		return
 	}
@@ -46,10 +49,10 @@ func (s *BacklogService) populatePRCounts(ctx context.Context, items []*sessionv
 }
 
 // countItemPRs returns the set size and how many of its PRs are merged.
-func countItemPRs(prs []session.PRView) (total, merged int32) {
+func countItemPRs(prs []domain.PRView) (total, merged int32) {
 	for _, v := range prs {
 		total++
-		if v.State == session.PRStateMerged {
+		if v.State == domain.PRStateMerged {
 			merged++
 		}
 	}
@@ -59,9 +62,9 @@ func countItemPRs(prs []session.PRView) (total, merged int32) {
 // prHolds derives the held lines from the same facts the gate reads: non-terminal PRs
 // of the derived set, superseded rounds' non-terminal PRs, a live work session, and a
 // live session past the max hold. The client never recomputes a hold.
-func (s *BacklogService) prHolds(ctx context.Context, item *session.BacklogItemData, prs []session.PRView) []*sessionv1.PrHold {
+func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogItemData, prs []domain.PRView) []*sessionv1.PrHold {
 	holds := services.NonTerminalPRHolds(prs, "")
-	inSet := map[session.PRRef]bool{}
+	inSet := map[domain.PRRef]bool{}
 	for _, v := range prs {
 		inSet[v.Ref] = true
 	}
@@ -75,10 +78,10 @@ func (s *BacklogService) prHolds(ctx context.Context, item *session.BacklogItemD
 
 // supersededRoundHolds names non-terminal PRs only an earlier round's session links:
 // the verdict ignores them but they still hold that round's worktree.
-func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []session.ItemSessionSummary, inSet map[session.PRRef]bool) []*sessionv1.PrHold {
+func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, inSet map[domain.PRRef]bool) []*sessionv1.PrHold {
 	var uuids []string
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork && is.SessionUUID != "" {
+		if is.Role == instance.SessionRoleWork && is.SessionUUID != "" {
 			uuids = append(uuids, is.SessionUUID)
 		}
 	}
@@ -100,7 +103,7 @@ func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []se
 
 // liveWorkHolds reports SESSION_ACTIVE while the newest work session is live, and
 // MAX_HOLD instead once the first merge is older than the max hold.
-func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []session.ItemSessionSummary, prs []session.PRView) []*sessionv1.PrHold {
+func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, prs []domain.PRView) []*sessionv1.PrHold {
 	probe := s.cleanup.ruleLProbe()
 	if probe == nil {
 		return nil
@@ -112,10 +115,10 @@ func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []session.I
 			continue
 		}
 		kind := sessionv1.PrHold_KIND_SESSION_ACTIVE
-		if start := session.LiveWorkHoldStart(prs, time.Time{}); session.LiveWorkHoldExpired(now, start, session.LiveWorkMaxHold) {
+		if start := instance.LiveWorkHoldStart(prs, time.Time{}); instance.LiveWorkHoldExpired(now, start, instance.LiveWorkMaxHold) {
 			kind = sessionv1.PrHold_KIND_MAX_HOLD
 		}
-		return []*sessionv1.PrHold{{Kind: kind, OwnerSessionId: is.SessionUUID, IdleWindowSeconds: int32(session.LiveWorkIdleWindow / time.Second)}}
+		return []*sessionv1.PrHold{{Kind: kind, OwnerSessionId: is.SessionUUID, IdleWindowSeconds: int32(instance.LiveWorkIdleWindow / time.Second)}}
 	}
 	return nil
 }

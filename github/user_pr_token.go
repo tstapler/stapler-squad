@@ -1,6 +1,10 @@
 package github
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+)
 
 // TokenForPR returns the token and login of the account whose poll produced
 // the cached PR for key. Dedup in fetch() keeps the first account in
@@ -26,7 +30,7 @@ func (c *UserPRCache) TokenForPR(key PRKey) (token, login string, ok bool) {
 		return "", "", false
 	}
 	for _, acc := range state.accounts {
-		if NormalizeHost(acc.host) == key.Host() && strings.EqualFold(acc.login, owner) {
+		if domain.NormalizeHost(acc.host) == key.Host() && strings.EqualFold(acc.login, owner) {
 			return acc.token, acc.login, true
 		}
 	}
@@ -49,7 +53,7 @@ func (c *UserPRCache) cachedPRAccount(key PRKey) (string, bool) {
 		if pr.Number != key.Number() || pr.AccountLogin == "" {
 			continue
 		}
-		if NormalizeHost(pr.Host) != key.Host() ||
+		if domain.NormalizeHost(pr.Host) != key.Host() ||
 			!strings.EqualFold(pr.Owner, key.Owner()) ||
 			!strings.EqualFold(pr.Repo, key.RepoName()) {
 			continue

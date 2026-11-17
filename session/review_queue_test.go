@@ -5,17 +5,18 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 func TestReviewQueue_AddAndGet(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
-	item := &ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID:   "session-1",
 		SessionName: "Test Session",
-		Reason:      ReasonApprovalPending,
-		Priority:    PriorityHigh,
+		Reason:      queue.ReasonApprovalPending,
+		Priority:    queue.PriorityHigh,
 		DetectedAt:  time.Now(),
 		Context:     "Would you like to proceed?",
 	}
@@ -39,12 +40,12 @@ func TestReviewQueue_AddAndGet(t *testing.T) {
 
 func TestReviewQueue_Remove(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
-	item := &ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID: "session-1",
-		Reason:    ReasonApprovalPending,
-		Priority:  PriorityHigh,
+		Reason:    queue.ReasonApprovalPending,
+		Priority:  queue.PriorityHigh,
 	}
 
 	rq.Add(item)
@@ -70,16 +71,16 @@ func TestReviewQueue_Remove(t *testing.T) {
 
 func TestReviewQueue_Has(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	if rq.Has("session-1") {
 		t.Error("Expected Has to return false for empty queue")
 	}
 
-	item := &ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID: "session-1",
-		Reason:    ReasonApprovalPending,
-		Priority:  PriorityHigh,
+		Reason:    queue.ReasonApprovalPending,
+		Priority:  queue.PriorityHigh,
 	}
 
 	rq.Add(item)
@@ -97,14 +98,14 @@ func TestReviewQueue_Has(t *testing.T) {
 
 func TestReviewQueue_List_SortsByPriority(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	// Add items with different priorities
-	items := []*ReviewItem{
-		{SessionID: "low", Priority: PriorityLow, DetectedAt: time.Now()},
-		{SessionID: "urgent", Priority: PriorityUrgent, DetectedAt: time.Now()},
-		{SessionID: "medium", Priority: PriorityMedium, DetectedAt: time.Now()},
-		{SessionID: "high", Priority: PriorityHigh, DetectedAt: time.Now()},
+	items := []*queue.ReviewItem{
+		{SessionID: "low", Priority: queue.PriorityLow, DetectedAt: time.Now()},
+		{SessionID: "urgent", Priority: queue.PriorityUrgent, DetectedAt: time.Now()},
+		{SessionID: "medium", Priority: queue.PriorityMedium, DetectedAt: time.Now()},
+		{SessionID: "high", Priority: queue.PriorityHigh, DetectedAt: time.Now()},
 	}
 
 	for _, item := range items {
@@ -129,15 +130,15 @@ func TestReviewQueue_List_SortsByPriority(t *testing.T) {
 
 func TestReviewQueue_List_SortsByTime(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	now := time.Now()
 
 	// Add items with same priority but different LastActivity times
-	items := []*ReviewItem{
-		{SessionID: "newer", Priority: PriorityHigh, DetectedAt: now, LastActivity: now.Add(2 * time.Second)},
-		{SessionID: "oldest", Priority: PriorityHigh, DetectedAt: now, LastActivity: now},
-		{SessionID: "older", Priority: PriorityHigh, DetectedAt: now, LastActivity: now.Add(1 * time.Second)},
+	items := []*queue.ReviewItem{
+		{SessionID: "newer", Priority: queue.PriorityHigh, DetectedAt: now, LastActivity: now.Add(2 * time.Second)},
+		{SessionID: "oldest", Priority: queue.PriorityHigh, DetectedAt: now, LastActivity: now},
+		{SessionID: "older", Priority: queue.PriorityHigh, DetectedAt: now, LastActivity: now.Add(1 * time.Second)},
 	}
 
 	for _, item := range items {
@@ -160,14 +161,14 @@ func TestReviewQueue_List_SortsByTime(t *testing.T) {
 
 func TestReviewQueue_Count(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	if rq.Count() != 0 {
 		t.Error("Expected empty queue to have count 0")
 	}
 
-	rq.Add(&ReviewItem{SessionID: "session-1", Priority: PriorityHigh})
-	rq.Add(&ReviewItem{SessionID: "session-2", Priority: PriorityMedium})
+	rq.Add(&queue.ReviewItem{SessionID: "session-1", Priority: queue.PriorityHigh})
+	rq.Add(&queue.ReviewItem{SessionID: "session-2", Priority: queue.PriorityMedium})
 
 	if rq.Count() != 2 {
 		t.Errorf("Expected count 2, got %d", rq.Count())
@@ -182,46 +183,46 @@ func TestReviewQueue_Count(t *testing.T) {
 
 func TestReviewQueue_CountByPriority(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
-	rq.Add(&ReviewItem{SessionID: "s2", Priority: PriorityHigh})
-	rq.Add(&ReviewItem{SessionID: "s3", Priority: PriorityMedium})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Priority: queue.PriorityHigh})
+	rq.Add(&queue.ReviewItem{SessionID: "s3", Priority: queue.PriorityMedium})
 
 	counts := rq.CountByPriority()
 
-	if counts[PriorityHigh] != 2 {
-		t.Errorf("Expected 2 high priority items, got %d", counts[PriorityHigh])
+	if counts[queue.PriorityHigh] != 2 {
+		t.Errorf("Expected 2 high priority items, got %d", counts[queue.PriorityHigh])
 	}
-	if counts[PriorityMedium] != 1 {
-		t.Errorf("Expected 1 medium priority item, got %d", counts[PriorityMedium])
+	if counts[queue.PriorityMedium] != 1 {
+		t.Errorf("Expected 1 medium priority item, got %d", counts[queue.PriorityMedium])
 	}
-	if counts[PriorityLow] != 0 {
-		t.Errorf("Expected 0 low priority items, got %d", counts[PriorityLow])
+	if counts[queue.PriorityLow] != 0 {
+		t.Errorf("Expected 0 low priority items, got %d", counts[queue.PriorityLow])
 	}
 }
 
 func TestReviewQueue_CountByReason(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
-	rq.Add(&ReviewItem{SessionID: "s1", Reason: ReasonApprovalPending})
-	rq.Add(&ReviewItem{SessionID: "s2", Reason: ReasonApprovalPending})
-	rq.Add(&ReviewItem{SessionID: "s3", Reason: ReasonErrorState})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Reason: queue.ReasonApprovalPending})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Reason: queue.ReasonApprovalPending})
+	rq.Add(&queue.ReviewItem{SessionID: "s3", Reason: queue.ReasonErrorState})
 
 	counts := rq.CountByReason()
 
-	if counts[ReasonApprovalPending] != 2 {
-		t.Errorf("Expected 2 approval pending items, got %d", counts[ReasonApprovalPending])
+	if counts[queue.ReasonApprovalPending] != 2 {
+		t.Errorf("Expected 2 approval pending items, got %d", counts[queue.ReasonApprovalPending])
 	}
-	if counts[ReasonErrorState] != 1 {
-		t.Errorf("Expected 1 error state item, got %d", counts[ReasonErrorState])
+	if counts[queue.ReasonErrorState] != 1 {
+		t.Errorf("Expected 1 error state item, got %d", counts[queue.ReasonErrorState])
 	}
 }
 
 func TestReviewQueue_Next(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	// Empty queue
 	_, ok := rq.Next("")
@@ -230,9 +231,9 @@ func TestReviewQueue_Next(t *testing.T) {
 	}
 
 	// Add items
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh, DetectedAt: time.Now()})
-	rq.Add(&ReviewItem{SessionID: "s2", Priority: PriorityMedium, DetectedAt: time.Now()})
-	rq.Add(&ReviewItem{SessionID: "s3", Priority: PriorityLow, DetectedAt: time.Now()})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh, DetectedAt: time.Now()})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Priority: queue.PriorityMedium, DetectedAt: time.Now()})
+	rq.Add(&queue.ReviewItem{SessionID: "s3", Priority: queue.PriorityLow, DetectedAt: time.Now()})
 
 	// Next from empty (should return first)
 	next, ok := rq.Next("")
@@ -261,12 +262,12 @@ func TestReviewQueue_Next(t *testing.T) {
 
 func TestReviewQueue_Previous(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	// Add items
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh, DetectedAt: time.Now()})
-	rq.Add(&ReviewItem{SessionID: "s2", Priority: PriorityMedium, DetectedAt: time.Now()})
-	rq.Add(&ReviewItem{SessionID: "s3", Priority: PriorityLow, DetectedAt: time.Now()})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh, DetectedAt: time.Now()})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Priority: queue.PriorityMedium, DetectedAt: time.Now()})
+	rq.Add(&queue.ReviewItem{SessionID: "s3", Priority: queue.PriorityLow, DetectedAt: time.Now()})
 
 	// Previous from empty (should return first)
 	prev, ok := rq.Previous("")
@@ -289,10 +290,10 @@ func TestReviewQueue_Previous(t *testing.T) {
 
 func TestReviewQueue_Clear(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
-	rq.Add(&ReviewItem{SessionID: "s2", Priority: PriorityMedium})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Priority: queue.PriorityMedium})
 
 	rq.Clear()
 
@@ -303,11 +304,11 @@ func TestReviewQueue_Clear(t *testing.T) {
 
 func TestReviewQueue_Update(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
-	item1 := &ReviewItem{
+	item1 := &queue.ReviewItem{
 		SessionID: "session-1",
-		Priority:  PriorityHigh,
+		Priority:  queue.PriorityHigh,
 		Context:   "Original context",
 	}
 
@@ -317,9 +318,9 @@ func TestReviewQueue_Update(t *testing.T) {
 	}
 
 	// Update with new item
-	item2 := &ReviewItem{
+	item2 := &queue.ReviewItem{
 		SessionID: "session-1",
-		Priority:  PriorityUrgent,
+		Priority:  queue.PriorityUrgent,
 		Context:   "Updated context",
 	}
 
@@ -330,7 +331,7 @@ func TestReviewQueue_Update(t *testing.T) {
 
 	// Verify update
 	retrieved, _ := rq.Get("session-1")
-	if retrieved.Priority != PriorityUrgent {
+	if retrieved.Priority != queue.PriorityUrgent {
 		t.Errorf("Expected priority to be updated to Urgent, got %v", retrieved.Priority)
 	}
 	if retrieved.Context != "Updated context" {
@@ -340,13 +341,13 @@ func TestReviewQueue_Update(t *testing.T) {
 
 func TestReviewQueue_GetStatistics(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	now := time.Now()
 	old := now.Add(-5 * time.Minute)
 
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh, Reason: ReasonApprovalPending, DetectedAt: now})
-	rq.Add(&ReviewItem{SessionID: "s2", Priority: PriorityMedium, Reason: ReasonInputRequired, DetectedAt: old})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh, Reason: queue.ReasonApprovalPending, DetectedAt: now})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Priority: queue.PriorityMedium, Reason: queue.ReasonInputRequired, DetectedAt: old})
 
 	stats := rq.GetStatistics()
 
@@ -365,21 +366,21 @@ func TestReviewQueue_GetStatistics(t *testing.T) {
 
 func TestReviewQueue_GetStatistics_OldestTimeCalculation(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	now := time.Now()
 
 	// Add items with different ages
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:  "old",
-		Priority:   PriorityLow,
-		Reason:     ReasonTaskComplete,
+		Priority:   queue.PriorityLow,
+		Reason:     queue.ReasonTaskComplete,
 		DetectedAt: now.Add(-10 * time.Minute), // 10 minutes ago
 	})
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:  "newer",
-		Priority:   PriorityLow,
-		Reason:     ReasonTaskComplete,
+		Priority:   queue.PriorityLow,
+		Reason:     queue.ReasonTaskComplete,
 		DetectedAt: now.Add(-5 * time.Minute), // 5 minutes ago
 	})
 
@@ -419,24 +420,24 @@ func TestReviewQueue_GetStatistics_OldestTimeCalculation(t *testing.T) {
 
 func TestReviewQueue_GetStatistics_WithZeroTimestamp(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	now := time.Now()
 
 	// Add item with zero timestamp - should be reset to current time by Add()
-	zeroItem := &ReviewItem{
+	zeroItem := &queue.ReviewItem{
 		SessionID:  "zero-time",
-		Priority:   PriorityMedium,
-		Reason:     ReasonInputRequired,
+		Priority:   queue.PriorityMedium,
+		Reason:     queue.ReasonInputRequired,
 		DetectedAt: time.Time{}, // Zero time
 	}
 	rq.Add(zeroItem)
 
 	// Add item with valid timestamp
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:  "valid",
-		Priority:   PriorityHigh,
-		Reason:     ReasonApprovalPending,
+		Priority:   queue.PriorityHigh,
+		Reason:     queue.ReasonApprovalPending,
 		DetectedAt: now.Add(-2 * time.Minute),
 	})
 
@@ -466,24 +467,24 @@ func TestReviewQueue_GetStatistics_WithZeroTimestamp(t *testing.T) {
 
 func TestReviewQueue_GetStatistics_WithInvalidTimestamp(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	now := time.Now()
 
 	// Add item with very old (invalid) timestamp - should be reset to current time
-	invalidItem := &ReviewItem{
+	invalidItem := &queue.ReviewItem{
 		SessionID:  "invalid",
-		Priority:   PriorityLow,
-		Reason:     ReasonIdleTimeout,
+		Priority:   queue.PriorityLow,
+		Reason:     queue.ReasonIdleTimeout,
 		DetectedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), // Before 2020
 	}
 	rq.Add(invalidItem)
 
 	// Add item with valid timestamp
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:  "valid",
-		Priority:   PriorityMedium,
-		Reason:     ReasonInputRequired,
+		Priority:   queue.PriorityMedium,
+		Reason:     queue.ReasonInputRequired,
 		DetectedAt: now.Add(-3 * time.Minute),
 	})
 
@@ -508,19 +509,19 @@ func TestReviewQueue_GetStatistics_WithInvalidTimestamp(t *testing.T) {
 
 func TestReviewQueue_GetStatistics_AllInvalidTimestamps(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	// Add items with only invalid timestamps - all should be reset to now
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:  "zero1",
-		Priority:   PriorityHigh,
-		Reason:     ReasonApprovalPending,
+		Priority:   queue.PriorityHigh,
+		Reason:     queue.ReasonApprovalPending,
 		DetectedAt: time.Time{}, // Zero time
 	})
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:  "zero2",
-		Priority:   PriorityMedium,
-		Reason:     ReasonInputRequired,
+		Priority:   queue.PriorityMedium,
+		Reason:     queue.ReasonInputRequired,
 		DetectedAt: time.Time{}, // Zero time
 	})
 
@@ -545,7 +546,7 @@ func TestReviewQueue_GetStatistics_AllInvalidTimestamps(t *testing.T) {
 
 func TestReviewQueue_GetStatistics_EmptyQueue(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	stats := rq.GetStatistics()
 
@@ -569,7 +570,7 @@ func TestReviewQueue_GetStatistics_EmptyQueue(t *testing.T) {
 
 func TestReviewQueue_Observer(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 
 	// Create observer
 	addedCount := 0
@@ -577,13 +578,13 @@ func TestReviewQueue_Observer(t *testing.T) {
 	updatedCount := 0
 
 	observer := &testObserver{
-		onAdd: func(item *ReviewItem) {
+		onAdd: func(item *queue.ReviewItem) {
 			addedCount++
 		},
-		onRemove: func(sessionID string, info RemovalInfo) {
+		onRemove: func(sessionID string, info queue.RemovalInfo) {
 			removedCount++
 		},
-		onUpdate: func(items []*ReviewItem) {
+		onUpdate: func(items []*queue.ReviewItem) {
 			updatedCount++
 		},
 	}
@@ -591,13 +592,13 @@ func TestReviewQueue_Observer(t *testing.T) {
 	rq.Subscribe(observer)
 
 	// Add item - should trigger onAdd
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh})
 	if addedCount != 1 {
 		t.Errorf("Expected 1 add notification, got %d", addedCount)
 	}
 
 	// Update item - should trigger onUpdate
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityUrgent})
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityUrgent})
 	if updatedCount != 1 {
 		t.Errorf("Expected 1 update notification, got %d", updatedCount)
 	}
@@ -612,7 +613,7 @@ func TestReviewQueue_Observer(t *testing.T) {
 	rq.Unsubscribe(observer)
 
 	// Operations after unsubscribe should not trigger notifications
-	rq.Add(&ReviewItem{SessionID: "s2", Priority: PriorityHigh})
+	rq.Add(&queue.ReviewItem{SessionID: "s2", Priority: queue.PriorityHigh})
 	if addedCount != 1 {
 		t.Error("Expected no notifications after unsubscribe")
 	}
@@ -620,20 +621,20 @@ func TestReviewQueue_Observer(t *testing.T) {
 
 func TestReviewQueue_RemoveWithInfo_CarriesRuleName(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+	rq := queue.NewReviewQueue()
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh})
 
 	var gotSessionID string
-	var gotInfo RemovalInfo
+	var gotInfo queue.RemovalInfo
 	observer := &testObserver{
-		onRemove: func(sessionID string, info RemovalInfo) {
+		onRemove: func(sessionID string, info queue.RemovalInfo) {
 			gotSessionID = sessionID
 			gotInfo = info
 		},
 	}
 	rq.Subscribe(observer)
 
-	removed := rq.RemoveWithInfo("s1", AutoResolvedByRuleRemoval("some rule"))
+	removed := rq.RemoveWithInfo("s1", queue.AutoResolvedByRuleRemoval("some rule"))
 	if !removed {
 		t.Fatal("Expected RemoveWithInfo to return true")
 	}
@@ -650,12 +651,12 @@ func TestReviewQueue_RemoveWithInfo_CarriesRuleName(t *testing.T) {
 
 func TestReviewQueue_Remove_StillReportsUserAction(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
-	rq.Add(&ReviewItem{SessionID: "s1", Priority: PriorityHigh})
+	rq := queue.NewReviewQueue()
+	rq.Add(&queue.ReviewItem{SessionID: "s1", Priority: queue.PriorityHigh})
 
-	var gotInfo RemovalInfo
+	var gotInfo queue.RemovalInfo
 	observer := &testObserver{
-		onRemove: func(sessionID string, info RemovalInfo) {
+		onRemove: func(sessionID string, info queue.RemovalInfo) {
 			gotInfo = info
 		},
 	}
@@ -675,24 +676,24 @@ func TestReviewQueue_Remove_StillReportsUserAction(t *testing.T) {
 
 // testObserver is a test implementation of ReviewQueueObserver
 type testObserver struct {
-	onAdd    func(*ReviewItem)
-	onRemove func(string, RemovalInfo)
-	onUpdate func([]*ReviewItem)
+	onAdd    func(*queue.ReviewItem)
+	onRemove func(string, queue.RemovalInfo)
+	onUpdate func([]*queue.ReviewItem)
 }
 
-func (o *testObserver) OnItemAdded(item *ReviewItem) {
+func (o *testObserver) OnItemAdded(item *queue.ReviewItem) {
 	if o.onAdd != nil {
 		o.onAdd(item)
 	}
 }
 
-func (o *testObserver) OnItemRemoved(sessionID string, info RemovalInfo) {
+func (o *testObserver) OnItemRemoved(sessionID string, info queue.RemovalInfo) {
 	if o.onRemove != nil {
 		o.onRemove(sessionID, info)
 	}
 }
 
-func (o *testObserver) OnQueueUpdated(items []*ReviewItem) {
+func (o *testObserver) OnQueueUpdated(items []*queue.ReviewItem) {
 	if o.onUpdate != nil {
 		o.onUpdate(items)
 	}
@@ -702,42 +703,42 @@ func TestDeterminePriority(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name        string
-		reason      AttentionReason
+		reason      queue.AttentionReason
 		status      detection.DetectedStatus
 		age         time.Duration
-		expectedMin Priority
-		expectedMax Priority
+		expectedMin queue.Priority
+		expectedMax queue.Priority
 	}{
 		{
 			name:        "error always urgent",
-			reason:      ReasonInputRequired,
+			reason:      queue.ReasonInputRequired,
 			status:      detection.StatusError,
 			age:         0,
-			expectedMin: PriorityUrgent,
-			expectedMax: PriorityUrgent,
+			expectedMin: queue.PriorityUrgent,
+			expectedMax: queue.PriorityUrgent,
 		},
 		{
 			name:        "approval pending is high",
-			reason:      ReasonApprovalPending,
+			reason:      queue.ReasonApprovalPending,
 			status:      detection.StatusNeedsApproval,
 			age:         0,
-			expectedMin: PriorityHigh,
-			expectedMax: PriorityHigh,
+			expectedMin: queue.PriorityHigh,
+			expectedMax: queue.PriorityHigh,
 		},
 		{
 			name:        "old item gets elevated",
-			reason:      ReasonTaskComplete,
+			reason:      queue.ReasonTaskComplete,
 			status:      detection.StatusReady,
 			age:         35 * time.Minute,
-			expectedMin: PriorityMedium,
-			expectedMax: PriorityLow,
+			expectedMin: queue.PriorityMedium,
+			expectedMax: queue.PriorityLow,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			priority := DeterminePriority(tt.reason, tt.status, tt.age)
+			priority := queue.DeterminePriority(tt.reason, tt.status, tt.age)
 			if priority < tt.expectedMin || priority > tt.expectedMax {
 				t.Errorf("Expected priority between %v and %v, got %v",
 					tt.expectedMin, tt.expectedMax, priority)
@@ -749,14 +750,14 @@ func TestDeterminePriority(t *testing.T) {
 func TestAttentionReason_String(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		reason   AttentionReason
+		reason   queue.AttentionReason
 		expected string
 	}{
-		{ReasonApprovalPending, "Approval Pending"},
-		{ReasonInputRequired, "Input Required"},
-		{ReasonErrorState, "Error State"},
-		{ReasonIdleTimeout, "Idle Timeout"},
-		{ReasonTaskComplete, "Task Complete"},
+		{queue.ReasonApprovalPending, "Approval Pending"},
+		{queue.ReasonInputRequired, "Input Required"},
+		{queue.ReasonErrorState, "Error State"},
+		{queue.ReasonIdleTimeout, "Idle Timeout"},
+		{queue.ReasonTaskComplete, "Task Complete"},
 	}
 
 	for _, tt := range tests {
@@ -769,13 +770,13 @@ func TestAttentionReason_String(t *testing.T) {
 func TestPriority_String(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		priority Priority
+		priority queue.Priority
 		expected string
 	}{
-		{PriorityUrgent, "Urgent"},
-		{PriorityHigh, "High"},
-		{PriorityMedium, "Medium"},
-		{PriorityLow, "Low"},
+		{queue.PriorityUrgent, "Urgent"},
+		{queue.PriorityHigh, "High"},
+		{queue.PriorityMedium, "Medium"},
+		{queue.PriorityLow, "Low"},
 	}
 
 	for _, tt := range tests {
@@ -788,13 +789,13 @@ func TestPriority_String(t *testing.T) {
 func TestPriority_Emoji(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		priority Priority
+		priority queue.Priority
 		expected string
 	}{
-		{PriorityUrgent, "🔴"},
-		{PriorityHigh, "🟡"},
-		{PriorityMedium, "🔵"},
-		{PriorityLow, "⚪"},
+		{queue.PriorityUrgent, "🔴"},
+		{queue.PriorityHigh, "🟡"},
+		{queue.PriorityMedium, "🔵"},
+		{queue.PriorityLow, "⚪"},
 	}
 
 	for _, tt := range tests {

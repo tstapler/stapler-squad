@@ -19,6 +19,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/webhookstore"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Webhook-management contract identity. Bumping CapabilityRevision is a compatible
@@ -72,7 +75,7 @@ func WebhookWorkspaceID(configDir string) string {
 
 // WebhookCaller is an authenticated principal and the workspace/directory bounds of its credential.
 type WebhookCaller struct {
-	session.WebhookScope
+	webhookstore.WebhookScope
 	AllowedDirRoot string
 }
 
@@ -184,7 +187,7 @@ func (s *WebhookRegistrationService) Authenticate(ctx context.Context, token str
 		return nil
 	}
 	return &WebhookCaller{
-		WebhookScope:   session.WebhookScope{PrincipalID: info.PrincipalID, WorkspaceID: info.WorkspaceID},
+		WebhookScope:   webhookstore.WebhookScope{PrincipalID: info.PrincipalID, WorkspaceID: info.WorkspaceID},
 		AllowedDirRoot: info.AllowedDirRoot,
 	}
 }
@@ -239,18 +242,18 @@ func (s *WebhookRegistrationService) Reconcile(ctx context.Context, caller *Webh
 	}, nil
 }
 
-func (s *WebhookRegistrationService) publish(result *session.WebhookReconcileResult) {
+func (s *WebhookRegistrationService) publish(result *webhookstore.WebhookReconcileResult) {
 	if s.eventBus == nil || result.ChangedWorkflow == nil || result.Replayed {
 		return
 	}
 	kind := events.WorkflowChangeUpdated
-	if result.Outcome == session.WebhookOutcomeCreated {
+	if result.Outcome == webhookstore.WebhookOutcomeCreated {
 		kind = events.WorkflowChangeCreated
 	}
 	s.eventBus.Publish(events.NewWorkflowChangedEvent(&events.WorkflowEventPayload{Kind: kind, Workflow: result.ChangedWorkflow}))
 }
 
-func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, instanceID string, req WebhookReconcileRequest) (*session.WebhookReconcileInput, error) {
+func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, instanceID string, req WebhookReconcileRequest) (*webhookstore.WebhookReconcileInput, error) {
 	if !webhookInstanceIDRe.MatchString(instanceID) {
 		return nil, apiErr(http.StatusBadRequest, "INVALID_REQUEST", "invalid instance id")
 	}
@@ -280,7 +283,7 @@ func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, 
 	if err != nil {
 		return nil, apiErr(http.StatusInternalServerError, "INTERNAL", "secret storage unavailable")
 	}
-	in := &session.WebhookReconcileInput{
+	in := &webhookstore.WebhookReconcileInput{
 		Scope:             caller.WebhookScope,
 		RequestID:         req.RequestID,
 		InstanceID:        instanceID,
@@ -290,7 +293,7 @@ func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, 
 		Workflow:          spec,
 	}
 	if req.Secret != "" {
-		encrypted, encErr := session.EncryptToken(encKey, req.Secret)
+		encrypted, encErr := domain.EncryptToken(encKey, req.Secret)
 		if encErr != nil {
 			return nil, apiErr(http.StatusInternalServerError, "INTERNAL", "secret storage unavailable")
 		}
@@ -324,13 +327,13 @@ func keyedHex(key, data []byte) string { return hex.EncodeToString(hmacBytes(key
 
 // requestFingerprint is a keyed digest of everything that defines the request except its
 // ID. The plaintext secret never enters it: only its keyed digest does.
-func requestFingerprint(macKey []byte, in *session.WebhookReconcileInput) (string, error) {
+func requestFingerprint(macKey []byte, in *webhookstore.WebhookReconcileInput) (string, error) {
 	canonical, err := json.Marshal(struct {
-		InstanceID        string                      `json:"instance_id"`
-		ExpectedVersion   int64                       `json:"expected_version"`
-		CompatTupleSHA256 string                      `json:"compat_tuple_sha256"`
-		Workflow          session.WebhookWorkflowSpec `json:"workflow"`
-		SecretDigest      string                      `json:"secret_digest"`
+		InstanceID        string                           `json:"instance_id"`
+		ExpectedVersion   int64                            `json:"expected_version"`
+		CompatTupleSHA256 string                           `json:"compat_tuple_sha256"`
+		Workflow          webhookstore.WebhookWorkflowSpec `json:"workflow"`
+		SecretDigest      string                           `json:"secret_digest"`
 	}{in.InstanceID, in.ExpectedVersion, in.CompatTupleSHA256, in.Workflow, in.SecretDigest})
 	if err != nil {
 		return "", fmt.Errorf("marshal fingerprint input: %w", err)
@@ -389,11 +392,11 @@ const (
 	maxWebhookModelBytes    = 256
 )
 
-func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.WebhookWorkflowSpec, error) {
-	invalid := func(msg string) (session.WebhookWorkflowSpec, error) {
-		return session.WebhookWorkflowSpec{}, apiErr(http.StatusBadRequest, "INVALID_REQUEST", msg)
+func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (webhookstore.WebhookWorkflowSpec, error) {
+	invalid := func(msg string) (webhookstore.WebhookWorkflowSpec, error) {
+		return webhookstore.WebhookWorkflowSpec{}, apiErr(http.StatusBadRequest, "INVALID_REQUEST", msg)
 	}
-	if err := session.ValidateWorkflowSlug(b.Slug); err != nil {
+	if err := workflowengine.ValidateWorkflowSlug(b.Slug); err != nil {
 		return invalid("webhook.slug: " + err.Error())
 	}
 	if b.Name == "" || len(b.Name) > maxWebhookNameBytes {
@@ -408,7 +411,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.Webhook
 	if b.InputTemplate != nil && len(*b.InputTemplate) > maxWebhookTemplateBytes {
 		return invalid("webhook.input_template exceeds its size limit")
 	}
-	if b.SessionType != nil && !config.SessionType(*b.SessionType).IsValid() {
+	if b.SessionType != nil && !domain.SessionType(*b.SessionType).IsValid() {
 		return invalid("webhook.session_type is not supported")
 	}
 	if b.Model != nil {
@@ -432,13 +435,13 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.Webhook
 		return invalid("webhook." + err.Error())
 	}
 	if !dirRoot(allowedRoot).contains(b.TargetDirectory) {
-		return session.WebhookWorkflowSpec{}, apiErr(http.StatusForbidden, "FORBIDDEN_DIRECTORY", "target_directory is outside this credential's allowed directory")
+		return webhookstore.WebhookWorkflowSpec{}, apiErr(http.StatusForbidden, "FORBIDDEN_DIRECTORY", "target_directory is outside this credential's allowed directory")
 	}
 	enabled := true
 	if b.Enabled != nil {
 		enabled = *b.Enabled
 	}
-	return session.WebhookWorkflowSpec{
+	return webhookstore.WebhookWorkflowSpec{
 		WebhookSlug: b.Slug, Name: b.Name, Command: b.Command, TargetDirectory: b.TargetDirectory,
 		PromptTemplate: b.PromptTemplate, EventFilter: b.EventFilter, LabelFilter: b.LabelFilter, Enabled: enabled,
 		InputTemplate: b.InputTemplate, SessionType: b.SessionType, Model: b.Model, AgentType: b.AgentType,
@@ -468,7 +471,7 @@ func (r dirRoot) contains(dir string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-func registrationBodyOf(v *session.WebhookRegistrationView) WebhookRegistrationBody {
+func registrationBodyOf(v *webhookstore.WebhookRegistrationView) WebhookRegistrationBody {
 	enabled := v.Workflow.Enabled
 	inputTemplate, sessionType, model, agentType := "", "directory", "", ""
 	if v.Workflow.InputTemplate != nil {
@@ -502,23 +505,23 @@ func registrationBodyOf(v *session.WebhookRegistrationView) WebhookRegistrationB
 }
 
 func mapWebhookRepoError(err error) *WebhookAPIError {
-	var conflict *session.WebhookVersionConflictError
+	var conflict *webhookstore.WebhookVersionConflictError
 	switch {
 	case errors.As(err, &conflict):
 		e := apiErr(http.StatusConflict, "VERSION_CONFLICT", "expected_version does not match the current version")
 		e.CurrentVersion = &conflict.CurrentVersion
 		return e
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return apiErr(http.StatusNotFound, "NOT_FOUND", "registration not found")
-	case errors.Is(err, session.ErrIdempotencyKeyReused):
+	case errors.Is(err, webhookstore.ErrIdempotencyKeyReused):
 		return apiErr(http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "request_id was already used for a different request")
-	case errors.Is(err, session.ErrWebhookSlugUnavailable):
+	case errors.Is(err, webhookstore.ErrWebhookSlugUnavailable):
 		return apiErr(http.StatusConflict, "SLUG_UNAVAILABLE", "webhook slug is not available")
-	case errors.Is(err, session.ErrCompatTupleMismatch):
+	case errors.Is(err, webhookstore.ErrCompatTupleMismatch):
 		return apiErr(http.StatusConflict, "COMPAT_TUPLE_MISMATCH", "compatibility tuple differs from the one persisted at creation")
-	case errors.Is(err, session.ErrImmutableWebhookField):
+	case errors.Is(err, webhookstore.ErrImmutableWebhookField):
 		return apiErr(http.StatusConflict, "IMMUTABLE_FIELD", "webhook.slug cannot change after creation")
-	case errors.Is(err, session.ErrRegistrationOrphaned):
+	case errors.Is(err, webhookstore.ErrRegistrationOrphaned):
 		return apiErr(http.StatusConflict, "REGISTRATION_ORPHANED", "the registration's workflow no longer exists")
 	default:
 		log.Error("[WebhookManagement] unexpected error", "err", err)

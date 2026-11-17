@@ -15,6 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	"connectrpc.com/connect"
 	kzip "github.com/klauspost/compress/zip"
 	"github.com/tstapler/stapler-squad/config"
@@ -22,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BundleStorage is the narrow persistence interface SessionBundleService needs
@@ -32,10 +36,10 @@ type BundleStorage interface {
 	// given session UUID, ordered by created_at DESC.
 	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]session.AnalyticsData, error)
 	// GetItemSessionBySessionUUID returns the most-recent backlog item session
-	// linked to this session, or session.ErrNotFound when none exists.
-	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
+	// linked to this session, or domain.ErrNotFound when none exists.
+	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
 	// GetSessionArtifactsByUUID returns the artifact blob, or (nil, nil) when none.
-	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
+	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*domain.SessionArtifactsBlob, error)
 }
 
 // ContextHistoryReader is the narrow contexthistory interface SessionBundleService
@@ -113,7 +117,7 @@ func (s *SessionBundleService) SetExternalDiscovery(disc *session.ExternalSessio
 
 // findInstance mirrors DiagnosticService.findInstance's poller ->
 // external-discovery fallback chain.
-func (s *SessionBundleService) findInstance(id string) *session.Instance {
+func (s *SessionBundleService) findInstance(id string) *instance.Instance {
 	if s.poller != nil {
 		if inst := s.poller.FindInstance(id); inst != nil {
 			return inst
@@ -196,7 +200,7 @@ func (c *bundleCollector) addMarshaled(name string, v any) {
 // inst must not be nil. maxScrollbackLines is capped at 500 internally.
 func (s *SessionBundleService) assembleBundle(
 	ctx context.Context,
-	inst *session.Instance,
+	inst *instance.Instance,
 	maxScrollbackLines int,
 	clientSpans []byte,
 ) ([]byte, BundleManifest, error) {
@@ -252,7 +256,7 @@ func (s *SessionBundleService) assembleBundle(
 }
 
 // collectSessionMetadata adds the required session_metadata section.
-func (c *bundleCollector) collectSessionMetadata(snap *session.InstanceSnapshot) {
+func (c *bundleCollector) collectSessionMetadata(snap *domain.InstanceSnapshot) {
 	metaPayload := struct {
 		ID          string    `json:"id"`
 		UUID        string    `json:"uuid"`
@@ -418,7 +422,7 @@ func (s *SessionBundleService) collectArtifacts(ctx context.Context, c *bundleCo
 		c.omit("artifacts", "no artifact scan recorded for this session (not_linked or scan pending)")
 		return
 	}
-	c.addMarshaled("artifacts", artBlob.Redacted())
+	c.addMarshaled("artifacts", artifacts.RedactBlob(artBlob))
 }
 
 func (c *bundleCollector) totalUncompressed() int {
@@ -737,7 +741,7 @@ func RunDiagnosticsRetention(dir string, maxAge time.Duration) error {
 
 // ExportBundleForTest calls assembleBundle and exposes it for package-level tests
 // that cannot call the private method directly. It is not part of the public API.
-func (s *SessionBundleService) ExportBundleForTest(ctx context.Context, inst *session.Instance, maxScrollbackLines int, clientSpans []byte) ([]byte, BundleManifest, error) {
+func (s *SessionBundleService) ExportBundleForTest(ctx context.Context, inst *instance.Instance, maxScrollbackLines int, clientSpans []byte) ([]byte, BundleManifest, error) {
 	return s.assembleBundle(ctx, inst, maxScrollbackLines, clientSpans)
 }
 

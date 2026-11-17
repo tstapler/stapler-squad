@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func notifyOnce(t *testing.T, n wakes.Notification) *events.Event {
@@ -60,19 +60,19 @@ func TestWakeNotifier_should_ReachOperator_When_OwnerSessionIsHidden(t *testing.
 
 func TestIsStartingStatus_should_OnlyBeTrueForCreatingAndRestoring(t *testing.T) {
 	t.Parallel()
-	for _, s := range []session.Status{session.Creating, session.Restoring} {
+	for _, s := range []domain.Status{domain.Creating, domain.Restoring} {
 		assert.True(t, isStartingStatus(s), s.String())
 	}
-	for _, s := range []session.Status{session.Active, session.Paused, session.Stopped, session.Hibernated, session.Crashed, session.PermanentlyFailed, session.Failed} {
+	for _, s := range []domain.Status{domain.Active, domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed, domain.PermanentlyFailed, domain.Failed} {
 		assert.False(t, isStartingStatus(s), s.String())
 	}
 }
 
 func TestWakeOwners_should_ReadCreatingAndRestoringAsStartingOnly(t *testing.T) {
 	t.Parallel()
-	for status, want := range map[session.Status]bool{
-		session.Creating: true, session.Restoring: true,
-		session.Active: false, session.Stopped: false,
+	for status, want := range map[domain.Status]bool{
+		domain.Creating: true, domain.Restoring: true,
+		domain.Active: false, domain.Stopped: false,
 	} {
 		assert.Equal(t, want, isStartingStatus(status), status.String())
 	}

@@ -1,11 +1,14 @@
 package events
 
 import (
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/sshremote"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/sshremote"
 )
 
 // EventType represents the type of session event that occurred.
@@ -82,7 +85,7 @@ type BacklogItemEventPayload struct {
 	// Kind identifies which backlog mutation this payload describes.
 	Kind BacklogChangeKind
 	// Item is the current snapshot of the backlog item after the mutation.
-	Item *session.BacklogItemData
+	Item *backlogdto.BacklogItemData
 	// OldStatus is the prior status for BacklogChangeStatusTransition.
 	OldStatus string
 	// NewStatus is the new status for BacklogChangeStatusTransition.
@@ -93,7 +96,7 @@ type BacklogItemEventPayload struct {
 	// SessionID identifies the session for BacklogChangeSessionAttached.
 	SessionID string
 	// ClaimantHostID is the attaching process's own stable host identifier for
-	// BacklogChangeSessionAttached, mirrored from session.BacklogItemChange —
+	// BacklogChangeSessionAttached, mirrored from backlogdto.BacklogItemChange —
 	// never derived from the session being attached.
 	ClaimantHostID string
 	// ArchivedAt is the archival timestamp for BacklogChangeItemArchived.
@@ -104,10 +107,10 @@ type BacklogItemEventPayload struct {
 	// when Kind == BacklogChangeVerdictRecorded, copied straight through by
 	// the adapter so the verdict reaches subscribers as first-class payload
 	// data rather than something derived by joining item_sessions.
-	Verdict *session.ReviewVerdictData
-	// ActivityNote mirrors session.BacklogItemChange.ActivityNote one-to-one;
+	Verdict *backlogdto.ReviewVerdictData
+	// ActivityNote mirrors backlogdto.BacklogItemChange.ActivityNote one-to-one;
 	// populated only when Kind == BacklogChangeActivityNoteAdded.
-	ActivityNote *session.ActivityNoteData
+	ActivityNote *backlogdto.ActivityNoteData
 	// IsSnapshot is true when this event was generated as part of an
 	// initial-snapshot send (e.g. WatchBacklogItems's first batch) rather
 	// than a live mutation.
@@ -175,16 +178,16 @@ type Event struct {
 	// Timestamp when the event occurred
 	Timestamp time.Time
 	// Session affected by the event (may be nil for delete events)
-	Session *session.Instance
+	Session *instance.Instance
 	// SessionID for delete events when Session is nil
 	SessionID string
 	// UpdatedFields tracks which fields were modified (for update events).
 	// See FieldStatus for the well-known "status" entry.
 	UpdatedFields []string
 	// OldStatus for status change events
-	OldStatus session.Status
+	OldStatus domain.Status
 	// NewStatus for status change events
-	NewStatus session.Status
+	NewStatus domain.Status
 	// DetectedStatus is kept for legacy compatibility; no longer serialized to wire.
 	DetectedStatus string
 	// DetectedContext is the human-readable context from the terminal detector
@@ -218,7 +221,7 @@ type Event struct {
 }
 
 // NewSessionCreatedEvent creates an event for session creation.
-func NewSessionCreatedEvent(sess *session.Instance) *Event {
+func NewSessionCreatedEvent(sess *instance.Instance) *Event {
 	return &Event{
 		Type:      EventSessionCreated,
 		Timestamp: time.Now(),
@@ -227,7 +230,7 @@ func NewSessionCreatedEvent(sess *session.Instance) *Event {
 }
 
 // NewSessionUpdatedEvent creates an event for session updates.
-func NewSessionUpdatedEvent(sess *session.Instance, updatedFields []string) *Event {
+func NewSessionUpdatedEvent(sess *instance.Instance, updatedFields []string) *Event {
 	return &Event{
 		Type:          EventSessionUpdated,
 		Timestamp:     time.Now(),
@@ -241,7 +244,7 @@ func NewSessionUpdatedEvent(sess *session.Instance, updatedFields []string) *Eve
 // Use this instead of NewSessionUpdatedEvent when the detection state is known
 // and should be propagated to frontend clients (e.g. the UpdateSession RPC path).
 func NewSessionUpdatedEventWithDetection(
-	sess *session.Instance,
+	sess *instance.Instance,
 	updatedFields []string,
 	detectedStatus detection.DetectedStatus,
 	detectedContext string,

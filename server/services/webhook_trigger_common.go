@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -34,7 +35,7 @@ func decryptWorkflowSecret(cfg *config.Config, wf *ent.Workflow) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("get encryption key: %w", err)
 	}
-	secret, err := session.DecryptToken(key, wf.WebhookSecretEncrypted)
+	secret, err := domain.DecryptToken(key, wf.WebhookSecretEncrypted)
 	if err != nil {
 		return "", fmt.Errorf("decrypt webhook secret: %w", err)
 	}

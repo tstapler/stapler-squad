@@ -6,6 +6,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // IT-001: Create item → transition to ready → spawn marker → verify in_progress
@@ -18,32 +21,32 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	ctx := context.Background()
 
 	// 1. Create a BacklogItem with status "idea"
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Implement login feature",
 		Description:        "User authentication flow",
 		AcceptanceCriteria: `[{"index":0,"text":"User can enter credentials","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 	require.NotNil(t, createdItem)
-	require.Equal(t, string(BacklogStatusIdea), createdItem.Status)
+	require.Equal(t, string(domain.BacklogStatusIdea), createdItem.Status)
 
 	// 2. Transition to "ready"
-	readyItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
+	readyItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusReady, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusReady), readyItem.Status)
+	require.Equal(t, string(domain.BacklogStatusReady), readyItem.Status)
 
 	// 3. Approve plan and transition to "in_progress"
 	readyItem.PlanApproved = true
-	inProgressItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredByUser)
+	inProgressItem, err := storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusInProgress), inProgressItem.Status)
+	require.Equal(t, string(domain.BacklogStatusInProgress), inProgressItem.Status)
 
 	// 4. Create an ItemSession (role "work")
 	sessionUUID := uuid.New().String()
-	isData := ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -56,7 +59,7 @@ func TestBacklogIntegration_IT001_IdeaToInProgressWithItemSession(t *testing.T) 
 	// 5. Verify state
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusInProgress), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusInProgress), fetchedItem.Status)
 }
 
 // IT-004: AC criterion update roundtrip
@@ -70,19 +73,19 @@ func TestBacklogIntegration_IT004_AcCriterionUpdateRoundtrip(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create item with AC criteria
-	criteria := []AcCriterion{
+	criteria := []domain.AcCriterion{
 		{Index: 0, Text: "must compile", Status: "pending"},
 		{Index: 1, Text: "tests pass", Status: "pending"},
 	}
-	rawCriteria, err := SerializeAcCriteria(criteria)
+	rawCriteria, err := domain.SerializeAcCriteria(criteria)
 	require.NoError(t, err)
 
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Build feature",
 		Description:        "New feature implementation",
 		AcceptanceCriteria: rawCriteria,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -95,11 +98,11 @@ func TestBacklogIntegration_IT004_AcCriterionUpdateRoundtrip(t *testing.T) {
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 
-	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	parsedCriteria, err := domain.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Len(t, parsedCriteria, 2)
-	require.Equal(t, AcStatusDone, parsedCriteria[0].Status)
-	require.Equal(t, AcStatusPending, parsedCriteria[1].Status)
+	require.Equal(t, domain.AcStatusDone, parsedCriteria[0].Status)
+	require.Equal(t, domain.AcStatusPending, parsedCriteria[1].Status)
 }
 
 // Archiving a backlog item creates a BacklogStatusEvent audit row with TriggeredByUser.
@@ -110,28 +113,28 @@ func TestBacklogIntegration_ArchiveRecordsStatusEvent(t *testing.T) {
 
 	ctx := context.Background()
 
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Item to archive",
 		Description:        "desc",
 		AcceptanceCriteria: `[{"index":0,"text":"do it","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
 	// Archive a freshly-created item (no prior transitions/events) straight from "idea".
-	_, err = storage.RawArchiveBacklogItem(ctx, createdItem.ID, nil, TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, createdItem.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusArchived), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusArchived), fetchedItem.Status)
 
 	require.Len(t, fetchedItem.StatusEvents, 1)
-	require.Equal(t, string(BacklogStatusIdea), fetchedItem.StatusEvents[0].FromStatus)
-	require.Equal(t, string(BacklogStatusArchived), fetchedItem.StatusEvents[0].ToStatus)
-	require.Equal(t, TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, string(domain.BacklogStatusIdea), fetchedItem.StatusEvents[0].FromStatus)
+	require.Equal(t, string(domain.BacklogStatusArchived), fetchedItem.StatusEvents[0].ToStatus)
+	require.Equal(t, instance.TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
 }
 
 // TransitionBacklogItemStatus records the triggeredBy value the caller passes,
@@ -143,26 +146,26 @@ func TestBacklogIntegration_TransitionRecordsTriggeredBy(t *testing.T) {
 
 	ctx := context.Background()
 
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Triggered-by coverage",
 		Description:        "desc",
 		AcceptanceCriteria: `[{"index":0,"text":"do it","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusReady, nil, TriggeredByUser)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusReady, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, BacklogStatusInProgress, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, createdItem.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
 	require.Len(t, fetchedItem.StatusEvents, 2)
-	require.Equal(t, TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
-	require.Equal(t, TriggeredBySystem, fetchedItem.StatusEvents[1].TriggeredBy)
+	require.Equal(t, instance.TriggeredByUser, fetchedItem.StatusEvents[0].TriggeredBy)
+	require.Equal(t, instance.TriggeredBySystem, fetchedItem.StatusEvents[1].TriggeredBy)
 }
 
 // IT-007: Multiple ItemSessions for same item
@@ -175,19 +178,19 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create item
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Iterative work",
 		Description:        "Requires multiple passes",
 		AcceptanceCriteria: `[{"index":0,"text":"Work complete","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
 	// 2. Create first work session
 	workSession1UUID := uuid.New().String()
-	is1Data := ItemSessionData{
+	is1Data := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: workSession1UUID,
 		SessionRole: "work",
@@ -197,7 +200,7 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 
 	// 3. Create a review session
 	reviewSessionUUID := uuid.New().String()
-	is2Data := ItemSessionData{
+	is2Data := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: reviewSessionUUID,
 		SessionRole: "review",
@@ -207,7 +210,7 @@ func TestBacklogIntegration_IT007_MultipleItemSessionsPerItem(t *testing.T) {
 
 	// 4. Create another work session
 	workSession2UUID := uuid.New().String()
-	is3Data := ItemSessionData{
+	is3Data := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: workSession2UUID,
 		SessionRole: "work",
@@ -244,25 +247,25 @@ func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create item with initial AC
-	initialCriteria := []AcCriterion{
+	initialCriteria := []domain.AcCriterion{
 		{Index: 0, Text: "initial requirement", Status: "pending"},
 	}
-	initialRaw, err := SerializeAcCriteria(initialCriteria)
+	initialRaw, err := domain.SerializeAcCriteria(initialCriteria)
 	require.NoError(t, err)
 
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Snapshot test",
 		Description:        "Testing AC snapshot",
 		AcceptanceCriteria: initialRaw,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
 	// 2. Create work session with AcSnapshot
 	sessionUUID := uuid.New().String()
-	isData := ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -276,7 +279,7 @@ func TestBacklogIntegration_IT008_AcSnapshotCapture(t *testing.T) {
 	fetchedIS, err := repo.GetItemSession(ctx, createdIS.ID)
 	require.NoError(t, err)
 
-	snapshotCriteria, err := ParseAcCriteria(AcCriteriaJSON(fetchedIS.AcSnapshot))
+	snapshotCriteria, err := domain.ParseAcCriteria(domain.AcCriteriaJSON(fetchedIS.AcSnapshot))
 	require.NoError(t, err)
 	require.Len(t, snapshotCriteria, 1, "AcSnapshot should preserve original AC at session creation time")
 	require.Equal(t, "initial requirement", snapshotCriteria[0].Text)
@@ -292,29 +295,29 @@ func TestBacklogIntegration_IT009_GetItemSessionBySessionAndItem(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create two items
-	item1Data := BacklogItemData{
+	item1Data := backlogdto.BacklogItemData{
 		Title:              "Item 1",
 		Description:        "First item",
 		AcceptanceCriteria: `[{"index":0,"text":"Complete","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	item1, err := storage.CreateBacklogItem(ctx, item1Data)
 	require.NoError(t, err)
 
-	item2Data := BacklogItemData{
+	item2Data := backlogdto.BacklogItemData{
 		Title:              "Item 2",
 		Description:        "Second item",
 		AcceptanceCriteria: `[{"index":0,"text":"Complete","status":"pending"}]`,
 		Priority:           2,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	item2, err := storage.CreateBacklogItem(ctx, item2Data)
 	require.NoError(t, err)
 
 	// 2. Create session linked to item1
 	sessionUUID := uuid.New().String()
-	isData := ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      item1.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -342,18 +345,18 @@ func TestBacklogIntegration_IT010_ItemSessionLastCommitSha(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create item and session
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Git tracking",
 		Description:        "Tracking commits",
 		AcceptanceCriteria: `[{"index":0,"text":"Done","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
 
 	sessionUUID := uuid.New().String()
-	isData := ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -390,24 +393,24 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Create two items — one in_progress, one done.
-	activeItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	activeItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Active Item",
 		AcceptanceCriteria: `[{"index":0,"text":"Ship it","status":"pending"}]`,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	doneItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	doneItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Done Item",
 		Priority: 2,
-		Status:   string(BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
 	// 2. Add two ItemSessions to the active item.
 	s1UUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      activeItem.ID,
 		SessionUUID: s1UUID,
 		SessionRole: "work",
@@ -415,7 +418,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	require.NoError(t, err)
 
 	s2UUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      activeItem.ID,
 		SessionUUID: s2UUID,
 		SessionRole: "review",
@@ -424,8 +427,8 @@ func TestListBacklogItemSummaries(t *testing.T) {
 
 	t.Run("returns both items when IncludeTerminal", func(t *testing.T) {
 		t.Parallel()
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
+			Statuses: []string{string(domain.BacklogStatusInProgress), string(domain.BacklogStatusDone)},
 		})
 		require.NoError(t, err)
 		require.Len(t, summaries, 2)
@@ -440,7 +443,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	// (before any t.Parallel() subtest actually starts executing
 	// concurrently) is sufficient — no need to touch the siblings.
 	t.Run("ExcludeDone omits done item", func(t *testing.T) {
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
 			ExcludeDone: true,
 		})
 		require.NoError(t, err)
@@ -450,14 +453,14 @@ func TestListBacklogItemSummaries(t *testing.T) {
 
 	t.Run("ExcludeDone alone does not omit an archived item", func(t *testing.T) {
 		t.Parallel()
-		archivedItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		archivedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:    "Archived Item",
 			Priority: 3,
-			Status:   string(BacklogStatusArchived),
+			Status:   string(domain.BacklogStatusArchived),
 		})
 		require.NoError(t, err)
 
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
 			ExcludeDone: true,
 		})
 		require.NoError(t, err)
@@ -472,14 +475,14 @@ func TestListBacklogItemSummaries(t *testing.T) {
 
 	t.Run("ExcludeArchived omits archived item but keeps done item", func(t *testing.T) {
 		t.Parallel()
-		archivedItem2, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		archivedItem2, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:    "Archived Item 2",
 			Priority: 3,
-			Status:   string(BacklogStatusArchived),
+			Status:   string(domain.BacklogStatusArchived),
 		})
 		require.NoError(t, err)
 
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
 			ExcludeArchived: true,
 		})
 		require.NoError(t, err)
@@ -494,8 +497,8 @@ func TestListBacklogItemSummaries(t *testing.T) {
 
 	t.Run("active item has lightweight scalar fields and ItemSessions loaded", func(t *testing.T) {
 		t.Parallel()
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			Statuses: []string{string(BacklogStatusInProgress)},
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
+			Statuses: []string{string(domain.BacklogStatusInProgress)},
 		})
 		require.NoError(t, err)
 		require.Len(t, summaries, 1)
@@ -503,7 +506,7 @@ func TestListBacklogItemSummaries(t *testing.T) {
 		s := summaries[0]
 		require.Equal(t, activeItem.ID, s.ID)
 		require.Equal(t, "Active Item", s.Title)
-		require.Equal(t, BacklogStatusInProgress, s.Status)
+		require.Equal(t, domain.BacklogStatusInProgress, s.Status)
 		require.Equal(t, 1, s.Priority)
 		require.NotZero(t, s.CreatedAt)
 		require.NotZero(t, s.UpdatedAt)
@@ -523,8 +526,8 @@ func TestListBacklogItemSummaries(t *testing.T) {
 
 	t.Run("done item has no ItemSessions", func(t *testing.T) {
 		t.Parallel()
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			Statuses: []string{string(BacklogStatusDone)},
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
+			Statuses: []string{string(domain.BacklogStatusDone)},
 		})
 		require.NoError(t, err)
 		require.Len(t, summaries, 1)
@@ -535,16 +538,16 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	t.Run("limit and offset work", func(t *testing.T) {
 		t.Parallel()
 		// Both items visible — limit 1 returns one.
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
+			Statuses: []string{string(domain.BacklogStatusInProgress), string(domain.BacklogStatusDone)},
 			Limit:    1,
 		})
 		require.NoError(t, err)
 		require.Len(t, summaries, 1)
 
 		// Offset 1 returns the second.
-		summaries2, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			Statuses: []string{string(BacklogStatusInProgress), string(BacklogStatusDone)},
+		summaries2, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
+			Statuses: []string{string(domain.BacklogStatusInProgress), string(domain.BacklogStatusDone)},
 			Limit:    1,
 			Offset:   1,
 		})
@@ -556,8 +559,8 @@ func TestListBacklogItemSummaries(t *testing.T) {
 	// Ensure timestamps are populated (guards against nullable-time scan bugs).
 	t.Run("timestamps are not zero", func(t *testing.T) {
 		t.Parallel()
-		summaries, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{
-			Statuses: []string{string(BacklogStatusInProgress)},
+		summaries, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{
+			Statuses: []string{string(domain.BacklogStatusInProgress)},
 		})
 		require.NoError(t, err)
 		require.Len(t, summaries, 1)
@@ -576,18 +579,18 @@ func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
 
 	ctx := context.Background()
 
-	criteria := []AcCriterion{
+	criteria := []domain.AcCriterion{
 		{Index: 0, Text: "must compile", Status: "pending"},
 	}
-	rawCriteria, err := SerializeAcCriteria(criteria)
+	rawCriteria, err := domain.SerializeAcCriteria(criteria)
 	require.NoError(t, err)
 
-	itemData := BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Build feature",
 		Description:        "New feature implementation",
 		AcceptanceCriteria: rawCriteria,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -621,9 +624,9 @@ func TestBacklogIntegration_IT011_ProgressNoteAppendOnlyHistory(t *testing.T) {
 	// AppendProgressNote — it stays whatever UpdateAcCriterionStatus last set it to.
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	parsedCriteria, err := ParseAcCriteria(fetchedItem.AcceptanceCriteria)
+	parsedCriteria, err := domain.ParseAcCriteria(fetchedItem.AcceptanceCriteria)
 	require.NoError(t, err)
-	require.Equal(t, AcStatusPending, parsedCriteria[0].Status, "AppendProgressNote alone must not mutate the AC criterion")
+	require.Equal(t, domain.AcStatusPending, parsedCriteria[0].Status, "AppendProgressNote alone must not mutate the AC criterion")
 
 	// 5. GetBacklogItem must also eagerly load ProgressNotes (mirrors StatusEvents'
 	// eager-load) so the audit trail is available wherever an item is fetched, not

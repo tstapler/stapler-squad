@@ -11,7 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // setDefaultBudget sets (or clears, for nil) the global default through the
@@ -40,7 +40,7 @@ func newBudgetProbe(t *testing.T) *budgetProbe {
 // warnings returns the warning counts for an item with the given own threshold.
 func (p *budgetProbe) warnings(itemThreshold *float64, spent float64) (inline, workStage int) {
 	before := p.buf.String()
-	logBudgetWarningIfCrossed("bl_inline", "triage", itemThreshold, []session.ItemSessionSummary{}, spent)
+	logBudgetWarningIfCrossed("bl_inline", "triage", itemThreshold, []backlogdto.ItemSessionSummary{}, spent)
 	NewBacklogService(nil, nil, nil, nil, nil, nil).checkWorkStageBudget("bl_work", itemThreshold, spent)
 	added := strings.TrimPrefix(p.buf.String(), before)
 	return strings.Count(added, "[BudgetWarning] item=bl_inline"), strings.Count(added, "[BudgetWarning] item=bl_work")

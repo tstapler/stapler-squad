@@ -10,23 +10,26 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func seedItemDirectPR(t *testing.T, fix *forkTestFixture, status session.BacklogStatus, number int) (string, session.PRRef) {
+func seedItemDirectPR(t *testing.T, fix *forkTestFixture, status domain.BacklogStatus, number int) (string, domain.PRRef) {
 	t.Helper()
-	item, err := fix.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "detach item", Status: string(status)})
+	item, err := fix.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "detach item", Status: string(status)})
 	require.NoError(t, err)
-	ref, err := session.NewPRRef("", "acme", "app", number)
+	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
 	_, err = fix.storage.AttachItemPR(context.Background(), item.ID, ref,
-		session.PRLink{Role: session.PRRolePrimary, Source: session.AttachSourceManual, Initial: session.PRInitial{State: session.PRStateUnknown}})
+		domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateUnknown}})
 	require.NoError(t, err)
 	return item.ID, ref
 }
 
 func TestDetachItemPullRequest_ShouldDeleteLinkAndTombstone_ForItemInAnyStatus(t *testing.T) {
 	t.Parallel()
-	for _, status := range []session.BacklogStatus{session.BacklogStatus("in_progress"), session.BacklogStatus("done")} {
+	for _, status := range []domain.BacklogStatus{domain.BacklogStatus("in_progress"), domain.BacklogStatus("done")} {
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 			fix := setupForkTestFixture(t)
@@ -42,7 +45,7 @@ func TestDetachItemPullRequest_ShouldDeleteLinkAndTombstone_ForItemInAnyStatus(t
 			assert.Empty(t, guards[itemID].Direct, "link gone, so the verdict and the sweeper stop counting it")
 
 			res, err := fix.storage.AttachItemPR(context.Background(), itemID, ref,
-				session.PRLink{Role: session.PRRolePrimary, Source: session.AttachSourceBranchDiscovery})
+				domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery})
 			require.NoError(t, err)
 			assert.True(t, res.Tombstoned, "an automatic re-attach is blocked by the item tombstone")
 		})
@@ -53,8 +56,8 @@ func TestDetachItemPullRequest_ShouldNotTouchSessionLinks(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	itemID, _ := seedItemDirectPR(t, fix, session.BacklogStatus("in_progress"), 42)
-	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, session.PRStateOpen, false})
+	itemID, _ := seedItemDirectPR(t, fix, domain.BacklogStatus("in_progress"), 42)
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, domain.PRStateOpen, false})
 
 	_, err := fix.svc.DetachItemPullRequest(context.Background(), connect.NewRequest(
 		&sessionv1.DetachItemPullRequestRequest{ItemId: itemID, Pr: protoRef(42)}))
@@ -69,7 +72,7 @@ func TestDetachItemPullRequest_ShouldRejectBadRequests(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	itemID, _ := seedItemDirectPR(t, fix, session.BacklogStatus("in_progress"), 43)
+	itemID, _ := seedItemDirectPR(t, fix, domain.BacklogStatus("in_progress"), 43)
 	call := func(r *sessionv1.DetachItemPullRequestRequest) connect.Code {
 		_, err := fix.svc.DetachItemPullRequest(context.Background(), connect.NewRequest(r))
 		require.Error(t, err)
@@ -94,20 +97,20 @@ func TestDetachItemPullRequest_ShouldRemovePRFromVerdict_WhenAlsoReachableViaCur
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	ctx := context.Background()
-	itemID, _ := seedItemDirectPR(t, fix, session.BacklogStatus("in_progress"), 42)
-	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, session.PRStateOpen, false})
-	_, err := fix.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: session.SessionRoleWork})
+	itemID, _ := seedItemDirectPR(t, fix, domain.BacklogStatus("in_progress"), 42)
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, domain.PRStateOpen, false})
+	_, err := fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	before, err := fix.storage.ItemPRs(ctx, itemID)
 	require.NoError(t, err)
-	require.Equal(t, session.ItemVerdictOpen, session.ItemPRVerdict(before))
+	require.Equal(t, instance.ItemVerdictOpen, instance.ItemPRVerdict(before))
 
 	_, err = fix.svc.DetachItemPullRequest(ctx, connect.NewRequest(&sessionv1.DetachItemPullRequestRequest{ItemId: itemID, Pr: protoRef(42)}))
 	require.NoError(t, err)
 
 	after, err := fix.storage.ItemPRs(ctx, itemID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ItemVerdictNoPRs, session.ItemPRVerdict(after), "the round's own link no longer counts for the item")
+	assert.Equal(t, instance.ItemVerdictNoPRs, instance.ItemPRVerdict(after), "the round's own link no longer counts for the item")
 	views, err := fix.storage.ListSessionPRViewsByUUIDs(ctx, []string{"uuid-u1"})
 	require.NoError(t, err)
 	assert.Len(t, views["uuid-u1"], 1, "but the session keeps its link (and its worktree hold)")
@@ -115,7 +118,7 @@ func TestDetachItemPullRequest_ShouldRemovePRFromVerdict_WhenAlsoReachableViaCur
 
 func TestDetachItemPullRequest_ShouldRerunCleanupGate_ForFinishedItemsOnly(t *testing.T) {
 	t.Parallel()
-	for status, want := range map[session.BacklogStatus]bool{session.BacklogStatus("done"): true, session.BacklogStatus("archived"): true, session.BacklogStatus("in_progress"): false} {
+	for status, want := range map[domain.BacklogStatus]bool{domain.BacklogStatus("done"): true, domain.BacklogStatus("archived"): true, domain.BacklogStatus("in_progress"): false} {
 		status, want := status, want
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()

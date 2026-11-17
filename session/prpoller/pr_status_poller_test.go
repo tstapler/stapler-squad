@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 // admissionControlFlagName mirrors github/http_client.go's unexported
@@ -46,14 +48,14 @@ func (f *fakeGHClient) GetPRInfoConditional(_ context.Context, _ github.RepoRef,
 // when neither priority nor conclusion changed.
 func TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityChange(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "ci-conclusion-test"}
+	inst := &instance.Instance{Title: "ci-conclusion-test"}
 	// Seed a "blocking" priority with a "pending" CI conclusion so a later "failure"
 	// conclusion crosses no priority boundary (both are priority "blocking").
-	inst.UpdatePRStatus(session.PRStatusUpdate{State: "open", Priority: "blocking", CheckConclusion: "pending"})
+	inst.UpdatePRStatus(instance.PRStatusUpdate{State: "open", Priority: "blocking", CheckConclusion: "pending"})
 
 	poller := NewPRStatusPoller(nil)
 	fired := 0
-	poller.SetOnUpdated(func(*session.Instance) { fired++ })
+	poller.SetOnUpdated(func(*instance.Instance) { fired++ })
 
 	// Conclusion-only change: "pending" -> "failure", priority stays "blocking".
 	poller.applyPRUpdate(inst, &github.PRInfo{
@@ -88,14 +90,14 @@ func TestApplyPRUpdate_FiresOnUpdated_WhenCheckConclusionChangesWithoutPriorityC
 // its Mergeable string through PRStatusUpdate onto the Instance unchanged.
 func TestApplyPRUpdate_should_ThreadChecksReviewsMergeable_When_PRInfoPopulated(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "checks-reviews-mergeable-test"}
+	inst := &instance.Instance{Title: "checks-reviews-mergeable-test"}
 	poller := NewPRStatusPoller(nil)
 
-	checks := []github.CheckItem{
+	checks := []domain.GitHubCheckItem{
 		{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "completed", Conclusion: "success"},
 		{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "completed", Conclusion: "failure"},
 	}
-	reviews := []github.ReviewItem{
+	reviews := []domain.GitHubReviewItem{
 		{Author: "alice", State: "APPROVED", Body: "lgtm"},
 		{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix x"},
 	}
@@ -149,8 +151,8 @@ func TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances(t *testing.T) {
 	poller.cancel = func() {}
 	poller.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
 
-	makeInst := func(title string, status session.Status) *session.Instance {
-		return &session.Instance{
+	makeInst := func(title string, status domain.Status) *instance.Instance {
+		return &instance.Instance{
 			Title:          title,
 			Status:         status,
 			GitHubOwner:    "tstapler",
@@ -159,13 +161,13 @@ func TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances(t *testing.T) {
 		}
 	}
 
-	skipped := make([]*session.Instance, 0, 4)
+	skipped := make([]*instance.Instance, 0, 4)
 	skipped = append(skipped,
-		makeInst("paused-session", session.Paused),
-		makeInst("hibernated-session", session.Hibernated),
-		makeInst("stopped-session", session.Stopped),
+		makeInst("paused-session", domain.Paused),
+		makeInst("hibernated-session", domain.Hibernated),
+		makeInst("stopped-session", domain.Stopped),
 	)
-	active := makeInst("active-session", session.Active)
+	active := makeInst("active-session", domain.Active)
 
 	poller.SetInstances(append(skipped, active))
 	poller.checkAllSessions()
@@ -196,9 +198,9 @@ func TestPRStatusPoller_ETagCache_ReturnsSharedNonNilInstance(t *testing.T) {
 // newInvalidateTestInstance builds an *Instance pre-populated with a known PR
 // so InvalidateAndRefresh's (owner, repo, prNumber) matching can be exercised
 // without going through PR auto-discovery.
-func newInvalidateTestInstance(t *testing.T, title string, prNumber int) *session.Instance {
+func newInvalidateTestInstance(t *testing.T, title string, prNumber int) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:          title,
 		Path:           t.TempDir(),
 		Branch:         "feature-branch",
@@ -230,7 +232,7 @@ func TestInvalidateAndRefresh_should_DispatchFetchAndReturnMatchedTrue_When_OneI
 	p := newTestPRStatusPoller()
 	p.AddInstance(newInvalidateTestInstance(t, "invalidate-match-test", 42))
 
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), domain.PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}
@@ -268,7 +270,7 @@ func TestInvalidateAndRefresh_should_ReturnMatchedFalse_When_NoTrackedInstanceMa
 	// Tracks a different PR number, so it must not match.
 	p.AddInstance(newInvalidateTestInstance(t, "invalidate-no-match-test", 99))
 
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), domain.PRSourceWebhook)
 	if matched {
 		t.Fatal("InvalidateAndRefresh() = true, want false when no tracked instance matches")
 	}
@@ -299,7 +301,7 @@ func TestInvalidateAndRefresh_should_DispatchFetchForEachInstance_When_TwoInstan
 	p.AddInstance(newInvalidateTestInstance(t, "session-a", 42))
 	p.AddInstance(newInvalidateTestInstance(t, "session-b", 42))
 
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 42), domain.PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true when two instances track the PR")
 	}
@@ -383,7 +385,7 @@ func TestFetchAndUpdatePRStatus_AdmissionControlRejection_SkipsCleanly(t *testin
 	inst := newInvalidateTestInstance(t, "admission-rejection-test", 42)
 
 	var updated int
-	p.SetOnUpdated(func(*session.Instance) { updated++ })
+	p.SetOnUpdated(func(*instance.Instance) { updated++ })
 
 	// Sanity-check the rejection actually reaches GetPRInfoConditional as a plain
 	// error (not a panic, not a false "unchanged" result) before exercising the
@@ -471,7 +473,7 @@ func TestPRStatusPoller_should_TagOriginWebhookReconcileDistinctFromTickerOrigin
 
 	// Webhook path: InvalidateAndRefresh tags OriginWebhookReconcile itself and
 	// dispatches fetchAndUpdatePRStatus out of band (see its doc comment).
-	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 43), session.PRSourceWebhook)
+	matched := p.InvalidateAndRefresh(context.Background(), mustPRRef(t, "", "acme", "widgets", 43), domain.PRSourceWebhook)
 	if !matched {
 		t.Fatal("InvalidateAndRefresh() = false, want true for a tracked instance")
 	}
@@ -532,7 +534,7 @@ func (b *blockingGHClient) GetPRInfoConditional(context.Context, github.RepoRef,
 func TestPollerMutex_ShouldBeFreeDuringInFlightPoll(t *testing.T) {
 	t.Parallel()
 	client := &blockingGHClient{entered: make(chan struct{}, 1), release: make(chan struct{})}
-	inst := &session.Instance{Title: "mutex-free", Status: session.Active, GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 11}
+	inst := &instance.Instance{Title: "mutex-free", Status: domain.Active, GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 11}
 	poller := newLegacyTestPoller(client, inst)
 
 	done := make(chan struct{})

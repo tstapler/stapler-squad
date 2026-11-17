@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -75,7 +76,7 @@ func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T
 func TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault(t *testing.T) {
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(SddDefaultPipelineFlagName, setting.(bool))
+		set(featureflags.SddDefaultPipelineFlagName, setting.(bool))
 		return SddDefaultPipelineEnabled()
 	}, false, true)
 }

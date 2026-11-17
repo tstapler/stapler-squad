@@ -10,26 +10,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func seedHiddenAndVisible(t *testing.T, fix *forkTestFixture, hidden, visible int) {
 	t.Helper()
 	for i := 0; i < hidden; i++ {
-		fix.poller.AddInstance(&session.Instance{
+		fix.poller.AddInstance(&instance.Instance{
 			Title:   fmt.Sprintf("hidden-%03d", i),
 			UUID:    fmt.Sprintf("a1000000-0000-0000-0000-%012d", i),
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 			Path:    "/tmp/test",
 			Hidden:  true,
 		})
 	}
 	for i := 0; i < visible; i++ {
-		fix.poller.AddInstance(&session.Instance{
+		fix.poller.AddInstance(&instance.Instance{
 			Title:   fmt.Sprintf("visible-%03d", i),
 			UUID:    fmt.Sprintf("b2000000-0000-0000-0000-%012d", i),
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 			Path:    "/tmp/test",
 		})

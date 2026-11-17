@@ -16,12 +16,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ─── fakes ────────────────────────────────────────────────────────────────────
@@ -29,9 +32,9 @@ import (
 type fakeBundleStorage struct {
 	analytics    []session.AnalyticsData
 	analyticsErr error
-	itemSession  session.ItemSessionSummary
+	itemSession  backlogdto.ItemSessionSummary
 	itemErr      error
-	artBlob      *artifacts.SessionArtifactsBlob
+	artBlob      *domain.SessionArtifactsBlob
 	artErr       error
 }
 
@@ -39,11 +42,11 @@ func (f *fakeBundleStorage) ListAnalyticsBySessionID(_ context.Context, _ string
 	return f.analytics, f.analyticsErr
 }
 
-func (f *fakeBundleStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (session.ItemSessionSummary, error) {
+func (f *fakeBundleStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (backlogdto.ItemSessionSummary, error) {
 	return f.itemSession, f.itemErr
 }
 
-func (f *fakeBundleStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*artifacts.SessionArtifactsBlob, error) {
+func (f *fakeBundleStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*domain.SessionArtifactsBlob, error) {
 	return f.artBlob, f.artErr
 }
 
@@ -92,8 +95,8 @@ func (f *fakeCtxHistory) Compactions(_ context.Context, _ string) ([]contexthist
 
 // newTestInstance builds a zero-value *session.Instance with UUID set so
 // assembleBundle's Snapshot() call resolves the UUID correctly.
-func newTestInstance(uuid string) *session.Instance {
-	inst := &session.Instance{}
+func newTestInstance(uuid string) *instance.Instance {
+	inst := &instance.Instance{}
 	inst.UUID = uuid
 	return inst
 }
@@ -312,11 +315,11 @@ func (b *blockingStorage) ListAnalyticsBySessionID(ctx context.Context, _ string
 	return nil, ctx.Err()
 }
 
-func (b *blockingStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (session.ItemSessionSummary, error) {
-	return session.ItemSessionSummary{}, nil
+func (b *blockingStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (backlogdto.ItemSessionSummary, error) {
+	return backlogdto.ItemSessionSummary{}, nil
 }
 
-func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*artifacts.SessionArtifactsBlob, error) {
+func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*domain.SessionArtifactsBlob, error) {
 	return nil, nil //nolint:nilnil // fake: no stored artifacts
 }
 
@@ -389,12 +392,12 @@ func TestSaveSessionBundle_WritesFileAndHash(t *testing.T) {
 
 // exportForTest calls the package-internal assembleBundle via the exported
 // ExportBundleForTest shim.
-func exportForTest(t *testing.T, svc *sessionbundle.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
+func exportForTest(t *testing.T, svc *sessionbundle.SessionBundleService, inst *instance.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
 	t.Helper()
 	return exportForTestCtx(t, context.Background(), svc, inst, maxScrollbackLines)
 }
 
-func exportForTestCtx(t *testing.T, ctx context.Context, svc *sessionbundle.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
+func exportForTestCtx(t *testing.T, ctx context.Context, svc *sessionbundle.SessionBundleService, inst *instance.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
 	t.Helper()
 	return svc.ExportBundleForTest(ctx, inst, maxScrollbackLines, []byte(`[{"name":"t"}]`))
 }
@@ -421,9 +424,9 @@ func TestAssembleBundle_IncludesTracesAndProfiles(t *testing.T) {
 
 func TestAssembleBundle_ShouldRedactSecrets_WhenArtifactsCarryTokens(t *testing.T) {
 	svc := sessionbundle.NewSessionBundleService(
-		&fakeBundleStorage{artBlob: &artifacts.SessionArtifactsBlob{
+		&fakeBundleStorage{artBlob: &domain.SessionArtifactsBlob{
 			ExternalURLs: []string{"https://x.io/cb?token=abcd1234"},
-			Commands:     []artifacts.CommandArtifact{{Type: "git_commit", Command: "git commit --token abcd1234"}},
+			Commands:     []domain.CommandArtifact{{Type: "git_commit", Command: "git commit --token abcd1234"}},
 		}},
 		&fakeCtxHistory{},
 		&fakeScrollback{lines: []byte("l")},

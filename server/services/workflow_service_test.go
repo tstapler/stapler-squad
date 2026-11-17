@@ -14,7 +14,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -59,7 +63,7 @@ func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService)
 	t.Cleanup(func() { sessSvc.Shutdown() })
 
 	repo := createTestEntClient(t)
-	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
+	workflowRepo := stagecfg.NewEntWorkflowRepository(repo.GetEntClient())
 	workflowSvc := NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
 	sessSvc.SetWorkflowService(workflowSvc)
 
@@ -1032,11 +1036,11 @@ func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_A
 
 	workflowID := uuid.New().String()
 
-	stopped := &session.Instance{Title: "wf-archive-stopped", Status: session.Stopped, WorkflowID: workflowID}
-	active := &session.Instance{Title: "wf-archive-active", Status: session.Active, WorkflowID: workflowID}
+	stopped := &instance.Instance{Title: "wf-archive-stopped", Status: domain.Stopped, WorkflowID: workflowID}
+	active := &instance.Instance{Title: "wf-archive-active", Status: domain.Active, WorkflowID: workflowID}
 
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), nil, nil)
-	poller.SetInstances([]*session.Instance{stopped, active})
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), nil, nil)
+	poller.SetInstances([]*instance.Instance{stopped, active})
 	svc.SetPoller(poller)
 
 	_, err := svc.ArchiveWorkflowSessions(ctx, connect.NewRequest(&sessionv1.ArchiveWorkflowSessionsRequest{

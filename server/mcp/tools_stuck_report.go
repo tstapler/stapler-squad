@@ -13,8 +13,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -57,14 +58,14 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s\n", backlog.SanitizeForAgentContext(item.Title, 200))
+	fmt.Fprintf(&sb, "# %s\n", pipeline.SanitizeForAgentContext(item.Title, 200))
 	fmt.Fprintf(&sb, "status=%s priority=%d\n\n", item.Status, item.Priority)
 
 	writeAcceptanceCriteria(&sb, item)
@@ -74,7 +75,7 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 	h.writePullRequestSet(ctx, &sb, item)
 	h.writeBlockedCleanup(&sb, itemID)
 
-	if session.BacklogStatus(item.Status) == session.BacklogStatusPRPending && item.PrNumber > 0 {
+	if domain.BacklogStatus(item.Status) == domain.BacklogStatusPRPending && item.PrNumber > 0 {
 		h.writeCICrossCheck(ctx, &sb, item)
 	}
 
@@ -92,14 +93,14 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 // acceptance criterion describing something an owner decision already ruled
 // out or made impossible, with the item's own AC text never reconciled to
 // match (see backlog item 242f8195-f15c-4b8a-a525-72b61d90c44b).
-func writeAcceptanceCriteria(sb *strings.Builder, item *session.BacklogItemData) {
-	criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria)
+func writeAcceptanceCriteria(sb *strings.Builder, item *backlogdto.BacklogItemData) {
+	criteria, parseErr := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if parseErr != nil || len(criteria) == 0 {
 		return
 	}
 	sb.WriteString("## Acceptance Criteria\n")
 	for i, c := range criteria {
-		fmt.Fprintf(sb, "%d. [%s] %s\n", i+1, c.Status, backlog.SanitizeForAgentContext(c.Text, stuckReportTruncateLen))
+		fmt.Fprintf(sb, "%d. [%s] %s\n", i+1, c.Status, pipeline.SanitizeForAgentContext(c.Text, stuckReportTruncateLen))
 	}
 	// kibitzer:ignore replace-magic-literal -- "\n" is a line terminator in formatted output, not a magic value; a named constant would just rename it
 	sb.WriteString("\n")
@@ -120,7 +121,7 @@ func (h *backlogHandlers) writeStuckTimeline(ctx context.Context, sb *strings.Bu
 		fmt.Fprintf(sb, "- %s  %-24s attempts=%d nudges=%d [%s]\n",
 			r.FirstDetectedAt.Format(time.RFC3339), r.Reason, r.RemediationAttempts, r.DiagnoseNudgeCount, state)
 		if r.Context != "" {
-			fmt.Fprintf(sb, "    %s\n", backlog.SanitizeForAgentContext(r.Context, stuckReportTruncateLen))
+			fmt.Fprintf(sb, "    %s\n", pipeline.SanitizeForAgentContext(r.Context, stuckReportTruncateLen))
 		}
 	}
 	sb.WriteString("\n")
@@ -167,7 +168,7 @@ func (h *backlogHandlers) writeActivityNotes(ctx context.Context, sb *strings.Bu
 		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
 			firstLine = firstLine[:idx]
 		}
-		fmt.Fprintf(sb, "- %s: %s\n", n.CreatedAt.Format(time.RFC3339), backlog.SanitizeForAgentContext(firstLine, stuckReportTruncateLen))
+		fmt.Fprintf(sb, "- %s: %s\n", n.CreatedAt.Format(time.RFC3339), pipeline.SanitizeForAgentContext(firstLine, stuckReportTruncateLen))
 	}
 	sb.WriteString("\n")
 }
@@ -185,7 +186,7 @@ func orDash(s string) string {
 // scripts/backlog-stuck-report.py's analyze_failing_check into a built-in
 // diagnostic any session can call directly, instead of shelling out to a
 // standalone script.
-func (h *backlogHandlers) writeCICrossCheck(ctx context.Context, sb *strings.Builder, item *session.BacklogItemData) {
+func (h *backlogHandlers) writeCICrossCheck(ctx context.Context, sb *strings.Builder, item *backlogdto.BacklogItemData) {
 	factory := h.prCheckerFactory
 	if factory == nil {
 		factory = defaultStuckReportPRChecker
@@ -298,7 +299,7 @@ func (h *backlogHandlers) backlogReaderEnabled() bool {
 // actions that release it. An item detach alone filters the verdict, but a session
 // link still holds that session's worktree, so both detaches are named when a
 // session also holds the PR.
-func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.Builder, item *session.BacklogItemData) {
+func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.Builder, item *backlogdto.BacklogItemData) {
 	if !h.backlogReaderEnabled() {
 		return
 	}
@@ -312,12 +313,12 @@ func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.B
 	}
 	holders := h.sessionHoldersOf(ctx, item.ID)
 	merged := 0
-	var waiting []session.PRView
+	var waiting []domain.PRView
 	for _, v := range prs {
 		switch v.State {
-		case session.PRStateMerged:
+		case domain.PRStateMerged:
 			merged++
-		case session.PRStateClosed:
+		case domain.PRStateClosed:
 		default:
 			waiting = append(waiting, v)
 		}
@@ -328,7 +329,7 @@ func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.B
 	}
 	for _, v := range waiting {
 		fmt.Fprintf(sb, "Waiting on #%d (%s).", v.Ref.Number(), v.State)
-		if v.State == session.PRStateUnknown {
+		if v.State == domain.PRStateUnknown {
 			if !v.AttachedAt.IsZero() && time.Since(v.AttachedAt) > unknownPRHoldWarnAfter {
 				fmt.Fprintf(sb, " Held longer than %s.", unknownPRHoldWarnAfter)
 			}
@@ -345,8 +346,8 @@ func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.B
 
 // sessionHoldersOf maps each PR to the item's sessions that link it, so the report
 // can name the session detach alongside the item detach. Best-effort: errors log.
-func (h *backlogHandlers) sessionHoldersOf(ctx context.Context, itemID string) map[session.PRRef][]string {
-	out := map[session.PRRef][]string{}
+func (h *backlogHandlers) sessionHoldersOf(ctx context.Context, itemID string) map[domain.PRRef][]string {
+	out := map[domain.PRRef][]string{}
 	sessions, err := h.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("get_backlog_stuck_report: ListItemSessions failed for %s: %v", itemID, err)
@@ -383,7 +384,7 @@ func (h *backlogHandlers) writeBlockedCleanup(sb *strings.Builder, itemID string
 			continue
 		}
 		fmt.Fprintf(sb, "\n## Worktree cleanup blocked\nBlocked for %s (path %s): %s\n",
-			time.Since(b.Since).Round(time.Minute), b.Path, backlog.SanitizeForAgentContext(b.Reason, 400))
+			time.Since(b.Since).Round(time.Minute), b.Path, pipeline.SanitizeForAgentContext(b.Reason, 400))
 		return
 	}
 }

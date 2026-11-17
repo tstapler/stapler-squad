@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTestStorageForReviewQueueLookup constructs a real ent-backed *session.Storage
@@ -53,9 +55,9 @@ func TestReviewQueueLookupAdapter_should_BucketSiblingItemSessionsByOverallOutco
 	ctx := context.Background()
 	adapter := &reviewQueueLookupAdapter{storage: storage}
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "shared backlog item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	if err != nil {
 		t.Fatalf("CreateBacklogItem: %v", err)
@@ -65,19 +67,19 @@ func TestReviewQueueLookupAdapter_should_BucketSiblingItemSessionsByOverallOutco
 	// sibling (no verdict yet) attached to the same backlog item.
 	queriedSessionUUID := uuid.NewString()
 	if _, err := storage.CreateItemSessionWithVerdict(ctx,
-		session.ItemSessionData{ItemID: item.ID, SessionUUID: queriedSessionUUID, SessionRole: "work"},
-		session.ReviewVerdictData{OverallOutcome: session.ReviewOutcomePass, Summary: "looks good"},
+		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: queriedSessionUUID, SessionRole: "work"},
+		backlogdto.ReviewVerdictData{OverallOutcome: domain.ReviewOutcomePass, Summary: "looks good"},
 	); err != nil {
 		t.Fatalf("CreateItemSessionWithVerdict (queried session): %v", err)
 	}
 	if _, err := storage.CreateItemSessionWithVerdict(ctx,
-		session.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: "review"},
-		session.ReviewVerdictData{OverallOutcome: session.ReviewOutcomeFail, Summary: "needs work"},
+		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: "review"},
+		backlogdto.ReviewVerdictData{OverallOutcome: domain.ReviewOutcomeFail, Summary: "needs work"},
 	); err != nil {
 		t.Fatalf("CreateItemSessionWithVerdict (resolved sibling): %v", err)
 	}
 	if _, err := storage.CreateItemSession(ctx,
-		session.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: "review"},
+		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: "review"},
 	); err != nil {
 		t.Fatalf("CreateItemSession (still-open sibling): %v", err)
 	}

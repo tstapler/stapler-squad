@@ -15,14 +15,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // newTestGateSatisfactionFixture creates a fresh stage/transition/gate row
 // triple (the FK chain GateSatisfactionRecord.gate_id requires) and returns
 // the repo plus that gate's ID, ready for a caller to Create/Update
 // GateSatisfactionRecord rows against.
-func newTestGateSatisfactionFixture(t *testing.T) (*EntGateSatisfactionRepository, *ent.Client, uuid.UUID) {
+func newTestGateSatisfactionFixture(t *testing.T) (*stagecfg.EntGateSatisfactionRepository, *ent.Client, uuid.UUID) {
 	t.Helper()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
@@ -36,10 +38,10 @@ func newTestGateSatisfactionFixture(t *testing.T) (*EntGateSatisfactionRepositor
 		SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).Save(ctx)
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
-		SetTransitionID(transition.ID).SetKind(string(GateKindHumanApproval)).Save(ctx)
+		SetTransitionID(transition.ID).SetKind(string(domain.GateKindHumanApproval)).Save(ctx)
 	require.NoError(t, err)
 
-	return NewEntGateSatisfactionRepository(client), client, gate.ID
+	return stagecfg.NewEntGateSatisfactionRepository(client), client, gate.ID
 }
 
 // TestEntGateSatisfactionRepository_Update_should_Succeed_When_ExpectedSatisfiedMatchesCurrentValue
@@ -51,12 +53,12 @@ func TestEntGateSatisfactionRepository_Update_should_Succeed_When_ExpectedSatisf
 	ctx := context.Background()
 	itemID := uuid.New()
 
-	_, err := repo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
+	_, err := repo.Create(ctx, stagecfg.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
 	require.NoError(t, err)
 
 	expected := false
 	newSatisfied := true
-	updated, err := repo.Update(ctx, itemID, gateID, GateSatisfactionUpdateInput{
+	updated, err := repo.Update(ctx, itemID, gateID, stagecfg.GateSatisfactionUpdateInput{
 		Satisfied:         &newSatisfied,
 		ExpectedSatisfied: &expected,
 	})
@@ -73,17 +75,17 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnConflictAndLeaveRowUn
 	ctx := context.Background()
 	itemID := uuid.New()
 
-	_, err := repo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
+	_, err := repo.Create(ctx, stagecfg.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "first"})
 	require.NoError(t, err)
 
 	wrongExpectation := true // row is actually Satisfied: false
 	newSatisfied := true
-	_, err = repo.Update(ctx, itemID, gateID, GateSatisfactionUpdateInput{
+	_, err = repo.Update(ctx, itemID, gateID, stagecfg.GateSatisfactionUpdateInput{
 		Satisfied:         &newSatisfied,
 		ExpectedSatisfied: &wrongExpectation,
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrConflict)
 
 	// The row must be entirely unchanged — the CAS must never partially apply.
 	row, err := repo.GetByItemAndGate(ctx, itemID, gateID)
@@ -102,9 +104,9 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoes
 	ctx := context.Background()
 
 	newSatisfied := true
-	_, err := repo.Update(ctx, uuid.New(), gateID, GateSatisfactionUpdateInput{Satisfied: &newSatisfied})
+	_, err := repo.Update(ctx, uuid.New(), gateID, stagecfg.GateSatisfactionUpdateInput{Satisfied: &newSatisfied})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 // TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoesNotExistAndExpectedSatisfiedIsSet
@@ -119,11 +121,11 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoes
 
 	expected := false
 	newSatisfied := true
-	_, err := repo.Update(ctx, uuid.New(), gateID, GateSatisfactionUpdateInput{
+	_, err := repo.Update(ctx, uuid.New(), gateID, stagecfg.GateSatisfactionUpdateInput{
 		Satisfied:         &newSatisfied,
 		ExpectedSatisfied: &expected,
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
-	assert.NotErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+	assert.NotErrorIs(t, err, domain.ErrConflict)
 }

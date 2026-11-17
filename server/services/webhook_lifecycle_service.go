@@ -8,7 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/webhookstore"
 )
 
 // WebhookLifecycleRequest is the body of disable and delete. Compat must equal, exactly, the
@@ -32,24 +32,24 @@ type WebhookEmergencyRequest struct {
 // Disable turns the caller's registration off. Disabling an already-disabled one is a no-op
 // reported as "unchanged", so a retry after a lost response is safe.
 func (s *WebhookRegistrationService) Disable(ctx context.Context, caller *WebhookCaller, instanceID string, req WebhookLifecycleRequest) (*WebhookReconcileResponse, error) {
-	return s.applyLifecycle(ctx, lifecycleCall{caller: caller, instanceID: instanceID, req: req, action: session.WebhookActionDisable, mode: lifecycleOrdinary})
+	return s.applyLifecycle(ctx, lifecycleCall{caller: caller, instanceID: instanceID, req: req, action: webhookstore.WebhookActionDisable, mode: lifecycleOrdinary})
 }
 
 // Delete removes the caller's registration and the workflow it owns.
 func (s *WebhookRegistrationService) Delete(ctx context.Context, caller *WebhookCaller, instanceID string, req WebhookLifecycleRequest) (*WebhookReconcileResponse, error) {
-	return s.applyLifecycle(ctx, lifecycleCall{caller: caller, instanceID: instanceID, req: req, action: session.WebhookActionDelete, mode: lifecycleOrdinary})
+	return s.applyLifecycle(ctx, lifecycleCall{caller: caller, instanceID: instanceID, req: req, action: webhookstore.WebhookActionDelete, mode: lifecycleOrdinary})
 }
 
 // EmergencyCleanup disables or deletes a registration without requiring its creation-time
 // capability revision to still be supported. Every failure to prove ownership or provenance
 // is the same bounded NOT_FOUND: nothing about the registration is revealed.
 func (s *WebhookRegistrationService) EmergencyCleanup(ctx context.Context, caller *WebhookCaller, instanceID string, req WebhookEmergencyRequest) (*WebhookReconcileResponse, error) {
-	var action session.WebhookLifecycleAction
+	var action webhookstore.WebhookLifecycleAction
 	switch req.Action {
-	case string(session.WebhookActionDisable):
-		action = session.WebhookActionDisable
-	case string(session.WebhookActionDelete):
-		action = session.WebhookActionDelete
+	case string(webhookstore.WebhookActionDisable):
+		action = webhookstore.WebhookActionDisable
+	case string(webhookstore.WebhookActionDelete):
+		action = webhookstore.WebhookActionDelete
 	default:
 		return nil, apiErr(http.StatusBadRequest, "INVALID_REQUEST", `action must be "disable" or "delete"`)
 	}
@@ -71,7 +71,7 @@ type lifecycleCall struct {
 	caller     *WebhookCaller
 	instanceID string
 	req        WebhookLifecycleRequest
-	action     session.WebhookLifecycleAction
+	action     webhookstore.WebhookLifecycleAction
 	mode       lifecycleMode
 }
 
@@ -104,7 +104,7 @@ func (s *WebhookRegistrationService) applyLifecycle(ctx context.Context, call li
 	}, nil
 }
 
-func (s *WebhookRegistrationService) buildLifecycleInput(call lifecycleCall) (*session.WebhookLifecycleInput, error) {
+func (s *WebhookRegistrationService) buildLifecycleInput(call lifecycleCall) (*webhookstore.WebhookLifecycleInput, error) {
 	caller, instanceID, req, action, emergency := call.caller, call.instanceID, call.req, call.action, call.emergency()
 	if !webhookInstanceIDRe.MatchString(instanceID) {
 		return nil, apiErr(http.StatusBadRequest, "INVALID_REQUEST", "invalid instance id")
@@ -123,7 +123,7 @@ func (s *WebhookRegistrationService) buildLifecycleInput(call lifecycleCall) (*s
 	if err != nil {
 		return nil, apiErr(http.StatusInternalServerError, "INTERNAL", "secret storage unavailable")
 	}
-	in := &session.WebhookLifecycleInput{
+	in := &webhookstore.WebhookLifecycleInput{
 		Scope: caller.WebhookScope, RequestID: req.RequestID, InstanceID: instanceID, Action: action,
 		Emergency: emergency, ExpectedVersion: req.ExpectedVersion, CompatTuple: tuple, CompatTupleSHA256: tupleSHA,
 	}
@@ -140,7 +140,7 @@ func (s *WebhookRegistrationService) buildLifecycleInput(call lifecycleCall) (*s
 	return in, nil
 }
 
-func lifecycleOperation(action session.WebhookLifecycleAction, emergency bool) string {
+func lifecycleOperation(action webhookstore.WebhookLifecycleAction, emergency bool) string {
 	if emergency {
 		return fmt.Sprintf("emergency_%s", action)
 	}
@@ -148,15 +148,15 @@ func lifecycleOperation(action session.WebhookLifecycleAction, emergency bool) s
 }
 
 // publishLifecycle tells open UIs about the change. Replays and no-ops publish nothing.
-func (s *WebhookRegistrationService) publishLifecycle(result *session.WebhookReconcileResult) {
+func (s *WebhookRegistrationService) publishLifecycle(result *webhookstore.WebhookReconcileResult) {
 	if s.eventBus == nil || result.Replayed {
 		return
 	}
 	switch result.Outcome {
-	case session.WebhookOutcomeDisabled:
+	case webhookstore.WebhookOutcomeDisabled:
 		s.eventBus.Publish(events.NewWorkflowChangedEvent(&events.WorkflowEventPayload{
 			Kind: events.WorkflowChangeUpdated, Workflow: result.ChangedWorkflow}))
-	case session.WebhookOutcomeDeleted:
+	case webhookstore.WebhookOutcomeDeleted:
 		s.eventBus.Publish(events.NewWorkflowChangedEvent(&events.WorkflowEventPayload{
 			Kind: events.WorkflowChangeDeleted, WorkflowID: result.Registration.WorkflowID.String()}))
 	}

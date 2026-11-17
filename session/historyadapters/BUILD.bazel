@@ -1,0 +1,69 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "historyadapters",
+    srcs = [
+        "agy_adapter.go",
+        "claude_adapter.go",
+        "gemini_adapter.go",
+        "history_adapter.go",
+        "history_post_export.go",
+        "history_transfer.go",
+        "inhibition.go",
+        "opencode_adapter.go",
+        "pi_adapter.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/historyadapters",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/sqlitedsn",
+        "//log",
+        "//session/dbpool",
+        "//session/domain",
+        "//session/instance",
+        "@com_github_google_uuid//:uuid",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":historyadapters",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "historyadapters_test",
+    srcs = [
+        "claude_adapter_test.go",
+        "history_adapter_test.go",
+        "history_post_export_test.go",
+        "history_resolution_test.go",
+        "history_transfer_test.go",
+        "inhibition_test.go",
+        "main_test.go",
+        "opencode_adapter_test.go",
+        "pi_adapter_test.go",
+    ],
+    data = ["//session/detection:testdata"],
+    embed = [":historyadapters"],
+    deps = [
+        "//session/domain",
+        "//session/instance",
+        "//session/internal/sessiontest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

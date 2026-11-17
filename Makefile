@@ -124,7 +124,7 @@ workflow-engine-soak-status: ## Print the workflow engine shadow-soak verdict pe
 .PHONY: workflow-engine-replay
 workflow-engine-replay: ## Replay the caller registry against a COPY of the database: make workflow-engine-replay DB=<copy> (made with sqlite3 <live> ".backup <copy>"; a path inside ~/.stapler-squad is refused; exit 1 = a fixed agent/system edge is denied with no gate)
 	@test -n "$(DB)" || { echo "usage: make workflow-engine-replay DB=<path to a COPY of the database>" >&2; exit 2; }
-	@WORKFLOW_ENGINE_REPLAY_DB="$(DB)" go test ./session -run '^TestWorkflowEngineReplayCommand$$' -count=1 -v
+	@WORKFLOW_ENGINE_REPLAY_DB="$(DB)" go test ./session/workflowengine -run '^TestWorkflowEngineReplayCommand$$' -count=1 -v
 
 .PHONY: verify-manual-instance
 verify-manual-instance: ## Guarded manual instance for slot N (make verify-manual-instance N=1 [CHECK=1 for a dry run that starts nothing])
@@ -798,8 +798,8 @@ coverage-pkg: ensure-tools proto-gen ## Show per-package coverage summary sorted
 coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targeted by the backend refactor
 	@go test -short -coverprofile=coverage.out -covermode=atomic ./... 2>/dev/null
 	@echo ""
-	@echo "=== session/instance.go ==="
-	@go tool cover -func=coverage.out | grep "session/instance.go" | sort -t'%' -k1 -n
+	@echo "=== session/instance/instance.go ==="
+	@go tool cover -func=coverage.out | grep "session/instance/instance.go" | sort -t'%' -k1 -n
 	@echo ""
 	@echo "=== server/services/session_service.go ==="
 	@go tool cover -func=coverage.out | grep "session_service.go" | sort -t'%' -k1 -n
@@ -1298,7 +1298,7 @@ quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens regi
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
 	@echo "✅ Pre-commit checks passed"
 
-actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exist outside session/instance*.go and actor.go
+actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exist outside session/instance/ (incl. actor.go)
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
 	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
 	    server/services/session_service.go \
@@ -1315,9 +1315,9 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 
 # Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
 # Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
-pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance*.go and session/session_pr_*.go
+pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance/ and session/session_pr_*.go
 	@echo "pr-field-guard: scanning for direct PR field writes..."
-	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance*.go' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance/*' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
 	    | xargs -r grep -EnH '\b(inst|instance|liveInst)\.(GitHubPRNumber|GitHubPRURL|GitHubPRStatusTerminal|GitHubOwner|GitHubRepo) = [^=]' \
 	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
 	    echo "❌ pr-field-guard: direct PR field write found — route through AttachPR / the actor setters (session-multi-pr-tracking)"; \
@@ -1325,14 +1325,14 @@ pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an
 	fi
 	@echo "✅ pr-field-guard: no direct PR field writes"
 
-# Invariant I1: only the repository file writes PullRequestState (session_pr_gc.go deletes only).
+# Invariant I1: only the repository file writes PullRequestState (session/sessionpr/session_pr_gc.go deletes only).
 # Grep-based like pr-field-guard; a typed analyzer is the follow-up T2.2.6.
-pr-state-write-guard: ## session-multi-pr-tracking guard: fail on a direct ent write to PullRequestState outside ent_repository_session_pr.go and session_pr_gc.go
+pr-state-write-guard: ## session-multi-pr-tracking guard: fail on a direct ent write to PullRequestState outside session/sessionpr/ent_repository_session_pr.go and session/sessionpr/session_pr_gc.go
 	@echo "pr-state-write-guard: scanning for direct PullRequestState writes..."
-	@if git ls-files '*.go' ':!:*_test.go' ':!:session/ent/*' ':!:gen/*' ':!:session/ent_repository_session_pr.go' ':!:session/session_pr_gc.go' \
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/ent/*' ':!:gen/*' ':!:session/sessionpr/ent_repository_session_pr.go' ':!:session/sessionpr/session_pr_gc.go' \
 	    | xargs -r grep -EnH 'PullRequestState\.(Create|CreateBulk|Update|UpdateOne|UpdateOneID|Delete|DeleteOne|DeleteOneID)\b|PullRequestState(Create|CreateBulk|Update|UpdateOne|Delete|DeleteOne|Client)\b' \
 	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
-	    echo "❌ pr-state-write-guard: direct PullRequestState write — only the PR status poller writes state (invariant I1); go through EntRepository.UpdatePullRequestState"; \
+	    echo "❌ pr-state-write-guard: direct PullRequestState write — only the PR status poller writes state (invariant I1); go through PRStore.UpdatePullRequestState (session/sessionpr)"; \
 	    exit 1; \
 	fi
 	@echo "✅ pr-state-write-guard: no direct PullRequestState writes"

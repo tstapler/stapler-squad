@@ -3,27 +3,9 @@ package services
 import (
 	"context"
 	"net/http"
-	"slices"
 
 	"github.com/google/uuid"
 )
-
-// FlagAuditPolicy says how a flag's flips are audited. Tightening flips never
-// wait on the sink; loosening flips are audited durably before they persist.
-type FlagAuditPolicy struct {
-	// Loosening reports whether setting the flag to enabled reduces a protection.
-	Loosening func(enabled bool) bool
-	// EscapeHatch lets a loosening flip persist on the fallback log record alone
-	// when the sink is down (the flag is the escape hatch for a sink fault).
-	EscapeHatch bool
-	// EscapeHatchScopes extends EscapeHatch to the named scopes only, for a flag
-	// whose other scopes must stay refused while the sink is down.
-	EscapeHatchScopes []string
-}
-
-func (p FlagAuditPolicy) escapeHatchFor(scope string) bool {
-	return p.EscapeHatch || slices.Contains(p.EscapeHatchScopes, scope)
-}
 
 // flagAudit is the audit state of one UpdateFeatureFlag call.
 type flagAudit struct {
@@ -68,7 +50,7 @@ func (f *FeatureFlagService) auditBegin(ctx context.Context, op flagOp, fields A
 	req := a.base
 	req.Phase, req.New = auditPhaseRequest, boolRef(enabled)
 	if err := f.audit.AppendBounded(ctx, req); err != nil {
-		if policy.escapeHatchFor(a.base.Scope) {
+		if policy.EscapeHatchFor(a.base.Scope) {
 			f.audit.fallback(req, err)
 			return a, nil
 		}

@@ -8,16 +8,16 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestBacklogItemMatchesFilters_should_FilterBySourcePlugin(t *testing.T) {
 	t.Parallel()
 	msg := &sessionv1.WatchBacklogItemsRequest{SourcePluginFilter: []string{"linear"}}
-	require.True(t, backlogItemMatchesFilters(&session.BacklogItemData{SourcePluginID: "linear"}, msg))
-	require.False(t, backlogItemMatchesFilters(&session.BacklogItemData{SourcePluginID: "github_issues"}, msg))
-	require.False(t, backlogItemMatchesFilters(&session.BacklogItemData{}, msg))
-	require.True(t, backlogItemMatchesFilters(&session.BacklogItemData{}, &sessionv1.WatchBacklogItemsRequest{}))
+	require.True(t, backlogItemMatchesFilters(&backlogdto.BacklogItemData{SourcePluginID: "linear"}, msg))
+	require.False(t, backlogItemMatchesFilters(&backlogdto.BacklogItemData{SourcePluginID: "github_issues"}, msg))
+	require.False(t, backlogItemMatchesFilters(&backlogdto.BacklogItemData{}, msg))
+	require.True(t, backlogItemMatchesFilters(&backlogdto.BacklogItemData{}, &sessionv1.WatchBacklogItemsRequest{}))
 }
 
 func TestWithSourcePlugin_should_FillPluginIDWithoutMutatingSharedEvent(t *testing.T) {

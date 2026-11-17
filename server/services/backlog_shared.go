@@ -2,6 +2,7 @@ package services
 
 import (
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -29,5 +30,5 @@ func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (hostclaim
 // unset flag resolves the same way the Features page reports it.
 func SddDefaultPipelineEnabled() bool {
 	return config.LoadConfig().GetFeatureFlagWithDefault(
-		SddDefaultPipelineFlagName, FeatureFlagDefault(SddDefaultPipelineFlagName))
+		featureflags.SddDefaultPipelineFlagName, FeatureFlagDefault(featureflags.SddDefaultPipelineFlagName))
 }

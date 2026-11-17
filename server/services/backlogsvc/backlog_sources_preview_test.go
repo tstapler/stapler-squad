@@ -16,6 +16,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems verifies the preview
@@ -40,27 +42,27 @@ func TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems(t *testing.T) {
 	registry.Register(plugin)
 	svc.SetPluginRegistry(registry)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Source",
 		Enabled:     true,
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "Eligible Ready", Status: string(session.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "Eligible Ready", Status: string(domain.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "Eligible Idea", Status: string(session.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "Eligible Idea", Status: string(domain.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "Open Issue", Status: string(session.BacklogStatusReady), SourceID: src.ID, ExternalID: "e3",
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "Open Issue", Status: string(domain.BacklogStatusReady), SourceID: src.ID, ExternalID: "e3",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "In Progress", Status: string(session.BacklogStatusInProgress), SourceID: src.ID, ExternalID: "e4",
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "In Progress", Status: string(domain.BacklogStatusInProgress), SourceID: src.ID, ExternalID: "e4",
 	})
 	require.NoError(t, err)
 	// e5 deliberately has no matching locally-imported item.
@@ -97,10 +99,10 @@ func (f *fakePaginatedSourcePlugin) FetchAll(_ context.Context, _ session.Plugin
 	return f.items, cursor, f.possiblyIncomplete, nil
 }
 
-func (f *fakePaginatedSourcePlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
-	return session.BacklogItemData{
+func (f *fakePaginatedSourcePlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
+	return backlogdto.BacklogItemData{
 		Title:      item.Title,
-		Status:     string(session.BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: item.ExternalID,
 		SourceID:   sourceID,
 	}
@@ -128,19 +130,19 @@ func TestPreviewBackwardSyncImpact_UsesFetchAllAndSurfacesPossiblyIncomplete(t *
 	registry.Register(plugin)
 	svc.SetPluginRegistry(registry)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Paginated Source",
 		Enabled:     true,
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "Eligible One", Status: string(session.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "Eligible One", Status: string(domain.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
-		Title: "Eligible Two", Status: string(session.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
+		Title: "Eligible Two", Status: string(domain.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
 	})
 	require.NoError(t, err)
 
@@ -178,7 +180,7 @@ func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testin
 	registry.Register(plugin)
 	svc.SetPluginRegistry(registry)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Source",
 		Enabled:     true,
@@ -189,12 +191,12 @@ func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testin
 	// non-eligible one. Half of numClosedIssues should end up counted.
 	wantTitles := make([]string, 0, numClosedIssues/2)
 	for i := 0; i < numClosedIssues; i++ {
-		status := string(session.BacklogStatusInProgress)
+		status := string(domain.BacklogStatusInProgress)
 		if i%2 == 0 {
-			status = string(session.BacklogStatusReady)
+			status = string(domain.BacklogStatusReady)
 			wantTitles = append(wantTitles, fmt.Sprintf("Issue %d", i))
 		}
-		_, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		_, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 			Title: fmt.Sprintf("Issue %d", i), Status: status, SourceID: src.ID, ExternalID: fmt.Sprintf("e%d", i),
 		})
 		require.NoError(t, err)
@@ -225,7 +227,7 @@ func TestPreviewBackwardSyncImpact_ReturnsErrorOnFetchFailure(t *testing.T) {
 	registry.Register(plugin)
 	svc.SetPluginRegistry(registry)
 
-	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Fake Source",
 		Enabled:     true,

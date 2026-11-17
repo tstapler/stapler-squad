@@ -3,6 +3,8 @@ package artifacts
 import (
 	"strings"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestExtractFromToolResult_PRURLs(t *testing.T) {
@@ -154,32 +156,32 @@ func TestExtractor_ShouldEmitCommitBranchIssuePlanCI_WhenSamples(t *testing.T) {
 		writeToolUseLine(t, "2026-11-04T10:02:00Z", "w", "Write", map[string]string{"file_path": "project_plans/x/plan.md"}),
 		toolResultLine(t, "2026-11-04T10:03:00Z", "c", "run: https://github.com/acme/app/actions/runs/123 and https://github.com/acme/app/issues/8"),
 	)
-	var got = map[RecordKind][]ArtifactRecord{}
+	var got = map[domain.RecordKind][]domain.ArtifactRecord{}
 	for _, r := range f.records {
 		got[r.Kind()] = append(got[r.Kind()], r)
 	}
-	if c := got[KindCommit]; len(c) != 1 || c[0].(CommitRecord).SHA != "1a2b3c4" ||
-		c[0].(CommitRecord).Subject != "fix: token refresh" || c[0].(CommitRecord).Branch != "feat-b" {
+	if c := got[domain.KindCommit]; len(c) != 1 || c[0].(domain.CommitRecord).SHA != "1a2b3c4" ||
+		c[0].(domain.CommitRecord).Subject != "fix: token refresh" || c[0].(domain.CommitRecord).Branch != "feat-b" {
 		t.Errorf("commit: %#v", c)
 	}
 	branches := map[string]string{}
-	for _, b := range got[KindBranch] {
-		branches[b.(BranchRecord).Name] = b.(BranchRecord).Action
+	for _, b := range got[domain.KindBranch] {
+		branches[b.(domain.BranchRecord).Name] = b.(domain.BranchRecord).Action
 	}
-	if branches["feat-b"] == "" || len(got[KindBranch]) != 2 {
-		t.Errorf("want created + pushed feat-b, got %#v", got[KindBranch])
+	if branches["feat-b"] == "" || len(got[domain.KindBranch]) != 2 {
+		t.Errorf("want created + pushed feat-b, got %#v", got[domain.KindBranch])
 	}
 	issues := map[int]bool{}
-	for _, i := range got[KindIssue] {
-		issues[i.(IssueRecord).Number] = true
+	for _, i := range got[domain.KindIssue] {
+		issues[i.(domain.IssueRecord).Number] = true
 	}
 	if !issues[45] || !issues[8] {
-		t.Errorf("issues: %#v", got[KindIssue])
+		t.Errorf("issues: %#v", got[domain.KindIssue])
 	}
-	if p := got[KindPlanDoc]; len(p) != 1 || p[0].(PlanDocRecord).Path != "project_plans/x/plan.md" {
+	if p := got[domain.KindPlanDoc]; len(p) != 1 || p[0].(domain.PlanDocRecord).Path != "project_plans/x/plan.md" {
 		t.Errorf("plan doc: %#v", p)
 	}
-	if c := got[KindCILink]; len(c) != 1 || c[0].(CILinkRecord).URL != "https://github.com/acme/app/actions/runs/123" {
+	if c := got[domain.KindCILink]; len(c) != 1 || c[0].(domain.CILinkRecord).URL != "https://github.com/acme/app/actions/runs/123" {
 		t.Errorf("ci link: %#v", c)
 	}
 }

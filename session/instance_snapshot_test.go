@@ -5,50 +5,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- Story 1.1: Construction guarantee ---
 
 // TestSnapshotNonNilAfterNewInstance verifies that all 4 construction paths populate the snapshot.
-
-func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
-	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{
-		Title:   "snapshot-test-new",
-		Path:    t.TempDir(),
-		Program: "echo",
-	})
-	if err != nil {
-		t.Fatalf("NewInstance: %v", err)
-	}
-	if inst.Snapshot() == nil {
-		t.Fatal("Snapshot() is nil after NewInstance")
-	}
-	if inst.Snapshot().Title != "snapshot-test-new" {
-		t.Fatalf("Snapshot().Title = %q, want %q", inst.Snapshot().Title, "snapshot-test-new")
-	}
-}
-
-func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
-	t.Parallel()
-	s := &Session{
-		Title:     "session-to-instance",
-		Status:    Creating,
-		Program:   "echo",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	inst := SessionToInstance(s)
-	if inst == nil {
-		t.Fatal("SessionToInstance returned nil")
-	}
-	if inst.Snapshot() == nil {
-		t.Fatal("Snapshot() is nil after SessionToInstance")
-	}
-	if inst.Snapshot().Title != "session-to-instance" {
-		t.Fatalf("Snapshot().Title = %q", inst.Snapshot().Title)
-	}
-}
 
 // --- Story 1.2: Mutator snapshot freshness ---
 
@@ -88,8 +52,8 @@ func TestSnapshotReflectsSetLastMeaningfulOutput(t *testing.T) {
 func TestSnapshotReflectsForceStatus(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.ForceStatus(Paused)
-	if inst.Snapshot().Status != Paused {
+	inst.ForceStatus(domain.Paused)
+	if inst.Snapshot().Status != domain.Paused {
 		t.Fatalf("Snapshot().Status = %v, want Paused", inst.Snapshot().Status)
 	}
 }
@@ -152,7 +116,7 @@ func TestSnapshotReflectsSetGitHubPRNumber(t *testing.T) {
 func TestCreationProgressActorRouted(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	inst.SetCreationProgress("Starting session...")
@@ -178,7 +142,7 @@ func TestCreationProgressActorRouted(t *testing.T) {
 func TestSetProgramActorRouted(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	inst.SetProgram("agy")
@@ -196,12 +160,12 @@ func TestSetProgramActorRouted(t *testing.T) {
 func TestSetAutonomousCompleteActorRouted(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	li := NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	inst.AutonomousMode = true
 	inst.AutonomousTurn = 5
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.PublishSnapshotForTest()
 
 	inst.SetAutonomousComplete(true)
 
@@ -221,7 +185,7 @@ func TestSnapshotReflectsClearConversationState(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.HistoryFilePath = "/some/path"
-	inst.snapshot.Store(buildSnapshot(inst)) // prime snapshot with the path
+	inst.PublishSnapshotForTest() // prime snapshot with the path
 	if inst.Snapshot().HistoryFilePath == "" {
 		t.Skip("prime failed — HistoryFilePath not in snapshot")
 	}
@@ -278,7 +242,7 @@ func TestInstanceSnapshot_should_DeepCopyRuleTagProvenance_When_SnapshotTaken(t 
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.PublishSnapshotForTest()
 	snap := inst.Snapshot()
 
 	snap.RuleTagProvenance["Bugfix"] = "mutated"
@@ -292,7 +256,7 @@ func TestInstanceSnapshot_should_DeepCopySuppressedRuleTags_When_SnapshotTaken(t
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.PublishSnapshotForTest()
 	snap := inst.Snapshot()
 
 	snap.SuppressedRuleTags["Bugfix"] = false
@@ -307,63 +271,37 @@ func TestInstanceSnapshot_should_DeepCopySuppressedRuleTags_When_SnapshotTaken(t
 }
 
 // minimalInstance builds a bare Instance safe for unit tests (no tmux, no disk I/O).
-func minimalInstance(t *testing.T) *Instance {
+func minimalInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	i := &Instance{
+	i := &instance.Instance{
 		Title:       t.Name(),
-		Status:      Creating,
+		Status:      domain.Creating,
 		Program:     "echo",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 		IsManaged:   true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
-	i.tagManager = NewTagManager(&i.Tags)
-	finishInstanceConstruction(i)
+	i.InitTagManagerForTest()
+	instance.FinishInstanceConstruction(i)
 	return i
 }
 
-func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
+func TestSetRetryProgressRepublishesSnapshotWithDeepCopiedHistory(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "pr-snap", Path: t.TempDir(), Program: "echo", Branch: "feat/x"}
-	finishInstanceConstruction(inst)
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	inst.PRs = []PRView{{StateID: 1, Ref: ref, State: PRStateOpen, HeadBranch: "feat/x"}}
-	inst.LegacyPRUnrepresented = true
-	inst.HasPRLinks = true
-
-	snap := buildSnapshot(inst)
-	inst.PRs[0].State = PRStateMerged // mutate the live set after the build
-
-	if got := snap.GitHub.PRs[0].State; got != PRStateOpen {
-		t.Errorf("snapshot PR aliased the live slice: state = %q", got)
+	inst := minimalInstance(t)
+	now := time.Now()
+	inst.SetRetryProgress(func(rs *domain.RetryState) {
+		rs.RetryAttempt = 2
+		rs.LastFailureReason = "crashed"
+		rs.RecordAttempt(2, "crashed", now)
+	})
+	snap := inst.Snapshot()
+	if snap.Retry.RetryAttempt != 2 || snap.Retry.LastFailureReason != "crashed" || len(snap.Retry.RetryHistory) != 1 {
+		t.Fatalf("snapshot did not republish retry state: %+v", snap.Retry)
 	}
-	if !snap.GitHub.LegacyPRUnrepresented || !snap.GitHub.HasPRLinks {
-		t.Errorf("flags not copied: %+v", snap.GitHub)
-	}
-	if snap.GitHub.GitHubPRNumber != 12 || snap.GitHub.GitHubPRURL != "https://github.com/acme/app/pull/12" {
-		t.Errorf("legacy scalars = %d %q, want 12 + derived URL", snap.GitHub.GitHubPRNumber, snap.GitHub.GitHubPRURL)
-	}
-
-	// The flags are carried, never re-derived: no links but a true flag stays true.
-	inst.PRs, inst.HasPRLinks = nil, true
-	if !buildSnapshot(inst).GitHub.HasPRLinks {
-		t.Error("HasPRLinks was re-derived from an empty PRs slice")
-	}
-}
-
-func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "pr-out", Path: t.TempDir(), Program: "echo"}
-	inst.PRs = []PRView{{StateID: 1, Ref: mustPRRef(t, "", "acme", "app", 12), State: PRStateOpen}}
-	inst.LegacyPRUnrepresented, inst.HasPRLinks = true, true
-	finishInstanceConstruction(inst)
-
-	data := inst.ToInstanceData()
-	if !data.LegacyPRUnrepresented || !data.HasPRLinks || len(data.PRs) != 1 {
-		t.Errorf("ToInstanceData dropped PR state: %+v", data)
-	}
-	if data.GitHubPRNumber != 12 {
-		t.Errorf("GitHubPRNumber = %d, want mirror 12", data.GitHubPRNumber)
+	inst.SetRetryProgress(func(rs *domain.RetryState) { rs.RecordAttempt(3, "stalled", now) })
+	if len(snap.Retry.RetryHistory) != 1 {
+		t.Fatalf("earlier snapshot history aliased the live slice: %+v", snap.Retry.RetryHistory)
 	}
 }

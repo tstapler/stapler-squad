@@ -26,7 +26,7 @@ go_test(
     name = "silenttransition_test",
     srcs = ["analyzer_test.go"],
     data = glob(["testdata/**"]) + [
-        "//session:transition_callers.go",
+        "//session/domain:transition_callers.go",
         "@rules_go//go",
     ],
     deps = [

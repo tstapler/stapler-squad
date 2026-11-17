@@ -3,6 +3,8 @@ package session
 import (
 	"flag"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,7 +14,7 @@ import (
 
 var updateSessionLifecycleDiagram = flag.Bool("update-session-lifecycle-diagram", false, "regenerate the session lifecycle reference")
 
-func sessionLifecycleReference(defs []TransitionDef) string {
+func sessionLifecycleReference(defs []instance.TransitionDef) string {
 	edges := make([]string, 0, len(defs))
 	for _, def := range defs {
 		edges = append(edges, fmt.Sprintf("    %s --> %s", def.From.String(), def.To.String()))
@@ -32,7 +34,7 @@ func sessionLifecycleReference(defs []TransitionDef) string {
 
 func TestSessionLifecycleDiagram(t *testing.T) {
 	path := filepath.Join("..", "docs", "reference", "session-lifecycle.md")
-	want := sessionLifecycleReference(transitionDefs)
+	want := sessionLifecycleReference(instance.TransitionDefs)
 	if *updateSessionLifecycleDiagram {
 		if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
 			t.Fatal(err)
@@ -49,8 +51,8 @@ func TestSessionLifecycleDiagram(t *testing.T) {
 
 func TestSessionLifecycleReference_DeterministicAndSensitiveToEdges(t *testing.T) {
 	t.Parallel()
-	forward := []TransitionDef{{From: Active, To: Stopped}, {From: Stopped, To: Active}}
-	reverse := []TransitionDef{forward[1], forward[0]}
+	forward := []instance.TransitionDef{{From: domain.Active, To: domain.Stopped}, {From: domain.Stopped, To: domain.Active}}
+	reverse := []instance.TransitionDef{forward[1], forward[0]}
 	if sessionLifecycleReference(forward) != sessionLifecycleReference(reverse) {
 		t.Fatal("diagram must not depend on transition declaration order")
 	}

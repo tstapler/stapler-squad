@@ -14,7 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Spawn-path matrix of Story 4.9 (ADR-007 rule 0): for each way a client can
@@ -39,8 +39,8 @@ func newMatrixEnv(t *testing.T) *matrixEnv {
 	keys, err := services.NewHookProofs(dir)
 	require.NoError(t, err)
 	proofs := services.NewMcpProofs(keys, dir)
-	session.SetMCPProofProvider(proofs.Provider())
-	t.Cleanup(func() { session.SetMCPProofProvider(nil) })
+	instance.SetMCPProofProvider(proofs.Provider())
+	t.Cleanup(func() { instance.SetMCPProofProvider(nil) })
 	probe := &identityProbe{}
 	return &matrixEnv{
 		dir: dir, proofs: proofs, probe: probe,
@@ -58,7 +58,7 @@ func (e *matrixEnv) send(t *testing.T, headers map[string]string) (verified stri
 
 func (e *matrixEnv) launch(t *testing.T, program, uuid, resume string, mcpURL string) string {
 	t.Helper()
-	inst := &session.Instance{Program: program, UUID: uuid}
+	inst := &instance.Instance{Program: program, UUID: uuid}
 	inst.SetMCPServerURLProvider(func() string { return mcpURL })
 	return inst.BuildLaunchCommandForTest(resume)
 }
@@ -121,7 +121,7 @@ func TestSpawnPathMatrix_ClaudeTmuxSessions_should_Verify(t *testing.T) {
 
 		headers := claudeConfigHeaders(t, cmd)
 		assert.Equal(t, uuid, e.send(t, headers), name)
-		assert.NotContains(t, cmd, headers[session.MCPProofHeader], "proof never in argv: %s", name)
+		assert.NotContains(t, cmd, headers[instance.MCPProofHeader], "proof never in argv: %s", name)
 	}
 }
 
@@ -133,9 +133,9 @@ func TestSpawnPathMatrix_ClaudeStdioProxy_should_VerifyWhenProofFilePresent(t *t
 	headers := ProxyHeaders()
 	assert.Equal(t, "claude-proxy", e.send(t, headers))
 
-	require.NoError(t, os.Remove(session.MCPProofFilePath(e.dir, "claude-proxy")))
+	require.NoError(t, os.Remove(instance.MCPProofFilePath(e.dir, "claude-proxy")))
 	headers = ProxyHeaders()
-	assert.NotContains(t, headers, session.MCPProofHeader, "no proof file, no header")
+	assert.NotContains(t, headers, instance.MCPProofHeader, "no proof file, no header")
 	assert.Equal(t, "", e.send(t, headers))
 	assert.Equal(t, "claude-proxy", e.probe.claimed, "pre-existing tools still see the claimed uuid")
 }
@@ -147,7 +147,7 @@ func TestSpawnPathMatrix_OpenCode_should_VerifyThroughPerSessionConfigFile(t *te
 
 	headers := openCodeConfigHeaders(t, cmd)
 	assert.Equal(t, "oc-1", e.send(t, headers))
-	assert.NotContains(t, cmd, headers[session.MCPProofHeader], "proof never in argv")
+	assert.NotContains(t, cmd, headers[instance.MCPProofHeader], "proof never in argv")
 	assert.Equal(t, "", e.send(t, map[string]string{"X-Stapler-Session-UUID": "oc-1"}), "forged uuid without the proof")
 }
 
@@ -158,7 +158,7 @@ func TestSpawnPathMatrix_HarnessesWithoutProofSupport_should_StayUnverifiedWithN
 		cmd := e.launch(t, program, uuid, "", matrixMCPURL)
 		assert.NotContains(t, cmd, "--mcp-config", program)
 		assert.NotContains(t, cmd, "OPENCODE_CONFIG", program)
-		assert.False(t, session.MCPProofFilePresent(e.dir, uuid), "%s must have no proof file", program)
+		assert.False(t, instance.MCPProofFilePresent(e.dir, uuid), "%s must have no proof file", program)
 
 		// Whatever it tries over the stdio proxy carries no proof.
 		t.Setenv("STAPLER_SESSION_UUID", uuid)
@@ -171,7 +171,7 @@ func TestSpawnPathMatrix_SsqMuxSession_should_StayUnverified(t *testing.T) {
 	// External/IDE sessions are never launched by buildLaunchCommand, so no
 	// provider call and no proof file exist for them.
 	t.Setenv("STAPLER_SESSION_UUID", "mux-1")
-	assert.False(t, session.MCPProofFilePresent(e.dir, "mux-1"))
+	assert.False(t, instance.MCPProofFilePresent(e.dir, "mux-1"))
 	assert.Equal(t, "", e.send(t, ProxyHeaders()))
 }
 
@@ -182,15 +182,15 @@ func TestSpawnPathMatrix_FailClosedPaths_should_StayUnverified(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(e.dir, "mcp"), []byte("x"), 0o600))
 	cmd := e.launch(t, "claude", "claude-wf", "", matrixMCPURL)
 	headers := claudeConfigHeaders(t, cmd)
-	assert.NotContains(t, headers, session.MCPProofHeader)
+	assert.NotContains(t, headers, instance.MCPProofHeader)
 	assert.Equal(t, "", e.send(t, headers))
 
 	// Nil provider (boot window before wiring): the session keeps no proof.
 	require.NoError(t, os.Remove(filepath.Join(e.dir, "mcp")))
-	session.SetMCPProofProvider(nil)
+	instance.SetMCPProofProvider(nil)
 	cmd = e.launch(t, "claude", "claude-nil", "", matrixMCPURL)
 	headers = claudeConfigHeaders(t, cmd)
-	assert.NotContains(t, headers, session.MCPProofHeader)
+	assert.NotContains(t, headers, instance.MCPProofHeader)
 	assert.Equal(t, "", e.send(t, headers))
 }
 
@@ -216,7 +216,7 @@ func TestSpawnPathMatrix_ProofOfDeletedSession_should_NotVerify(t *testing.T) {
 	assert.False(t, e.probe.verifiedOK, "the still-HMAC-valid proof of a deleted session is refused")
 
 	e.proofs.RemoveFiles("claude-del")
-	assert.NoFileExists(t, session.MCPProofFilePath(e.dir, "claude-del"))
+	assert.NoFileExists(t, instance.MCPProofFilePath(e.dir, "claude-del"))
 	assert.NoFileExists(t, filepath.Join(e.dir, "mcp", "claude-del.json"))
 }
 

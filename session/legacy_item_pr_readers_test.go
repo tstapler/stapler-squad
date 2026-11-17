@@ -28,11 +28,12 @@ type itemPRReader struct{ disposition, reason string }
 // No file reads the set yet, so each is scalar-ok today; a file moves to
 // itemPRsSeam when its reads go through itemPRs.
 var legacyItemPRReaders = map[string]itemPRReader{
-	"session/ent_repository_flow_markers.go":                     {itemScalarOK, "flow-marker rows carry their own PR number (analytics), not the item scalar"},
-	"session/ent_repository_session_pr_guard.go":                 {itemScalarOK, "guard view flags an item scalar no link or tombstone represents, the same rule as the backfill"},
+	"session/flowstore/markers.go":                               {itemScalarOK, "flow-marker rows carry their own PR number (analytics), not the item scalar"},
+	"session/markerstore/markers.go":                             {itemScalarOK, "flow-marker rows carry their own PR number (analytics), not the item scalar"},
+	"session/sessionpr/ent_repository_session_pr_guard.go":       {itemScalarOK, "guard view flags an item scalar no link or tombstone represents, the same rule as the backfill"},
 	"server/mcp/tools_backlog_pr.go":                             {itemScalarOK, "pr_pending reassignment guard compares the one tracked PR number"},
 	"server/mcp/tools_stuck_report.go":                           {itemPRsSeam, "report lists the whole item PR set under reader:backlog; the CI cross-check still targets the tracked scalar"},
-	"server/services/backlog_debug_seed_handler.go":              {itemScalarOK, "debug seed writes the scalars onto a fixture item"},
+	"server/services/debugseed/backlog_debug_seed_handler.go":    {itemScalarOK, "debug seed writes the scalars onto a fixture item"},
 	"server/services/backlog_github_forward_sync.go":             {itemScalarOK, "close comment links the item's tracked PR URL"},
 	"server/services/backlog_github_progress_sync.go":            {itemPRsSeam, "review comment lists the whole item PR set under reader:backlog; the tracked URL is the flag-off fallback"},
 	"server/services/backlogsvc/backlog_service.go":              {itemScalarOK, "maps the stored scalars onto the item proto"},
@@ -48,11 +49,12 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/backlog/backlog_lifecycle.go":                       {itemScalarOK, "merge check on the item's tracked PR number"},
 	"session/backlog/backlog_lifecycle_pr.go":                    {itemScalarOK, "pr_pending reconciler is keyed on the item's tracked PR"},
 	"session/domain/backlog.go":                                  {itemScalarOK, "domain field definitions and their doc comments"},
+	"session/domain/backlogdto/backlog_item.go":                  {itemScalarOK, "backlog item DTOs carrying the stored columns"},
+	"session/domain/backlogdto/stuck.go":                         {itemScalarOK, "stuck-state row DTO carrying the stored columns"},
 	"session/ent_repository_backlog.go":                          {itemScalarOK, "persistence mapping of the stored columns"},
-	"session/repository.go":                                      {itemScalarOK, "repository row types carrying the stored columns"},
-	"session/session_pr_backfill.go":                             {itemScalarOK, "backfill imports the stored scalar into links"},
+	"session/sessionpr/session_pr_backfill.go":                   {itemScalarOK, "backfill imports the stored scalar into links"},
 	"session/storage.go":                                         {itemScalarOK, "PR reassignment guard compares the stored scalar"},
-	"session/storage_backlog.go":                                 {itemScalarOK, "storage helpers derive a number from the stored URL"},
+	"session/ent_repository_backlog_items.go":                    {itemScalarOK, "storage helpers derive a number from the stored URL"},
 }
 
 var legacyItemPRFieldRe = regexp.MustCompile(`\b(PrNumber|PrURL)\b`)

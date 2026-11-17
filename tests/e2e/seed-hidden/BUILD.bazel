@@ -5,7 +5,10 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/tstapler/stapler-squad/tests/e2e/seed-hidden",
     visibility = ["//visibility:private"],
-    deps = ["//session"],
+    deps = [
+        "//session",
+        "//session/domain",
+    ],
 )
 
 go_binary(

@@ -5,12 +5,41 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
+
+func TestResolveReviewTarget_ShouldRunInWorkWorktreeAndNameBranch_WhenWorktreeExists(t *testing.T) {
+	t.Parallel()
+	wtDir := t.TempDir()
+	got := resolveReviewTarget("/shared/repo", domain.GitWorktreeData{WorktreePath: wtDir, BranchName: "backlog/my-item", BaseCommitSHA: "abc123"})
+	assert.Equal(t, wtDir, got.Dir)
+	assert.Contains(t, got.Preamble, "abc123..backlog/my-item")
+}
+
+func TestResolveReviewTarget_ShouldForbidHEADAndNameBranch_WhenWorktreeGone(t *testing.T) {
+	t.Parallel()
+	got := resolveReviewTarget("/shared/repo", domain.GitWorktreeData{WorktreePath: filepath.Join(t.TempDir(), "gone"), BranchName: "backlog/my-item", BaseCommitSHA: "abc123"})
+	assert.Equal(t, "/shared/repo", got.Dir)
+	assert.Contains(t, got.Preamble, "abc123..backlog/my-item")
+	assert.Contains(t, got.Preamble, "NOT that branch")
+}
+
+func TestResolveReviewTarget_ShouldUseRepoPathWithoutPreamble_WhenNoBranchRecorded(t *testing.T) {
+	t.Parallel()
+	got := resolveReviewTarget("/shared/repo", domain.GitWorktreeData{})
+	assert.Equal(t, reviewTarget{Dir: "/shared/repo"}, got)
+}
 
 // T-IX-16 (index half): a hidden review/triage/diagnose spawn is resolvable by
 // the gate, with its kind, as soon as CreateDirectorySession returns.
@@ -91,4 +120,90 @@ func TestSpawnEntryPoints_ShouldIndexBeforeStart_WhenCreatingHiddenSessions(t *t
 	for name, seen := range spawners {
 		assert.True(t, seen, "%s not found in scanned files", name)
 	}
+}
+
+// spawnReviewPassesRepoPath reports whether fnName in src passes a `.RepoPath`
+// selector as the directory argument of CreateDirectorySession.
+func spawnReviewPassesRepoPath(t *testing.T, src, fnName string) bool {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "src.go", src, 0)
+	require.NoError(t, err)
+	found, bad := false, false
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != fnName {
+			continue
+		}
+		found = true
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "CreateDirectorySession" || len(call.Args) < 2 {
+				return true
+			}
+			if sel, ok := call.Args[1].(*ast.SelectorExpr); ok && sel.Sel.Name == "RepoPath" {
+				bad = true
+			}
+			return true
+		})
+	}
+	require.True(t, found, "%s not found", fnName)
+	return bad
+}
+
+// Structural guard for the "review runs in the shared checkout" class: the review
+// spawn must take its directory from resolveReviewTarget, never item.RepoPath
+// directly (the shared checkout's HEAD is an arbitrary branch).
+func TestSpawnReviewSession_ShouldNotPassItemRepoPathToCreateDirectorySession(t *testing.T) {
+	src, err := os.ReadFile("session_service_diagnose.go")
+	require.NoError(t, err)
+	assert.False(t, spawnReviewPassesRepoPath(t, string(src), "SpawnReviewSession"),
+		"SpawnReviewSession passes item.RepoPath to CreateDirectorySession; use resolveReviewTarget")
+}
+
+func TestSpawnReviewPassesRepoPath_ShouldDetectOldPassThrough(t *testing.T) {
+	t.Parallel()
+	old := `package x
+func (s *S) SpawnReviewSession() {
+	s.CreateDirectorySession(ctx, item.RepoPath, opts)
+}`
+	assert.True(t, spawnReviewPassesRepoPath(t, old, "SpawnReviewSession"))
+}
+
+func TestReviewTargetFor_ShouldResolveWorkWorktreeFromStorage_WhenItemSessionHasWorktree(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	ctx := context.Background()
+	wtDir := t.TempDir()
+	const workUUID = "work-session-uuid-r1"
+	require.NoError(t, storage.CreateInstanceData(ctx, domain.InstanceData{
+		Title:     "r1-work-" + t.Name(),
+		UUID:      workUUID,
+		Path:      t.TempDir(),
+		Status:    domain.Active,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Worktree:  domain.GitWorktreeData{WorktreePath: wtDir, SessionName: "r1-work", BranchName: "backlog/r1-item", BaseCommitSHA: "base123", RepoPath: "/shared/repo"},
+	}))
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "r1 item", RepoPath: "/shared/repo"})
+	require.NoError(t, err)
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: workUUID, SessionRole: instance.SessionRoleWork})
+	require.NoError(t, err)
+
+	svc := &SessionService{storage: storage, concStorage: storage}
+	got := svc.reviewTargetFor(ctx, &backlogdto.BacklogItemData{ID: item.ID, RepoPath: "/shared/repo"}, is.ID)
+
+	assert.Equal(t, wtDir, got.Dir)
+	assert.Contains(t, got.Preamble, "base123..backlog/r1-item")
+}
+
+func TestReviewTargetFor_ShouldFallBackToRepoPath_WhenItemSessionUnknown(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	svc := &SessionService{storage: storage, concStorage: storage}
+	got := svc.reviewTargetFor(context.Background(), &backlogdto.BacklogItemData{ID: "x", RepoPath: "/shared/repo"}, "no-such-item-session")
+	assert.Equal(t, reviewTarget{Dir: "/shared/repo"}, got)
 }

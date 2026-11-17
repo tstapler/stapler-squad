@@ -10,6 +10,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/markerstore"
 )
 
 // TerminalService handles GetTerminalSnapshot and WriteToSession RPCs.
@@ -62,7 +64,7 @@ func (ts *TerminalService) SetExternalDiscovery(d *session.ExternalSessionDiscov
 
 // findInstance implements the shared poller → external-discovery fallback chain
 // used by both GetTerminalSnapshot and WriteToSession.
-func (ts *TerminalService) findInstance(id string) *session.Instance {
+func (ts *TerminalService) findInstance(id string) *instance.Instance {
 	if ts.poller != nil {
 		if inst := ts.poller.FindInstance(id); inst != nil {
 			return inst
@@ -151,22 +153,22 @@ func (ts *TerminalService) WriteToSession(
 	//
 	// This handler is the chain's acquirer (Story 5.0): the primitives only
 	// receive the lease and release it in the goroutine that writes.
-	lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 	if !ok {
-		return nil, submitErrToConnectError(session.ErrLeaseBusy)
+		return nil, submitErrToConnectError(instance.ErrLeaseBusy)
 	}
 	var err error
 	if req.Msg.PressEnter {
-		err = session.SubmitContentWithEnter(ctx, inst, lease, req.Msg.Input)
+		err = instance.SubmitContentWithEnter(ctx, inst, lease, req.Msg.Input)
 	} else {
-		err = session.SendKeysWithTimeout(ctx, inst, lease, req.Msg.Input, session.DefaultSendKeysTimeout)
+		err = instance.SendKeysWithTimeout(ctx, inst, lease, req.Msg.Input, instance.DefaultSendKeysTimeout)
 	}
 	if err != nil {
 		return nil, submitErrToConnectError(err)
 	}
 
 	if ts.nudges != nil {
-		ts.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), session.ManualNudgeWrite)
+		ts.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), markerstore.ManualNudgeWrite)
 	}
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
 }
@@ -180,11 +182,11 @@ func (ts *TerminalService) WriteToSession(
 // three-way mapping for the MCP error-result shape instead of a connect
 // error.
 func submitErrToConnectError(err error) error {
-	if errors.Is(err, session.ErrLeaseBusy) {
+	if errors.Is(err, instance.ErrLeaseBusy) {
 		// Retryable: another writer (a driver key, a steer, a nudge) holds the pane.
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	}
-	if errors.Is(err, session.ErrSubmitNotConfirmed) {
+	if errors.Is(err, instance.ErrSubmitNotConfirmed) {
 		return connect.NewError(connect.CodeAborted, err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

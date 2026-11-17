@@ -25,19 +25,25 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prompts"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -74,15 +80,7 @@ var testTmuxServerSocketCounter uint64
 type ReactiveQueueManager interface {
 	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
 	RemoveStreamClient(clientID string)
-	OnControllerStatusChange(inst *session.Instance, newStatus detection.DetectedStatus)
-}
-
-// FeatureController is implemented by components that can be enabled/disabled at runtime.
-// Used by GetFeatureFlags/UpdateFeatureFlag to toggle named subsystems.
-type FeatureController interface {
-	Enable(ctx context.Context) error
-	Disable() error
-	IsEnabled() bool
+	OnControllerStatusChange(inst *instance.Instance, newStatus detection.DetectedStatus)
 }
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
@@ -90,7 +88,7 @@ type SessionService struct {
 	tccEnrichment     tccEnrichmentState
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
-	statusManager     *session.InstanceStatusManager
+	statusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
 	federation        *FederatedSessions // nil unless host gossip is running
 
@@ -114,7 +112,7 @@ type SessionService struct {
 	// replyPeerAddr and replyControllerActive are test seams; nil means
 	// req.Peer().Addr and "the instance has a started status controller".
 	replyPeerAddr         func(connect.AnyRequest) string
-	replyControllerActive func(*session.Instance) bool
+	replyControllerActive func(*instance.Instance) bool
 	// replyAfter injects the timer behind the send timeout and the closed-check
 	// polls (nil is time.After).
 	replyAfter func(time.Duration) <-chan time.Time
@@ -319,9 +317,9 @@ type SessionService struct {
 	// sessionSummaryGenerator is wired to each newly created session (alongside
 	// backlogLifecycleListener, at the same call sites) so that session-completion-
 	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
-	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// called (session/summaries/session_summary_service.go's ent-client/headless-pool wiring
 	// happens after SessionService construction).
-	sessionSummaryGenerator *session.SessionSummaryGenerator
+	sessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
@@ -358,7 +356,7 @@ type SessionService struct {
 
 	// workflowRepo is used to populate the workflow meta cache.
 	// Injected via SetWorkflowRepository to avoid bootstrapping cycle.
-	workflowRepo session.WorkflowRepository
+	workflowRepo stagecfg.WorkflowRepository
 
 	// workflowMetaCache provides workflow name and retention settings keyed by workflow UUID.
 	// Populated on startup and refreshed every minute. Protected by workflowMetaMu.
@@ -416,7 +414,7 @@ type SessionService struct {
 	// synchronously on the RPC path -- it runs in the trackCleanup-dispatched
 	// background goroutine, ahead of Start(). See project_plans/
 	// async-session-creation/implementation/plan.md Epic 2.1 Story 2.1.1.
-	githubResolver func(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *session.GitHubRef, err error)
+	githubResolver func(ctx context.Context, input string, enterpriseHosts []string) (localPath string, ref *instance.GitHubRef, err error)
 
 	// creationResolutionTimeout bounds the Background Resolution Pipeline's
 	// (Epic 2.2) entire run end to end -- the Background Resolution
@@ -755,9 +753,9 @@ func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassif
 // overrides the floor (0 disables it entirely); unset defaults to 3000ms,
 // comfortably inside every existing e2e timeout that waits on this
 // transition (all >= 10s, most 30s).
-func testModeGitHubResolver() func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+func testModeGitHubResolver() func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 	if !config.IsIsolatedInstance() {
-		return session.ResolveGitHubInputCtxWithHosts
+		return instance.ResolveGitHubInputCtxWithHosts
 	}
 	minDelay := 3 * time.Second
 	if raw := os.Getenv("STAPLER_SQUAD_TEST_GITHUB_RESOLVE_MIN_MS"); raw != "" {
@@ -766,11 +764,11 @@ func testModeGitHubResolver() func(ctx context.Context, input string, enterprise
 		}
 	}
 	if minDelay == 0 {
-		return session.ResolveGitHubInputCtxWithHosts
+		return instance.ResolveGitHubInputCtxWithHosts
 	}
-	return func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	return func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		start := time.Now()
-		localPath, ref, err := session.ResolveGitHubInputCtxWithHosts(ctx, input, enterpriseHosts)
+		localPath, ref, err := instance.ResolveGitHubInputCtxWithHosts(ctx, input, enterpriseHosts)
 		if elapsed := time.Since(start); elapsed < minDelay {
 			select {
 			case <-time.After(minDelay - elapsed):
@@ -788,7 +786,7 @@ func testModeGitHubResolver() func(ctx context.Context, input string, enterprise
 // a separate, larger mechanical refactor — out of scope here; this seam exists so new or
 // updated tests can opt in without waiting on that migration.
 func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *events.EventBus, searchEngine *search.SearchEngine) *SessionService {
-	reviewQueue := session.NewReviewQueue()
+	reviewQueue := queue.NewReviewQueue()
 
 	// concStorage is the concrete backing store used by sub-services that haven't migrated to
 	// InstanceStore yet (ReviewQueueService, GitHubService, WorkspaceService). In tests using a
@@ -937,14 +935,14 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		capRoleResolver = func(ctx context.Context, sessionUUID string) string {
 			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 			if err != nil {
-				if !errors.Is(err, session.ErrNotFound) {
+				if !errors.Is(err, domain.ErrNotFound) {
 					log.Warn("capacity: role lookup failed; applying default (non-pipeline) limits", "uuid", sessionUUID, "err", err)
 				}
 				return ""
 			}
 			return is.Role
 		}
-		capTerminator = func(ctx context.Context, inst *session.Instance, reason string) error {
+		capTerminator = func(ctx context.Context, inst *instance.Instance, reason string) error {
 			return stopGuardrailSession(ctx, concStorage, inst, reason)
 		}
 	}
@@ -1079,7 +1077,7 @@ func newPromptStore() *prompts.PromptStore {
 
 // loadInstancesWithWiring loads instances from storage and wires up dependencies.
 // This ensures instances have reviewQueue and statusManager set properly.
-func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) {
+func (s *SessionService) loadInstancesWithWiring() ([]*instance.Instance, error) {
 	instances, err := s.storage.LoadInstances()
 	if err != nil {
 		return nil, fmt.Errorf("loadInstancesWithWiring: %w", err)
@@ -1174,7 +1172,7 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)
-	ff.SetAudit(sink, map[string]FlagAuditPolicy{
+	ff.SetAudit(sink, map[string]featureflags.FlagAuditPolicy{
 		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
 		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
 		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
@@ -1262,7 +1260,7 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 
 	// state.json stores instances inside a wrapper: {"instances": [...], ...}
 	type stateFileFormat struct {
-		Instances []session.InstanceData `json:"instances"`
+		Instances []domain.InstanceData `json:"instances"`
 	}
 	// #nosec G304 -- stateJSONPath is configDir+"/state.json", built from the internal
 	// config dir and a literal filename; never network/RPC input.

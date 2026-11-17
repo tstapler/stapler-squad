@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -19,8 +21,8 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 	defer func() { newTymuxSessionFn = orig }()
 
 	live := &fakeTymuxManagerForSetCommand{sessionID: "daemon-session-42"}
-	inst := &Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: Paused, Backend: BackendTymux}
-	inst.processManager = NewTymuxBackend(live)
+	inst := &instance.Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
+	inst.SetProcessManagerForTest(NewTymuxBackend(live))
 	require.NoError(t, inst.Rename("after-rename"))
 
 	data := inst.ToInstanceData()
@@ -29,7 +31,7 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 
 	restored := &fakeTymuxManagerForSetCommand{}
 	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
-	_, err := FromInstanceDataDeferred(data)
+	_, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	assert.Equal(t, "daemon-session-42", restored.gotStoredID)
 	assert.Equal(t, "after-rename", restored.gotLabel)
@@ -44,8 +46,8 @@ func TestTymuxSessionID_OldRecordWithoutIDRestoresWithEmptyStoredID(t *testing.T
 	restored := &fakeTymuxManagerForSetCommand{}
 	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
 
-	data := InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: Paused, Backend: BackendTymux}
-	_, err := FromInstanceDataDeferred(data)
+	data := domain.InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
+	_, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	assert.Empty(t, restored.gotStoredID)
 }
@@ -88,8 +90,8 @@ func TestEntRepository_ClearsTymuxSessionID(t *testing.T) {
 
 func TestToInstanceData_TmuxSwitchedInstanceDropsTymuxSessionID(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	inst := &Instance{Title: "switched", Path: t.TempDir(), Program: "claude", Status: Paused, Backend: BackendTmux}
-	inst.processManager = newTmuxBackendFromOpts(ProcessManagerOptions{})
+	inst := &instance.Instance{Title: "switched", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTmux}
+	inst.SetProcessManagerForTest(newTmuxBackendFromOpts(instance.ProcessManagerOptions{}))
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
 }
 
@@ -106,11 +108,11 @@ func TestFromInstanceDataDeferred_NeverTouchesDaemonSession(t *testing.T) {
 		fakes = append(fakes, f)
 		return f
 	}
-	data := InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: Active, Backend: BackendTymux, TymuxSessionID: "daemon-7"}
+	data := domain.InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: domain.Active, Backend: domain.BackendTymux, TymuxSessionID: "daemon-7"}
 
-	_, err := FromInstanceDataDeferred(data)
+	_, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
-	_, err = FromInstanceDataDeferred(data)
+	_, err = instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
 	require.Len(t, fakes, 2)

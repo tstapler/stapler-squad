@@ -17,8 +17,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // WorkflowSchedulerInterface is the interface WorkflowService uses to interact with the scheduler.
@@ -32,7 +36,7 @@ type WorkflowSchedulerInterface interface {
 
 // WorkflowService implements the workflow-related RPCs on SessionService.
 type WorkflowService struct {
-	repo      session.WorkflowRepository
+	repo      stagecfg.WorkflowRepository
 	scheduler WorkflowSchedulerInterface
 	// storage is used by ArchiveWorkflowSessions and DeleteWorkflowFailedSessions to
 	// access the ent client for bulk updates. Wired at construction time.
@@ -54,7 +58,7 @@ type WorkflowService struct {
 // NewWorkflowService creates a new WorkflowService.
 // storage is required for ArchiveWorkflowSessions / DeleteWorkflowFailedSessions; pass nil
 // to disable those RPCs (they will return CodeUnavailable).
-func NewWorkflowService(repo session.WorkflowRepository, scheduler WorkflowSchedulerInterface, storage session.InstanceStore) *WorkflowService {
+func NewWorkflowService(repo stagecfg.WorkflowRepository, scheduler WorkflowSchedulerInterface, storage session.InstanceStore) *WorkflowService {
 	return &WorkflowService{repo: repo, scheduler: scheduler, storage: storage}
 }
 
@@ -192,7 +196,7 @@ func encryptWebhookSecret(secret string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get encryption key: %w", err)
 	}
-	encrypted, err := session.EncryptToken(key, secret)
+	encrypted, err := domain.EncryptToken(key, secret)
 	if err != nil {
 		return "", fmt.Errorf("encrypt webhook secret: %w", err)
 	}
@@ -220,7 +224,7 @@ func (s *WorkflowService) CreateWorkflow(
 	}
 
 	// Validate slug.
-	if err := session.ValidateWorkflowSlug(req.Msg.Slug); err != nil {
+	if err := workflowengine.ValidateWorkflowSlug(req.Msg.Slug); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	// Validate required fields per ADR-9.
@@ -270,7 +274,7 @@ func (s *WorkflowService) CreateWorkflow(
 		}
 	}
 
-	createInput := session.WorkflowCreateInput{
+	createInput := stagecfg.WorkflowCreateInput{
 		Slug:            req.Msg.Slug,
 		Name:            req.Msg.Name,
 		Description:     req.Msg.Description,
@@ -310,7 +314,7 @@ func (s *WorkflowService) CreateWorkflow(
 	}
 	wf, err := s.repo.Create(ctx, createInput)
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("workflow with slug %q already exists", req.Msg.Slug))
 		}
@@ -373,7 +377,7 @@ func (s *WorkflowService) UpdateWorkflow(
 	// spuriously rejected or, worse, let a mismatched combination through unnoticed.
 	existing, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))
@@ -417,7 +421,7 @@ func (s *WorkflowService) UpdateWorkflow(
 		}
 	}
 
-	update := session.WorkflowUpdateInput{
+	update := stagecfg.WorkflowUpdateInput{
 		Name:            req.Msg.Name,
 		Description:     req.Msg.Description,
 		Command:         req.Msg.Command,
@@ -467,10 +471,10 @@ func (s *WorkflowService) UpdateWorkflow(
 		wf, err = s.repo.Update(ctx, id, update)
 	}
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
-		if errors.Is(err, session.ErrPreconditionFailed) {
+		if errors.Is(err, domain.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("workflow %s was changed concurrently, reload and retry", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update workflow: %w", err))
@@ -507,7 +511,7 @@ func (s *WorkflowService) DeleteWorkflow(
 	}
 
 	if err := s.repo.Delete(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete workflow: %w", err))
@@ -569,7 +573,7 @@ func (s *WorkflowService) RunWorkflow(
 
 	wf, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))
@@ -662,7 +666,7 @@ const archiveInstanceTimeout = 2 * time.Second
 // archived while Active. That residual is by design, and is repaired by the
 // load-time self-heal in fromInstanceData (see ADR-001,
 // superseded-rework-session-retirement).
-func archiveMatchingInstances(ctx context.Context, instances []*session.Instance, workflowID string, now time.Time) {
+func archiveMatchingInstances(ctx context.Context, instances []*instance.Instance, workflowID string, now time.Time) {
 	for _, inst := range instances {
 		if inst == nil {
 			continue
@@ -717,7 +721,7 @@ func (ws *WorkflowService) ArchiveWorkflowSessions(
 		Where(
 			entsession.WorkflowID(req.Msg.WorkflowId),
 			entsession.ArchivedAtIsNil(),
-			entsession.StatusNotIn(int(session.Active), int(session.Creating), int(session.Paused)),
+			entsession.StatusNotIn(int(domain.Active), int(domain.Creating), int(domain.Paused)),
 		).
 		SetArchivedAt(now).
 		Save(ctx)
@@ -767,7 +771,7 @@ func (ws *WorkflowService) DeleteWorkflowFailedSessions(
 	updated, err := entClient.Session.Update().
 		Where(
 			entsession.WorkflowID(req.Msg.WorkflowId),
-			entsession.StatusIn(int(session.Stopped)),
+			entsession.StatusIn(int(domain.Stopped)),
 			entsession.ArchivedAtIsNil(),
 			entsession.LastMeaningfulOutputIsNil(),
 		).

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Adapters for the wake sources that read sessions, guidance requests and the
@@ -19,9 +20,9 @@ import (
 // never imports the services these wrap.
 
 // sessionStateLabel is the lowercase wake vocabulary for a lifecycle status.
-func sessionStateLabel(s session.Status) string {
+func sessionStateLabel(s domain.Status) string {
 	switch s {
-	case session.PermanentlyFailed:
+	case domain.PermanentlyFailed:
 		return "permanently_failed"
 	default:
 		return strings.ToLower(s.String())
@@ -40,7 +41,7 @@ func (w wakeSessionStates) SessionState(_ context.Context, sessionUUID string) (
 		if inst.IsActive() && w.svc.IsReadyForSteer(sessionUUID) {
 			return wakes.SessionFacts{Exists: true, State: "idle"}, nil
 		}
-		return wakes.SessionFacts{Exists: true, State: sessionStateLabel(session.Status(inst.GetStatus()))}, nil
+		return wakes.SessionFacts{Exists: true, State: sessionStateLabel(domain.Status(inst.GetStatus()))}, nil
 	}
 	data, err := w.storage.FindInstanceDataByID(sessionUUID)
 	switch {
@@ -61,7 +62,7 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 		return wakes.GuidanceFacts{}, nil
 	}
 	data, err := w.storage.GetGuidanceRequest(ctx, parsed)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return wakes.GuidanceFacts{}, nil
 	}
 	if err != nil {
@@ -69,8 +70,8 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 	}
 	return wakes.GuidanceFacts{
 		Exists:              true,
-		Answered:            data.Status() == session.GuidanceRequestStatusAnswered,
-		Cancelled:           data.Status() == session.GuidanceRequestStatusCancelled,
+		Answered:            data.Status() == domain.GuidanceRequestStatusAnswered,
+		Cancelled:           data.Status() == domain.GuidanceRequestStatusCancelled,
 		CancelReason:        string(data.CancelReason),
 		Answer:              data.Answer,
 		AskerSessionUUID:    askerOf(data),
@@ -81,7 +82,7 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 
 // askerOf is the session a request's question lives in: the hook-row asker,
 // else the session a session-scope request is about.
-func askerOf(d *session.GuidanceRequestData) string {
+func askerOf(d *domain.GuidanceRequestData) string {
 	if d.AskerSessionUUID != "" {
 		return d.AskerSessionUUID
 	}

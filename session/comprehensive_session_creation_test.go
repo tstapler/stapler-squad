@@ -10,6 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	creackpty "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
@@ -126,18 +131,18 @@ func (m *mockTmuxExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 // TestInstanceBuilder provides a fluent interface for creating test instances with proper isolation
 type TestInstanceBuilder struct {
 	t    *testing.T
-	opts InstanceOptions
+	opts instance.InstanceOptions
 }
 
 // NewTestInstance creates a new test instance builder with sane defaults and proper isolation
 func NewTestInstance(t *testing.T, title string) *TestInstanceBuilder {
 	return &TestInstanceBuilder{
 		t: t,
-		opts: InstanceOptions{
+		opts: instance.InstanceOptions{
 			Title:            title,
 			Path:             t.TempDir(),                              // Each test gets its own temp directory
 			Program:          "bash -c 'echo test session; exec bash'", // Safe default program
-			SessionType:      SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			AutoYes:          true,              // Tests shouldn't prompt for input
 			TmuxServerSocket: testTmuxSocket(t), // Isolated tmux server per test
 		},
@@ -157,7 +162,7 @@ func (b *TestInstanceBuilder) WithPath(path string) *TestInstanceBuilder {
 }
 
 // WithSessionType sets the session type
-func (b *TestInstanceBuilder) WithSessionType(sessionType SessionType) *TestInstanceBuilder {
+func (b *TestInstanceBuilder) WithSessionType(sessionType domain.SessionType) *TestInstanceBuilder {
 	b.opts.SessionType = sessionType
 	return b
 }
@@ -181,12 +186,12 @@ func (b *TestInstanceBuilder) WithCategory(category string) *TestInstanceBuilder
 }
 
 // Build creates the instance with cleanup function
-func (b *TestInstanceBuilder) Build() (*Instance, tmux.CleanupFunc, error) {
+func (b *TestInstanceBuilder) Build() (*instance.Instance, tmux.CleanupFunc, error) {
 	return b.buildWithMockTmux()
 }
 
 // BuildAndStart creates and starts the instance with cleanup functions
-func (b *TestInstanceBuilder) BuildAndStart() (*Instance, tmux.CleanupFunc, tmux.CleanupFunc, error) {
+func (b *TestInstanceBuilder) BuildAndStart() (*instance.Instance, tmux.CleanupFunc, tmux.CleanupFunc, error) {
 	instance, cleanup, err := b.buildWithMockTmux()
 	if err != nil {
 		return nil, nil, nil, err
@@ -204,9 +209,9 @@ func (b *TestInstanceBuilder) BuildAndStart() (*Instance, tmux.CleanupFunc, tmux
 }
 
 // buildWithMockTmux creates an instance with a mock tmux session to prevent real tmux command execution
-func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, error) {
+func (b *TestInstanceBuilder) buildWithMockTmux() (*instance.Instance, tmux.CleanupFunc, error) {
 	// Create the instance first
-	instance, cleanup, err := NewInstanceWithCleanup(b.opts)
+	instance, cleanup, err := instance.NewInstanceWithCleanup(b.opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -228,7 +233,7 @@ func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, 
 	mockExecutor.sessionsCreated[mockTmuxSession.GetSanitizedName()] = true
 
 	// Replace the real tmux session with the mock
-	instance.processManager.(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
+	instance.ProcessManagerForTest().(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
 
 	return instance, cleanup, nil
 }
@@ -383,10 +388,10 @@ func testSessionCreationValidation(t *testing.T) {
 	})
 
 	t.Run("SessionTypeValidation", func(t *testing.T) {
-		validSessionTypes := []SessionType{
-			SessionTypeDirectory,
-			SessionTypeNewWorktree,
-			SessionTypeExistingWorktree,
+		validSessionTypes := []domain.SessionType{
+			domain.SessionTypeDirectory,
+			domain.SessionTypeNewWorktree,
+			domain.SessionTypeExistingWorktree,
 		}
 
 		for _, sessionType := range validSessionTypes {
@@ -521,7 +526,7 @@ func testSessionCreationStates(t *testing.T) {
 		}()
 
 		// Initial state should be appropriate
-		assert.NotEqual(t, Running, instance.Status, "Instance should not be running before start")
+		assert.NotEqual(t, domain.Active, instance.Status, "Instance should not be running before start")
 
 		// Start the session
 		startCleanup, err := instance.StartWithCleanup(true)
@@ -535,7 +540,7 @@ func testSessionCreationStates(t *testing.T) {
 		}()
 
 		// Should be running after successful start
-		assert.Equal(t, Running, instance.Status, "Instance should be running after start")
+		assert.Equal(t, domain.Active, instance.Status, "Instance should be running after start")
 
 		// Test Started() method
 		assert.True(t, instance.Started(), "Started() should return true for running instance")
@@ -574,7 +579,7 @@ func testSessionCreationStates(t *testing.T) {
 		assert.False(t, beforeStart, "Should not be started initially")
 		assert.True(t, afterStart, "Should be started after StartWithCleanup")
 		assert.NotEqual(t, statusBeforeStart, statusAfterStart, "Status should change after starting")
-		assert.Equal(t, Running, statusAfterStart, "Status should be Running after start")
+		assert.Equal(t, domain.Active, statusAfterStart, "Status should be Running after start")
 	})
 }
 
@@ -754,7 +759,7 @@ func testSessionCreationConcurrency(t *testing.T) {
 
 		// Create sessions concurrently
 		type sessionResult struct {
-			instance *Instance
+			instance *instance.Instance
 			cleanup  tmux.CleanupFunc
 			err      error
 		}
@@ -870,7 +875,7 @@ func testSessionCreationFileSystem(t *testing.T) {
 func testSessionCreationWorktreeManagement(t *testing.T) {
 	t.Run("NewWorktreeCreation", func(t *testing.T) {
 		// Create a git repository
-		tempRepo := setupTestRepository(t)
+		tempRepo := fixturetest.SetupTestRepository(t)
 		defer func() {
 			if err := os.RemoveAll(tempRepo); err != nil {
 				t.Logf("Failed to remove temp repo: %v", err)
@@ -880,7 +885,7 @@ func testSessionCreationWorktreeManagement(t *testing.T) {
 		instance, cleanup, err := NewTestInstance(t, "worktree-creation-test").
 			WithPath(tempRepo).
 			WithProgram("bash -c 'git status; echo worktree test'").
-			WithSessionType(SessionTypeNewWorktree).
+			WithSessionType(domain.SessionTypeNewWorktree).
 			Build()
 		require.NoError(t, err)
 		defer func() {
@@ -939,7 +944,7 @@ func testSessionCreationWorktreeManagement(t *testing.T) {
 			}
 		}()
 
-		assert.Equal(t, SessionTypeDirectory, instance.SessionType)
+		assert.Equal(t, domain.SessionTypeDirectory, instance.SessionType)
 		t.Logf("✓ Directory session created successfully")
 	})
 }

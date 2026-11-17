@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // scriptedPool replays steps in order; the last step repeats. A step with err
@@ -76,8 +78,8 @@ func (f *fakeStopSource) Tail(ctx context.Context) (string, error) {
 
 type stopHarness struct {
 	driver   *AutonomousDriver
-	cc       *ClaudeController
-	inst     *Instance
+	cc       *claudectl.ClaudeController
+	inst     *instance.Instance
 	pm       *fakeSendKeysProcessManager
 	outcomes chan AutonomousDriverOutcome
 	ctx      context.Context
@@ -86,12 +88,12 @@ type stopHarness struct {
 
 func newStopHarness(t *testing.T, pool HeadlessPoolClient, maxTurns int, src stopSource) *stopHarness {
 	t.Helper()
-	inst := &Instance{Title: "stop-harness", UUID: "abcdefgh-stop-harness"}
-	cc, _ := NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst := &instance.Instance{Title: "stop-harness", UUID: "abcdefgh-stop-harness"}
+	cc, _ := claudectl.NewClaudeController(inst)
+	inst.SetControllerForTest(cc)
 	pm := &fakeSendKeysProcessManager{}
-	inst.processManager = pm
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(pm)
+	inst.MarkStarted()
 
 	d := &AutonomousDriver{
 		inst:                   inst,
@@ -169,7 +171,7 @@ func TestAutonomousDriver_StopReasonPerExit(t *testing.T) {
 		h := newStopHarness(t, pool, 3, idleSrc)
 		m := ratelimit.NewManager("rl", nil)
 		m.GetDetector().SetState(ratelimit.StateWaiting)
-		h.cc.rateLimitHandler.Store(ratelimit.NewPTYConsumer(nil, m))
+		h.cc.SetRateLimitHandlerForTest(ratelimit.NewPTYConsumer(nil, m))
 		h.driver.rateLimitWaitMax = 20 * time.Millisecond
 		h.startWithIdle(t)
 		o := h.outcome(t)
@@ -216,7 +218,7 @@ func TestAutonomousDriver_StopReasonPerExit(t *testing.T) {
 	t.Run("lease timeout", func(t *testing.T) {
 		h := newStopHarness(t, &scriptedPool{steps: []poolStep{{resp: "NEXT_MESSAGE: hello"}}}, 3, idleSrc)
 		h.driver.turnLeaseWait = 20 * time.Millisecond
-		held, err := h.inst.AcquireTerminalWriteLease(h.ctx, LeaseWriterSteer, time.Second)
+		held, err := h.inst.AcquireTerminalWriteLease(h.ctx, instance.LeaseWriterSteer, time.Second)
 		if err != nil {
 			t.Fatalf("acquire: %v", err)
 		}

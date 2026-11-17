@@ -13,10 +13,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // testDBCounter guarantees each createTestStorage call gets a uniquely-named
@@ -76,10 +82,10 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
 	// branchName is non-empty.
 	inst := newTestInstance("shared-cache-visibility-test")
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	db, err := sql.Open("sqlite", er.DbPath)
 	require.NoError(t, err)
@@ -100,18 +106,18 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "uuid-roundtrip",
 		UUID:      "my-stable-uuid",
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 	// Paused sets started=true internally, which is required for SaveInstances.
 	// We use the same fast-path that FromInstanceData takes.
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -134,16 +140,16 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "backend-roundtrip",
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Backend:   BackendTymux,
+		Backend:   domain.BackendTymux,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -151,7 +157,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 
-	assert.Equal(t, BackendTymux, loaded[0].Backend,
+	assert.Equal(t, domain.BackendTymux, loaded[0].Backend,
 		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
 }
 
@@ -162,16 +168,16 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "multi-load",
 		UUID:      "consistent-uuid",
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	first, err := storage.LoadInstances()
@@ -197,16 +203,16 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 	defer cleanup()
 
 	// Insert a legacy session with no UUID (simulating pre-UUID schema data).
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "legacy-no-uuid",
 		UUID:      "", // explicitly empty — legacy session
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	// First load: migration assigns a new UUID.
@@ -234,18 +240,18 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 // This is the specific lookup that was failing with "session not found" after restart.
 func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
-	statusMgr := NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:   "my-session-title",
 		UUID:    "test-uuid-lookup",
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
-	inst.started.Store(true)
-	poller.SetInstances([]*Instance{inst})
+	inst.MarkStarted()
+	poller.SetInstances([]*instance.Instance{inst})
 
 	found := poller.FindInstance("test-uuid-lookup")
 	require.NotNil(t, found, "FindInstance must find session by UUID")
@@ -257,26 +263,26 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 // pre-existing instances.
 func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
-	statusMgr := NewInstanceStatusManager()
+	queue := queue.NewReviewQueue()
+	statusMgr := instance.NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
 
-	existing := &Instance{
+	existing := &instance.Instance{
 		Title:   "existing-session",
 		UUID:    "existing-uuid",
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
-	existing.started.Store(true)
-	poller.SetInstances([]*Instance{existing})
+	existing.MarkStarted()
+	poller.SetInstances([]*instance.Instance{existing})
 
-	newcomer := &Instance{
+	newcomer := &instance.Instance{
 		Title:   "new-session",
 		UUID:    "new-uuid",
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
-	newcomer.started.Store(true)
+	newcomer.MarkStarted()
 	poller.AddInstance(newcomer)
 
 	// Both sessions must be findable.
@@ -292,7 +298,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 func TestDiffStatsDataSerializationExcludesContent(t *testing.T) {
 	t.Parallel()
 	// Create DiffStatsData with content
-	stats := DiffStatsData{
+	stats := domain.DiffStatsData{
 		Added:   10,
 		Removed: 5,
 		Content: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,5 +1,10 @@\n+new line\n",
@@ -330,7 +336,7 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 	}`
 
 	// Parse into DiffStatsData
-	var stats DiffStatsData
+	var stats domain.DiffStatsData
 	err := json.Unmarshal([]byte(oldJSON), &stats)
 	require.NoError(t, err)
 
@@ -347,10 +353,10 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 func TestInstanceDataSaveExcludesDiffContent(t *testing.T) {
 	t.Parallel()
 	// Create InstanceData with diff stats including content
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title: "test-session",
 		Path:  "/test/path",
-		DiffStats: DiffStatsData{
+		DiffStats: domain.DiffStatsData{
 			Added:   25,
 			Removed: 10,
 			Content: "large diff content that should not be persisted to reduce file size...",
@@ -413,7 +419,7 @@ func TestInstanceDataLoadWithDiffContent(t *testing.T) {
 	}`
 
 	// Parse into InstanceData
-	var data InstanceData
+	var data domain.InstanceData
 	err := json.Unmarshal([]byte(oldJSON), &data)
 	require.NoError(t, err)
 
@@ -431,16 +437,16 @@ func TestInstanceDataLoadWithDiffContent(t *testing.T) {
 }
 
 // newTestInstance returns a minimal Paused Instance ready for AddInstance.
-func newTestInstance(title string) *Instance {
-	inst := &Instance{
+func newTestInstance(title string) *instance.Instance {
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	return inst
 }
 
@@ -682,9 +688,9 @@ func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDi
 
 	inst := newTestInstance("worktree-session-records")
 	inst.UUID = "33333333-3333-3333-3333-333333333333"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	records := storage.ListSessionRecords()
 	require.Len(t, records, 1)
@@ -701,7 +707,7 @@ func TestListSessionRecords_WhenSessionHasNoWorktree_ExpectPathIsIdentityPath(t 
 	defer cleanup()
 
 	inst := newTestInstance("plain-session-records")
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	records := storage.ListSessionRecords()
 	require.Len(t, records, 1)
@@ -728,7 +734,7 @@ func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExists
 	data, err := storage.FindInstanceDataByID("storage-only-session")
 	require.NoError(t, err)
 	require.NotNil(t, data.ArchivedAt, "ArchivedAt should be set after archiving")
-	assert.Equal(t, Stopped, data.Status, "Status should transition to Stopped")
+	assert.Equal(t, domain.Stopped, data.Status, "Status should transition to Stopped")
 }
 
 // TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving guards the
@@ -825,7 +831,7 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	// Mutate fields that the Ent schema supports.
 	inst.Tags = []string{"sync-tag"}
 	inst.Category = "sync-category"
-	err := storage.SaveInstancesSync([]*Instance{inst})
+	err := storage.SaveInstancesSync([]*instance.Instance{inst})
 	require.NoError(t, err)
 
 	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
@@ -852,7 +858,7 @@ func TestStorage_should_RoundTripRuleTagProvenance_When_SessionSavedAndReloaded(
 	inst.Tags = []string{"Bugfix"}
 	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
 	inst.SuppressedRuleTags = map[string]bool{"Suppressed": true}
-	require.NoError(t, storage.SaveInstancesSync([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstancesSync([]*instance.Instance{inst}))
 
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -897,10 +903,10 @@ func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
 
 	inst := newTestInstance("worktree-session")
 	inst.UUID = "11111111-1111-1111-1111-111111111111"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session", "worktree-session", "backlog/some-item", "abc123def")
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	wt, err := storage.GetWorktreeDataBySessionUUID(context.Background(), inst.UUID)
 	require.NoError(t, err)
@@ -918,10 +924,10 @@ func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{Title: "not-started", Path: "/tmp/test", UUID: "22222222-2222-2222-2222-222222222222"}
+	inst := &instance.Instance{Title: "not-started", Path: "/tmp/test", UUID: "22222222-2222-2222-2222-222222222222"}
 	require.False(t, inst.Started())
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -935,7 +941,7 @@ func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
 func TestDiffStatsDataRoundTrip(t *testing.T) {
 	t.Parallel()
 	// Original data with content
-	original := DiffStatsData{
+	original := domain.DiffStatsData{
 		Added:   42,
 		Removed: 17,
 		Content: "This content should not survive the round trip...",
@@ -946,7 +952,7 @@ func TestDiffStatsDataRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Deserialize
-	var loaded DiffStatsData
+	var loaded domain.DiffStatsData
 	err = json.Unmarshal(jsonBytes, &loaded)
 	require.NoError(t, err)
 
@@ -967,9 +973,9 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Ship it",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -978,7 +984,7 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 55, fetched.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/55", fetched.PrURL)
 }
@@ -991,14 +997,14 @@ func TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Already shipped",
-		Status: string(BacklogStatusPRPending),
+		Status: string(domain.BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/55"
 	prNum := 55
-	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, updated, prURL, prNum, "Implemented the feature.", nil)
@@ -1023,9 +1029,9 @@ func TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Ship it",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -1044,18 +1050,18 @@ func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedSt
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Not ready for a PR yet",
-		Status: string(BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Too early.", nil)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusIdea), fetched.Status, "an invalid starting status must never be transitioned")
+	assert.Equal(t, string(domain.BacklogStatusIdea), fetched.Status, "an invalid starting status must never be transitioned")
 	assert.Equal(t, 0, fetched.PrNumber)
 }
 
@@ -1070,9 +1076,9 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Ship it",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -1081,15 +1087,15 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	// updated_at (ent's UpdateDefault), which is enough to invalidate a
 	// pinned-snapshot CAS.
 	title := "Retitled by a concurrent winner"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Title: &title}, nil)
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, item /* stale */, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusReview), fetched.Status, "a stale observed snapshot must never win the CAS")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "a stale observed snapshot must never win the CAS")
 	assert.Equal(t, 0, fetched.PrNumber)
 }
 
@@ -1101,25 +1107,25 @@ func TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T)
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "epoch-match",
 		UUID:      "uuid-epoch-match",
 		Path:      "/tmp/test",
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
 
-	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, Active, "")
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, domain.Active, "")
 	require.NoError(t, err)
 	assert.True(t, applied)
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, Active, loaded[0].Status, "the persisted row must now read Active")
+	assert.Equal(t, domain.Active, loaded[0].Status, "the persisted row must now read Active")
 }
 
 // TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale covers Task
@@ -1131,11 +1137,11 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:     "epoch-stale",
 		UUID:      "uuid-epoch-stale",
 		Path:      "/tmp/test",
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1145,14 +1151,14 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	// The persisted row's creation_epoch defaults to 0; present a stale
 	// captured value of 2 (as if a cancel had already bumped it past this
 	// caller's captured value).
-	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, Active, "")
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, domain.Active, "")
 	require.NoError(t, err)
 	assert.False(t, applied)
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
+	assert.Equal(t, domain.Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
 }
 
 // ── Epic 2.2: TaggingRule Storage CRUD ──────────────────────────────────────
@@ -1321,7 +1327,7 @@ func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *te
 }
 
 // TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActiveRoundTrips
-// pins the interaction the ADR-001 backfill depends on: fromInstanceData's
+// pins the interaction the ADR-001 backfill depends on: instanceFromData's
 // archived guard heals an Active+archived row to Stopped *and* sets
 // started=true, and saveInstancesToRepo only writes instances where Started()
 // is true — so the heal actually reaches the database on the next
@@ -1333,16 +1339,16 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 	defer cleanup()
 
 	archivedAt := time.Now()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:      "archived-active-roundtrip",
 		Path:       "/tmp/test",
-		Status:     Active,
+		Status:     domain.Active,
 		Program:    "claude",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 		ArchivedAt: &archivedAt,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	loaded, err := storage.LoadInstances()
@@ -1352,7 +1358,7 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 
 	persisted, err := storage.FindInstanceDataByID("archived-active-roundtrip")
 	require.NoError(t, err)
-	assert.Equal(t, Stopped, persisted.Status,
+	assert.Equal(t, domain.Stopped, persisted.Status,
 		"the archived Active row must be self-healed to Stopped and that heal must be persisted")
 	require.NotNil(t, persisted.ArchivedAt, "archival itself must be untouched by the heal")
 }
@@ -1364,13 +1370,13 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 
 	a := newTestInstance("batch-a")
 	a.UUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	a.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
+	a.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
 	b := newTestInstance("batch-b")
 	b.UUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	b.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
+	b.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
 	noWT := newTestInstance("batch-dir")
 	noWT.UUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-	require.NoError(t, storage.SaveInstances([]*Instance{a, b, noWT}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{a, b, noWT}))
 
 	var queries atomic.Int64
 	storage.GetEntClient().Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
@@ -1399,8 +1405,8 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 // prLoadFixture creates a persisted Paused session row with an optional legacy PR.
 func prLoadFixture(t *testing.T, storage *Storage, title, uuid, owner, repo string, legacyNumber int) {
 	t.Helper()
-	data := InstanceData{
-		Title: title, UUID: uuid, Path: "/tmp/test", Status: Paused, Program: "claude",
+	data := domain.InstanceData{
+		Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: owner, GitHubRepo: repo,
 	}
 	if legacyNumber > 0 {
@@ -1418,17 +1424,17 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 	for i := 0; i < n; i++ {
 		uuid := fmt.Sprintf("uuid-%03d", i)
 		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
-		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
-			mustPRRef(t, "", "acme", "app", 1000+i), PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}})
+		_, err := storage.Repo.UpsertSessionPR(context.Background(), domain.SessionPROwner(uuid),
+			fixturetest.MustPRRef(t, "", "acme", "app", 1000+i), domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}})
 		require.NoError(t, err)
 	}
 
-	var loaded []*Instance
+	var loaded []*instance.Instance
 	stmts := countStatementsMatching(t, storage.Repo, func(q string) bool {
 		return strings.Contains(q, "session_prs") || strings.Contains(q, "pull_request_states")
-	}, func() {
+	}, func(counted *EntRepository) {
 		var err error
-		loaded, err = storage.LoadInstances()
+		loaded, err = (&Storage{Repo: counted}).LoadInstances()
 		require.NoError(t, err)
 	})
 
@@ -1448,12 +1454,12 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 	prLoadFixture(t, storage, "skipped", "uuid-skipped", "", "", 41)
 	// A represented legacy number for contrast.
 	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
-	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
-		mustPRRef(t, "", "acme", "app", 42), PRLink{Source: AttachSourceBackfill})
+	_, err := storage.Repo.UpsertSessionPR(context.Background(), domain.SessionPROwner("uuid-represented"),
+		fixturetest.MustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
 	require.NoError(t, err)
 
-	byTitle := func(insts []*Instance) map[string]*Instance {
-		m := map[string]*Instance{}
+	byTitle := func(insts []*instance.Instance) map[string]*instance.Instance {
+		m := map[string]*instance.Instance{}
 		for _, i := range insts {
 			m[i.Title] = i
 		}

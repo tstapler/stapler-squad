@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +19,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -47,14 +49,14 @@ func TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCa
 	resolvedPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, resolvedPath)
 	resolved := make(chan struct{})
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		select {
 		case <-time.After(300 * time.Millisecond):
 		case <-ctx.Done():
 			return "", nil, ctx.Err()
 		}
 		defer close(resolved)
-		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
+		return resolvedPath, &instance.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
 	}
 
 	rpcCtx, rpcCancel := context.WithCancel(context.Background())
@@ -79,7 +81,7 @@ func TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCa
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "pipeline must still reach Active after the RPC context cancellation")
 }
 
@@ -94,7 +96,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailed_When_ResolutionExceedsT
 	fix.svc.creationResolutionTimeout = 50 * time.Millisecond
 
 	sawTimeout := make(chan struct{})
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		<-ctx.Done()
 		close(sawTimeout)
 		return "", nil, ctx.Err()
@@ -115,7 +117,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailed_When_ResolutionExceedsT
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Failed
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Failed
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "a resolution that exceeds the Background Resolution Context's timeout must produce a terminal Failed write")
 
 	inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
@@ -141,8 +143,8 @@ func TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_Github
 
 	resolvedPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, resolvedPath)
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
-		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
+		return resolvedPath, &instance.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "main"}, nil
 	}
 
 	var mu sync.Mutex
@@ -162,7 +164,7 @@ func TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_Github
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond)
 
 	mu.Lock()
@@ -185,7 +187,7 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 	t.Cleanup(fix.cleanup)
 
 	var resolverCalled atomic.Bool
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		resolverCalled.Store(true)
 		return "", nil, fmt.Errorf("githubResolver must not be called for a plain directory session")
 	}
@@ -199,7 +201,7 @@ func TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_Plain
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Active
 	}, pipelineEventuallyTimeout, 5*time.Millisecond)
 
 	assert.False(t, resolverCalled.Load(), "githubResolver must never be invoked for a plain directory session")
@@ -228,7 +230,7 @@ func BenchmarkBackgroundResolutionPipeline_PlainDirectorySession(b *testing.B) {
 
 		if err := wait.WaitForCondition(func() bool {
 			inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-			return inst != nil && session.Status(inst.GetStatus()) == session.Active
+			return inst != nil && domain.Status(inst.GetStatus()) == domain.Active
 		}, wait.WaitConfig{Timeout: wait.SlowTimeout, PollInterval: time.Millisecond, Description: "session Active"}); err != nil {
 			b.Fatalf("session never became Active: %v", err)
 		}
@@ -247,7 +249,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailedAndNotCrashProcess_When_
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
 		panic("simulated phase panic")
 	}
 
@@ -260,7 +262,7 @@ func TestBackgroundResolutionPipeline_should_WriteFailedAndNotCrashProcess_When_
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Failed
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Failed
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "a panic inside the pipeline must be recovered into a terminal Failed write")
 
 	// The process (and this test) is still running to check this at all --
@@ -280,8 +282,8 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 
 	resolvedPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, resolvedPath)
-	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *session.GitHubRef, error) {
-		return resolvedPath, &session.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "feature-x"}, nil
+	fix.svc.githubResolver = func(ctx context.Context, input string, enterpriseHosts []string) (string, *instance.GitHubRef, error) {
+		return resolvedPath, &instance.GitHubRef{Owner: "acme", Repo: "widgets", Branch: "feature-x"}, nil
 	}
 
 	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -293,7 +295,7 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond)
 
 	inst := fix.svc.FindLiveInstance(resp.Msg.Session.Id)
@@ -317,7 +319,7 @@ func TestBackgroundResolutionPipeline_should_TransitionToActive_When_ResolutionS
 		}
 		for _, l := range loaded {
 			if l.GetStableID() == stableID {
-				return l.Status == session.Active
+				return l.Status == domain.Active
 			}
 		}
 		return false
@@ -342,11 +344,11 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 
 	dir := t.TempDir()
 	instance, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-		Options: session.InstanceOptions{
+		Options: instance.InstanceOptions{
 			Title:            "epic22-stale-epoch",
 			Path:             dir,
 			Program:          "claude",
-			SessionType:      session.SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		},
 		Storage: fix.storage,
@@ -362,7 +364,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 		instanceRootDir: instance.GetEffectiveRootDir(),
 	})
 
-	assert.Equal(t, session.Creating, session.Status(instance.GetStatus()),
+	assert.Equal(t, domain.Creating, domain.Status(instance.GetStatus()),
 		"in-memory status must be untouched when the pipeline's captured epoch is already stale")
 
 	loaded, err := fix.storage.LoadInstances()
@@ -371,7 +373,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 	for _, l := range loaded {
 		if l.GetStableID() == instance.GetStableID() {
 			found = true
-			assert.Equal(t, session.Creating, l.Status,
+			assert.Equal(t, domain.Creating, l.Status,
 				"persisted row must be unchanged when the pipeline's captured epoch is already stale")
 		}
 	}
@@ -422,7 +424,7 @@ func TestCreateSession_should_PublishExactlyOneTerminalEvent_When_CancelRacesSuc
 	// TestTryForceStatusIfEpoch_should_ProduceExactlyOneWinner_When_CalledConcurrently
 	// (session/instance_epoch_test.go) for the same requirement on the
 	// lower-level primitive this test races at the commitTerminalStatus layer.
-	li := session.NewLiveInstance(inst)
+	li := instance.NewLiveInstance(inst)
 	defer li.Stop()
 
 	ch, _ := bus.Subscribe(context.Background())
@@ -432,14 +434,14 @@ func TestCreateSession_should_PublishExactlyOneTerminalEvent_When_CancelRacesSuc
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		results[0] = commitTerminalStatus(context.Background(), storage, inst, 0, session.Active, "")
+		results[0] = commitTerminalStatus(context.Background(), storage, inst, 0, domain.Active, "")
 		if results[0] {
 			bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status", "creation_progress"}))
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		results[1] = commitTerminalStatus(context.Background(), storage, inst, 0, session.Failed, "Cancelled")
+		results[1] = commitTerminalStatus(context.Background(), storage, inst, 0, domain.Failed, "Cancelled")
 		if results[1] {
 			bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status", "creation_progress"}))
 		}
@@ -484,11 +486,11 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	instance, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-		Options: session.InstanceOptions{
+		Options: instance.InstanceOptions{
 			Title:            "epic42-hook-config-worktree",
 			Path:             repoDir,
 			Program:          "sh",
-			SessionType:      session.SessionTypeNewWorktree,
+			SessionType:      domain.SessionTypeNewWorktree,
 			Branch:           "feature-hook-test",
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		},
@@ -506,7 +508,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 	})
 
 	wait.RequireEventually(t, func() bool {
-		return session.Status(instance.GetStatus()) == session.Active
+		return domain.Status(instance.GetStatus()) == domain.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "pipeline must reach Active for a plain SessionTypeNewWorktree session")
 
 	worktreeDir := instance.Workspace().WorktreeDir
@@ -563,7 +565,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 
 	wait.RequireEventually(t, func() bool {
 		inst := fix.svc.FindLiveInstance(respA.Msg.Session.Id)
-		return inst != nil && session.Status(inst.GetStatus()) == session.Active
+		return inst != nil && domain.Status(inst.GetStatus()) == domain.Active
 	}, pipelineEventuallyTimeout, 20*time.Millisecond, "session A must reach Active before the collision attempt")
 
 	sessionA := fix.svc.FindLiveInstance(respA.Msg.Session.Id)
@@ -574,11 +576,11 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 
 	// Session B: forced to resolve to the identical, already-live directory.
 	instanceB, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-		Options: session.InstanceOptions{
+		Options: instance.InstanceOptions{
 			Title:            "epic45-collision-target",
 			Path:             repoDir,
 			Program:          "sh",
-			SessionType:      session.SessionTypeExistingWorktree,
+			SessionType:      domain.SessionTypeExistingWorktree,
 			ExistingWorktree: collisionPath,
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		},
@@ -594,7 +596,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 		instanceRootDir: instanceB.GetEffectiveRootDir(),
 	})
 
-	require.Equal(t, session.Failed, session.Status(instanceB.GetStatus()),
+	require.Equal(t, domain.Failed, domain.Status(instanceB.GetStatus()),
 		"session B must fail, not silently spawn into session A's already-occupied directory")
 	// "DirectoryCollision" is session_creation_pipeline.go's classification for
 	// errors.Is(startErr, session.ErrDirectoryCollision) (its only source) --
@@ -611,13 +613,13 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 	for _, l := range loaded {
 		if l.GetStableID() == instanceB.GetStableID() {
 			found = true
-			assert.Equal(t, session.Failed, l.Status, "persisted row must reflect the classified Failed/DirectoryCollision outcome")
+			assert.Equal(t, domain.Failed, l.Status, "persisted row must reflect the classified Failed/DirectoryCollision outcome")
 		}
 	}
 	assert.True(t, found)
 
 	// Session A's own state must be completely unaffected by B's refused spawn.
-	assert.Equal(t, session.Active, session.Status(sessionA.GetStatus()))
+	assert.Equal(t, domain.Active, domain.Status(sessionA.GetStatus()))
 	assert.Equal(t, collisionPath, sessionA.Workspace().ActiveDir)
 	assert.True(t, sessionA.IsBackendProcessAlive(), "session A's real tmux pane must still be alive after B's refused spawn")
 }
@@ -645,14 +647,14 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
 
-	newContender := func(title string) *session.Instance {
+	newContender := func(title string) *instance.Instance {
 		t.Helper()
 		inst, err := importer.CreateManagedInstance(context.Background(), importer.CreateManagedInstanceParams{
-			Options: session.InstanceOptions{
+			Options: instance.InstanceOptions{
 				Title:            title,
 				Path:             repoDir,
 				Program:          "sh",
-				SessionType:      session.SessionTypeExistingWorktree,
+				SessionType:      domain.SessionTypeExistingWorktree,
 				ExistingWorktree: repoDir,
 				TmuxServerSocket: fix.svc.testTmuxServerSocket,
 			},
@@ -670,7 +672,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for _, inst := range []*session.Instance{instA, instB} {
+	for _, inst := range []*instance.Instance{instA, instB} {
 		inst := inst
 		go func() {
 			defer wg.Done()
@@ -686,18 +688,18 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 	close(start)
 	wg.Wait()
 
-	results := map[session.Status]int{}
+	results := map[domain.Status]int{}
 	var failureReasons []string
-	for _, inst := range []*session.Instance{instA, instB} {
-		status := session.Status(inst.GetStatus())
+	for _, inst := range []*instance.Instance{instA, instB} {
+		status := domain.Status(inst.GetStatus())
 		results[status]++
-		if status == session.Failed {
+		if status == domain.Failed {
 			failureReasons = append(failureReasons, inst.FailureReason())
 		}
 	}
 
-	require.Equal(t, 1, results[session.Active], "exactly one contender must reach Active; observed=%v", results)
-	require.Equal(t, 1, results[session.Failed], "exactly one contender must reach Failed; observed=%v", results)
+	require.Equal(t, 1, results[domain.Active], "exactly one contender must reach Active; observed=%v", results)
+	require.Equal(t, 1, results[domain.Failed], "exactly one contender must reach Failed; observed=%v", results)
 	assert.Equal(t, []string{"DirectoryCollision"}, failureReasons,
 		"the loser must be classified as DirectoryCollision, not a generic StartupError")
 }

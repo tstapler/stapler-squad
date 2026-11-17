@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/internal/proflabel"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"net"
 	"os"
 	"path/filepath"
@@ -230,9 +231,9 @@ func startPRWatch(ctx context.Context, srv *Server, deps *ServerDependencies) {
 		sc = append(sc, prwatch.SettingCorrection{Key: c.Key, Bad: c.Value, Effective: c.Effective})
 	}
 	svc := deps.SessionService
-	snapshots := func() []*session.InstanceSnapshot {
+	snapshots := func() []*domain.InstanceSnapshot {
 		insts := svc.GetInstances()
-		out := make([]*session.InstanceSnapshot, 0, len(insts))
+		out := make([]*domain.InstanceSnapshot, 0, len(insts))
 		for _, inst := range insts {
 			if inst != nil {
 				out = append(out, inst.Snapshot())

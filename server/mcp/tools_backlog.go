@@ -24,8 +24,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- Session UUID context injection ---
@@ -80,7 +83,7 @@ func callerSessionUUIDForAudit(ctx context.Context) string {
 // Used by post_backlog_update to resolve an explicit session_id param.
 // Delegates to findInstanceByIDInStore (tools_goal.go), the body shared with
 // goalHandlers.findInstanceByID rather than duplicated per handler struct.
-func (h *backlogHandlers) findInstanceByID(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func (h *backlogHandlers) findInstanceByID(sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	return findInstanceByIDInStore(h.store, sessionID)
 }
 
@@ -89,7 +92,7 @@ func (h *backlogHandlers) findInstanceByID(sessionID string) (*session.Instance,
 // lookup that must never fail the call. Delegates to
 // findInstanceByUUIDInStore (tools_goal.go), shared with
 // goalHandlers.findInstanceByUUID.
-func (h *backlogHandlers) findInstanceByUUID(uuid string) (*session.Instance, *mcpgo.CallToolResult) {
+func (h *backlogHandlers) findInstanceByUUID(uuid string) (*instance.Instance, *mcpgo.CallToolResult) {
 	return findInstanceByUUIDInStore(h.store, uuid)
 }
 
@@ -164,16 +167,16 @@ type stageLister interface {
 // validates the status filter against when no stageLister is wired (see
 // backlogHandlers.stageEngine and validateBacklogStatus) — matching
 // session.BacklogStatus's 9 built-in values.
-var validBacklogStatuses = []session.BacklogStatus{
-	session.BacklogStatusIdea,
-	session.BacklogStatusRefining,
-	session.BacklogStatusReady,
-	session.BacklogStatusQueued,
-	session.BacklogStatusInProgress,
-	session.BacklogStatusReview,
-	session.BacklogStatusPRPending,
-	session.BacklogStatusDone,
-	session.BacklogStatusArchived,
+var validBacklogStatuses = []domain.BacklogStatus{
+	domain.BacklogStatusIdea,
+	domain.BacklogStatusRefining,
+	domain.BacklogStatusReady,
+	domain.BacklogStatusQueued,
+	domain.BacklogStatusInProgress,
+	domain.BacklogStatusReview,
+	domain.BacklogStatusPRPending,
+	domain.BacklogStatusDone,
+	domain.BacklogStatusArchived,
 }
 
 // validStatusFilterNames returns the status-filter values list_backlog_items
@@ -249,9 +252,9 @@ func paginateBacklogItems(items []*sessionv1.BacklogItem, limit, offset int) (pa
 // custom stage is a full transition/liveness graph citizen but does not
 // automatically inherit MCP self-resolve eligibility — that requires an
 // explicit gate-model attachment, out of this project's scope.
-var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
-	session.BacklogStatusInProgress: true,
-	session.BacklogStatusPRPending:  true,
+var allowedSelfResolveSourceStatuses = map[domain.BacklogStatus]bool{
+	domain.BacklogStatusInProgress: true,
+	domain.BacklogStatusPRPending:  true,
 }
 
 // validateSelfResolveSource is the chokepoint request_review calls to obtain a validated source status. Downstream code
@@ -262,8 +265,8 @@ var allowedSelfResolveSourceStatuses = map[session.BacklogStatus]bool{
 // Scope boundary (Story 2.1.4): validates against allowedSelfResolveSourceStatuses,
 // which is intentionally built-in-only — see that map's doc comment for the
 // "does not automatically inherit" resolution a custom stage falls under.
-func validateSelfResolveSource(item *session.BacklogItemData, toolName string) (session.BacklogStatus, error) {
-	s := session.BacklogStatus(item.Status)
+func validateSelfResolveSource(item *backlogdto.BacklogItemData, toolName string) (domain.BacklogStatus, error) {
+	s := domain.BacklogStatus(item.Status)
 	if !allowedSelfResolveSourceStatuses[s] {
 		return "", fmt.Errorf("item is at status %q — %s only allowed from in_progress or pr_pending", item.Status, toolName)
 	}
@@ -310,11 +313,17 @@ type backlogHandlers struct {
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
 	backlogSvc *backlogsvc.BacklogService
 
+	// plugins resolves the tracker plugins behind import_linear_issue / import_jira_issue.
+	plugins *session.PluginRegistry
+
+	// refParser parses the issue_url argument of the tracker import tools.
+	refParser TrackerRefParser
+
 	// fetchLinearIssue / fetchJiraIssue back import_linear_issue / import_jira_issue.
-	// Default to the real plugins' FetchIssue when nil; overridable in tests to
+	// Default to the registry plugins' FetchIssue when nil; overridable in tests to
 	// avoid real network calls.
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
-	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)
+	fetchJiraIssue   func(ctx context.Context, ref JiraIssueRef) (session.ExternalItem, error)
 
 	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
 	backlogReaderOverride func() bool
@@ -342,7 +351,7 @@ type backlogHandlers struct {
 	// its repository to the concrete *EntRepository (session/storage.go),
 	// so it has no swappable-Repository test seam of its own. This field
 	// mirrors verifyPRMatchesBranch/resolveSessionBranch's existing shape.
-	listItemSessionsFn func(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+	listItemSessionsFn func(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
 
 	// autoReopener backs submit_review_verdict's eager review->in_progress
 	// transition on FAIL/PARTIAL/UNVERIFIABLE verdicts (BUG-047: a reviewer
@@ -352,7 +361,7 @@ type backlogHandlers struct {
 	// the pre-existing session-exit/sweep paths. The same
 	// session.AutoReopenSpawner *services.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
-	autoReopener backlog.AutoReopenSpawner
+	autoReopener reviewgate.AutoReopenSpawner
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
@@ -367,7 +376,7 @@ type backlogHandlers struct {
 	// tests to deterministically control the read/write interleaving between
 	// two concurrent request_review calls — mirrors listItemSessionsFn's
 	// existing shape.
-	getBacklogItemFn func(ctx context.Context, itemID string) (*session.BacklogItemData, error)
+	getBacklogItemFn func(ctx context.Context, itemID string) (*backlogdto.BacklogItemData, error)
 
 	// resolveCallerGitHubLogin resolves the GitHub login of the identity this
 	// server is authenticated as, used by report_pr_created's override path
@@ -426,7 +435,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
@@ -434,11 +443,11 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Build human-readable text output.
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s\n", backlog.SanitizeForAgentContext(item.Title, 200))
+	fmt.Fprintf(&sb, "# %s\n", pipeline.SanitizeForAgentContext(item.Title, 200))
 	fmt.Fprintf(&sb, "Priority: %d | Status: %s\n\n", item.Priority, item.Status)
 
 	// Acceptance criteria checklist.
-	criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, parseErr := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if parseErr == nil && len(criteria) > 0 {
 		sb.WriteString("## Acceptance Criteria\n")
 		for i, c := range criteria {
@@ -451,14 +460,14 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			default:
 				marker = "[ ]"
 			}
-			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, backlog.SanitizeForAgentContext(c.Text, 500))
+			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, pipeline.SanitizeForAgentContext(c.Text, 500))
 		}
 		sb.WriteString("\n")
 	}
 
 	// Description.
 	if item.Description != "" {
-		backlog.WriteDescriptionSection(&sb, item.Description, 2000)
+		pipeline.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
 	h.writeDependenciesSection(ctx, &sb, itemID)
@@ -470,19 +479,19 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("## Latest Review Verdict\n")
 		fmt.Fprintf(&sb, "Outcome: %s\n", verdict.OverallOutcome)
 		if verdict.Summary != "" {
-			fmt.Fprintf(&sb, "Reviewer summary: %s\n", backlog.SanitizeForAgentContext(verdict.Summary, 500))
+			fmt.Fprintf(&sb, "Reviewer summary: %s\n", pipeline.SanitizeForAgentContext(verdict.Summary, 500))
 		}
-		var perCriterion []session.CriterionVerdict
+		var perCriterion []domain.CriterionVerdict
 		if verdict.PerCriterion != "" {
 			if jsonErr := json.Unmarshal([]byte(verdict.PerCriterion), &perCriterion); jsonErr != nil {
 				log.WarningLog().Printf("get_backlog_item: failed to parse per-criterion verdicts for item %s: %v", itemID, jsonErr)
 			}
 		}
 		for _, v := range perCriterion {
-			if v.Outcome == session.ReviewOutcomePass {
+			if v.Outcome == domain.ReviewOutcomePass {
 				continue
 			}
-			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, backlog.SanitizeForAgentContext(v.Evidence, 300))
+			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, pipeline.SanitizeForAgentContext(v.Evidence, 300))
 		}
 		sb.WriteString("\n")
 	}
@@ -529,7 +538,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			if author == "" {
 				author = manualCallerSentinel
 			}
-			fmt.Fprintf(&sb, "- note from %s at %s: %s\n", author, n.CreatedAt.Format(time.RFC3339), backlog.SanitizeForAgentContext(n.Message, 500))
+			fmt.Fprintf(&sb, "- note from %s at %s: %s\n", author, n.CreatedAt.Format(time.RFC3339), pipeline.SanitizeForAgentContext(n.Message, 500))
 		}
 		sb.WriteString("\n")
 	}
@@ -563,7 +572,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
-		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", domain.MaxSameSessionReviewAttempts)
 		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary for each PR you open, as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
@@ -594,7 +603,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 // latestReviewVerdict returns the most recently submitted ReviewVerdict for the item,
 // or nil if none exists yet. ListItemSessions orders ascending by created_at, so the
 // last session carrying a verdict is the most recent one.
-func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID string) *session.ReviewVerdictSummary {
+func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID string) *backlogdto.ReviewVerdictSummary {
 	sessions, err := storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("get_backlog_item: failed to list item sessions for %s: %v", itemID, err)
@@ -605,8 +614,8 @@ func latestReviewVerdict(ctx context.Context, storage *session.Storage, itemID s
 
 // latestVerdictFromSessions picks the newest verdict by CreatedAt rather than by
 // session order, which a later-created session without a verdict can't skew.
-func latestVerdictFromSessions(sessions []session.ItemSessionSummary) *session.ReviewVerdictSummary {
-	var latest *session.ReviewVerdictSummary
+func latestVerdictFromSessions(sessions []backlogdto.ItemSessionSummary) *backlogdto.ReviewVerdictSummary {
+	var latest *backlogdto.ReviewVerdictSummary
 	for _, s := range sessions {
 		if s.ReviewVerdict != nil && (latest == nil || !s.ReviewVerdict.CreatedAt.Before(latest.CreatedAt)) {
 			latest = s.ReviewVerdict
@@ -618,9 +627,9 @@ func latestVerdictFromSessions(sessions []session.ItemSessionSummary) *session.R
 // latestReviewEntryTime returns when item most recently entered review — the
 // moment of the latest request_review (or equivalent routing) — from its status
 // history. ok is false when the history holds no such transition.
-func latestReviewEntryTime(item *session.BacklogItemData) (t time.Time, ok bool) {
+func latestReviewEntryTime(item *backlogdto.BacklogItemData) (t time.Time, ok bool) {
 	for _, ev := range item.StatusEvents {
-		if ev.ToStatus == string(session.BacklogStatusReview) && ev.CreatedAt.After(t) {
+		if ev.ToStatus == string(domain.BacklogStatusReview) && ev.CreatedAt.After(t) {
 			t, ok = ev.CreatedAt, true
 		}
 	}
@@ -629,7 +638,7 @@ func latestReviewEntryTime(item *session.BacklogItemData) (t time.Time, ok bool)
 
 // isStaleVerdict reports whether verdict was recorded before item's latest entry
 // into review, i.e. it answers an earlier review request, not the current one.
-func isStaleVerdict(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary) bool {
+func isStaleVerdict(item *backlogdto.BacklogItemData, verdict *backlogdto.ReviewVerdictSummary) bool {
 	if verdict == nil {
 		return false
 	}
@@ -640,11 +649,11 @@ func isStaleVerdict(item *session.BacklogItemData, verdict *session.ReviewVerdic
 // canRecoverFromReview reports whether an item sitting in review can be
 // re-requested: no reviewer is live and the latest verdict is missing, stale, or
 // not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
-func canRecoverFromReview(item *session.BacklogItemData, sessions []session.ItemSessionSummary, verdict *session.ReviewVerdictSummary) bool {
+func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary, verdict *backlogdto.ReviewVerdictSummary) bool {
 	if backlogsvc.HasActiveReviewSession(sessions) {
 		return false
 	}
-	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(session.ReviewVerdictPass)
+	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(domain.ReviewVerdictPass)
 }
 
 // resolveItemLink verifies that callerUUID is linked to itemID, returning the
@@ -658,18 +667,18 @@ func canRecoverFromReview(item *session.BacklogItemData, sessions []session.Item
 // backlog-item ownership check shares this exact logic instead of an
 // independently-maintained copy (durable-guidance-request plan, Task
 // 2.1.2a-pre).
-func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
+func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
 	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
 	switch linkErr.Code {
 	case session.ItemLinkNotFound:
-		return session.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
+		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
 	case session.ItemLinkPermissionDenied:
-		return session.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
+		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
-		return session.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
+		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
 	}
 }
 
@@ -738,7 +747,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 	}
 	if payload.Item != nil {
 		res.Status = payload.Item.Status
-		status := session.BacklogStatus(payload.Item.Status)
+		status := domain.BacklogStatus(payload.Item.Status)
 		if session.IsTerminalStatus(status) {
 			res.IsTerminal = true
 		}
@@ -770,8 +779,8 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 // unambiguous answer from a single state read (no prior state to diff
 // against for status_changed/item_removed). Returns nil when nothing
 // pre-satisfies.
-func currentStateWaitResult(item *session.BacklogItemData, verdict *session.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
-	status := session.BacklogStatus(item.Status)
+func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdto.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
+	status := domain.BacklogStatus(item.Status)
 	terminal := session.IsTerminalStatus(status)
 
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
@@ -792,7 +801,7 @@ func currentStateWaitResult(item *session.BacklogItemData, verdict *session.Revi
 	// terminal-ness — a "done" (or custom-terminal) item must not satisfy an
 	// eventTypeItemArchived wait (Epic 2.1, Story 2.1.3 sweep — reviewed,
 	// benign).
-	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeItemArchived) && status == session.BacklogStatusArchived {
+	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeItemArchived) && status == domain.BacklogStatusArchived {
 		return &WaitForBacklogEventResult{
 			MCPResult:        MCPResult{Success: true},
 			EventReceived:    true,
@@ -958,7 +967,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 
 	item, err := h.storage.GetBacklogItem(waitCtx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
@@ -974,7 +983,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 	// A verdict wait on a review-status item never needs polling: the app steers the work session when
 	// the verdict lands. After the current-state check so an existing verdict is still returned; skips
 	// the cap counter on purpose. Other filters (archived, status_changed, ...) get no steer, so they still wait.
-	if item.Status == string(session.BacklogStatusReview) && (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) {
+	if item.Status == string(domain.BacklogStatusReview) && (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) {
 		return okResult(h.reviewWaitRefusedResult(itemID)), nil
 	}
 	// After the current-state check so a capped session still sees a verdict that already exists.
@@ -1182,7 +1191,7 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: verified, Source: "mcp",
 	})
 	if err := h.storage.UpdateAcCriterionStatus(auditCtx, itemID, criteriaIndex, acStatus, note); err != nil {
-		if errors.Is(err, session.ErrAcCriterionWaived) {
+		if errors.Is(err, backlogdto.ErrAcCriterionWaived) {
 			return errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d was waived and needs no further work", criteriaIndex), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("update criterion status: %v", err), ""), nil
@@ -1206,9 +1215,9 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 // activeWorkSessionOwner returns the UUID of another live work-role ItemSession on the item,
 // if any. A row with EndedAt == nil only conflicts if liveCheck is nil or reports it alive —
 // a liveness-dead owner is stale, not a conflict, so resuming crashed work isn't blocked.
-func activeWorkSessionOwner(sessions []session.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
+func activeWorkSessionOwner(sessions []backlogdto.ItemSessionSummary, callerUUID string, liveCheck func(sessionUUID string) bool) (string, bool) {
 	for _, s := range sessions {
-		if s.Role != session.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
+		if s.Role != instance.SessionRoleWork || s.EndedAt != nil || s.SessionUUID == callerUUID {
 			continue
 		}
 		if liveCheck != nil && !liveCheck(s.SessionUUID) {
@@ -1260,7 +1269,7 @@ func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallT
 	// Check-then-act, no lock/transaction — two concurrent first-link calls on the same item can
 	// both pass this and both attach. Accepted, documented gap (rare in practice); see plan.md.
 	itemSessions, listErr := h.storage.ListItemSessions(ctx, itemID)
-	if listErr != nil && !errors.Is(listErr, session.ErrNotFound) {
+	if listErr != nil && !errors.Is(listErr, domain.ErrNotFound) {
 		return errResult(ErrInternalError, fmt.Sprintf("list item sessions: %v", listErr), ""), nil
 	}
 	if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID, h.liveCheck); conflict {
@@ -1351,7 +1360,7 @@ func (h *backlogHandlers) getLinkedItem(ctx context.Context, req mcpgo.CallToolR
 		}
 	}
 
-	var is session.ItemSessionSummary
+	var is backlogdto.ItemSessionSummary
 	var lookupErr error
 	if itemID != "" {
 		is, lookupErr = h.storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
@@ -1359,7 +1368,7 @@ func (h *backlogHandlers) getLinkedItem(ctx context.Context, req mcpgo.CallToolR
 		is, lookupErr = h.storage.GetItemSessionBySessionUUID(ctx, callerUUID)
 	}
 	if lookupErr != nil {
-		if errors.Is(lookupErr, session.ErrNotFound) {
+		if errors.Is(lookupErr, domain.ErrNotFound) {
 			return okResult(GetLinkedItemResult{MCPResult: MCPResult{Success: true}, Linked: false, ItemID: itemID}), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("lookup item session: %v", lookupErr), ""), nil
@@ -1430,7 +1439,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// matching this belt-and-suspenders check's pre-existing fail-open behavior; it's
 	// still logged so a silent failure to reject a genuinely dirty worktree is visible.
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
-		paths, pathsErr := backlog.GetWorktreeDirtyPaths(wt.WorktreePath)
+		paths, pathsErr := pipeline.GetWorktreeDirtyPaths(wt.WorktreePath)
 		if pathsErr != nil {
 			log.WarningLog().Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
 		}
@@ -1460,7 +1469,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// FR9 — see validateSelfResolveSource).
 	validStatus, valErr := validateSelfResolveSource(item, "request_review")
 	recoverFromReview := false
-	if valErr != nil && session.BacklogStatus(item.Status) == session.BacklogStatusReview {
+	if valErr != nil && domain.BacklogStatus(item.Status) == domain.BacklogStatusReview {
 		// A session stuck in review (stale/blocked verdict, no live reviewer) must be
 		// able to re-request. Fail closed on a lookup error, like the pr_pending guard.
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
@@ -1473,7 +1482,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		}
 		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
 			recoverFromReview = true
-			validStatus, valErr = session.BacklogStatusInProgress, nil
+			validStatus, valErr = domain.BacklogStatusInProgress, nil
 		}
 	}
 	if valErr != nil {
@@ -1485,7 +1494,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// path's existing behavior (including the pre-existing "zombie reviewer"
 	// edge case) is unchanged. Fail closed on a ListItemSessions error: never
 	// silently fall through as if no reviewer were active.
-	if validStatus == session.BacklogStatusPRPending {
+	if validStatus == domain.BacklogStatusPRPending {
 		itemSessions, lsErr := h.itemSessionsFor(ctx, itemID)
 		if lsErr != nil {
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
@@ -1512,23 +1521,23 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// automatically inherit" resolution as allowedSelfResolveSourceStatuses
 	// (a custom stage is never chosen here even if it were otherwise a
 	// plausible "review-like" destination).
-	targetStatus := session.BacklogStatusReview
+	targetStatus := domain.BacklogStatusReview
 	if item.SkipReviewGate {
-		targetStatus = session.BacklogStatusDone
+		targetStatus = domain.BacklogStatusDone
 	}
 
 	// Recovery: reopen the stuck review first so the transition below writes a fresh
 	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
 	if recoverFromReview {
-		reopen := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
-		_, reopenErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerMCPRequestReview, ItemID: itemID, Observed: item,
-			To: session.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: session.TriggeredByAgent,
+		reopen := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
+		_, reopenErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerMCPRequestReview, ItemID: itemID, Observed: item,
+			To: domain.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: instance.TriggeredByAgent,
 		})
 		if reopenErr != nil {
 			log.InfoLog().Printf("[mcp:request_review] recovery reopen failed: %v", reopenErr)
 			if isTransitionDenied(reopenErr) {
-				return transitionDeniedResult(reopenErr, session.BacklogStatusReview, session.BacklogStatusInProgress), nil
+				return transitionDeniedResult(reopenErr, domain.BacklogStatusReview, domain.BacklogStatusInProgress), nil
 			}
 			return errResult(ErrInternalError, "item state changed since your last read — call get_backlog_item to see its current status", ""), nil
 		}
@@ -1536,14 +1545,14 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 	// Transition item from its validated source status to the target status.
 	// Past a recovery reopen the item changed, so the gate re-reads it.
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
-	transitionReq := session.TransitionRequest{
-		Caller: session.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
+	transitionReq := backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: instance.TriggeredByAgent,
 	}
 	if !recoverFromReview {
 		transitionReq.Observed = item
 	}
-	if targetStatus == session.BacklogStatusDone {
+	if targetStatus == domain.BacklogStatusDone {
 		// The operator configured SkipReviewGate, so no verdict will exist: the
 		// Default guard's own override exemption keeps this flow working under
 		// enforcement. It frees only that guard, never a Configured gate.
@@ -1554,7 +1563,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		if isTransitionDenied(transErr) {
 			return transitionDeniedResult(transErr, validStatus, targetStatus), nil
 		}
-		if errors.Is(transErr, session.ErrPreconditionFailed) {
+		if errors.Is(transErr, domain.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
@@ -1579,7 +1588,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 	log.InfoLog().Printf("[mcp:request_review] session=%s item=%s transitioned to %s message=%q verification_notes_len=%d", callerUUID, itemID, targetStatus, message, len(verificationNotes))
 
-	if targetStatus == session.BacklogStatusDone {
+	if targetStatus == domain.BacklogStatusDone {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
 			"Item %s has SkipReviewGate enabled; marked done directly without a review gate.", itemID,
 		)), nil
@@ -1603,7 +1612,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 // blockedCycleThreshold caps how many times report_blocked may return the
 // same item to ready before escalating to review instead. Mirrors
-// session/stuck_decisions.go's bounceThreshold precedent (3) — an item that
+// session/backlog/stuck/decisions.go's bounceThreshold precedent (3) — an item that
 // keeps landing back in ready for the same external-blocker reason needs a
 // human/reviewer to look at it rather than looping through work sessions
 // indefinitely (the same failure shape the 78-bounce incident documented in
@@ -1653,7 +1662,7 @@ func countBlockedCycles(notes string) int {
 // a session stopped is an external dependency, not completed work.
 //
 // Deliberately does NOT call CountReviewCyclesSince or isBouncing
-// (session/stuck_decisions.go) — those track work<->review round trips
+// (session/backlog/stuck/decisions.go) — those track work<->review round trips
 // looking for non-converging rework, which is a different failure shape than
 // external blocking. Escalation here is driven purely by
 // blockedNoteMarker-prefixed lines in this item's own Notes.
@@ -1686,7 +1695,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	if errRes != nil {
 		return errRes, nil
 	}
-	if itemSession.Role != session.SessionRoleWork {
+	if itemSession.Role != instance.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a blocked item", itemSession.Role), ""), nil
 	}
 
@@ -1700,9 +1709,9 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	// same "does not automatically inherit" resolution: a custom stage is
 	// never an eligible report_blocked source even if it were otherwise
 	// in_progress-like.
-	currentStatus := session.BacklogStatus(item.Status)
+	currentStatus := domain.BacklogStatus(item.Status)
 	switch currentStatus {
-	case session.BacklogStatusInProgress, session.BacklogStatusReview:
+	case domain.BacklogStatusInProgress, domain.BacklogStatusReview:
 		// allowed
 	default:
 		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — report_blocked only allowed from in_progress or review", item.Status), ""), nil
@@ -1713,24 +1722,24 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	// custom stage is never chosen here.
 	priorBlockedCycles := countBlockedCycles(item.Notes)
 	escalated := priorBlockedCycles+1 >= blockedCycleThreshold
-	targetStatus := session.BacklogStatusReady
+	targetStatus := domain.BacklogStatusReady
 	if escalated {
-		targetStatus = session.BacklogStatusReview
+		targetStatus = domain.BacklogStatusReview
 	}
 
 	// An escalation from review has nowhere further to go: the item already
 	// waits in review for a human, and review->review is not an edge.
 	if targetStatus != currentStatus {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
-		if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
-			TriggeredBy: session.TriggeredByAgent,
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
+		if _, transErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
+			TriggeredBy: instance.TriggeredByAgent,
 		}); transErr != nil {
 			log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
 			if isTransitionDenied(transErr) {
 				return transitionDeniedResult(transErr, currentStatus, targetStatus), nil
 			}
-			if errors.Is(transErr, session.ErrPreconditionFailed) {
+			if errors.Is(transErr, domain.ErrPreconditionFailed) {
 				return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 			}
 			return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
@@ -1749,16 +1758,38 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	if escalated {
 		newNotes += fmt.Sprintf("\n%s escalated to review after %d blocked cycles", blockedNoteMarker, priorBlockedCycles+1)
 	}
-	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, backlogdto.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
 		log.WarningLog().Printf("[mcp:report_blocked] failed to persist rationale notes session=%s item=%s: %v", callerUUID, itemID, updateErr)
 	}
 
 	log.InfoLog().Printf("[mcp:report_blocked] session=%s item=%s transitioned to %s rationale=%q escalated=%v", callerUUID, itemID, targetStatus, rationale, escalated)
 
 	if escalated {
+		// An item already in review was announced when it first crossed the
+		// threshold; only a real transition or that first crossing notifies.
+		if targetStatus != currentStatus || priorBlockedCycles+1 == blockedCycleThreshold {
+			h.notifyBlockedEscalation(callerUUID, item, rationale, priorBlockedCycles+1)
+		}
 		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
+// notifyBlockedEscalation tells the operator a decision is needed: the item
+// was parked in review because it hit blockedCycleThreshold, and nothing else
+// surfaces that. INPUT_REQUIRED/HIGH because a human must pick the way forward.
+func (h *backlogHandlers) notifyBlockedEscalation(sessionUUID string, item *backlogdto.BacklogItemData, rationale string, cycles int) {
+	if h.eventBus == nil {
+		return
+	}
+	h.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		"Backlog item needs a decision",
+		fmt.Sprintf("%q was blocked %d times and escalated to review. Latest blocker: %s", item.Title, cycles, rationale),
+		map[string]string{"item_id": item.ID, "reason": "blocked_cycle_escalation"},
+	))
 }
 
 // rejectedNoteMarker prefixes the note request_review appends to
@@ -1777,13 +1808,13 @@ const rejectedNoteMarker = "[request_review:rejected]"
 // persist the audit note must not turn an already-correct rejection into a
 // harder failure for the calling session — it still gets the same error
 // result either way, it just won't be visible in Notes to anyone else.
-func (h *backlogHandlers) recordRejectedRequestReview(ctx context.Context, item *session.BacklogItemData, rejectErr error) {
+func (h *backlogHandlers) recordRejectedRequestReview(ctx context.Context, item *backlogdto.BacklogItemData, rejectErr error) {
 	noteLine := fmt.Sprintf("%s %s", rejectedNoteMarker, rejectErr.Error())
 	newNotes := noteLine
 	if item.Notes != "" {
 		newNotes = item.Notes + "\n" + noteLine
 	}
-	if _, updateErr := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
 		log.WarningLog().Printf("[mcp:request_review] failed to persist rejection note item=%s: %v", item.ID, updateErr)
 	}
 }
@@ -1795,8 +1826,8 @@ func (h *backlogHandlers) recordRejectedRequestReview(ctx context.Context, item 
 // items created before ACs were mandatory must not be rejected forever).
 // Malformed criteria JSON fails open (logged, not rejected) rather than
 // permanently blocking an item on a parse bug.
-func unmetAcCriteriaError(item *session.BacklogItemData) error {
-	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+func unmetAcCriteriaError(item *backlogdto.BacklogItemData) error {
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil {
 		log.WarningLog().Printf("[mcp:request_review] failed to parse acceptance criteria for item=%s: %v", item.ID, err)
 		return nil
@@ -1852,7 +1883,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	if errRes != nil {
 		return errRes, nil
 	}
-	if itemSession.Role != session.SessionRoleWork {
+	if itemSession.Role != instance.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may resume work on an item", itemSession.Role), ""), nil
 	}
 
@@ -1863,20 +1894,20 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	// Scope boundary (Story 2.1.4 precedent): hardcoded built-in-only source
 	// status, same rationale as report_blocked's switch above — resume_work
 	// only ever bridges ready -> in_progress.
-	if session.BacklogStatus(item.Status) != session.BacklogStatusReady {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusReady {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("item is at status %q — resume_work only allowed from ready", item.Status), ""), nil
 	}
 
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
-	if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress, Precondition: precondition,
-		TriggeredBy: session.TriggeredByAgent,
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady), Note: "resume_work"}
+	if _, transErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: domain.BacklogStatusInProgress, Precondition: precondition,
+		TriggeredBy: instance.TriggeredByAgent,
 	}); transErr != nil {
 		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
 		if isTransitionDenied(transErr) {
-			return transitionDeniedResult(transErr, session.BacklogStatusReady, session.BacklogStatusInProgress), nil
+			return transitionDeniedResult(transErr, domain.BacklogStatusReady, domain.BacklogStatusInProgress), nil
 		}
-		if errors.Is(transErr, session.ErrPreconditionFailed) {
+		if errors.Is(transErr, domain.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("transition to in_progress failed: %v", transErr), ""), nil
@@ -1891,7 +1922,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	if item.Notes != "" {
 		newNotes = item.Notes + "\n" + noteLine
 	}
-	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
+	if _, updateErr := h.storage.UpdateBacklogItem(ctx, itemID, backlogdto.BacklogItemUpdate{Notes: &newNotes}, nil); updateErr != nil {
 		log.WarningLog().Printf("[mcp:resume_work] failed to persist resume note session=%s item=%s: %v", callerUUID, itemID, updateErr)
 	}
 
@@ -1928,7 +1959,7 @@ func formatDirtyPathsRejectionMessage(paths []string) string {
 // listItemSessionsFn seam when set, otherwise the real
 // h.storage.ListItemSessions. Used by request_review's FR2 active-reviewer
 // guard.
-func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error) {
+func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error) {
 	if h.listItemSessionsFn != nil {
 		return h.listItemSessionsFn(ctx, itemID)
 	}
@@ -1940,7 +1971,7 @@ func (h *backlogHandlers) itemSessionsFor(ctx context.Context, itemID string) ([
 // request_review's, report_duplicate's, and report_pr_created's
 // pre-transition reads. Mirrors itemSessionsFor/sessionBranch/verifyRef's
 // existing nil-check-then-fallback shape.
-func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) (*session.BacklogItemData, error) {
+func (h *backlogHandlers) getBacklogItemFor(ctx context.Context, itemID string) (*backlogdto.BacklogItemData, error) {
 	if h.getBacklogItemFn != nil {
 		return h.getBacklogItemFn(ctx, itemID)
 	}
@@ -1975,9 +2006,9 @@ type transitionDeniedError struct {
 // failure such as a lost compare-and-swap.
 func isTransitionDenied(err error) bool {
 	for _, sentinel := range []error{
-		session.ErrTransitionNotAllowed, session.ErrGateNotSatisfied,
-		session.ErrACRequired, session.ErrPlanRequired, session.ErrPlanArtifactsRequired, session.ErrPlanArtifactsMissing,
-		session.ErrVerdictRequired, session.ErrCodeNotOnMain, session.ErrVerdictClearRequiredForReady, session.ErrUnresolvedBlockers,
+		domain.ErrTransitionNotAllowed, domain.ErrGateNotSatisfied,
+		domain.ErrACRequired, domain.ErrPlanRequired, domain.ErrPlanArtifactsRequired, domain.ErrPlanArtifactsMissing,
+		domain.ErrVerdictRequired, domain.ErrCodeNotOnMain, domain.ErrVerdictClearRequiredForReady, domain.ErrUnresolvedBlockers,
 	} {
 		if errors.Is(err, sentinel) {
 			return true
@@ -1989,12 +2020,12 @@ func isTransitionDenied(err error) bool {
 // transitionDeniedResult is the structured result of a denied agent transition:
 // the denying layer in blocked_by and a hint that tells the agent to stop and
 // ask rather than retry.
-func transitionDeniedResult(err error, from, to session.BacklogStatus) *mcpgo.CallToolResult {
+func transitionDeniedResult(err error, from, to domain.BacklogStatus) *mcpgo.CallToolResult {
 	blockedBy, hint := blockedByDefaultGuard, "satisfy the guard named in the message, then call again"
 	switch {
-	case errors.Is(err, session.ErrGateNotSatisfied):
+	case errors.Is(err, domain.ErrGateNotSatisfied):
 		blockedBy, hint = blockedByOperatorGate, hintAskOperatorApprove
-	case errors.Is(err, session.ErrTransitionNotAllowed):
+	case errors.Is(err, domain.ErrTransitionNotAllowed):
 		blockedBy, hint = blockedByConfigGraph, hintAskOperatorEnable
 	}
 	// Marshaling plain strings cannot fail, as in errResult.
@@ -2075,19 +2106,19 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	}
 
 	// Build CriterionVerdicts, auto-downgrading to PARTIAL if evidence is empty.
-	cvs := make([]session.CriterionVerdict, len(inputs))
+	cvs := make([]domain.CriterionVerdict, len(inputs))
 	for i, vi := range inputs {
 		class := domain.FailureClass(strings.ToUpper(strings.TrimSpace(vi.FailureClass)))
 		if !class.IsValid() {
 			return errResult(ErrInvalidArgument, fmt.Sprintf("verdict[%d]: unknown failure_class %q", i, vi.FailureClass), "Use NOT_DONE, CANNOT_VERIFY, UNRELATED_FAILURE, ENVIRONMENTAL, WRONG_BRANCH or UNATTAINABLE."), nil
 		}
-		outcome := session.ReviewOutcome(strings.ToUpper(vi.Outcome))
+		outcome := domain.ReviewOutcome(strings.ToUpper(vi.Outcome))
 		evidence := vi.Evidence
 		if evidence == "" {
-			outcome = session.ReviewVerdictPartial
+			outcome = domain.ReviewVerdictPartial
 			evidence = "[no evidence provided — auto-downgraded to PARTIAL]"
 		}
-		cvs[i] = session.CriterionVerdict{
+		cvs[i] = domain.CriterionVerdict{
 			CriterionIndex: vi.CriterionIndex,
 			Outcome:        outcome,
 			Evidence:       evidence,
@@ -2096,7 +2127,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		}
 	}
 
-	overallOutcome := session.AggregateOutcome(cvs)
+	overallOutcome := domain.AggregateOutcome(cvs)
 
 	// Serialize per-criterion verdicts to JSON.
 	perCriterionJSON, jsonErr := json.Marshal(cvs)
@@ -2104,7 +2135,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("serialize verdicts: %v", jsonErr), ""), nil
 	}
 
-	verdictData := session.ReviewVerdictData{
+	verdictData := backlogdto.ReviewVerdictData{
 		ItemSessionID:     itemSession.ID,
 		OverallOutcome:    overallOutcome,
 		PerCriterion:      string(perCriterionJSON),
@@ -2139,7 +2170,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	// go on to exit normally moments later, handleReviewSessionExited's own
 	// (duplicate) AutoReopenAfterFailedReview call simply fails its CAS and
 	// logs — no double-transition, no error surfaced to either caller.
-	if overallOutcome == session.ReviewVerdictFail || overallOutcome == session.ReviewVerdictPartial || overallOutcome == session.ReviewVerdictUnverifiable {
+	if overallOutcome == domain.ReviewVerdictFail || overallOutcome == domain.ReviewVerdictPartial || overallOutcome == domain.ReviewVerdictUnverifiable {
 		if h.autoReopener != nil {
 			// Detached from the request ctx (context.WithoutCancel) and
 			// explicitly time-bounded: AutoReopenAfterFailedReview's only
@@ -2233,7 +2264,7 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 	// get_backlog_item's render-time truncation-to-500-chars for this same field. maxLen
 	// is the same 2000 already enforced above, so this call only strips tags here; it
 	// never truncates since message is already known to be <= maxPostBacklogUpdateMessageLen.
-	sanitizedMessage := backlog.SanitizeForAgentContext(message, maxPostBacklogUpdateMessageLen)
+	sanitizedMessage := pipeline.SanitizeForAgentContext(message, maxPostBacklogUpdateMessageLen)
 
 	// Resolve the author's identity: an explicit session_id param takes precedence over
 	// the caller's own session UUID (mirrors set_session_goal's pattern), since a session
@@ -2256,7 +2287,7 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 	}
 
 	if err := h.storage.AppendActivityNote(ctx, itemID, authorUUID, authorTitle, sanitizedMessage); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("post backlog update: %v", err), ""), nil
@@ -2276,19 +2307,19 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 // brand-new item's criteria always start in. Mirrors acCriteriaToJSON
 // (server/services/backlog_service_lifecycle.go), which starts from proto
 // AcCriterion instead of plain strings.
-func acCriteriaFromStrings(lines []string) (session.AcCriteriaJSON, error) {
+func acCriteriaFromStrings(lines []string) (domain.AcCriteriaJSON, error) {
 	if len(lines) == 0 {
 		return "", nil
 	}
-	criteria := make([]session.AcCriterion, len(lines))
+	criteria := make([]domain.AcCriterion, len(lines))
 	for i, text := range lines {
-		criteria[i] = session.AcCriterion{Index: i, Text: text, Status: session.AcStatusPending}
+		criteria[i] = domain.AcCriterion{Index: i, Text: text, Status: domain.AcStatusPending}
 	}
 	b, err := json.Marshal(criteria)
 	if err != nil {
 		return "", err
 	}
-	return session.AcCriteriaJSON(b), nil
+	return domain.AcCriteriaJSON(b), nil
 }
 
 // createBacklogItem adds a brand-new item to the backlog, same as a human
@@ -2313,11 +2344,11 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	baseBranch, _ := args["base_branch"].(string)
 	notes, _ := args["notes"].(string)
 	category, _ := args["category"].(string)
-	if category != "" && !session.IsValidBacklogCategory(category) {
+	if category != "" && !instance.IsValidBacklogCategory(category) {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid category %q", category), ""), nil
 	}
 
-	priority := session.DefaultBacklogPriority
+	priority := domain.DefaultBacklogPriority
 	if pf, ok := args["priority"].(float64); ok && pf != 0 {
 		priority = int(pf)
 		if priority < 1 || priority > 5 {
@@ -2343,12 +2374,12 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	if bad != nil {
 		return bad, nil
 	}
-	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              title,
 		Description:        description,
 		AcceptanceCriteria: acJSON,
 		Priority:           priority,
-		Status:             string(session.BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 		RepoPath:           repoPath,
 		BaseBranch:         baseBranch,
 		Category:           category,
@@ -2361,7 +2392,7 @@ func (h *backlogHandlers) createBacklogItem(ctx context.Context, req mcpgo.CallT
 	log.InfoLog().Printf("[mcp:create_backlog_item] session=%s item=%s title=%q", callerUUID, created.ID, created.Title)
 	var depNote, depFailures string
 	for _, blocker := range dependsOn {
-		edge := session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: created.ID}
+		edge := backlogdto.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: created.ID}
 		if err := h.storage.AddBacklogItemDependency(ctx, edge); err != nil {
 			depFailures += fmt.Sprintf(" Failed to add dependency on %s: %v.", blocker, err)
 			continue
@@ -2438,11 +2469,11 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		}
 	}
 
-	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       issue.Title,
 		Description: issue.Body,
-		Priority:    session.DefaultBacklogPriority,
-		Status:      string(session.BacklogStatusIdea),
+		Priority:    domain.DefaultBacklogPriority,
+		Status:      string(domain.BacklogStatusIdea),
 		RepoPath:    repoPath,
 		Notes:       fmt.Sprintf("Imported from %s", issue.URL),
 		ExternalID:  strconv.Itoa(ref.IssueNumber),
@@ -2521,10 +2552,10 @@ func duplicateClosureNotePrefix(duplicateRef string) string {
 
 // recordedDuplicateClosure reports whether item's status history already
 // records an archive as a duplicate of duplicateRef.
-func recordedDuplicateClosure(item *session.BacklogItemData, duplicateRef string) bool {
+func recordedDuplicateClosure(item *backlogdto.BacklogItemData, duplicateRef string) bool {
 	prefix := duplicateClosureNotePrefix(duplicateRef)
 	for _, ev := range item.StatusEvents {
-		if ev.ToStatus == string(session.BacklogStatusArchived) && ev.Note != nil && strings.HasPrefix(*ev.Note, prefix) {
+		if ev.ToStatus == string(domain.BacklogStatusArchived) && ev.Note != nil && strings.HasPrefix(*ev.Note, prefix) {
 			return true
 		}
 	}
@@ -2592,7 +2623,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	// two racing calls' reads to land before either write (CAS-failure test).
 	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
-		if errors.Is(getErr, session.ErrNotFound) {
+		if errors.Is(getErr, domain.ErrNotFound) {
 			// Reuse the shared helper's ITEM_NOT_FOUND result so remediation
 			// text stays consistent with every other mutating tool.
 			if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
@@ -2603,9 +2634,9 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
 	}
 
-	status := session.BacklogStatus(item.Status)
-	if status == session.BacklogStatusArchived || status == session.BacklogStatusDone {
-		if status == session.BacklogStatusArchived && recordedDuplicateClosure(item, duplicateRef) {
+	status := domain.BacklogStatus(item.Status)
+	if status == domain.BacklogStatusArchived || status == domain.BacklogStatusDone {
+		if status == domain.BacklogStatusArchived && recordedDuplicateClosure(item, duplicateRef) {
 			return mcpgo.NewToolResultText(fmt.Sprintf(
 				"item %s is already archived as a duplicate of %s — no changes made.", itemID, duplicateRef,
 			)), nil
@@ -2622,7 +2653,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	if lsErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("could not verify no other session is active on this item — retry: %v", lsErr), ""), nil
 	}
-	var ownOpenLinks []session.ItemSessionSummary
+	var ownOpenLinks []backlogdto.ItemSessionSummary
 	for _, is := range itemSessions {
 		if is.EndedAt != nil {
 			continue
@@ -2651,15 +2682,15 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	}
 
 	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
-	if _, archErr := h.storage.GatedArchive(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
+	if _, archErr := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: instance.TriggeredByAgent,
 	}); archErr != nil {
 		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
 		if isTransitionDenied(archErr) {
-			return transitionDeniedResult(archErr, status, session.BacklogStatusArchived), nil
+			return transitionDeniedResult(archErr, status, domain.BacklogStatusArchived), nil
 		}
-		if errors.Is(archErr, session.ErrPreconditionFailed) {
+		if errors.Is(archErr, domain.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("archive failed: %v", archErr), ""), nil
@@ -2688,16 +2719,22 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 // so it is checked against the service's in-flight record; headless re-review
 // has no liveness signal; and any other role (e.g. Jules, which runs remotely)
 // is treated as live. With no liveCheck/backlogSvc wired it fails closed.
-func (h *backlogHandlers) linkedSessionLive(itemID string, is session.ItemSessionSummary) bool {
-	switch {
-	case strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix):
-		return h.backlogSvc == nil || h.backlogSvc.IsTriageLive(itemID)
-	case strings.HasPrefix(is.SessionUUID, services.HeadlessReReviewUUIDPrefix):
-		return true
+func (h *backlogHandlers) linkedSessionLive(itemID string, is backlogdto.ItemSessionSummary) bool {
+	if role, headless := domain.HeadlessRoleOf(is.SessionUUID); headless {
+		return h.headlessLive(role, itemID)
 	}
 	switch is.Role {
-	case session.SessionRoleWork, session.SessionRoleReview, session.SessionRoleDiagnose, session.SessionRoleTriage:
+	case instance.SessionRoleWork, instance.SessionRoleReview, instance.SessionRoleDiagnose, instance.SessionRoleTriage:
 		return h.liveCheck == nil || h.liveCheck(is.SessionUUID)
+	}
+	return true
+}
+
+// headlessLive is the per-role liveness policy for headless sessions. Roles
+// without an in-flight record (re-review) count as live.
+func (h *backlogHandlers) headlessLive(role domain.HeadlessRole, itemID string) bool {
+	if role == domain.HeadlessRoleTriage {
+		return h.backlogSvc == nil || h.backlogSvc.IsTriageLive(itemID)
 	}
 	return true
 }
@@ -2706,7 +2743,7 @@ func (h *backlogHandlers) linkedSessionLive(itemID string, is session.ItemSessio
 // different, existing, non-archived item — the evidence bar for a backlog-to-
 // backlog duplicate, in place of GitHub existence. It does not move the
 // duplicate's dependencies, notes, or tags to the survivor.
-func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item *session.BacklogItemData, targetID string) *mcpgo.CallToolResult {
+func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item *backlogdto.BacklogItemData, targetID string) *mcpgo.CallToolResult {
 	if err := validateUUID(targetID); err != nil {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref %q: %v", backlogDuplicateRefPrefix+targetID, err), "")
 	}
@@ -2715,12 +2752,12 @@ func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item
 	}
 	target, err := h.getBacklogItemFor(ctx, targetID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target backlog item %q not found", targetID), "")
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get duplicate_ref target: %v", err), "")
 	}
-	if session.BacklogStatus(target.Status) == session.BacklogStatusArchived {
+	if domain.BacklogStatus(target.Status) == domain.BacklogStatusArchived {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target %q is archived — point at the surviving item instead", targetID), "")
 	}
 	return nil
@@ -2794,7 +2831,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse suggestions.
-	var suggestions []backlog.TriageSuggestion
+	var suggestions []pipeline.TriageSuggestion
 	if rawSuggestions, exists := args["suggestions"]; exists {
 		if arr, ok := rawSuggestions.([]interface{}); ok {
 			for i, rs := range arr {
@@ -2802,7 +2839,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var ts backlog.TriageSuggestion
+				var ts pipeline.TriageSuggestion
 				if err := json.Unmarshal(b, &ts); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -2812,7 +2849,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse tasks (optional).
-	var tasks []backlog.TriageTask
+	var tasks []pipeline.TriageTask
 	if rawTasks, exists := args["tasks"]; exists {
 		if arr, ok := rawTasks.([]interface{}); ok {
 			for i, rt := range arr {
@@ -2820,7 +2857,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var tt backlog.TriageTask
+				var tt pipeline.TriageTask
 				if err := json.Unmarshal(b, &tt); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -2835,9 +2872,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	// Build triage result JSON payload using canonical struct (prevents schema drift).
 	type triageResultPayload struct {
-		Summary     string                     `json:"summary"`
-		Suggestions []backlog.TriageSuggestion `json:"suggestions"`
-		Tasks       []backlog.TriageTask       `json:"tasks,omitempty"`
+		Summary     string                      `json:"summary"`
+		Suggestions []pipeline.TriageSuggestion `json:"suggestions"`
+		Tasks       []pipeline.TriageTask       `json:"tasks,omitempty"`
 	}
 	triagePayload := triageResultPayload{
 		Summary:     summary,
@@ -2853,7 +2890,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	// We use UpdateBacklogItem for plan_artifacts_path and acceptance_criteria if provided.
 	planArtifactsPath, _ := args["plan_artifact_path"].(string)
 
-	itemUpdate := session.BacklogItemUpdate{}
+	itemUpdate := backlogdto.BacklogItemUpdate{}
 	if planArtifactsPath != "" {
 		pap := planArtifactsPath
 		itemUpdate.PlanArtifactsPath = &pap
@@ -2870,7 +2907,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 			itemUpdate.Priority = &priority
 		}
 	}
-	if itemCategory, ok := args["item_category"].(string); ok && itemCategory != "" && session.IsValidBacklogCategory(itemCategory) {
+	if itemCategory, ok := args["item_category"].(string); ok && itemCategory != "" && instance.IsValidBacklogCategory(itemCategory) {
 		itemUpdate.Category = &itemCategory
 	}
 
@@ -2884,10 +2921,10 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 			if loadErr != nil {
 				return errResult(ErrInternalError, fmt.Sprintf("load item for AC merge: %v", loadErr), ""), nil
 			}
-			existing, _ := session.ParseAcCriteria(existingItem.AcceptanceCriteria)
+			existing, _ := domain.ParseAcCriteria(existingItem.AcceptanceCriteria)
 
 			// Parse incoming criteria from the raw MCP payload.
-			incomingCriteria := make([]session.AcCriterion, 0, len(arr))
+			incomingCriteria := make([]domain.AcCriterion, 0, len(arr))
 			for i, raw := range arr {
 				b, marshalErr := json.Marshal(raw)
 				if marshalErr != nil {
@@ -2910,16 +2947,16 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 					status = "pending"
 				}
 				// Waivers are recorded only through the audited WaiveAcCriterion path.
-				if session.AcStatus(status) == session.AcStatusWaived {
+				if domain.AcStatus(status) == domain.AcStatusWaived {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("acceptance_criteria[%d]: status %q cannot be set from an agent tool", i, status), ""), nil
 				}
-				if slices.ContainsFunc(existing, func(c session.AcCriterion) bool { return c.Index == idx && c.Status == session.AcStatusWaived }) {
+				if slices.ContainsFunc(existing, func(c domain.AcCriterion) bool { return c.Index == idx && c.Status == domain.AcStatusWaived }) {
 					continue // keep the recorded waiver; an agent edit cannot overwrite it
 				}
-				incomingCriteria = append(incomingCriteria, session.AcCriterion{Index: idx, Text: ac.Text, Status: session.AcStatus(status)})
+				incomingCriteria = append(incomingCriteria, domain.AcCriterion{Index: idx, Text: ac.Text, Status: domain.AcStatus(status)})
 			}
 
-			acJSON, mergeErr := session.MergeAcCriteria(existing, incomingCriteria)
+			acJSON, mergeErr := instance.MergeAcCriteria(existing, incomingCriteria)
 			if mergeErr != nil {
 				return errResult(ErrInvalidArgument, fmt.Sprintf("merge acceptance_criteria: %v", mergeErr), ""), nil
 			}

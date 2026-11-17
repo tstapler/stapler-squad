@@ -7,6 +7,7 @@ package session
 import (
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -30,7 +31,7 @@ type InstanceReader interface {
 	GetStatus() int
 
 	// GetLifecycleStatus returns the current lifecycle status as a typed Status value.
-	GetLifecycleStatus() Status
+	GetLifecycleStatus() domain.Status
 
 	// Typed state predicates — prefer these over comparing GetStatus() against constants.
 	IsActive() bool

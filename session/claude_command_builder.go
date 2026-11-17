@@ -3,7 +3,7 @@ package session
 import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
-	"regexp"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"strings"
 )
 
@@ -12,14 +12,14 @@ import (
 // conversation continuity across session restarts.
 type ClaudeCommandBuilder struct {
 	baseProgram   string
-	claudeSession *ClaudeSessionData
+	claudeSession *domain.ClaudeSessionData
 }
 
 // NewClaudeCommandBuilder creates a new command builder for constructing Claude CLI commands.
 // Parameters:
 //   - baseProgram: The base command string (e.g., "claude", "claude --model sonnet", "aider")
 //   - claudeSession: Optional session data for resumption support (can be nil)
-func NewClaudeCommandBuilder(baseProgram string, claudeSession *ClaudeSessionData) *ClaudeCommandBuilder {
+func NewClaudeCommandBuilder(baseProgram string, claudeSession *domain.ClaudeSessionData) *ClaudeCommandBuilder {
 	return &ClaudeCommandBuilder{
 		baseProgram:   baseProgram,
 		claudeSession: claudeSession,
@@ -50,7 +50,7 @@ func (b *ClaudeCommandBuilder) Build() string {
 
 	// Validate session ID format before using it
 	sessionID := b.claudeSession.ConversationUUID
-	if !isValidUUID(sessionID) {
+	if !domain.IsValidUUID(sessionID) {
 		log.Warn("invalid uuid format for session id, skipping resumption", "uuid", sessionID)
 		return b.baseProgram
 	}
@@ -83,13 +83,4 @@ func (b *ClaudeCommandBuilder) isClaudeCommand() bool {
 	}
 
 	return strings.ToLower(commandName) == "claude"
-}
-
-var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
-// isValidUUID validates that a string matches UUID v4 format.
-// Format: 8-4-4-4-12 hexadecimal digits (e.g., 550e8400-e29b-41d4-a716-446655440000)
-// This validation is critical because Claude CLI requires valid UUIDs for session IDs.
-func isValidUUID(uuid string) bool {
-	return uuidRegex.MatchString(strings.ToLower(uuid))
 }

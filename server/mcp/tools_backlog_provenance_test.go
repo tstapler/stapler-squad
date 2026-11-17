@@ -12,12 +12,14 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type fakeProvenanceSource struct{ host hostclaim.HostIdentity }
 
-func (f fakeProvenanceSource) PRProvenanceComment(item *session.BacklogItemData) (string, bool) {
+func (f fakeProvenanceSource) PRProvenanceComment(item *backlogdto.BacklogItemData) (string, bool) {
 	return session.FormatPRProvenanceComment(f.host.ID, "ssq://laptop"+session.BacklogItemDeepLinkPath(item)), true
 }
 
@@ -27,13 +29,13 @@ type postedComment struct {
 	body   string
 }
 
-func reportPRWithProvenance(t *testing.T, post func(context.Context, githubpkg.RepoRef, int, string) error) (*session.BacklogItemData, hostclaim.HostIdentity, string, string) {
+func reportPRWithProvenance(t *testing.T, post func(context.Context, githubpkg.RepoRef, int, string) error) (*backlogdto.BacklogItemData, hostclaim.HostIdentity, string, string) {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	host, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
 	storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	handler := &backlogHandlers{
 		storage:            storage,
 		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
@@ -63,7 +65,7 @@ func TestReportPRCreated_should_PostProvenanceComment_When_TransitionSucceeds(t 
 	})
 
 	assert.Contains(t, out, "recorded")
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	publicID, hasPublic := fetched.PublicID()
 	require.True(t, hasPublic)
 	require.Len(t, posted, 1)
@@ -83,13 +85,13 @@ func TestReportPRCreated_should_StillSucceed_When_ProvenanceCommentFails(t *test
 	})
 
 	assert.Contains(t, out, "recorded", "provenance stamping is best-effort")
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 42, fetched.PrNumber)
 }
 
 func TestReportPRCreated_should_NotPostComment_When_NoProvenanceSourceWired(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	calls := 0
 	handler := &backlogHandlers{
 		storage:            storage,

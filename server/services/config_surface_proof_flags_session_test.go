@@ -10,8 +10,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestConfigSurfaceProof_HiddenSessionReadonlyGuards_ChangesWriteToHiddenSession(t *testing.T) {
@@ -29,7 +30,7 @@ func TestConfigSurfaceProof_HiddenSessionReadonlyGuards_ChangesWriteToHiddenSess
 
 func TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]FlagAuditPolicy{hiddenSessionReplyFlagName: replyFlagAuditPolicy})
+	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{hiddenSessionReplyFlagName: replyFlagAuditPolicy})
 	e.fix.svc.wireReplyFlag()
 	replies := 0
 
@@ -43,14 +44,14 @@ func TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome(t *testing.T)
 func TestConfigSurfaceProof_TerminalWriteLease_ChangesLeaseExclusivity(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	svc := newGatedFlagService(t)
-	inst := &session.Instance{UUID: "bkf-lease"}
+	inst := &instance.Instance{UUID: "bkf-lease"}
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		require.NoError(t, flagUpdateCtx(t.Context(), svc.featureFlagSvc, terminalWriteLeaseFlagName, setting.(bool)))
-		first, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+		first, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		require.True(t, ok)
 		defer first.Release()
-		second, secondOK := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+		second, secondOK := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		second.Release()
 		return secondOK
 	}, true, false)

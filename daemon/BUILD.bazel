@@ -9,6 +9,7 @@ go_library(
         "//config",
         "//log",
         "//session",
+        "//session/instance",
         "@com_github_fsnotify_fsnotify//:fsnotify",
     ],
 )

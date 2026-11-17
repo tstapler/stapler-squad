@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 type liveWorkMetricSet struct {
-	results *counterByLabel
+	results *instance.CounterByLabel
 	otel    metric.Int64Counter
 
 	probeWired atomic.Int64
@@ -37,7 +38,7 @@ type liveWorkMetricSet struct {
 var liveWorkMetrics = newLiveWorkMetricSet()
 
 func newLiveWorkMetricSet() *liveWorkMetricSet {
-	m := &liveWorkMetricSet{results: newCounterByLabel()}
+	m := &liveWorkMetricSet{results: instance.NewCounterByLabel()}
 	meter := telemetry.GetMeter()
 	m.otel, _ = meter.Int64Counter(MetricPRLiveWorkHoldTotal)
 	m.wiredGauge, _ = meter.Int64Gauge(MetricLiveWorkProbeWired)
@@ -46,14 +47,14 @@ func newLiveWorkMetricSet() *liveWorkMetricSet {
 }
 
 func (m *liveWorkMetricSet) count(result string) {
-	m.results.add(result)
+	m.results.Add(result)
 	if m.otel != nil {
 		m.otel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", result)))
 	}
 }
 
 // LiveWorkResultCount is ssq_pr_live_work_hold_total{result} in this process.
-func LiveWorkResultCount(result string) int64 { return liveWorkMetrics.results.get(result) }
+func LiveWorkResultCount(result string) int64 { return liveWorkMetrics.results.Get(result) }
 
 // SetLiveWorkProbeWired records ssq_live_work_probe_wired (1 wired, 0 not).
 func SetLiveWorkProbeWired(wired bool) {

@@ -13,7 +13,9 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // lockedBuffer lets the server's background goroutines log while the test reads.
@@ -68,7 +70,7 @@ func TestBuildServerDependencies_WiresSelectorIntoBacklogServiceAndSyncLoop_When
 	require.NotNil(t, selector)
 
 	// BacklogService holds the selector.
-	got, ok := rt.BacklogService.WorkflowEngine().(*session.SwitchableWorkflowEngine)
+	got, ok := rt.BacklogService.WorkflowEngine().(*workflowengine.SwitchableWorkflowEngine)
 	require.Truef(t, ok, "BacklogService engine is %T, want *session.SwitchableWorkflowEngine", rt.BacklogService.WorkflowEngine())
 	require.Same(t, selector, got)
 
@@ -76,16 +78,16 @@ func TestBuildServerDependencies_WiresSelectorIntoBacklogServiceAndSyncLoop_When
 	require.NotNil(t, rt.BacklogController)
 	require.NoError(t, rt.BacklogController.Enable(context.Background()))
 	t.Cleanup(func() { _ = rt.BacklogController.Disable() })
-	syncEngine, ok := rt.BacklogController.SyncLoopWorkflowEngine().(*session.SwitchableWorkflowEngine)
+	syncEngine, ok := rt.BacklogController.SyncLoopWorkflowEngine().(*workflowengine.SwitchableWorkflowEngine)
 	require.True(t, ok, "SyncLoop engine must be the selector")
 	require.Same(t, selector, syncEngine)
 
 	// The lifecycle listener keeps the concrete configured engine, never the selector.
 	listenerEngine := rt.BacklogLifecycleListener.WorkflowEngine()
 	require.NotNil(t, listenerEngine)
-	_, isSelector := listenerEngine.(*session.SwitchableWorkflowEngine)
+	_, isSelector := listenerEngine.(*workflowengine.SwitchableWorkflowEngine)
 	require.False(t, isSelector, "the lifecycle listener must not be handed the selector")
-	_, isConfigured := listenerEngine.(*session.ConfiguredWorkflowEngine)
+	_, isConfigured := listenerEngine.(*workflowengine.ConfiguredWorkflowEngine)
 	require.Truef(t, isConfigured, "listener engine is %T, want *session.ConfiguredWorkflowEngine", listenerEngine)
 
 	require.NotNil(t, rt.WorkflowEngine.Recorder)
@@ -106,18 +108,18 @@ func TestBuildServerDependencies_ClassModesFollowTheirOwnFlags(t *testing.T) {
 	rt, _ := buildNarrowRuntimeDeps(t)
 	modes := rt.WorkflowEngine.Modes
 	require.NotNil(t, modes)
-	require.Equal(t, session.ModeShadow, modes.ModeFor(session.ClassAgent), "agent enforce ships off")
+	require.Equal(t, workflowengine.ModeShadow, modes.ModeFor(domain.ClassAgent), "agent enforce ships off")
 
 	// The selector answers per class from the same source: an unchecked agent
 	// write (idea->done has no edge) is allowed until the agent class enforces.
-	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork)
+	spec, ok := domain.LookupTransitionCaller(domain.CallerMCPResumeWork)
 	require.True(t, ok)
-	require.True(t, rt.WorkflowEngine.Engine.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil))
+	require.True(t, rt.WorkflowEngine.Engine.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil))
 }
 
 func TestTransitionGateStartupLine_ReportsUnwiredStorage(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	w := newWorkflowEngineWiring(session.NewDefaultWorkflowEngine(), nil, nil, config.LoadConfig)
+	w := newWorkflowEngineWiring(workflowengine.NewDefaultWorkflowEngine(), nil, nil, config.LoadConfig)
 	storage := &session.Storage{}
 
 	require.Equal(t, "workflow engine gate: transition_gate=unwired reporter=unwired class_modes=operator:shadow,agent:shadow,system:shadow",
@@ -139,7 +141,7 @@ func TestBuildServerDependencies_LogsInvalidatorUnwired_WhenStageConfigEngineCon
 	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
 
-	w := newWorkflowEngineWiring(session.NewDefaultWorkflowEngine(), nil, nil, config.LoadConfig)
+	w := newWorkflowEngineWiring(workflowengine.NewDefaultWorkflowEngine(), nil, nil, config.LoadConfig)
 
 	require.NotNil(t, w.Engine, "a failed stage-config construction must still yield a selector")
 	require.Contains(t, buf.String(), "level=WARN")

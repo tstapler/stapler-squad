@@ -12,6 +12,9 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // This file lives in the external session_test package (not the internal
@@ -50,7 +53,7 @@ func storageOn(t *testing.T, repo *session.EntRepository) *session.Storage {
 // wired in.
 type panickingItemChangePublisher struct{}
 
-func (panickingItemChangePublisher) PublishItemChanged(item *session.BacklogItemData, change session.BacklogItemChange) {
+func (panickingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change backlogdto.BacklogItemChange) {
 	panic("boom")
 }
 
@@ -71,15 +74,15 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for status transition publish test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
-		ExpectedStatus: string(session.BacklogStatusInProgress),
-	}, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusInProgress),
+	}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -87,8 +90,8 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 		require.Equal(t, pkgevents.EventBacklogItemChanged, ev.Type)
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeStatusTransition, ev.BacklogItemPayload.Kind)
-		assert.Equal(t, string(session.BacklogStatusInProgress), ev.BacklogItemPayload.OldStatus)
-		assert.Equal(t, string(session.BacklogStatusDone), ev.BacklogItemPayload.NewStatus)
+		assert.Equal(t, string(domain.BacklogStatusInProgress), ev.BacklogItemPayload.OldStatus)
+		assert.Equal(t, string(domain.BacklogStatusDone), ev.BacklogItemPayload.NewStatus)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event")
 	}
@@ -110,19 +113,19 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for lost-race no-publish test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
 	// Stale precondition: the item is actually "in_progress", not "review", so
 	// the CAS WHERE clause matches zero rows.
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
-		ExpectedStatus: string(session.BacklogStatusReview),
-	}, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusReview),
+	}, instance.TriggeredBySystem)
 	require.Error(t, err)
-	require.ErrorIs(t, err, session.ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	select {
 	case ev := <-sub:
@@ -149,23 +152,23 @@ func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_Item
 
 	repo.SetItemChangePublisher(panickingItemChangePublisher{})
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for panicking publisher regression test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		updated, transErr := storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
-			ExpectedStatus: string(session.BacklogStatusInProgress),
-		}, session.TriggeredBySystem)
+		updated, transErr := storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+			ExpectedStatus: string(domain.BacklogStatusInProgress),
+		}, instance.TriggeredBySystem)
 		require.NoError(t, transErr)
 		require.NotNil(t, updated)
 	})
 
 	fetched, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 }
 
 // TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated
@@ -183,14 +186,14 @@ func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Old title",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	newTitle := "New title"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Title: &newTitle}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Title: &newTitle}, nil)
 	require.NoError(t, err)
 
 	select {
@@ -221,13 +224,13 @@ func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAre
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for no-op update test",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{}, nil)
 	require.NoError(t, err)
 
 	select {
@@ -256,16 +259,16 @@ func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFields
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Old title",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	newTitle := "New title"
 	newDescription := "New description"
 	newNotes := "New notes"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		Title:       &newTitle,
 		Description: &newDescription,
 		Notes:       &newNotes,
@@ -300,13 +303,13 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to archive",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	select {
@@ -337,7 +340,7 @@ func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *t
 
 	_, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, uuid.NewString())
 	require.Error(t, err)
-	require.ErrorIs(t, err, session.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	select {
 	case ev := <-sub:
@@ -361,13 +364,13 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 	bus := pkgevents.NewEventBus(10)
 	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to unarchive",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+	_, err = storageOn(t, repo).RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	sub, subID := bus.Subscribe(ctx)
@@ -375,15 +378,15 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 
 	unarchived, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusIdea), unarchived.Status)
+	assert.Equal(t, string(domain.BacklogStatusIdea), unarchived.Status)
 	assert.Nil(t, unarchived.ArchivedAt)
 
 	select {
 	case ev := <-sub:
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeStatusTransition, ev.BacklogItemPayload.Kind)
-		assert.Equal(t, string(session.BacklogStatusArchived), ev.BacklogItemPayload.OldStatus)
-		assert.Equal(t, string(session.BacklogStatusIdea), ev.BacklogItemPayload.NewStatus)
+		assert.Equal(t, string(domain.BacklogStatusArchived), ev.BacklogItemPayload.OldStatus)
+		assert.Equal(t, string(domain.BacklogStatusIdea), ev.BacklogItemPayload.NewStatus)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event")
 	}
@@ -404,9 +407,9 @@ func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArc
 	bus := pkgevents.NewEventBus(10)
 	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item never archived",
-		Status: string(session.BacklogStatusReady),
+		Status: string(domain.BacklogStatusReady),
 	})
 	require.NoError(t, err)
 
@@ -415,15 +418,15 @@ func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArc
 
 	unarchived, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusIdea), unarchived.Status)
+	assert.Equal(t, string(domain.BacklogStatusIdea), unarchived.Status)
 	assert.Nil(t, unarchived.ArchivedAt)
 
 	select {
 	case ev := <-sub:
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeStatusTransition, ev.BacklogItemPayload.Kind)
-		assert.Equal(t, string(session.BacklogStatusReady), ev.BacklogItemPayload.OldStatus)
-		assert.Equal(t, string(session.BacklogStatusIdea), ev.BacklogItemPayload.NewStatus)
+		assert.Equal(t, string(domain.BacklogStatusReady), ev.BacklogItemPayload.OldStatus)
+		assert.Equal(t, string(domain.BacklogStatusIdea), ev.BacklogItemPayload.NewStatus)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event")
 	}
@@ -446,7 +449,7 @@ func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.
 
 	err := repo.DeleteBacklogItem(ctx, uuid.NewString())
 	require.Error(t, err)
-	require.ErrorIs(t, err, session.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	select {
 	case ev := <-sub:
@@ -473,9 +476,9 @@ func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDe
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to delete",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -521,13 +524,13 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for embedded-itemSessions regression test",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "review",
@@ -542,8 +545,8 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 		t.Fatal("timed out waiting for CreateItemSession's own BacklogItemChanged event")
 	}
 
-	err = repo.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
-		OverallOutcome: session.ReviewOutcomePass,
+	err = repo.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
+		OverallOutcome: domain.ReviewOutcomePass,
 		Summary:        "looks good",
 	})
 	require.NoError(t, err)
@@ -557,7 +560,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 		t.Fatal("timed out waiting for SaveReviewVerdict's own BacklogItemChanged event")
 	}
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, nil, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -570,7 +573,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 		assert.Equal(t, is.ID, embedded.ID)
 		assert.Equal(t, "review", embedded.Role)
 		require.NotNil(t, embedded.ReviewVerdict, "embedded session's ReviewVerdict must be populated, not blanked")
-		assert.Equal(t, string(session.ReviewOutcomePass), embedded.ReviewVerdict.OverallOutcome)
+		assert.Equal(t, string(domain.ReviewOutcomePass), embedded.ReviewVerdict.OverallOutcome)
 		assert.Equal(t, "looks good", embedded.ReviewVerdict.Summary)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from TransitionBacklogItemStatus")
@@ -604,13 +607,13 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for embedded-statusEvents regression test",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReady, nil, session.TriggeredByUser)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReady, nil, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	// Drain the "idea -> ready" transition's own event — a different publish
@@ -621,7 +624,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 		t.Fatal("timed out waiting for the idea->ready BacklogItemChanged event")
 	}
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	select {
@@ -631,11 +634,11 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 		require.Len(t, ev.BacklogItemPayload.Item.StatusEvents, 2,
 			"embedded item snapshot must carry the item's full status-transition history, not an empty slice (the blanking regression)")
 		events := ev.BacklogItemPayload.Item.StatusEvents
-		assert.Equal(t, string(session.BacklogStatusIdea), events[0].FromStatus)
-		assert.Equal(t, string(session.BacklogStatusReady), events[0].ToStatus)
-		assert.Equal(t, string(session.BacklogStatusReady), events[1].FromStatus)
-		assert.Equal(t, string(session.BacklogStatusInProgress), events[1].ToStatus)
-		assert.Equal(t, session.TriggeredBySystem, events[1].TriggeredBy)
+		assert.Equal(t, string(domain.BacklogStatusIdea), events[0].FromStatus)
+		assert.Equal(t, string(domain.BacklogStatusReady), events[0].ToStatus)
+		assert.Equal(t, string(domain.BacklogStatusReady), events[1].FromStatus)
+		assert.Equal(t, string(domain.BacklogStatusInProgress), events[1].ToStatus)
+		assert.Equal(t, instance.TriggeredBySystem, events[1].TriggeredBy)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from the second TransitionBacklogItemStatus call")
 	}
@@ -659,20 +662,20 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	ac, err := session.SerializeAcCriteria([]session.AcCriterion{
-		{Index: 0, Text: "First criterion", Status: session.AcStatusPending},
-		{Index: 1, Text: "Second criterion", Status: session.AcStatusPending},
+	ac, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "First criterion", Status: domain.AcStatusPending},
+		{Index: 1, Text: "Second criterion", Status: domain.AcStatusPending},
 	})
 	require.NoError(t, err)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "item for AC-status publish regression test",
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		AcceptanceCriteria: ac,
 	})
 	require.NoError(t, err)
 
-	err = repo.UpdateAcCriterionStatus(ctx, item.ID, 0, string(session.AcStatusDone), "")
+	err = repo.UpdateAcCriterionStatus(ctx, item.ID, 0, string(domain.AcStatusDone), "")
 	require.NoError(t, err)
 
 	select {
@@ -681,10 +684,10 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 		assert.Equal(t, pkgevents.BacklogChangeItemUpdated, ev.BacklogItemPayload.Kind)
 		assert.Contains(t, ev.BacklogItemPayload.UpdatedFields, "acceptanceCriteria")
 		require.NotNil(t, ev.BacklogItemPayload.Item)
-		criteria, parseErr := session.ParseAcCriteria(ev.BacklogItemPayload.Item.AcceptanceCriteria)
+		criteria, parseErr := domain.ParseAcCriteria(ev.BacklogItemPayload.Item.AcceptanceCriteria)
 		require.NoError(t, parseErr)
 		require.Len(t, criteria, 2)
-		assert.Equal(t, session.AcStatusDone, criteria[0].Status)
+		assert.Equal(t, domain.AcStatusDone, criteria[0].Status)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from UpdateAcCriterionStatus")
 	}
@@ -692,7 +695,7 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 
 // TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitionsToReview
 // is a sweep-discovered fix (Phase 5 spec-compliance sweep, backlog-event-driven-updates):
-// ReconcileStuckItems mutates status via a raw ent transaction (session/storage_backlog.go)
+// ReconcileStuckItems mutates status via a raw ent transaction (session/ent_repository_backlog_items.go)
 // rather than going through TransitionBacklogItemStatus, so it originally bypassed the
 // publish hook entirely — exactly the "missed call site" failure mode requirements.md's
 // Feasibility Risks section warns about for internal reconcilers that touch storage
@@ -711,13 +714,13 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "stuck item for reconcile publish test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -742,8 +745,8 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 	case ev := <-sub:
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeStatusTransition, ev.BacklogItemPayload.Kind)
-		assert.Equal(t, string(session.BacklogStatusInProgress), ev.BacklogItemPayload.OldStatus)
-		assert.Equal(t, string(session.BacklogStatusReview), ev.BacklogItemPayload.NewStatus)
+		assert.Equal(t, string(domain.BacklogStatusInProgress), ev.BacklogItemPayload.OldStatus)
+		assert.Equal(t, string(domain.BacklogStatusReview), ev.BacklogItemPayload.NewStatus)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from ReconcileStuckItems")
 	}
@@ -768,13 +771,13 @@ func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtI
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionStarted publish regression test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -817,13 +820,13 @@ func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_Commit
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionGitActivity publish regression test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -864,13 +867,13 @@ func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouc
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionFileTouch publish regression test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -911,13 +914,13 @@ func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionVerificationNotes publish regression test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "review",
@@ -960,17 +963,17 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "item for BackfillMissingPRNumbers publish regression test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
 
 	prURL := "https://github.com/tstapler/stapler-squad/pull/148"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 	require.NoError(t, err)
 
 	// Drain UpdateBacklogItem's own event — it is a different call site from
@@ -1018,9 +1021,9 @@ func TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called(t *
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for activity-note publish test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -1058,9 +1061,9 @@ func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "item with known status and repo path",
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 		RepoPath: "/repo/known-path",
 	})
 	require.NoError(t, err)
@@ -1071,7 +1074,7 @@ func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_
 	case ev := <-sub:
 		require.NotNil(t, ev.BacklogItemPayload)
 		require.NotNil(t, ev.BacklogItemPayload.Item, "the published snapshot must carry a non-nil Item so backlogItemMatchesFilters doesn't unconditionally reject it")
-		assert.Equal(t, string(session.BacklogStatusReview), ev.BacklogItemPayload.Item.Status, "Status must be populated on the snapshot, not left zero-value")
+		assert.Equal(t, string(domain.BacklogStatusReview), ev.BacklogItemPayload.Item.Status, "Status must be populated on the snapshot, not left zero-value")
 		assert.Equal(t, "/repo/known-path", ev.BacklogItemPayload.Item.RepoPath, "RepoPath must be populated on the snapshot, not left zero-value")
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event from AppendActivityNote")
@@ -1084,16 +1087,16 @@ func TestSaveReviewVerdict_should_persistCommitShaAndTruncation_When_Set(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{Title: "verdict sha round trip", Status: string(session.BacklogStatusReview)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "verdict sha round trip", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID: item.ID, SessionUUID: "review-" + uuid.NewString(), SessionRole: session.SessionRoleReview, DiffTruncated: true,
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
+		ItemID: item.ID, SessionUUID: "review-" + uuid.NewString(), SessionRole: instance.SessionRoleReview, DiffTruncated: true,
 	})
 	require.NoError(t, err)
 	assert.True(t, is.DiffTruncated, "spawn-time truncation must round-trip on the item session")
 
-	require.NoError(t, repo.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictFail, ReviewedCommitSha: "abc123", DiffTruncated: true,
+	require.NoError(t, repo.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
+		OverallOutcome: domain.ReviewVerdictFail, ReviewedCommitSha: "abc123", DiffTruncated: true,
 	}))
 
 	recent, err := repo.GetRecentReviewVerdictSummaries(ctx, item.ID, 5)

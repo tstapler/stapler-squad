@@ -6,6 +6,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ResolveItemLinkViaMCPAdapter exercises the exact resolveItemLink code path
@@ -17,7 +18,7 @@ import (
 // produces an identical (error code, remediation text) pair to this one for
 // the same fixture — guarding against the MCP and RPC adapters drifting
 // apart from the session.ResolveItemLink helper they both wrap.
-func ResolveItemLinkViaMCPAdapter(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
+func ResolveItemLinkViaMCPAdapter(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
 	h := &backlogHandlers{storage: storage}
 	return h.resolveItemLink(ctx, callerUUID, itemID)
 }

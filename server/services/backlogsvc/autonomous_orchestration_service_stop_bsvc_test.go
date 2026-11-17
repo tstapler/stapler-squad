@@ -7,18 +7,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // OBS-7: the operator read path returns the detail unchanged.
 func TestStuckRowContext_ReturnedByListStuckBacklogItems(t *testing.T) {
-	f := newCharFixture(t, "stop-detail-rpc", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "stop-detail-rpc", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	svc := NewBacklogService(f.storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 	detail := "stopped: idle_prompt after 2 turns (orchestrator_error)" // any detail string: the read path returns it unchanged
 
-	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, session.BacklogStatusInProgress, detail)
+	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusInProgress, detail)
 	require.NoError(t, err)
 	require.True(t, applied)
 

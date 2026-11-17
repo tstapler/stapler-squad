@@ -8,20 +8,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // addTestPeer creates a peer session sharing repoPath's workspace, with a goal set, for
 // use by the workspace-peers-nudge tests below.
 func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 	t.Helper()
-	peer := &session.Instance{
+	peer := &instance.Instance{
 		Title: "peer-session", UUID: "peer-uuid", Path: repoPath, Branch: "main",
-		Status: session.Active, Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Status: domain.Active, Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(peer))
-	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "fix the widget loader", session.GoalStatusWorking, nil, "", "")
+	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "fix the widget loader", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 }
@@ -32,7 +35,7 @@ func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 // is opt-in via the workspacePeersNudgeFlagName feature flag.
 func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -70,7 +73,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_OmitPeerNudge_When_FlagDisa
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExist(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)

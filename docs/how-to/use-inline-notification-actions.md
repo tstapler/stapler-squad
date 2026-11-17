@@ -16,7 +16,7 @@ If you rely on being paged, test your Slack and web-push setup yourself.
 ## Flags
 
 Four flags control the feature. A flip applies at once, with no restart
-(`server/services/feature_flag_service.go`, the `knownFeatureFlags` entries).
+(`server/services/feature_flag_specs.go`, the `featureflags.Spec` entries).
 
 | Flag | Default | What it turns on |
 |---|---|---|

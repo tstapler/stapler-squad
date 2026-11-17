@@ -5,8 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // A user refresh (PRSourceReconcilerRefresh) on an unverified-terminal row
@@ -15,21 +20,21 @@ import (
 func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing.T) {
 	t.Parallel()
 	later := prRepoT0.Add(time.Hour)
-	seed := func(t *testing.T, n int) (*EntRepository, PRRef) {
+	seed := func(t *testing.T, n int) (*EntRepository, domain.PRRef) {
 		repo := newPRRepo(t)
-		ref := mustPRRef(t, "", "acme", "app", n)
-		seedState(t, repo, ref, PRStateUnknown, true)
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", n)
+		seedState(t, repo, ref, domain.PRStateUnknown, true)
 		setPolled(t, repo, ref, prRepoT0)
-		require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).
+		require.NoError(t, repo.Client.PullRequestState.Update().Where(sessionpr.RefPredicate(ref)).
 			SetPollFailCount(4).SetFirstFailAt(prRepoT0.Add(-time.Hour)).SetPollError("network").Exec(context.Background()))
 		return repo, ref
 	}
 
-	for i, st := range []PRState{PRStateOpen, PRStateMerged, PRStateClosed} {
+	for i, st := range []domain.PRState{domain.PRStateOpen, domain.PRStateMerged, domain.PRStateClosed} {
 		t.Run("fetch "+string(st), func(t *testing.T) {
 			t.Parallel()
 			repo, ref := seed(t, i+1)
-			res, err := repo.UpdatePullRequestState(context.Background(), ref, fetchObs(PRSourceReconcilerRefresh, st, later))
+			res, err := repo.UpdatePullRequestState(context.Background(), ref, fetchObs(domain.PRSourceReconcilerRefresh, st, later))
 			require.NoError(t, err)
 			assert.True(t, res.Applied)
 			row := reload(t, repo, ref)
@@ -43,8 +48,8 @@ func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing
 	t.Run("counted failure keeps the row unverified and increments", func(t *testing.T) {
 		t.Parallel()
 		repo, ref := seed(t, 10)
-		obs := failObs(later, PRObservationCountedFailure, "network")
-		obs.Source = PRSourceReconcilerRefresh
+		obs := failObs(later, domain.PRObservationCountedFailure, "network")
+		obs.Source = domain.PRSourceReconcilerRefresh
 		res, err := repo.UpdatePullRequestState(context.Background(), ref, obs)
 		require.NoError(t, err)
 		assert.True(t, res.Applied)

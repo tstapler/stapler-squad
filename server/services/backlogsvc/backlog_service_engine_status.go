@@ -9,17 +9,18 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // WorkflowEngineStatusSource is everything GetWorkflowEngineStatus reads. A nil
 // optional field degrades to "unknown" for that part; a nil ModeFor or Ledger
 // makes the whole RPC Unavailable so a caller can never read a default as ENFORCE.
 type WorkflowEngineStatusSource struct {
-	ModeFor          func(session.CallerClass) session.EngineMode
-	Ledger           func() (session.ShadowLedger, error)
-	ConfigDiff       func(ctx context.Context) (session.ConfigDiff, []session.StrandedItem, error)
-	Acks             func() session.SoakAcks
+	ModeFor          func(domain.CallerClass) workflowengine.EngineMode
+	Ledger           func() (workflowengine.ShadowLedger, error)
+	ConfigDiff       func(ctx context.Context) (workflowengine.ConfigDiff, []workflowengine.StrandedItem, error)
+	Acks             func() workflowengine.SoakAcks
 	InvalidatorWired func() bool
 	GateWired        func() bool
 	FallbackActive   func() bool
@@ -31,7 +32,7 @@ func (s *BacklogService) SetWorkflowEngineStatusSource(src *WorkflowEngineStatus
 	s.engineStatus = src
 }
 
-var engineStatusClasses = []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem}
+var engineStatusClasses = []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem}
 
 // GetWorkflowEngineStatus reports per-class engine modes and flip-readiness evidence.
 // +api: backlog:get-workflow-engine-status
@@ -61,7 +62,7 @@ func (s *BacklogService) GetWorkflowEngineStatus(
 	anyEnforced := false
 	for _, c := range engineStatusClasses {
 		m := src.ModeFor(c)
-		anyEnforced = anyEnforced || m == session.ModeEnforce
+		anyEnforced = anyEnforced || m == workflowengine.ModeEnforce
 		resp.ClassModes[string(c)] = engineModeToProto(m)
 	}
 
@@ -86,18 +87,18 @@ func (s *BacklogService) GetWorkflowEngineStatus(
 	return connect.NewResponse(resp), nil
 }
 
-func evaluateClassSoak(src *WorkflowEngineStatusSource, c session.CallerClass, l session.ShadowLedger, ledgerErr error, now time.Time, anyEnforced bool) session.Verdict {
-	p := session.DefaultSoakParams(c, now)
+func evaluateClassSoak(src *WorkflowEngineStatusSource, c domain.CallerClass, l workflowengine.ShadowLedger, ledgerErr error, now time.Time, anyEnforced bool) workflowengine.Verdict {
+	p := workflowengine.DefaultSoakParams(c, now)
 	p.AnyClassEnforced = anyEnforced
 	if src.Acks != nil {
 		p.Acks = src.Acks()
 	}
-	return session.EvaluateSoakFromSource(c, func() (session.ShadowLedger, error) { return l, ledgerErr }, p)
+	return workflowengine.EvaluateSoakFromSource(c, func() (workflowengine.ShadowLedger, error) { return l, ledgerErr }, p)
 }
 
 // divergenceCounts counts the repro ring's last-24h records overall (key "")
 // and per class. The ring holds the last 200, so a busy day reads as a floor.
-func divergenceCounts(l session.ShadowLedger, err error, now time.Time) map[string]int64 {
+func divergenceCounts(l workflowengine.ShadowLedger, err error, now time.Time) map[string]int64 {
 	out := map[string]int64{}
 	if err != nil {
 		return out
@@ -112,8 +113,8 @@ func divergenceCounts(l session.ShadowLedger, err error, now time.Time) map[stri
 	return out
 }
 
-func fillReviewState(resp *sessionv1.GetWorkflowEngineStatusResponse, l session.ShadowLedger, err error, now time.Time, anyEnforced bool) {
-	due, ok := session.SoakReviewDueAt(l)
+func fillReviewState(resp *sessionv1.GetWorkflowEngineStatusResponse, l workflowengine.ShadowLedger, err error, now time.Time, anyEnforced bool) {
+	due, ok := workflowengine.SoakReviewDueAt(l)
 	if err != nil || !ok {
 		return
 	}
@@ -129,13 +130,13 @@ func fillReviewState(resp *sessionv1.GetWorkflowEngineStatusResponse, l session.
 	}
 }
 
-func engineModeToProto(m session.EngineMode) sessionv1.WorkflowEngineMode {
+func engineModeToProto(m workflowengine.EngineMode) sessionv1.WorkflowEngineMode {
 	switch m {
-	case session.ModeOff:
+	case workflowengine.ModeOff:
 		return sessionv1.WorkflowEngineMode_WORKFLOW_ENGINE_MODE_OFF
-	case session.ModeShadow:
+	case workflowengine.ModeShadow:
 		return sessionv1.WorkflowEngineMode_WORKFLOW_ENGINE_MODE_SHADOW
-	case session.ModeEnforce:
+	case workflowengine.ModeEnforce:
 		return sessionv1.WorkflowEngineMode_WORKFLOW_ENGINE_MODE_ENFORCE
 	}
 	return sessionv1.WorkflowEngineMode_WORKFLOW_ENGINE_MODE_UNSPECIFIED
@@ -143,21 +144,21 @@ func engineModeToProto(m session.EngineMode) sessionv1.WorkflowEngineMode {
 
 func provenanceToProto(label string) sessionv1.WorkflowEngineConfigProvenance {
 	switch label {
-	case session.ConfigSeeded:
+	case workflowengine.ConfigSeeded:
 		return sessionv1.WorkflowEngineConfigProvenance_WORKFLOW_ENGINE_CONFIG_PROVENANCE_SEEDED
-	case session.ConfigEdited:
+	case workflowengine.ConfigEdited:
 		return sessionv1.WorkflowEngineConfigProvenance_WORKFLOW_ENGINE_CONFIG_PROVENANCE_EDITED
 	}
 	return sessionv1.WorkflowEngineConfigProvenance_WORKFLOW_ENGINE_CONFIG_PROVENANCE_UNSPECIFIED
 }
 
-func verdictToProto(v session.VerdictStatus) sessionv1.WorkflowEngineSoakVerdict {
+func verdictToProto(v workflowengine.VerdictStatus) sessionv1.WorkflowEngineSoakVerdict {
 	switch v {
-	case session.VerdictReady:
+	case workflowengine.VerdictReady:
 		return sessionv1.WorkflowEngineSoakVerdict_WORKFLOW_ENGINE_SOAK_VERDICT_READY
-	case session.VerdictNotReady:
+	case workflowengine.VerdictNotReady:
 		return sessionv1.WorkflowEngineSoakVerdict_WORKFLOW_ENGINE_SOAK_VERDICT_NOT_READY
-	case session.VerdictNeedsOwnerAck:
+	case workflowengine.VerdictNeedsOwnerAck:
 		return sessionv1.WorkflowEngineSoakVerdict_WORKFLOW_ENGINE_SOAK_VERDICT_NEEDS_OWNER_ACK
 	}
 	return sessionv1.WorkflowEngineSoakVerdict_WORKFLOW_ENGINE_SOAK_VERDICT_UNAVAILABLE

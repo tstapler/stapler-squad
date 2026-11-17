@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // newItemSessionRoleFixture creates a fresh Storage-backed backlog item and
@@ -21,10 +23,10 @@ func newItemSessionRoleFixture(t *testing.T, role, title string) (storage *Stora
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: title})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title})
 	require.NoError(t, err)
 	sessUUID = uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessUUID,
 		SessionRole: role,
@@ -43,8 +45,8 @@ func newItemSessionRoleFixture(t *testing.T, role, title string) (storage *Stora
 func TestStorage_IsDiagnoseCaller(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	diagnoseStorage, diagnoseSessUUID := newItemSessionRoleFixture(t, SessionRoleDiagnose, "diag test item")
-	workStorage, workSessUUID := newItemSessionRoleFixture(t, SessionRoleWork, "work test item")
+	diagnoseStorage, diagnoseSessUUID := newItemSessionRoleFixture(t, instance.SessionRoleDiagnose, "diag test item")
+	workStorage, workSessUUID := newItemSessionRoleFixture(t, instance.SessionRoleWork, "work test item")
 
 	assert.True(t, diagnoseStorage.IsDiagnoseCaller(ctx, diagnoseSessUUID), "a diagnose-role ItemSession must be identified")
 	assert.False(t, workStorage.IsDiagnoseCaller(ctx, workSessUUID), "a work-role ItemSession must not be identified as diagnose")

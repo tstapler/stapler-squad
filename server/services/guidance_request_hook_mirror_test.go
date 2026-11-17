@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 const mirrorSession = "7c1e0000-0000-4000-8000-0000000000aa"
@@ -78,7 +79,7 @@ func mirrorReq(t *testing.T, callID, question string, replyable bool) HookMirror
 	return HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: callID, Asked: askedFromBody(t, question, "Red", "Green"), Replyable: replyable}
 }
 
-func guidanceRowOf(t *testing.T, s *session.Storage, id string) *session.GuidanceRequestData {
+func guidanceRowOf(t *testing.T, s *session.Storage, id string) *domain.GuidanceRequestData {
 	t.Helper()
 	row, err := s.GetGuidanceRequest(context.Background(), uuid.MustParse(id))
 	require.NoError(t, err)
@@ -150,7 +151,7 @@ type blockingMirrorStore struct {
 	err     error
 }
 
-func (b *blockingMirrorStore) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*session.GuidanceRequestData, error) {
+func (b *blockingMirrorStore) CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error) {
 	if b.release != nil {
 		<-b.release
 	}
@@ -214,10 +215,10 @@ func TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog(t
 
 	q, found := restarted.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: id})
 	require.True(t, found, "the card's question id is the row id")
-	assert.True(t, session.DialogMatch(string(frame), q.Dialog), "the same dialog still verifies")
+	assert.True(t, panereply.DialogMatch(string(frame), q.Dialog), "the same dialog still verifies")
 	other, err := os.ReadFile("../../session/testdata/reply_dialogs/question_wrapped_2opts.txt")
 	require.NoError(t, err)
-	assert.False(t, session.DialogMatch(string(other), q.Dialog), "a different dialog on screen: DialogMatch fails, so nothing is written")
+	assert.False(t, panereply.DialogMatch(string(other), q.Dialog), "a different dialog on screen: DialogMatch fails, so nothing is written")
 }
 
 func TestEnsureRegistered_should_ReRegisterAnOpenRow_AfterTheCacheTTL(t *testing.T) {
@@ -344,7 +345,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *te
 	default:
 	}
 
-	agent, err := storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
+	agent, err := storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope: domain.RequestScopeSession, SessionUUID: asker, QuestionText: "Ship it?", QuestionType: domain.QuestionTypeYesNo,
 	})
 	require.NoError(t, err)

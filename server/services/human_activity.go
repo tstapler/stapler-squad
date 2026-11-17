@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -113,7 +113,7 @@ func NewHumanActiveGuard(activity *HumanActivity, clients tmuxClientLister) *Hum
 // the window (a person's own `tmux attach`; ssq's control-mode clients are
 // always attached, so attachment alone says nothing). A list-clients failure
 // drops (b) only.
-func (g *HumanActiveGuard) Active(ctx context.Context, inst *session.Instance) bool {
+func (g *HumanActiveGuard) Active(ctx context.Context, inst *instance.Instance) bool {
 	active := g.active(ctx, inst)
 	if active {
 		humanActiveRefusals.Add(1)
@@ -124,7 +124,7 @@ func (g *HumanActiveGuard) Active(ctx context.Context, inst *session.Instance) b
 	return active
 }
 
-func (g *HumanActiveGuard) active(ctx context.Context, inst *session.Instance) bool {
+func (g *HumanActiveGuard) active(ctx context.Context, inst *instance.Instance) bool {
 	name := inst.GetTmuxSessionName()
 	if g.activity.Within(name, humanActiveWindow) {
 		return true

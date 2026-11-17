@@ -10,16 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const testProofSentinel = "ssqmcp1.sentinel-not-a-real-proof"
 
 func TestGetSession_should_ReportProofPresentWithoutValue(t *testing.T) {
 	dir := envtest.NewIsolatedStateDir(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, session.MCPProofsDirName), 0o700))
-	require.NoError(t, os.WriteFile(session.MCPProofFilePath(dir, "with-proof"), []byte(testProofSentinel), 0o600))
-	d := &discoveryHandlers{store: &stubStore{instances: []*session.Instance{
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, instance.MCPProofsDirName), 0o700))
+	require.NoError(t, os.WriteFile(instance.MCPProofFilePath(dir, "with-proof"), []byte(testProofSentinel), 0o600))
+	d := &discoveryHandlers{store: &stubStore{instances: []*instance.Instance{
 		{Title: "with", UUID: "with-proof"}, {Title: "without", UUID: "no-proof"},
 	}}}
 

@@ -13,14 +13,14 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
 func TestTCCEnrichmentRPC_ConsentAndUnknownRoot(t *testing.T) {
 	t.Parallel()
 	gate := tcc.NewConsentGate(func(string) tcc.Result { return tcc.Result{Protected: true, Root: "/protected"} }, nil, nil)
-	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{Ready: gate.Ready, Probe: func(string) (*session.WorktreeInfo, error) { return &session.WorktreeInfo{}, nil }})
+	e := instance.NewWorktreeEnricher(instance.WorktreeEnricherConfig{Ready: gate.Ready, Probe: func(string) (*instance.WorktreeInfo, error) { return &instance.WorktreeInfo{}, nil }})
 	defer e.Stop()
 	svc := &SessionService{}
 	svc.SetTCCEnrichment(gate, e, true)
@@ -49,7 +49,10 @@ func TestTCCEnrichmentRPC_UnparksOnlyConsentedRoots(t *testing.T) {
 		return tcc.Result{Protected: true, Root: filepath.Dir(path)}
 	}, nil, nil)
 	probes := make(chan string, 3)
-	e := session.NewWorktreeEnricher(session.WorktreeEnricherConfig{Workers: 1, Ready: gate.Ready, Probe: func(path string) (*session.WorktreeInfo, error) { probes <- path; return &session.WorktreeInfo{}, nil }})
+	e := instance.NewWorktreeEnricher(instance.WorktreeEnricherConfig{Workers: 1, Ready: gate.Ready, Probe: func(path string) (*instance.WorktreeInfo, error) {
+		probes <- path
+		return &instance.WorktreeInfo{}, nil
+	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	e.Start(ctx)
 	t.Cleanup(func() { cancel(); e.Stop() })
@@ -110,7 +113,7 @@ func TestTCCEnrichmentRPC_Disabled(t *testing.T) {
 
 type tccDenialFixture struct {
 	gate  *tcc.ConsentGate
-	e     *session.WorktreeEnricher
+	e     *instance.WorktreeEnricher
 	svc   *SessionService
 	clock *atomic.Int64
 	err   atomic.Value // holds a boxed error returned by the probe
@@ -127,17 +130,17 @@ func newTCCDenialFixture(t *testing.T, probeErr error) *tccDenialFixture {
 	f.gate = tcc.NewConsentGate(func(string) tcc.Result {
 		return tcc.Result{Protected: true, Root: "/protected", Service: tcc.FilesAndFolders}
 	}, nil, nil)
-	f.e = session.NewWorktreeEnricher(session.WorktreeEnricherConfig{
+	f.e = instance.NewWorktreeEnricher(instance.WorktreeEnricherConfig{
 		Ready:     f.gate.Ready,
 		ResultTTL: time.Minute,
 		Now:       func() time.Time { return base.Add(time.Duration(f.clock.Load())) },
 		OnResult:  f.gate.ObserveResult,
-		Probe: func(string) (*session.WorktreeInfo, error) {
+		Probe: func(string) (*instance.WorktreeInfo, error) {
 			defer func() { f.probe <- struct{}{} }()
 			if err := f.err.Load().(boxedErr).err; err != nil {
 				return nil, err
 			}
-			return &session.WorktreeInfo{}, nil
+			return &instance.WorktreeInfo{}, nil
 		},
 	})
 	ctx, cancel := context.WithCancel(context.Background())

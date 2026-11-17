@@ -23,8 +23,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -82,8 +85,8 @@ func newDraftPRTestRepoWithOrigin(t *testing.T) string {
 
 // findInstanceFunc returns a PRCreationService findInstance closure serving a single
 // instance under the given session ID, nil for anything else.
-func findInstanceFunc(sessionID string, inst *session.Instance) func(string) *session.Instance {
-	return func(id string) *session.Instance {
+func findInstanceFunc(sessionID string, inst *instance.Instance) func(string) *instance.Instance {
+	return func(id string) *instance.Instance {
 		if id == sessionID {
 			return inst
 		}
@@ -123,7 +126,7 @@ func TestDraftPullRequest_should_PrefillTitleBodyBaseBranch_When_SessionHasCommi
 	svctest.RunGit(t, dir, "commit", "-q", "-m", "Add rate limit toggle")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-7f3a", "feature/rate-limit-toggle", "")
-	inst := &session.Instance{Title: "Add rate limit toggle"}
+	inst := &instance.Instance{Title: "Add rate limit toggle"}
 	inst.SetGitWorktree(wt)
 
 	const draftedBody = "## Summary\n\nAdded a rate limit toggle."
@@ -163,7 +166,7 @@ func TestDraftPullRequest_should_StripRemotePrefix_When_OriginHEADResolvesToRemo
 	svctest.RunGit(t, dir, "commit", "-q", "-m", "Add a change")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-strip-prefix", "feature/strip-remote-prefix", "")
-	inst := &session.Instance{Title: "Strip remote prefix session"}
+	inst := &instance.Instance{Title: "Strip remote prefix session"}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(nil, nil, nil, nil, findInstanceFunc("sess-strip-prefix", inst))
@@ -186,7 +189,7 @@ func TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne(t *t
 	svctest.RunGit(t, dir, "commit", "-q", "-m", "some work")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-existing-pr", "feature/already-has-pr", "")
-	inst := &session.Instance{Title: "Already has a PR"}
+	inst := &instance.Instance{Title: "Already has a PR"}
 	inst.SetGitWorktree(wt)
 	inst.GitHubPRURL = "https://github.com/tstapler/stapler-squad/pull/512"
 	inst.GitHubPRNumber = 512
@@ -214,7 +217,7 @@ func TestDraftPullRequest_should_ReportHasCommitsAhead_False_When_BranchIsUpToDa
 	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/up-to-date")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-9c21", "feature/up-to-date", "")
-	inst := &session.Instance{Title: "Up to date session"}
+	inst := &instance.Instance{Title: "Up to date session"}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(nil, nil, nil, nil, findInstanceFunc("sess-9c21", inst))
@@ -242,7 +245,7 @@ func TestDraftPullRequest_should_PreviewWorkingTreeDiff_When_UncommittedChangesP
 	beforeCount := svctest.RunGitOutput(t, dir, "rev-list", "--count", "HEAD")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-uncommitted", "feature/uncommitted-work", "")
-	inst := &session.Instance{Title: "Uncommitted work session"}
+	inst := &instance.Instance{Title: "Uncommitted work session"}
 	inst.SetGitWorktree(wt)
 
 	const draftedBody = "## Summary\n\nDrafted from the working-tree diff."
@@ -280,7 +283,7 @@ func TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil(t *testing
 	svctest.RunGit(t, dir, "commit", "-q", "-m", "a real commit")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-no-pool", "feature/no-pool", "")
-	inst := &session.Instance{Title: "No headless pool session"}
+	inst := &instance.Instance{Title: "No headless pool session"}
 	inst.SetGitWorktree(wt)
 
 	// headlessPool is nil — must not panic, must use the fallback body.
@@ -300,7 +303,7 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty(t *testing.T) 
 	// No commits, no uncommitted changes — diff is empty.
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-empty-diff", "feature/empty-diff", "")
-	inst := &session.Instance{Title: "Empty diff session"}
+	inst := &instance.Instance{Title: "Empty diff session"}
 	inst.SetGitWorktree(wt)
 
 	runner := headless.NewFakeRunner(firstCallJSONPR(t, "s1", "should never be used"))
@@ -330,7 +333,7 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors(t
 	svctest.RunGit(t, dir, "commit", "-q", "-m", "a real commit")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-draft-error", "feature/draft-error", "")
-	inst := &session.Instance{Title: "Draft error session"}
+	inst := &instance.Instance{Title: "Draft error session"}
 	inst.SetGitWorktree(wt)
 
 	runner := headless.NewFakeRunner()
@@ -467,23 +470,23 @@ func newFakePRWorktree(t *testing.T, sessionID, branchName string, mock *fakePRG
 type fakePRInstanceStore struct {
 	mu             sync.Mutex
 	saveErr        error
-	savedInstances []*session.Instance
+	savedInstances []*instance.Instance
 	saveCalls      int
 }
 
-func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)       { return nil, nil }
-func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error) { return nil, nil }
-func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*session.InstanceData, error) {
+func (f *fakePRInstanceStore) LoadInstances() ([]*instance.Instance, error)     { return nil, nil }
+func (f *fakePRInstanceStore) ListInstanceData() ([]domain.InstanceData, error) { return nil, nil }
+func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*domain.InstanceData, error) {
 	return nil, session.ErrInstanceDataNotFound
 }
-func (f *fakePRInstanceStore) AddInstance(*session.Instance) error                    { return nil }
+func (f *fakePRInstanceStore) AddInstance(*instance.Instance) error                   { return nil }
 func (f *fakePRInstanceStore) DeleteInstance(string) error                            { return nil }
 func (f *fakePRInstanceStore) UpdateInstanceLastUserResponse(string, time.Time) error { return nil }
 func (f *fakePRInstanceStore) UpdateInstanceMetadata(string, *string, *string, *string, *string) error {
 	return nil
 }
 
-func (f *fakePRInstanceStore) SaveInstances(instances []*session.Instance) error {
+func (f *fakePRInstanceStore) SaveInstances(instances []*instance.Instance) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.saveCalls++
@@ -500,7 +503,7 @@ func TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool(t *testin
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
 	wt := newFakePRWorktree(t, "sess-direct", "feature/direct", mock)
-	inst := &session.Instance{Title: "Direct PR session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Direct PR session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	runner := headless.NewFakeRunner(firstCallJSONPR(t, "s1", "should never be used"))
@@ -521,7 +524,7 @@ func TestCreatePullRequest_should_PersistAndPublishEvent_When_CreateSucceeds(t *
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/512\n"}
 	wt := newFakePRWorktree(t, "sess-7f3a", "feature/rate-limit-toggle", mock)
-	inst := &session.Instance{Title: "Add rate limit toggle", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Add rate limit toggle", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	store := &fakePRInstanceStore{}
@@ -571,7 +574,7 @@ func TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails(t
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
 	wt := newFakePRWorktree(t, "sess-persist-fail", "feature/persist-fail", mock)
-	inst := &session.Instance{Title: "Persist-fail session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Persist-fail session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	store := &fakePRInstanceStore{saveErr: errors.New("db unavailable")}
@@ -591,7 +594,7 @@ func TestCreatePullRequest_should_SurfaceSpecificError_When_GHNotAuthenticated(t
 	t.Parallel()
 	mock := &fakePRGitExecutor{authErr: errors.New("not logged in")}
 	wt := newFakePRWorktree(t, "sess-no-auth", "feature/no-auth", mock)
-	inst := &session.Instance{Title: "No auth session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "No auth session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, nil, nil, nil, findInstanceFunc("sess-no-auth", inst))
@@ -630,7 +633,7 @@ func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
 
 	mock := &fakePRGitExecutor{}
 	wt := git.NewGitWorktreeFromStorageWithExecutor(dir, dir, "sess-commit-fail", "feature/commit-fail", "", git.WithCommandRunner(mock))
-	inst := &session.Instance{Title: "Commit-fail session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Commit-fail session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, nil, nil, nil, findInstanceFunc("sess-commit-fail", inst))
@@ -654,7 +657,7 @@ func TestCreatePullRequest_should_SurfaceError_When_PushFails(t *testing.T) {
 	t.Parallel()
 	mock := &fakePRGitExecutor{pushErr: errors.New("non-fast-forward")}
 	wt := newFakePRWorktree(t, "sess-push-fail", "feature/push-fail", mock)
-	inst := &session.Instance{Title: "Push-fail session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Push-fail session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, nil, nil, nil, findInstanceFunc("sess-push-fail", inst))
@@ -677,7 +680,7 @@ func TestCreatePullRequest_should_SetAlreadyExisted_When_SessionHasCachedPRUrl(t
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
 	wt := newFakePRWorktree(t, "sess-cached-pr", "feature/cached-pr", mock)
-	inst := &session.Instance{Title: "Cached PR session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Cached PR session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 	inst.GitHubPRURL = "https://github.com/tstapler/stapler-squad/pull/999"
 	inst.GitHubPRNumber = 999
@@ -703,7 +706,7 @@ func TestCreatePullRequest_should_RejectConcurrentCall_When_AlreadyInFlight(t *t
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
 	wt := newFakePRWorktree(t, "sess-in-flight", "feature/in-flight", mock)
-	inst := &session.Instance{Title: "In-flight session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "In-flight session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, nil, nil, nil, findInstanceFunc("sess-in-flight", inst))
@@ -736,7 +739,7 @@ func TestCreatePullRequest_should_RejectConcurrentCall_When_RacingRealGoroutines
 		blockFirstCallProceed: make(chan struct{}),
 	}
 	wt := newFakePRWorktree(t, "sess-real-race", "feature/real-race", mock)
-	inst := &session.Instance{Title: "Real race session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Real race session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-real-race", inst))
@@ -786,7 +789,7 @@ func TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero(t *tes
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/not-a-number\n"}
 	wt := newFakePRWorktree(t, "sess-zero-number", "feature/zero-number", mock)
-	inst := &session.Instance{Title: "Zero PR number session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Zero PR number session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, nil, nil, nil, findInstanceFunc("sess-zero-number", inst))
@@ -803,20 +806,20 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 	t.Parallel()
 	mock := &fakePRGitExecutor{}
 	wt := newFakePRWorktree(t, "sess-backlog-linked", "feature/backlog-linked", mock)
-	inst := &session.Instance{Title: "Backlog-linked session", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Backlog-linked session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
 	backlogStorage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
-	item, err := backlogStorage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := backlogStorage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Backlog item behind this session",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
-	_, err = backlogStorage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = backlogStorage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -834,6 +837,6 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 
 	updated, err := backlogStorage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), updated.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), updated.Status,
 		"RecordPRCreatedOutOfBand must be called unconditionally and transition the linked item to pr_pending")
 }

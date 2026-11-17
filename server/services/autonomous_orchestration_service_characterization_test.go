@@ -16,13 +16,15 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // charFixture is one backlog-linked autonomous session with a subscribed event channel.
 type charFixture struct {
 	svc     *SessionService
 	storage *session.Storage
-	inst    *session.Instance
+	inst    *instance.Instance
 	title   string
 	itemID  string
 	itemSes string
@@ -32,10 +34,10 @@ type charFixture struct {
 // newUnlinkedCharFixture is an autonomous session with no linked backlog item.
 func newUnlinkedCharFixture(t *testing.T, title string) *charFixture {
 	t.Helper()
-	return newUnlinkedCharFixtureWithStatus(t, title, session.Paused)
+	return newUnlinkedCharFixtureWithStatus(t, title, domain.Paused)
 }
 
-func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session.Status) *charFixture {
+func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status domain.Status) *charFixture {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -45,25 +47,25 @@ func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session
 	t.Cleanup(func() { svc.Shutdown() })
 	svc.SetLifecycleContext(ctx)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
 		Status: status, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	ch, _ := bus.Subscribe(ctx)
 	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
 }
 
-func newCharFixture(t *testing.T, title string, role string, itemStatus session.BacklogStatus) *charFixture {
+func newCharFixture(t *testing.T, title string, role string, itemStatus domain.BacklogStatus) *charFixture {
 	t.Helper()
 	f := newUnlinkedCharFixture(t, title)
 	ctx := context.Background()
-	item, err := f.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
+	item, err := f.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
 	require.NoError(t, err)
-	is, err := f.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: f.inst.UUID, SessionRole: role})
+	is, err := f.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: f.inst.UUID, SessionRole: role})
 	require.NoError(t, err)
 	f.itemID, f.itemSes = item.ID, is.ID
 	return f
@@ -91,14 +93,14 @@ func (f *charFixture) drain() []*events.Event {
 func (f *charFixture) seedAutonomousStuckRow(t *testing.T, attempts int32, nextAt *time.Time) {
 	t.Helper()
 	ctx := context.Background()
-	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, session.BacklogStatusInProgress, "seed")
+	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusInProgress, "seed")
 	require.NoError(t, err)
 	require.True(t, applied)
 	_, err = f.storage.RecordRemediationAttempt(ctx, f.itemID, domain.StuckReasonAutonomousStuck, attempts, nextAt)
 	require.NoError(t, err)
 }
 
-func (f *charFixture) openStuckRow(t *testing.T) session.OpenStuckStateData {
+func (f *charFixture) openStuckRow(t *testing.T) backlogdto.OpenStuckStateData {
 	t.Helper()
 	open, err := f.storage.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
@@ -122,7 +124,7 @@ func (r *signalingRespawner) AutoRespawnAutonomousWork(_ context.Context, itemID
 
 func TestOnAutonomousDriverComplete_Characterization_RemediationNotDue_SkipsRespawn(t *testing.T) {
 	// Not parallel: captureLogs swaps the shared slog seam.
-	f := newCharFixture(t, "char-not-due", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-not-due", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	future := time.Now().Add(time.Hour)
@@ -143,7 +145,7 @@ func TestOnAutonomousDriverComplete_Characterization_RemediationNotDue_SkipsResp
 }
 
 func TestOnAutonomousDriverComplete_Characterization_JustParked_NotifiesAndStillRespawns(t *testing.T) {
-	f := newCharFixture(t, "char-just-parked", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-just-parked", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	past := time.Now().Add(-time.Minute)
@@ -164,7 +166,7 @@ func TestOnAutonomousDriverComplete_Characterization_JustParked_NotifiesAndStill
 }
 
 func TestOnAutonomousDriverComplete_Characterization_UpdateItemSessionEndedFails_NotifiesBookkeepingFailed(t *testing.T) {
-	f := newCharFixture(t, "char-end-fails", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-end-fails", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	session.TestFailItemSessionUpdates(t, f.storage)
@@ -182,7 +184,7 @@ func TestOnAutonomousDriverComplete_Characterization_UpdateItemSessionEndedFails
 }
 
 func TestOnAutonomousDriverComplete_Characterization_NilRespawner_LeavesItemInProgress(t *testing.T) {
-	f := newCharFixture(t, "char-nil-respawner", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-nil-respawner", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	f.svc.SetAutonomousStuckRespawner(nil)
 
 	f.complete(stallOutcome)
@@ -195,7 +197,7 @@ func TestOnAutonomousDriverComplete_Characterization_NilRespawner_LeavesItemInPr
 	assert.NotNil(t, is.EndedAt)
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), item.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), item.Status)
 	assert.Equal(t, []string{"Autonomous fix stuck"}, svctest.NotificationTitles(f.drain()))
 }
 
@@ -211,7 +213,7 @@ func TestOnAutonomousDriverComplete_Characterization_EventPayloadEqualsPostWrite
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newCharFixture(t, "char-event-payload-"+string(rune('a'+i)), session.SessionRoleWork, session.BacklogStatusInProgress)
+			f := newCharFixture(t, "char-event-payload-"+string(rune('a'+i)), instance.SessionRoleWork, domain.BacklogStatusInProgress)
 
 			f.complete(tc.outcome)
 
@@ -236,12 +238,12 @@ func TestOnAutonomousDriverComplete_Characterization_MarkStuckOncePerRolePerStal
 	roles := []struct {
 		name   string
 		role   string
-		status session.BacklogStatus
+		status domain.BacklogStatus
 	}{
-		{"work", session.SessionRoleWork, session.BacklogStatusInProgress},
-		{"triage", session.SessionRoleTriage, session.BacklogStatusIdea},
-		{"review", session.SessionRoleReview, session.BacklogStatusReview},
-		{"unrecognized", "future-pipeline-stage", session.BacklogStatusIdea},
+		{"work", instance.SessionRoleWork, domain.BacklogStatusInProgress},
+		{"triage", instance.SessionRoleTriage, domain.BacklogStatusIdea},
+		{"review", instance.SessionRoleReview, domain.BacklogStatusReview},
+		{"unrecognized", "future-pipeline-stage", domain.BacklogStatusIdea},
 	}
 	for _, r := range roles {
 		for _, done := range []bool{false, true} {

@@ -16,14 +16,14 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // InstanceFinder provides a targeted in-memory session lookup for the VNC proxy.
 // Implemented by session.ReviewQueuePoller — avoids a full SQLite deserialise on
 // every WebSocket upgrade (contrast with session.InstanceStore.LoadInstances).
 type InstanceFinder interface {
-	FindInstance(sessionID string) *session.Instance
+	FindInstance(sessionID string) *instance.Instance
 }
 
 // vncUpgrader is a WebSocket upgrader for VNC proxy connections.

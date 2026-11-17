@@ -3,24 +3,24 @@ package adapters
 import (
 	"testing"
 
-	"google.golang.org/protobuf/proto"
+	"github.com/tstapler/stapler-squad/session/domain"
 
-	"github.com/tstapler/stapler-squad/session/artifacts"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestArtifactsToProto_ShouldMarshal_WhenStringsHaveInvalidUTF8(t *testing.T) {
 	t.Parallel()
 	bad := "ok\xe6\x97 tail" // truncated 3-byte rune
-	recs := artifacts.RecordList{
-		artifacts.CommandRecord{Type: bad, Command: bad, Detail: bad, Result: bad},
-		artifacts.CommitRecord{SHA: bad, Subject: bad, Branch: bad},
-		artifacts.PRRecord{Host: bad, Owner: bad, Repo: bad, Branch: bad, Base: bad},
-		artifacts.BranchRecord{Name: bad, Action: bad},
-		artifacts.IssueRecord{Host: bad, Owner: bad, Repo: bad, Relation: bad},
-		artifacts.PlanDocRecord{Path: bad},
-		artifacts.CILinkRecord{URL: bad},
+	recs := domain.RecordList{
+		domain.CommandRecord{Type: bad, Command: bad, Detail: bad, Result: bad},
+		domain.CommitRecord{SHA: bad, Subject: bad, Branch: bad},
+		domain.PRRecord{Host: bad, Owner: bad, Repo: bad, Branch: bad, Base: bad},
+		domain.BranchRecord{Name: bad, Action: bad},
+		domain.IssueRecord{Host: bad, Owner: bad, Repo: bad, Relation: bad},
+		domain.PlanDocRecord{Path: bad},
+		domain.CILinkRecord{URL: bad},
 	}
-	got := artifactsToProto(&artifacts.SessionArtifactsBlob{
+	got := artifactsToProto(&domain.SessionArtifactsBlob{
 		PRURLs: []string{bad}, CommitSHAs: []string{bad}, ExternalURLs: []string{bad}, Records: recs,
 	}, true, nil)
 	if _, err := proto.Marshal(got); err != nil {

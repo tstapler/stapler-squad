@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 // feature_flags_notification_actions.go registers the four rollout flags of the
@@ -100,13 +101,13 @@ type (
 // notificationActionsFlagAuditPolicy: turning a flag on loosens (it opens a new
 // path, or re-enables a kill-switched one), so the flip is audit-fsynced and
 // refused while the sink is down; turning it off is persisted first and queued.
-var notificationActionsFlagAuditPolicy = FlagAuditPolicy{
+var notificationActionsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 	Loosening: func(enabled bool) bool { return enabled },
 }
 
 // notificationActionsFlagAuditPolicies is merged into the service's audit wiring.
-func notificationActionsFlagAuditPolicies() map[string]FlagAuditPolicy {
-	return map[string]FlagAuditPolicy{
+func notificationActionsFlagAuditPolicies() map[string]featureflags.FlagAuditPolicy {
+	return map[string]featureflags.FlagAuditPolicy{
 		backgroundActivityFeedFlagName:    notificationActionsFlagAuditPolicy,
 		notificationInlineActionsFlagName: notificationActionsFlagAuditPolicy,
 		askUserQuestionStructuredFlagName: notificationActionsFlagAuditPolicy,
@@ -138,7 +139,7 @@ func startupFlagValue(name string, def bool) bool {
 // their status_detail. Decision points read the config at decision time via
 // effectiveFlag, so a scoped flip needs no controller.
 func wireNotificationActionFlags(ff *FeatureFlagService) {
-	wire := func(name string, ctrl func(liveFlagController) FeatureController, offDetail string) {
+	wire := func(name string, ctrl func(liveFlagController) featureflags.FeatureController, offDetail string) {
 		f := &liveFlag{}
 		f.on.Store(startupFlagValue(name, FeatureFlagDefault(name)))
 		ff.SetFeatureController(name, ctrl(liveFlagController{flag: f}))
@@ -149,10 +150,16 @@ func wireNotificationActionFlags(ff *FeatureFlagService) {
 			return offDetail
 		})
 	}
-	wire(backgroundActivityFeedFlagName, func(c liveFlagController) FeatureController { return backgroundActivityFeedFlagController{c} }, backgroundActivityFeedOffDetail)
-	wire(notificationInlineActionsFlagName, func(c liveFlagController) FeatureController { return notificationInlineActionsFlagController{c} }, "Inline notification actions are OFF globally; per-action scopes can still enable a decision point")
-	wire(askUserQuestionStructuredFlagName, func(c liveFlagController) FeatureController { return askUserQuestionStructuredFlagController{c} }, "Structured AskUserQuestion is OFF globally; per-stage scopes can still enable a stage")
-	wire(agentWakeTriggersFlagName, func(c liveFlagController) FeatureController { return agentWakeTriggersFlagController{c} }, "Agent wake triggers are OFF globally; per-trigger scopes can still enable a trigger type")
+	wire(backgroundActivityFeedFlagName, func(c liveFlagController) featureflags.FeatureController {
+		return backgroundActivityFeedFlagController{c}
+	}, backgroundActivityFeedOffDetail)
+	wire(notificationInlineActionsFlagName, func(c liveFlagController) featureflags.FeatureController {
+		return notificationInlineActionsFlagController{c}
+	}, "Inline notification actions are OFF globally; per-action scopes can still enable a decision point")
+	wire(askUserQuestionStructuredFlagName, func(c liveFlagController) featureflags.FeatureController {
+		return askUserQuestionStructuredFlagController{c}
+	}, "Structured AskUserQuestion is OFF globally; per-stage scopes can still enable a stage")
+	wire(agentWakeTriggersFlagName, func(c liveFlagController) featureflags.FeatureController { return agentWakeTriggersFlagController{c} }, "Agent wake triggers are OFF globally; per-trigger scopes can still enable a trigger type")
 }
 
 // flagOffMessage is the operator copy for the FLAG_OFF action outcome (UX-AC55,

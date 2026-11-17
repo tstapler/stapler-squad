@@ -9,7 +9,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -27,8 +29,8 @@ type WorkspacePeer struct {
 	Title       string
 	Branch      string
 	Path        string
-	Status      Status
-	Goal        *SessionGoalData // nil when the peer has never set a goal
+	Status      domain.Status
+	Goal        *instance.SessionGoalData // nil when the peer has never set a goal
 
 	// InstanceLive is a best-effort liveness signal: false when the session's Status is
 	// Stopped. Callers wanting an authoritative "process confirmed dead" signal should
@@ -79,7 +81,7 @@ func (s *Storage) ListWorkspacePeers(ctx context.Context, workspaceKey string, e
 			Branch:       d.Branch,
 			Path:         d.Path,
 			Status:       d.Status,
-			InstanceLive: d.Status != Stopped,
+			InstanceLive: d.Status != domain.Stopped,
 		})
 		peerUUIDs = append(peerUUIDs, d.UUID)
 	}
@@ -108,22 +110,22 @@ func (s *Storage) ListWorkspacePeers(ctx context.Context, workspaceKey string, e
 
 // sessionGoalsByUUIDs bulk-loads SessionGoal rows for the given session UUIDs, keyed by
 // session UUID. Missing rows (no goal set) are simply absent from the map.
-func (s *Storage) sessionGoalsByUUIDs(ctx context.Context, uuids []string) (map[string]*SessionGoalData, error) {
+func (s *Storage) sessionGoalsByUUIDs(ctx context.Context, uuids []string) (map[string]*instance.SessionGoalData, error) {
 	client := s.GetEntClient()
 	if client == nil {
-		return map[string]*SessionGoalData{}, nil
+		return map[string]*instance.SessionGoalData{}, nil
 	}
 	rows, err := client.SessionGoal.Query().Where(sessiongoal.SessionUUIDIn(uuids...)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load session goals: %w", err)
 	}
-	out := make(map[string]*SessionGoalData, len(rows))
+	out := make(map[string]*instance.SessionGoalData, len(rows))
 	for _, g := range rows {
-		tasks, decodeErr := DecodeTasks(g.Tasks)
+		tasks, decodeErr := instance.DecodeTasks(g.Tasks)
 		if decodeErr != nil {
-			tasks = []TaskNode{}
+			tasks = []instance.TaskNode{}
 		}
-		out[g.SessionUUID] = &SessionGoalData{
+		out[g.SessionUUID] = &instance.SessionGoalData{
 			UUID:        g.ID.String(),
 			SessionUUID: g.SessionUUID,
 			Goal:        g.Goal,
@@ -248,7 +250,7 @@ func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath 
 	if repoPath == "" || storage == nil {
 		return ""
 	}
-	info, err := DetectWorktree(repoPath)
+	info, err := instance.DetectWorktree(repoPath)
 	if err != nil {
 		log.Warn("WorkspacePeersBlockForPath: failed to detect worktree info", "repo_path", repoPath, "err", err)
 		return ""
@@ -257,7 +259,7 @@ func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath 
 	if info.IsWorktree && info.MainRepoRoot != "" {
 		mainRepoPath = info.MainRepoRoot
 	}
-	workspaceKey := WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
+	workspaceKey := domain.WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
 	if workspaceKey == "" {
 		return ""
 	}

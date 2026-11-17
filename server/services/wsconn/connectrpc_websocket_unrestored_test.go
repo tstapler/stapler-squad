@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -17,10 +19,10 @@ import (
 // not restored yet: no pane (HasSession false) while the daemon still holds the
 // record's stored session live.
 type unrestoredTymuxPM struct {
-	session.ProcessManager // nil; any unlisted method must not be reached
-	restored               atomic.Int32
-	attached               atomic.Bool
-	exitCallbackSet        atomic.Int32
+	instance.ProcessManager // nil; any unlisted method must not be reached
+	restored                atomic.Int32
+	attached                atomic.Bool
+	exitCallbackSet         atomic.Int32
 }
 
 func (p *unrestoredTymuxPM) HasSession() bool            { return p.attached.Load() }
@@ -63,12 +65,12 @@ func (retainedPaintManager) CapturePaneRedraw(context.Context) (string, bool, bo
 
 func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 	t.Parallel()
-	for _, status := range []session.Status{session.Failed, session.PermanentlyFailed, session.Stopped, session.Crashed} {
+	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := session.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
+			inst := instance.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
 			inst.Status = status
-			inst.Backend = session.BackendTymux
+			inst.Backend = domain.BackendTymux
 			frame, ok := fullStateFrame(context.Background(), inst)
 			require.True(t, ok)
 			require.Equal(t, "retained first paint", frame.data)
@@ -82,11 +84,11 @@ func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 
 func TestStreamPaths_RetainedTymuxNeverRestores(t *testing.T) {
 	t.Parallel()
-	for _, status := range []session.Status{session.Failed, session.PermanentlyFailed, session.Stopped, session.Crashed} {
+	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			pm := &retainedTymuxPM{unrestoredTymuxPM: &unrestoredTymuxPM{}}
-			inst := session.NewStartedInstanceForTest(t, "retained", pm)
+			inst := instance.NewStartedInstanceForTest(t, "retained", pm)
 			inst.Status = status // fixture, before the first snapshot is published
 			h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 			alive, err := h.ensureHubBackendAlive(inst, "sess")
@@ -108,7 +110,7 @@ func TestStreamPaths_should_RestoreUnrestoredTymuxInstance_When_StoredSessionIsL
 
 	t.Run("ensureHubBackendAlive", func(t *testing.T) {
 		pm := &unrestoredTymuxPM{}
-		inst := session.NewStartedInstanceForTest(t, "unrestored-hub", pm)
+		inst := instance.NewStartedInstanceForTest(t, "unrestored-hub", pm)
 
 		alive, err := h.ensureHubBackendAlive(inst, "sess")
 
@@ -119,7 +121,7 @@ func TestStreamPaths_should_RestoreUnrestoredTymuxInstance_When_StoredSessionIsL
 
 	t.Run("ensureControlModeStarted", func(t *testing.T) {
 		pm := &unrestoredTymuxPM{}
-		inst := session.NewStartedInstanceForTest(t, "unrestored-control", pm)
+		inst := instance.NewStartedInstanceForTest(t, "unrestored-control", pm)
 		streamer := &pumpTestController{}
 
 		require.NoError(t, h.ensureControlModeStarted(inst, "sess", streamer))
@@ -137,7 +139,7 @@ func TestStreamPaths_should_MarkUnstartedActiveInstanceStarted_When_LazyRestoreS
 
 	t.Run("ensureHubBackendAlive", func(t *testing.T) {
 		pm := &unrestoredTymuxPM{}
-		inst := session.NewUnstartedActiveInstanceForTest(t, "lazy-hub", pm)
+		inst := instance.NewUnstartedActiveInstanceForTest(t, "lazy-hub", pm)
 
 		alive, err := h.ensureHubBackendAlive(inst, "sess")
 
@@ -149,7 +151,7 @@ func TestStreamPaths_should_MarkUnstartedActiveInstanceStarted_When_LazyRestoreS
 
 	t.Run("ensureControlModeStarted", func(t *testing.T) {
 		pm := &unrestoredTymuxPM{}
-		inst := session.NewUnstartedActiveInstanceForTest(t, "lazy-control", pm)
+		inst := instance.NewUnstartedActiveInstanceForTest(t, "lazy-control", pm)
 
 		require.NoError(t, h.ensureControlModeStarted(inst, "sess", &pumpTestController{}))
 
@@ -163,7 +165,7 @@ func TestStreamPaths_should_MarkUnstartedActiveInstanceStarted_When_LazyRestoreS
 func TestEnsureControlModeStarted_should_NotMarkStarted_When_RestoredWithoutPTY(t *testing.T) {
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	pm := &ptylessUnrestoredPM{&unrestoredTymuxPM{}}
-	inst := session.NewUnstartedActiveInstanceForTest(t, "lazy-control-nopty", pm)
+	inst := instance.NewUnstartedActiveInstanceForTest(t, "lazy-control-nopty", pm)
 	var started atomic.Int32
 	inst.RegisterLifecycleListener(startedCounter{&started})
 	streamer := &pumpTestController{}
@@ -178,8 +180,8 @@ func TestEnsureControlModeStarted_should_NotMarkStarted_When_RestoredWithoutPTY(
 
 type startedCounter struct{ n *atomic.Int32 }
 
-func (c startedCounter) OnLifecycleEvent(e session.LifecycleEvent, _ string) {
-	if e == session.EventStarted {
+func (c startedCounter) OnLifecycleEvent(e domain.LifecycleEvent, _ string) {
+	if e == domain.EventStarted {
 		c.n.Add(1)
 	}
 }

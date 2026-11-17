@@ -6,15 +6,16 @@ import (
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
 // Wired via SetAutonomousDriverStarter from server.go after both services are constructed.
 type AutonomousDriverStarter interface {
-	StartAutonomousDriverForInstance(inst *session.Instance)
-	StartAutonomousDriverWithTimeout(inst *session.Instance, startupTimeout time.Duration)
+	StartAutonomousDriverForInstance(inst *instance.Instance)
+	StartAutonomousDriverWithTimeout(inst *instance.Instance, startupTimeout time.Duration)
 }
 
 // SessionStopper allows BacklogService to kill live sessions.
@@ -108,7 +109,7 @@ type transitionCallerKey struct{}
 // another operator-facing component forwards to TransitionBacklogItemStatus.
 // resolveTransitionCaller honors only session.CallerOperatorNotificationAction,
 // and only for the user actor.
-func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) context.Context {
+func WithTransitionCaller(ctx context.Context, caller domain.TransitionCaller) context.Context {
 	return context.WithValue(ctx, transitionCallerKey{}, caller)
 }
 
@@ -116,21 +117,21 @@ func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) 
 // the user actor is an operator; the agent actor, and any unknown value, is the
 // MCP delegate (class agent), so an unknown actor never gains the operator
 // override. Both context keys are unexported, so only in-process code sets them.
-func ResolveTransitionCaller(ctx context.Context) session.TransitionCaller {
-	if TransitionActorFromContext(ctx) != session.TriggeredByUser {
-		return session.CallerMCPTransitionDelegate
+func ResolveTransitionCaller(ctx context.Context) domain.TransitionCaller {
+	if TransitionActorFromContext(ctx) != instance.TriggeredByUser {
+		return domain.CallerMCPTransitionDelegate
 	}
-	if c, ok := ctx.Value(transitionCallerKey{}).(session.TransitionCaller); ok && c == session.CallerOperatorNotificationAction {
+	if c, ok := ctx.Value(transitionCallerKey{}).(domain.TransitionCaller); ok && c == domain.CallerOperatorNotificationAction {
 		return c
 	}
-	return session.CallerOperatorTransitionRPC
+	return domain.CallerOperatorTransitionRPC
 }
 
 func TransitionActorFromContext(ctx context.Context) string {
 	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
 		return a
 	}
-	return session.TriggeredByUser
+	return instance.TriggeredByUser
 }
 
 // dropSubsumedChangesRequested removes CHANGES_REQUESTED when UNRESOLVED_THREADS
@@ -217,8 +218,6 @@ func FromProtoStuckReason(reason sessionv1.StuckReason) domain.StuckReason { //n
 	}
 }
 
-const headlessTriageUUIDPrefix = "headless-triage-"
-
 // findSupersededSessions returns every tmux-backed (work or review role)
 // ItemSession in sessions that is NOT the current round for its role — i.e.
 // a strictly newer ItemSession of the same role exists for this item. This is
@@ -236,13 +235,13 @@ const headlessTriageUUIDPrefix = "headless-triage-"
 // genuinely-attached session from being archived on such a disagreement, not
 // this function agreeing with those two on "current."
 // Pure — no I/O, no locking — so it's table-testable without tmux/storage.
-func FindSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
+func FindSupersededSessions(sessions []backlogdto.ItemSessionSummary) []backlogdto.ItemSessionSummary {
 	currentReview, currentWork := FindMostRecentSessions(sessions)
 
-	var superseded []session.ItemSessionSummary
+	var superseded []backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if !session.IsTmuxBackedSessionRole(is.Role) {
+		if !instance.IsTmuxBackedSessionRole(is.Role) {
 			continue
 		}
 		if is == currentReview || is == currentWork {
@@ -279,15 +278,15 @@ func RedactErrorDetail(s string) string {
 
 // findMostRecentSessions returns the most recently created review and work ItemSessions
 // from the provided list. Either return value may be nil if no session of that role exists.
-func FindMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSession, workSession *session.ItemSessionSummary) {
+func FindMostRecentSessions(sessions []backlogdto.ItemSessionSummary) (reviewSession, workSession *backlogdto.ItemSessionSummary) {
 	for i := range sessions {
 		is := &sessions[i]
 		switch is.Role {
-		case session.SessionRoleReview:
+		case instance.SessionRoleReview:
 			if reviewSession == nil || is.CreatedAt.After(reviewSession.CreatedAt) {
 				reviewSession = is
 			}
-		case session.SessionRoleWork:
+		case instance.SessionRoleWork:
 			if workSession == nil || is.CreatedAt.After(workSession.CreatedAt) {
 				workSession = is
 			}
@@ -303,17 +302,3 @@ const ReasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
 // reasonNameChangesRequested has no manual-nudge counterpart, so a
 // changes-requested-only steer never suppresses a thread nudge.
 const ReasonNameChangesRequested = "CHANGES_REQUESTED"
-
-// headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
-// headless triage path. The orphan guard uses this prefix to identify sessions that have no
-// live tmux process and can be safely tombstoned on re-trigger.
-// headlessReReviewUUIDPrefix is the equivalent prefix for headless re-review sessions.
-const (
-	headlessReReviewUUIDPrefix = "headless-re-review-"
-
-	// HeadlessTriageUUIDPrefix / HeadlessReReviewUUIDPrefix are the exported
-	// forms for callers outside this package that must not treat a synthetic
-	// headless ItemSession UUID as a tmux session.
-	HeadlessTriageUUIDPrefix   = headlessTriageUUIDPrefix
-	HeadlessReReviewUUIDPrefix = headlessReReviewUUIDPrefix
-)

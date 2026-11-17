@@ -8,12 +8,12 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // makeInstance creates a test session.Instance with the given fields.
-func makeInstance(title, branch, path string, tags []string) *session.Instance {
-	inst := &session.Instance{}
+func makeInstance(title, branch, path string, tags []string) *instance.Instance {
+	inst := &instance.Instance{}
 	inst.Title = title
 	inst.Branch = branch
 	inst.Path = path
@@ -72,7 +72,7 @@ func parseMCPResult(t *testing.T, result *mcpgo.CallToolResult) MCPResult {
 // sessions by default and provides a next_cursor when more exist (U-1.3).
 func TestListSessionsDefaultLimit(t *testing.T) {
 	const total = 25
-	instances := make([]*session.Instance, total)
+	instances := make([]*instance.Instance, total)
 	for i := 0; i < total; i++ {
 		instances[i] = makeInstance(fmt.Sprintf("session-%d", i), "", "", nil)
 	}
@@ -103,7 +103,7 @@ func TestListSessionsDefaultLimit(t *testing.T) {
 // with cursor yields exactly N unique IDs with no duplicates (U-1.4).
 func TestListSessionsCursorPagination(t *testing.T) {
 	const total = 25
-	instances := make([]*session.Instance, total)
+	instances := make([]*instance.Instance, total)
 	for i := 0; i < total; i++ {
 		instances[i] = makeInstance(fmt.Sprintf("session-%d", i), "", "", nil)
 	}
@@ -183,7 +183,7 @@ func TestGetSessionNotFound(t *testing.T) {
 
 // TestSearchSessionsByTitle verifies that search_sessions filters by title substring (U-1.6).
 func TestSearchSessionsByTitle(t *testing.T) {
-	instances := []*session.Instance{
+	instances := []*instance.Instance{
 		makeInstance("auth-service", "", "", nil),
 		makeInstance("auth-tests", "", "", nil),
 		makeInstance("payment-api", "", "", nil),
@@ -215,7 +215,7 @@ func TestSearchSessionsByTitle(t *testing.T) {
 // TestSearchSessionsByTag verifies that search_sessions filters by tag (U-1.7).
 // A non-empty query is required; we use a common prefix present in all session titles.
 func TestSearchSessionsByTag(t *testing.T) {
-	instances := []*session.Instance{
+	instances := []*instance.Instance{
 		makeInstance("svc-frontend-1", "", "", []string{"frontend"}),
 		makeInstance("svc-backend-1", "", "", []string{"backend"}),
 		makeInstance("svc-frontend-2", "", "", []string{"frontend", "urgent"}),
@@ -249,7 +249,7 @@ func TestSearchSessionsByTag(t *testing.T) {
 // summary fields and does not expose raw output or scrollback data (U-1.8).
 func TestSessionSummaryFields(t *testing.T) {
 	inst := makeInstance("my-session", "feature/foo", "/home/user/project", []string{"go", "backend"})
-	d := &discoveryHandlers{store: &stubStore{instances: []*session.Instance{inst}}}
+	d := &discoveryHandlers{store: &stubStore{instances: []*instance.Instance{inst}}}
 	ctx := context.Background()
 
 	result, err := d.listSessions(ctx, makeToolReq(map[string]interface{}{}))
@@ -304,7 +304,7 @@ func TestCursorPaginationComplete(t *testing.T) {
 		for _, lim := range limits {
 			n, lim := n, lim
 			t.Run(fmt.Sprintf("N=%d_limit=%d", n, lim), func(t *testing.T) {
-				instances := make([]*session.Instance, n)
+				instances := make([]*instance.Instance, n)
 				for i := 0; i < n; i++ {
 					instances[i] = makeInstance(fmt.Sprintf("inst-%04d", i), "", "", nil)
 				}

@@ -12,13 +12,13 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // attachDirtyWorktree gives inst a real worktree holding an untracked file and returns that
 // file's path.
-func attachDirtyWorktree(t *testing.T, inst *session.Instance, name string) string {
+func attachDirtyWorktree(t *testing.T, inst *instance.Instance, name string) string {
 	t.Helper()
 	wt, _, err := git.NewGitWorktree(newDraftPRTestRepo(t), name)
 	require.NoError(t, err)
@@ -32,18 +32,18 @@ func attachDirtyWorktree(t *testing.T, inst *session.Instance, name string) stri
 
 func TestCleanupPartialCreation_should_KeepDirtyWorktree_When_NotForced(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "cleanup-dirty-keep"}
+	inst := &instance.Instance{Title: "cleanup-dirty-keep"}
 	precious := attachDirtyWorktree(t, inst, "cleanup-dirty-keep")
 
 	err := cleanupPartialCreation(inst, false)
 
-	require.ErrorIs(t, err, session.ErrWorktreeDirty)
+	require.ErrorIs(t, err, instance.ErrWorktreeDirty)
 	assert.FileExists(t, precious)
 }
 
 func TestCleanupPartialCreation_should_RemoveDirtyWorktree_When_Forced(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "cleanup-dirty-force"}
+	inst := &instance.Instance{Title: "cleanup-dirty-force"}
 	precious := attachDirtyWorktree(t, inst, "cleanup-dirty-force")
 
 	require.NoError(t, cleanupPartialCreation(inst, true))

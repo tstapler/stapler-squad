@@ -1,0 +1,100 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "workflowengine",
+    srcs = [
+        "configured_workflow_engine.go",
+        "gate_latch.go",
+        "stage_config_cache.go",
+        "workflow_engine.go",
+        "workflow_engine_bypass.go",
+        "workflow_engine_enforce.go",
+        "workflow_engine_replay.go",
+        "workflow_engine_selector.go",
+        "workflow_engine_soak.go",
+        "workflow_engine_types.go",
+        "workflow_slug.go",
+        "workflow_stage_seed.go",
+        "workflow_system_edges.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/workflowengine",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//internal/sqlitedsn",
+        "//log",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/hostclaim",
+        "//session/stagecfg",
+        "//telemetry",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:backlogstage",
+        "@com_github_google_uuid//:uuid",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@org_golang_x_sync//singleflight",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workflowengine",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workflowengine_test",
+    srcs = [
+        "configured_workflow_engine_test.go",
+        "engine_helpers_test.go",
+        "main_test.go",
+        "stateful_latch_test.go",
+        "transition_callers_test.go",
+        "workflow_engine_equivalence_test.go",
+        "workflow_engine_replay_test.go",
+        "workflow_engine_selector_bench_test.go",
+        "workflow_engine_selector_test.go",
+        "workflow_engine_soak_test.go",
+        "workflow_engine_test.go",
+        "workflow_slug_test.go",
+        "workflow_stage_seed_test.go",
+        "workflow_system_edges_archive_test.go",
+        "workflow_system_edges_test.go",
+    ],
+    embed = [":workflowengine"],
+    deps = [
+        "//internal/sqlitedsn",
+        "//log",
+        "//session/dbpool",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/internal/entdbtest",
+        "//session/internal/gatefixturetest",
+        "//session/internal/sessiontest",
+        "//session/stagecfg",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogstage",
+        "//tools/bzl/ent:stagetransition",
+        "//tools/bzl/ent:transitiongate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+    ],
+)
+
+# Read by session and server/services tests that scan Go sources repo-wide.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

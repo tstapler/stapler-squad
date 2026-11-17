@@ -7,7 +7,7 @@ import (
 	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var testGHEHosts = []string{"ghe.example.com"}
@@ -22,10 +22,10 @@ func repoWithOrigin(t *testing.T, url string) string {
 	return dir
 }
 
-func legacySnap(path, owner, repo, prURL string) *session.InstanceSnapshot {
-	return &session.InstanceSnapshot{
+func legacySnap(path, owner, repo, prURL string) *domain.InstanceSnapshot {
+	return &domain.InstanceSnapshot{
 		Path:   path,
-		GitHub: session.GitHubIntegration{GitHubOwner: owner, GitHubRepo: repo, GitHubPRURL: prURL},
+		GitHub: domain.GitHubIntegration{GitHubOwner: owner, GitHubRepo: repo, GitHubPRURL: prURL},
 	}
 }
 
@@ -74,15 +74,15 @@ func TestResolveSessionRepo_LegacyNoRemoteNoURL_StaysUnrecorded(t *testing.T) {
 }
 
 func TestAnnotationsForSnapshot_ShouldEmitOneEntryPerPR_WhenSessionHoldsSeveral(t *testing.T) {
-	r11, err := session.NewPRRef("", "acme", "app", 11)
+	r11, err := domain.NewPRRef("", "acme", "app", 11)
 	require.NoError(t, err)
-	r12, err := session.NewPRRef("", "acme", "app", 12)
+	r12, err := domain.NewPRRef("", "acme", "app", 12)
 	require.NoError(t, err)
-	snap := &session.InstanceSnapshot{
+	snap := &domain.InstanceSnapshot{
 		Branch: "feat",
-		GitHub: session.GitHubIntegration{
+		GitHub: domain.GitHubIntegration{
 			GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 12,
-			PRs: []session.PRView{{Ref: r11}, {Ref: r12}},
+			PRs: []domain.PRView{{Ref: r11}, {Ref: r12}},
 		},
 	}
 
@@ -95,7 +95,7 @@ func TestAnnotationsForSnapshot_ShouldEmitOneEntryPerPR_WhenSessionHoldsSeveral(
 }
 
 func TestAnnotationsForSnapshot_ShouldKeepLegacyEntry_WhenSessionHasNoLinks(t *testing.T) {
-	snap := &session.InstanceSnapshot{GitHub: session.GitHubIntegration{GitHubOwner: "acme", GitHubRepo: "app", GitHubHost: "github.com", GitHubPRNumber: 7}}
+	snap := &domain.InstanceSnapshot{GitHub: domain.GitHubIntegration{GitHubOwner: "acme", GitHubRepo: "app", GitHubHost: "github.com", GitHubPRNumber: 7}}
 	got := annotationsForSnapshot("legacy", snap, nil)
 	require.Len(t, got, 1)
 	assert.Equal(t, 7, got[0].PRNumber)

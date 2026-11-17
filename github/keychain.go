@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/zalando/go-keyring"
 )
 
@@ -58,10 +60,10 @@ type AccountRef struct {
 // entries keep working without migration; enterprise accounts get a
 // host-qualified key ("github-token:<host>:<username>").
 func accountKey(ref AccountRef) string {
-	if IsGitHubCom(ref.Host) {
+	if domain.IsGitHubCom(ref.Host) {
 		return keychainAccountPrefix + ref.Username
 	}
-	return keychainAccountPrefix + NormalizeHost(ref.Host) + ":" + ref.Username
+	return keychainAccountPrefix + domain.NormalizeHost(ref.Host) + ":" + ref.Username
 }
 
 // GetKeychainToken returns a token for the default single-token auth flow
@@ -129,15 +131,15 @@ func ListKeychainAccounts() []AccountRef {
 // can't call GetKeychainTokenForAccount directly. Falls back to the legacy
 // single-account slot for github.com when no named account matches.
 func GetKeychainTokenForHost(host string) string {
-	normalized := NormalizeHost(host)
+	normalized := domain.NormalizeHost(host)
 	for _, ref := range ListKeychainAccounts() {
-		if NormalizeHost(ref.Host) == normalized {
+		if domain.NormalizeHost(ref.Host) == normalized {
 			if tok := GetKeychainTokenForAccount(ref.Host, ref.Username); tok != "" {
 				return tok
 			}
 		}
 	}
-	if IsGitHubCom(host) {
+	if domain.IsGitHubCom(host) {
 		if tok, err := keyringGet(keychainService, keychainTokenKey); err == nil {
 			return tok
 		}
@@ -157,7 +159,7 @@ func GetKeychainTokenForAccount(host, username string) string {
 // SetKeychainTokenForAccount stores a token under a per-account key and adds
 // the account to the accounts list if not already present.
 func SetKeychainTokenForAccount(host, username, token string) error {
-	ref := AccountRef{Username: username, Host: NormalizeHost(host)}
+	ref := AccountRef{Username: username, Host: domain.NormalizeHost(host)}
 	if err := keyringSet(keychainService, accountKey(ref), token); err != nil {
 		return err
 	}
@@ -167,7 +169,7 @@ func SetKeychainTokenForAccount(host, username, token string) error {
 // DeleteKeychainTokenForAccount removes the token for username on host and
 // removes it from the accounts list.
 func DeleteKeychainTokenForAccount(host, username string) error {
-	ref := AccountRef{Username: username, Host: NormalizeHost(host)}
+	ref := AccountRef{Username: username, Host: domain.NormalizeHost(host)}
 	_ = keyringDelete(keychainService, accountKey(ref))
 	return removeFromAccountList(ref)
 }

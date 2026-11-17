@@ -93,11 +93,19 @@ export function threePrs(): PrSeed[] {
   ];
 }
 
+// A test can end while a patched request is still in flight; Playwright then fails the test with an error from the route
+// callback, so that one teardown race is swallowed here.
+const PAGE_GONE = /Target page, context or browser has been closed|Response has been disposed|Test ended|Route is already handled/;
+
 async function patchJson(route: Route, patch: (body: Record<string, unknown>) => void): Promise<void> {
-  const response = await route.fetch();
-  const body = (await response.json()) as Record<string, unknown>;
-  patch(body);
-  await route.fulfill({ response, json: body });
+  try {
+    const response = await route.fetch();
+    const body = (await response.json()) as Record<string, unknown>;
+    patch(body);
+    await route.fulfill({ response, json: body });
+  } catch (err) {
+    if (!PAGE_GONE.test(String(err instanceof Error ? err.message : err))) throw err;
+  }
 }
 
 export interface SessionSeed {

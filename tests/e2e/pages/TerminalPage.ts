@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { CDPSession, Locator, Page } from '@playwright/test';
+import { expect, type CDPSession, type Locator, type Page } from '@playwright/test';
 import { baseUrl, tmuxSocket } from '../helpers/base-url';
 
 const run = promisify(execFile);
@@ -24,6 +24,10 @@ export class TerminalPage {
     const tab = this.page.getByRole('tab', { name: /terminal/i });
     if (await tab.isVisible().catch(() => false)) await tab.click();
     await this.surface().waitFor({ state: 'visible', timeout: 20_000 });
+    // The loading overlay sits over the surface and swallows taps until the first PTY output clears it.
+    await expect(this.page.getByText(/Loading terminal content|Initializing terminal|Starting session/)).not.toBeVisible({
+      timeout: 20_000,
+    });
   }
 
   /** The visible terminal surface that takes the tap. */

@@ -24,6 +24,8 @@ go_library(
         "//internal/dirwatch",
         "//log",
         "//session",
+        "//session/domain",
+        "//session/instance",
         "//session/mux",
         "//session/scanqueue",
         "@com_github_fsnotify_fsnotify//:fsnotify",
@@ -67,7 +69,9 @@ go_test(
         "//executor/safeexec",
         "//session",
         "//session/artifacts",
+        "//session/domain",
         "//session/git",
+        "//session/instance",
         "//session/internal/sessiontest",
         "//session/mux",
         "//session/tmux",
@@ -122,4 +126,14 @@ go_test(
         ],
         "//conditions:default": [],
     }),
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
 )

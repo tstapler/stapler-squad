@@ -10,6 +10,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type discoveryHandlers struct {
@@ -40,7 +41,7 @@ func decodeCursor(s string) (*paginationCursor, error) {
 	return &c, nil
 }
 
-func instanceToSummary(inst *session.Instance) SessionSummary {
+func instanceToSummary(inst *instance.Instance) SessionSummary {
 	snap := inst.Snapshot()
 	ws := inst.Workspace()
 	tags := snap.Tags
@@ -65,7 +66,7 @@ func instanceToSummary(inst *session.Instance) SessionSummary {
 	}
 }
 
-func instanceToDetail(inst *session.Instance) SessionDetail {
+func instanceToDetail(inst *instance.Instance) SessionDetail {
 	snap := inst.Snapshot()
 	return SessionDetail{
 		SessionSummary:  instanceToSummary(inst),
@@ -220,7 +221,7 @@ func (d *discoveryHandlers) searchSessions(ctx context.Context, req mcpgo.CallTo
 	}
 
 	queryLower := strings.ToLower(query)
-	var matched []*session.Instance
+	var matched []*instance.Instance
 	for _, inst := range instances {
 		if matchesSearch(inst, queryLower, tagFilter) {
 			matched = append(matched, inst)
@@ -244,7 +245,7 @@ func (d *discoveryHandlers) searchSessions(ctx context.Context, req mcpgo.CallTo
 	}), nil
 }
 
-func matchesSearch(inst *session.Instance, queryLower string, tagFilter []string) bool {
+func matchesSearch(inst *instance.Instance, queryLower string, tagFilter []string) bool {
 	snap := inst.Snapshot()
 
 	// Must match all required tags.

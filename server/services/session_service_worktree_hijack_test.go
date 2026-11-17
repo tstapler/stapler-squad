@@ -15,8 +15,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestCreateSession_MainCheckoutBranchCollision confirms a branch already
@@ -57,12 +58,12 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	// this test proves/refutes is purely a git-level fact on disk -- but the
 	// acceptance criteria's scenario names a live occupant explicitly, so it
 	// is seeded for fidelity to the reported bug shape.
-	require.NoError(t, fix.storage.AddInstance(&session.Instance{
+	require.NoError(t, fix.storage.AddInstance(&instance.Instance{
 		Title:   "epic11-collision-main-checkout",
 		Path:    repoDir,
 		Branch:  "collide-branch",
 		Program: "sh",
-		Status:  session.Active,
+		Status:  domain.Active,
 	}))
 
 	// Capture creation-progress phase text (same seam
@@ -98,7 +99,7 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	capturedPhases := append([]string(nil), phases...)
 	mu.Unlock()
 
-	require.Equal(t, session.Failed, outcome.Status,
+	require.Equal(t, domain.Failed, outcome.Status,
 		"main-checkout branch collision must fail loudly, not silently succeed against the bare repo path (phases=%v)", capturedPhases)
 	assert.Equal(t, "StartupError", outcome.FailureReason)
 

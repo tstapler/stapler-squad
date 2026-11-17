@@ -7,16 +7,15 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // WakeBackend is the running wake dispatcher as the wake tools use it;
 // *wakes.Dispatcher satisfies it.
 type WakeBackend interface {
-	Schedule(ctx context.Context, req wakes.ScheduleRequest) (*session.WakeTriggerData, bool, error)
-	ListByOwner(ctx context.Context, owner string) ([]*session.WakeTriggerData, error)
-	Cancel(ctx context.Context, owner, id string) (*session.WakeTriggerData, bool, error)
+	Schedule(ctx context.Context, req wakes.ScheduleRequest) (*domain.WakeTriggerData, bool, error)
+	ListByOwner(ctx context.Context, owner string) ([]*domain.WakeTriggerData, error)
+	Cancel(ctx context.Context, owner, id string) (*domain.WakeTriggerData, bool, error)
 	NextGeneration(ctx context.Context, owner string) (int, error)
 	Limits() wakes.Limits
 }
@@ -25,7 +24,7 @@ type WakeBackend interface {
 // answer listener (and with it the asker's wake) runs exactly as for a human
 // answer; *services.GuidanceRequestService satisfies it.
 type HelpAnswerer interface {
-	AnswerAs(ctx context.Context, id, answer string, who services.Answerer) (*session.GuidanceRequestData, bool, error)
+	AnswerAs(ctx context.Context, id, answer string, who services.Answerer) (*domain.GuidanceRequestData, bool, error)
 }
 
 // WakeToolDeps are the late-bound collaborators of the five tools. The

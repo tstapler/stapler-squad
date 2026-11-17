@@ -212,7 +212,7 @@ func realCallerConfig() callerConfig {
 		exemptFiles: set("tmux_process_manager.go", "native_process_manager.go", "native_process_manager_windows.go",
 			"tmux_backend.go", "backend_tymux.go", "instance_tmux.go"),
 		exemptUnits: set("Instance.SendKeys", "Instance.SendKeysN", "Instance.SendPrompt", "Instance.TapEnter", "Instance.WriteToPTY",
-			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent", "sendKeysChunked"),
+			"SendKeysWithTimeout", "SubmitContentWithEnter", "SubmitDriverContent", "SendKeysChunked"),
 	}
 }
 
@@ -249,7 +249,7 @@ func (c callerConfig) scanCallers(pkgs []*packages.Package, pkgFilter func(strin
 				if !ok || !watched(key) {
 					return
 				}
-				if c.exemptUnits[strings.SplitN(u.name, ".func", 2)[0]] && strings.HasSuffix(p.PkgPath, "/session") {
+				if c.exemptUnits[strings.SplitN(u.name, ".func", 2)[0]] && (strings.HasSuffix(p.PkgPath, "/session") || strings.HasSuffix(p.PkgPath, "/session/instance")) {
 					return
 				}
 				name := strings.TrimPrefix(strings.TrimPrefix(p.PkgPath, guardModulePath), "/")

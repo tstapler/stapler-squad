@@ -5,7 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Retry gates for state rows that are no longer pollable would otherwise accumulate forever.
@@ -14,7 +15,7 @@ func TestPruneStateBackoffs_ShouldDropGatesOfRowsNoLongerPolled(t *testing.T) {
 	p := NewPRStatusPoller(nil)
 	p.stateBackoffs[1] = stateBackoff{failures: 2, nextAt: time.Now()}
 	p.stateBackoffs[2] = stateBackoff{failures: 1, nextAt: time.Now()}
-	p.pruneStateBackoffs([]session.PRView{{StateID: 2}})
+	p.pruneStateBackoffs([]domain.PRView{{StateID: 2}})
 	assert.NotContains(t, p.stateBackoffs, 1)
 	assert.Contains(t, p.stateBackoffs, 2)
 }
@@ -23,7 +24,7 @@ func TestPruneStateBackoffs_ShouldDropGatesOfRowsNoLongerPolled(t *testing.T) {
 func TestRemoveInstance_ShouldDropTerminalDiscoveryGate(t *testing.T) {
 	t.Parallel()
 	p := NewPRStatusPoller(nil)
-	inst := &session.Instance{Title: "gone", UUID: "u-gone"}
+	inst := &instance.Instance{Title: "gone", UUID: "u-gone"}
 	p.AddInstance(inst)
 	key := pollKey(inst.Snapshot())
 	p.stateMu.Lock()

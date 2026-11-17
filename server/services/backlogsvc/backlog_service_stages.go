@@ -21,12 +21,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // stageToProto converts a session.StageData to its proto representation.
-func stageToProto(sd *session.StageData) *sessionv1.BacklogStage {
+func stageToProto(sd *stagecfg.StageData) *sessionv1.BacklogStage {
 	return &sessionv1.BacklogStage{
 		Id:          sd.ID.String(),
 		Slug:        sd.Slug,
@@ -50,7 +52,7 @@ func (s *BacklogService) CreateStage(
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("stage storage not available"))
 	}
 
-	stage, err := s.stageCRUDRepo.CreateStage(ctx, session.StageCreateInput{
+	stage, err := s.stageCRUDRepo.CreateStage(ctx, stagecfg.StageCreateInput{
 		Slug:        req.Msg.Slug,
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
@@ -59,7 +61,7 @@ func (s *BacklogService) CreateStage(
 		Enabled:     req.Msg.Enabled,
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("stage with slug %q already exists", req.Msg.Slug))
 		}
@@ -94,7 +96,7 @@ func (s *BacklogService) UpdateStage(
 		}
 	}
 
-	stage, err := s.stageCRUDRepo.UpdateStage(ctx, id, session.StageUpdateInput{
+	stage, err := s.stageCRUDRepo.UpdateStage(ctx, id, stagecfg.StageUpdateInput{
 		Name:        req.Msg.Name,
 		Description: req.Msg.Description,
 		IsEntry:     req.Msg.IsEntry,
@@ -102,7 +104,7 @@ func (s *BacklogService) UpdateStage(
 		Enabled:     req.Msg.Enabled,
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update stage: %w", err))
@@ -139,7 +141,7 @@ func (s *BacklogService) DeleteStage(
 	if !req.Msg.Force {
 		stage, err := s.stageCRUDRepo.GetStageByID(ctx, id)
 		if err != nil {
-			if errors.Is(err, session.ErrNotFound) {
+			if errors.Is(err, domain.ErrNotFound) {
 				return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %s not found", req.Msg.Id))
 			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get stage: %w", err))
@@ -161,7 +163,7 @@ func (s *BacklogService) DeleteStage(
 	}
 
 	if err := s.stageCRUDRepo.DeleteStage(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete stage: %w", err))
@@ -181,12 +183,12 @@ func (s *BacklogService) rejectStageRemovalStranding(ctx context.Context, id uui
 	if err != nil {
 		return fmt.Errorf("get stage: %w", err)
 	}
-	return s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
+	return s.stageCRUDRepo.WithTx(ctx, func(tx stagecfg.TransitionTxRepository) error {
 		_, transitions, err := tx.ListGraphForValidation(ctx)
 		if err != nil {
 			return fmt.Errorf("load graph for validation: %w", err)
 		}
-		candidate := make([]session.TransitionDefinition, 0, len(transitions))
+		candidate := make([]stagecfg.TransitionDefinition, 0, len(transitions))
 		for _, t := range transitions {
 			if t.FromSlug != stage.Slug && t.ToSlug != stage.Slug {
 				candidate = append(candidate, t)
@@ -200,9 +202,9 @@ func (s *BacklogService) rejectStageRemovalStranding(ctx context.Context, id uui
 // transaction ended) and maps the error to a connect code.
 func mapStageStrandingError(ctx context.Context, s *BacklogService, err error) error {
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, backlog.ErrDisableWouldStrandLiveItems):
+	case errors.Is(err, chains.ErrDisableWouldStrandLiveItems):
 		return connect.NewError(connect.CodeFailedPrecondition, s.withStrandedItemIDs(ctx, err))
 	default:
 		return connect.NewError(connect.CodeInternal, err)
@@ -218,7 +220,7 @@ func (s *BacklogService) stageHostsSystemRequiredEdge(ctx context.Context, slug 
 	}
 	for _, t := range all {
 		if (t.FromStageSlug == slug || t.ToStageSlug == slug) &&
-			session.IsSystemRequired(session.BacklogStatus(t.FromStageSlug), session.BacklogStatus(t.ToStageSlug)) {
+			workflowengine.IsSystemRequired(domain.BacklogStatus(t.FromStageSlug), domain.BacklogStatus(t.ToStageSlug)) {
 			return true
 		}
 	}
@@ -237,7 +239,7 @@ func (s *BacklogService) GetStage(
 
 	stage, err := s.stageCRUDRepo.GetStageBySlug(ctx, req.Msg.Slug)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %q not found", req.Msg.Slug))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get stage: %w", err))

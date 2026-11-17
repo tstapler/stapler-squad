@@ -7,12 +7,15 @@ import (
 	"io"
 	"testing"
 
-	"connectrpc.com/connect"
 	"crypto/rand"
+
+	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTestEncryptionService builds a BacklogService wired to a narrow source backend for encryption tests.
@@ -22,23 +25,23 @@ func newTestEncryptionService(backend itemSourceBackend, cfg *config.Config) *Ba
 
 // testStorageRecorder captures calls to backlog methods
 type testStorageRecorder struct {
-	createdData map[string]session.ItemSourceData
-	updatedData map[string]session.ItemSourceData
+	createdData map[string]backlogdto.ItemSourceData
+	updatedData map[string]backlogdto.ItemSourceData
 }
 
-func (tsr *testStorageRecorder) CreateItemSource(ctx context.Context, data session.ItemSourceData) (*session.ItemSourceData, error) {
+func (tsr *testStorageRecorder) CreateItemSource(ctx context.Context, data backlogdto.ItemSourceData) (*backlogdto.ItemSourceData, error) {
 	if tsr.createdData == nil {
-		tsr.createdData = make(map[string]session.ItemSourceData)
+		tsr.createdData = make(map[string]backlogdto.ItemSourceData)
 	}
 	tsr.createdData[data.PluginID] = data
 	return &data, nil
 }
 
-func (tsr *testStorageRecorder) UpdateItemSource(ctx context.Context, id string, update session.ItemSourceUpdate) (*session.ItemSourceData, error) {
+func (tsr *testStorageRecorder) UpdateItemSource(ctx context.Context, id string, update backlogdto.ItemSourceUpdate) (*backlogdto.ItemSourceData, error) {
 	if tsr.updatedData == nil {
-		tsr.updatedData = make(map[string]session.ItemSourceData)
+		tsr.updatedData = make(map[string]backlogdto.ItemSourceData)
 	}
-	data := session.ItemSourceData{}
+	data := backlogdto.ItemSourceData{}
 	if update.Config != nil {
 		data.Config = *update.Config
 	}
@@ -110,7 +113,7 @@ func TestCreateItemSourceEncryptsToken(t *testing.T) {
 	}
 
 	// Verify we can decrypt it with the key
-	decrypted, err := session.DecryptToken(key, token_str)
+	decrypted, err := domain.DecryptToken(key, token_str)
 	if err != nil {
 		t.Fatalf("decrypt token: %v", err)
 	}
@@ -173,7 +176,7 @@ func TestUpdateItemSourceEncryptsToken(t *testing.T) {
 		t.Fatal("token is not a string")
 	}
 
-	decrypted, err := session.DecryptToken(key, token_str)
+	decrypted, err := domain.DecryptToken(key, token_str)
 	if err != nil {
 		t.Fatalf("decrypt token: %v", err)
 	}
@@ -279,7 +282,7 @@ func TestCreateItemSourceEncryptionRoundTrip(t *testing.T) {
 	}
 
 	// Decrypt the token using the same key and verify it matches the original.
-	decrypted, err := session.DecryptToken(key, tokenStr)
+	decrypted, err := domain.DecryptToken(key, tokenStr)
 	if err != nil {
 		t.Fatalf("decrypt stored token: %v", err)
 	}
@@ -299,7 +302,7 @@ func TestSyncLoopDecryptsToken(t *testing.T) {
 	}
 
 	plainToken := "ghp_verysecrettoken123456789"
-	encrypted, err := session.EncryptToken(key, plainToken)
+	encrypted, err := domain.EncryptToken(key, plainToken)
 	if err != nil {
 		t.Fatalf("encrypt token: %v", err)
 	}

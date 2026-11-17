@@ -6,23 +6,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-type fakeSnapshotSource map[string]*InstanceSnapshot
+type fakeSnapshotSource map[string]*domain.InstanceSnapshot
 
-func (f fakeSnapshotSource) LiveSnapshot(id string) (*InstanceSnapshot, bool) {
+func (f fakeSnapshotSource) LiveSnapshot(id string) (*domain.InstanceSnapshot, bool) {
 	s, ok := f[id]
 	return s, ok
 }
 
 type fakeProbeInstanceStore struct {
-	data map[string]*InstanceData
+	data map[string]*domain.InstanceData
 	err  error
 }
 
-func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*InstanceData, error) {
+func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -35,10 +40,10 @@ func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*InstanceData,
 
 func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldHoldOnErrorAndNilMeansToday(t *testing.T) {
 	t.Parallel()
-	now := prTestEpoch
+	now := fixturetest.PrTestEpoch
 	archived := now.Add(-time.Hour)
-	mk := func(status Status, lmca time.Time, mut func(*InstanceSnapshot)) *InstanceSnapshot {
-		s := &InstanceSnapshot{Status: status, LastMeaningfulChangeAt: lmca, CreatedAt: now.Add(-3 * time.Hour)}
+	mk := func(status domain.Status, lmca time.Time, mut func(*domain.InstanceSnapshot)) *domain.InstanceSnapshot {
+		s := &domain.InstanceSnapshot{Status: status, LastMeaningfulChangeAt: lmca, CreatedAt: now.Add(-3 * time.Hour)}
 		if mut != nil {
 			mut(s)
 		}
@@ -47,19 +52,19 @@ func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldH
 	turnEndedAt := now.Add(-30 * time.Minute)
 	tests := []struct {
 		name string
-		snap *InstanceSnapshot
+		snap *domain.InstanceSnapshot
 		want bool
 	}{
-		{"active mid-turn, recent change", mk(Active, now.Add(-2*time.Minute), nil), true},
-		{"paused is ended", mk(Paused, now, nil), false},
-		{"stopped is ended", mk(Stopped, now, nil), false},
-		{"hibernated is ended", mk(Hibernated, now, nil), false},
-		{"archived is ended", mk(Active, now, func(s *InstanceSnapshot) { s.ArchivedAt = &archived }), false},
-		{"turn ended and idle past the window", mk(Active, turnEndedAt, func(s *InstanceSnapshot) { s.TurnEnded = TurnEnded{At: turnEndedAt} }), false},
-		{"turn ended recently is still live inside the window", mk(Active, now.Add(-time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = TurnEnded{At: now.Add(-time.Minute)} }), true},
-		{"turn ended, then new activity: working again", mk(Active, now.Add(-5*time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = TurnEnded{At: now.Add(-20 * time.Minute)} }), true},
-		{"working with no change for over 1h is capped, not live", mk(Active, now.Add(-61*time.Minute), nil), false},
-		{"zero LMCA falls back to creation time (over 1h ago: capped)", mk(Active, time.Time{}, nil), false},
+		{"active mid-turn, recent change", mk(domain.Active, now.Add(-2*time.Minute), nil), true},
+		{"paused is ended", mk(domain.Paused, now, nil), false},
+		{"stopped is ended", mk(domain.Stopped, now, nil), false},
+		{"hibernated is ended", mk(domain.Hibernated, now, nil), false},
+		{"archived is ended", mk(domain.Active, now, func(s *domain.InstanceSnapshot) { s.ArchivedAt = &archived }), false},
+		{"turn ended and idle past the window", mk(domain.Active, turnEndedAt, func(s *domain.InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: turnEndedAt} }), false},
+		{"turn ended recently is still live inside the window", mk(domain.Active, now.Add(-time.Minute), func(s *domain.InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-time.Minute)} }), true},
+		{"turn ended, then new activity: working again", mk(domain.Active, now.Add(-5*time.Minute), func(s *domain.InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-20 * time.Minute)} }), true},
+		{"working with no change for over 1h is capped, not live", mk(domain.Active, now.Add(-61*time.Minute), nil), false},
+		{"zero LMCA falls back to creation time (over 1h ago: capped)", mk(domain.Active, time.Time{}, nil), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -74,13 +79,13 @@ func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldH
 
 func TestLiveWorkProbe_ShouldReturnNotLiveWithoutError_WhenSessionAbsentOrPersistedEnded(t *testing.T) {
 	t.Parallel()
-	now := prTestEpoch
+	now := fixturetest.PrTestEpoch
 	archived := now
-	store := &fakeProbeInstanceStore{data: map[string]*InstanceData{
-		"archived": {Status: Active, ArchivedAt: &archived, LastMeaningfulOutput: now},
-		"stopped":  {Status: Stopped, LastMeaningfulOutput: now},
-		"recent":   {Status: Active, LastMeaningfulOutput: now.Add(-time.Minute)},
-		"stale":    {Status: Active, LastMeaningfulOutput: now.Add(-2 * time.Hour)},
+	store := &fakeProbeInstanceStore{data: map[string]*domain.InstanceData{
+		"archived": {Status: domain.Active, ArchivedAt: &archived, LastMeaningfulOutput: now},
+		"stopped":  {Status: domain.Stopped, LastMeaningfulOutput: now},
+		"recent":   {Status: domain.Active, LastMeaningfulOutput: now.Add(-time.Minute)},
+		"stale":    {Status: domain.Active, LastMeaningfulOutput: now.Add(-2 * time.Hour)},
 	}}
 	p := NewSnapshotLiveWorkProbe(fakeSnapshotSource{}, store)
 	for id, want := range map[string]bool{"missing": false, "archived": false, "stopped": false, "recent": true, "stale": false, "": false} {
@@ -92,7 +97,7 @@ func TestLiveWorkProbe_ShouldReturnNotLiveWithoutError_WhenSessionAbsentOrPersis
 
 func TestLiveWorkProbe_ShouldHoldOnTransientErrorButOnlyForOneHour_AndRecoverOnSuccess(t *testing.T) {
 	t.Parallel()
-	now := prTestEpoch
+	now := fixturetest.PrTestEpoch
 	store := &fakeProbeInstanceStore{err: errors.New("db busy")}
 	p := NewSnapshotLiveWorkProbe(fakeSnapshotSource{}, store)
 	before := LiveWorkResultCount(LiveWorkResultCapError)
@@ -116,13 +121,13 @@ func TestLiveWorkProbe_ShouldHoldOnTransientErrorButOnlyForOneHour_AndRecoverOnS
 
 func TestIsLiveWork_ShouldCapMidTurnSession_WhenNoChangeForOverOneHour(t *testing.T) {
 	t.Parallel()
-	now := prTestEpoch
-	f := LiveWorkFacts{Unended: true, Working: true, LastMeaningfulChangeAt: now.Add(-59 * time.Minute)}
-	assert.True(t, IsLiveWork(f, now, LiveWorkIdleWindow))
+	now := fixturetest.PrTestEpoch
+	f := instance.LiveWorkFacts{Unended: true, Working: true, LastMeaningfulChangeAt: now.Add(-59 * time.Minute)}
+	assert.True(t, instance.IsLiveWork(f, now, instance.LiveWorkIdleWindow))
 	f.LastMeaningfulChangeAt = now.Add(-time.Hour)
-	assert.False(t, IsLiveWork(f, now, LiveWorkIdleWindow))
+	assert.False(t, instance.IsLiveWork(f, now, instance.LiveWorkIdleWindow))
 	before := LiveWorkResultCount(LiveWorkResultCapWorking)
-	snap := &InstanceSnapshot{Status: Active, LastMeaningfulChangeAt: now.Add(-2 * time.Hour)}
+	snap := &domain.InstanceSnapshot{Status: domain.Active, LastMeaningfulChangeAt: now.Add(-2 * time.Hour)}
 	p := NewSnapshotLiveWorkProbe(fakeSnapshotSource{"s": snap}, &fakeProbeInstanceStore{})
 	_, _ = p.IsLive(context.Background(), "s", now)
 	assert.Greater(t, LiveWorkResultCount(LiveWorkResultCapWorking), before, "the cap firing is counted")
@@ -130,42 +135,42 @@ func TestIsLiveWork_ShouldCapMidTurnSession_WhenNoChangeForOverOneHour(t *testin
 
 func TestLiveWorkHoldStart_ShouldUseFirstMerge_ThenLastPolled_ThenFirstObserved(t *testing.T) {
 	t.Parallel()
-	obs := prTestEpoch.Add(5 * time.Hour)
-	merged := func(n int, mergedAt, polled time.Time) PRView {
+	obs := fixturetest.PrTestEpoch.Add(5 * time.Hour)
+	merged := func(n int, mergedAt, polled time.Time) domain.PRView {
 		t.Helper()
-		v := prRow(t, n, PRStateMerged, "")
+		v := fixturetest.PrRow(t, n, domain.PRStateMerged, "")
 		v.MergedAt, v.LastPolledAt = mergedAt, polled
 		return v
 	}
-	first, second := prTestEpoch, prTestEpoch.Add(30*time.Minute)
-	assert.Equal(t, first, LiveWorkHoldStart([]PRView{merged(2, second, time.Time{}), merged(1, first, time.Time{})}, obs), "first merge, not the latest")
-	assert.Equal(t, second, LiveWorkHoldStart([]PRView{merged(1, time.Time{}, second)}, obs), "zero merged_at falls back to last_polled_at")
-	assert.Equal(t, obs, LiveWorkHoldStart([]PRView{merged(1, time.Time{}, time.Time{})}, obs), "no timestamps: first observation")
-	open := prRow(t, 3, PRStateOpen, "")
-	assert.Equal(t, obs, LiveWorkHoldStart([]PRView{open}, obs), "open PRs never start the clock")
+	first, second := fixturetest.PrTestEpoch, fixturetest.PrTestEpoch.Add(30*time.Minute)
+	assert.Equal(t, first, instance.LiveWorkHoldStart([]domain.PRView{merged(2, second, time.Time{}), merged(1, first, time.Time{})}, obs), "first merge, not the latest")
+	assert.Equal(t, second, instance.LiveWorkHoldStart([]domain.PRView{merged(1, time.Time{}, second)}, obs), "zero merged_at falls back to last_polled_at")
+	assert.Equal(t, obs, instance.LiveWorkHoldStart([]domain.PRView{merged(1, time.Time{}, time.Time{})}, obs), "no timestamps: first observation")
+	open := fixturetest.PrRow(t, 3, domain.PRStateOpen, "")
+	assert.Equal(t, obs, instance.LiveWorkHoldStart([]domain.PRView{open}, obs), "open PRs never start the clock")
 }
 
 func TestSplitLiveCurrentRound_ShouldSkipOnlyTheLiveNewestWorkSession_AndTreatErrorAsLive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	older := ItemSessionSummary{ID: "1", SessionUUID: "old", Role: SessionRoleWork, CreatedAt: prTestEpoch}
-	newest := ItemSessionSummary{ID: "2", SessionUUID: "new", Role: SessionRoleWork, CreatedAt: prTestEpoch.Add(time.Hour)}
-	review := ItemSessionSummary{ID: "3", SessionUUID: "rev", Role: SessionRoleReview, CreatedAt: prTestEpoch.Add(2 * time.Hour)}
-	all := []ItemSessionSummary{older, newest, review}
+	older := backlogdto.ItemSessionSummary{ID: "1", SessionUUID: "old", Role: instance.SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch}
+	newest := backlogdto.ItemSessionSummary{ID: "2", SessionUUID: "new", Role: instance.SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch.Add(time.Hour)}
+	review := backlogdto.ItemSessionSummary{ID: "3", SessionUUID: "rev", Role: instance.SessionRoleReview, CreatedAt: fixturetest.PrTestEpoch.Add(2 * time.Hour)}
+	all := []backlogdto.ItemSessionSummary{older, newest, review}
 
-	arch, skipped := SplitLiveCurrentRound(ctx, &fakeProbe{live: map[string]bool{"new": true}}, prTestEpoch, all)
+	arch, skipped := SplitLiveCurrentRound(ctx, &fakeProbe{live: map[string]bool{"new": true}}, fixturetest.PrTestEpoch, all)
 	assert.True(t, skipped)
-	assert.Equal(t, []ItemSessionSummary{older, review}, arch)
+	assert.Equal(t, []backlogdto.ItemSessionSummary{older, review}, arch)
 
-	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{err: errors.New("boom")}, prTestEpoch, all)
+	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{err: errors.New("boom")}, fixturetest.PrTestEpoch, all)
 	assert.True(t, skipped, "a probe error counts as live")
-	assert.Equal(t, []ItemSessionSummary{older, review}, arch)
+	assert.Equal(t, []backlogdto.ItemSessionSummary{older, review}, arch)
 
-	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{}, prTestEpoch, all)
+	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{}, fixturetest.PrTestEpoch, all)
 	assert.False(t, skipped)
 	assert.Equal(t, all, arch)
 
-	arch, skipped = SplitLiveCurrentRound(ctx, nil, prTestEpoch, all)
+	arch, skipped = SplitLiveCurrentRound(ctx, nil, fixturetest.PrTestEpoch, all)
 	assert.False(t, skipped, "a nil probe skips nothing")
 	assert.Equal(t, all, arch)
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"gopkg.in/yaml.v3"
 )
@@ -66,7 +68,7 @@ func ListCLIHosts() ([]CLIHost, error) {
 
 	hosts := make([]CLIHost, 0, len(raw))
 	for host, entry := range raw {
-		hosts = append(hosts, CLIHost{Host: NormalizeHost(host), Username: entry.User})
+		hosts = append(hosts, CLIHost{Host: domain.NormalizeHost(host), Username: entry.User})
 	}
 	return hosts, nil
 }
@@ -77,7 +79,7 @@ func ListCLIHosts() ([]CLIHost, error) {
 func GetCLIToken(ctx context.Context, host string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "gh", "auth", "token", "--hostname", NormalizeHost(host))
+	cmd := safeexec.CommandContext(ctx, "gh", "auth", "token", "--hostname", domain.NormalizeHost(host))
 	out, err := runGHCLICommand(ctx, "auth.token", func() ([]byte, error) { return cmd.Output() })
 	if err != nil {
 		return "", fmt.Errorf("gh auth token --hostname %s: %w", host, err)

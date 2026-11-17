@@ -10,8 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // seedRegistryEntry writes a valid, signed advertisement for hostname/addr
@@ -75,9 +77,9 @@ func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThis
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "deep link happy path",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -91,8 +93,8 @@ func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThis
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var body struct {
-		Kind string                   `json:"kind"`
-		Item *session.BacklogItemData `json:"item"`
+		Kind string                      `json:"kind"`
+		Item *backlogdto.BacklogItemData `json:"item"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "local", body.Kind)
@@ -152,9 +154,9 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 	resolver := newDeepLinkResolverForTest(storage, "myhost")
 
 	t.Run("deleted", func(t *testing.T) {
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "item to delete",
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
 		require.NoError(t, storage.DeleteBacklogItem(ctx, item.ID))
@@ -175,12 +177,12 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 	})
 
 	t.Run("archived", func(t *testing.T) {
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "item to archive",
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
-		_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
+		_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredByUser, "")
 		require.NoError(t, err)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/deep-link/resolve?url=ssq://myhost/backlog/v1/"+item.ID, nil)
@@ -302,25 +304,25 @@ func TestDeepLinkResolver_should_LogResolvedOrFailedEvent_When_EveryOutcomeReaso
 	ctx := context.Background()
 	resolver := newDeepLinkResolverForTest(storage, "myhost")
 
-	localItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	localItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "logging happy path",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	deletedItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	deletedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "logging deleted",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.DeleteBacklogItem(ctx, deletedItem.ID))
 
-	archivedItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	archivedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "logging archived",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	_, err = storage.RawArchiveBacklogItem(ctx, archivedItem.ID, nil, session.TriggeredByUser, "")
+	_, err = storage.RawArchiveBacklogItem(ctx, archivedItem.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
 	cases := []struct {

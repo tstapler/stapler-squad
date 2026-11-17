@@ -5,7 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestMaybeAutoArchive_ArchivesBacklogOriginatedSession is the regression test for the
@@ -21,14 +22,14 @@ func TestMaybeAutoArchive_ArchivesBacklogOriginatedSession(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "backlog-work-session",
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Tags:      []string{session.TagBacklogWork, session.TagAutonomous},
+		Tags:      []string{instance.TagBacklogWork, instance.TagAutonomous},
 	}
 
 	fix.svc.maybeAutoArchive(inst)
@@ -45,10 +46,10 @@ func TestMaybeAutoArchive_IgnoresPlainSession(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "plain-session",
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

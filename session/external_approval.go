@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"sync"
 	"time"
 
@@ -203,7 +204,7 @@ func (m *ExternalApprovalMonitor) IntegrateWithDiscoveryTmux(
 	discovery *ExternalSessionDiscovery,
 	tmuxStreamerManager *ExternalTmuxStreamerManager,
 ) {
-	discovery.OnSessionAdded(func(instance *Instance) {
+	discovery.OnSessionAdded(func(instance *instance.Instance) {
 		if instance.ExternalMetadata == nil {
 			return
 		}
@@ -229,7 +230,7 @@ func (m *ExternalApprovalMonitor) IntegrateWithDiscoveryTmux(
 		}
 	})
 
-	discovery.OnSessionRemoved(func(instance *Instance) {
+	discovery.OnSessionRemoved(func(instance *instance.Instance) {
 		if instance.ExternalMetadata == nil {
 			return
 		}

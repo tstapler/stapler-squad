@@ -7,17 +7,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-const redactionTestProof = session.MCPProofValuePrefix + "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+const redactionTestProof = instance.MCPProofValuePrefix + "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
 func newRedactionHandlers(t *testing.T, sessionID, output string) *terminalHandlers {
 	t.Helper()
 	mgr := makeScrollbackMgr(t)
 	require.NoError(t, mgr.AppendOutput(sessionID, []byte(output)))
 	return &terminalHandlers{
-		store:      &stubStore{instances: []*session.Instance{{Title: sessionID}}},
+		store:      &stubStore{instances: []*instance.Instance{{Title: sessionID}}},
 		scrollback: mgr,
 		writeLim:   newTokenBucket(10, 10),
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -21,7 +21,7 @@ type fakeTerminator struct {
 	reasons []string
 }
 
-func (f *fakeTerminator) terminate(_ context.Context, _ *session.Instance, reason string) error {
+func (f *fakeTerminator) terminate(_ context.Context, _ *instance.Instance, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reasons = append(f.reasons, reason)
@@ -97,10 +97,10 @@ func TestCapacityMonitor_CacheReadCostTripsBudget(t *testing.T) {
 		cfg      config.CapacityConfig
 		wantStop bool
 	}{
-		{"triage default budget stops", session.SessionRoleTriage, config.CapacityConfig{}, true},
-		{"work role without budget is not stopped", session.SessionRoleWork, config.CapacityConfig{}, false},
-		{"work role over explicit budget is warned, not stopped", session.SessionRoleWork, config.CapacityConfig{RoleCostBudgetUSD: map[string]float64{"work": 50}}, false},
-		{"triage budget disabled by explicit 0", session.SessionRoleTriage, config.CapacityConfig{RoleCostBudgetUSD: map[string]float64{"triage": 0}}, false},
+		{"triage default budget stops", instance.SessionRoleTriage, config.CapacityConfig{}, true},
+		{"work role without budget is not stopped", instance.SessionRoleWork, config.CapacityConfig{}, false},
+		{"work role over explicit budget is warned, not stopped", instance.SessionRoleWork, config.CapacityConfig{RoleCostBudgetUSD: map[string]float64{"work": 50}}, false},
+		{"triage budget disabled by explicit 0", instance.SessionRoleTriage, config.CapacityConfig{RoleCostBudgetUSD: map[string]float64{"triage": 0}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestCapacityMonitor_IdleWaitWallClockTrigger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			parseRes := parseResultFrom(cacheReadTimeline(tt.turns, 1000, tt.tools, base, tt.step))
-			monitor, _, compactor, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{IdleWaitTurnCeiling: 15}, parseRes)
+			monitor, _, compactor, _ := newGuardrailMonitor(t, instance.SessionRoleWork, config.CapacityConfig{IdleWaitTurnCeiling: 15}, parseRes)
 			lastTurn := parseRes.TurnTimeline[len(parseRes.TurnTimeline)-1].Timestamp
 			monitor.now = func() time.Time { return lastTurn.Add(tt.staleBy) }
 			monitor.poll(context.Background())
@@ -167,9 +167,9 @@ func TestCapacityMonitor_IdleWaitWallClockTrigger(t *testing.T) {
 func TestCapacityMonitor_FailedTerminatorRetriesWithoutRenotifying(t *testing.T) {
 	t.Parallel()
 	tl := cacheReadTimeline(100, 5_000_000, []string{"Edit"}, time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC), time.Minute)
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleTriage, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleTriage, config.CapacityConfig{}, parseResultFrom(tl))
 	attempts := 0
-	monitor.terminator = func(context.Context, *session.Instance, string) error {
+	monitor.terminator = func(context.Context, *instance.Instance, string) error {
 		attempts++
 		if attempts == 1 {
 			return assert.AnError
@@ -195,7 +195,7 @@ func TestCapacityMonitor_FailedTerminatorRetriesWithoutRenotifying(t *testing.T)
 func TestCapacityMonitor_PrunesStateForInactiveSessions(t *testing.T) {
 	t.Parallel()
 	tl := cacheReadTimeline(100, 5_000_000, []string{"Edit"}, time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC), time.Minute)
-	monitor, _, _, _ := newGuardrailMonitor(t, session.SessionRoleTriage, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor, _, _, _ := newGuardrailMonitor(t, instance.SessionRoleTriage, config.CapacityConfig{}, parseResultFrom(tl))
 	monitor.poll(context.Background())
 	monitor.mu.RLock()
 	require.NotEmpty(t, monitor.handledOnce)
@@ -224,7 +224,7 @@ func TestCapacityMonitor_IncidentReplay_CompactThenTerminalOnce(t *testing.T) {
 	base := time.Date(2026, 9, 22, 17, 0, 0, 0, time.UTC)
 	// Cost stays below the triage budget so this exercises idle-wait only.
 	parseRes := parseResultFrom(incidentWakeTurns(10, base))
-	monitor, bus, compactor, terminator := newGuardrailMonitor(t, session.SessionRoleTriage,
+	monitor, bus, compactor, terminator := newGuardrailMonitor(t, instance.SessionRoleTriage,
 		config.CapacityConfig{RoleCostBudgetUSD: map[string]float64{"triage": 0}}, parseRes)
 	ch, subID := bus.Subscribe(context.Background())
 	defer bus.Unsubscribe(subID)
@@ -297,14 +297,14 @@ func TestCapacityMonitor_SpendRateAlert_FastBurnNotifiesOncePerWindow(t *testing
 	t.Parallel()
 	// $0.30 per 1M cache-read tokens: 59 one-minute turns in the window cost ~$17.7/h > $15/h default.
 	tl := cacheReadTimeline(100, 1_000_000, []string{"Edit"}, spendRateBase, time.Minute)
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	assert.Equal(t, 1, countSpendRateAlerts(t, monitor, bus, 3))
 }
 
 func TestCapacityMonitor_SpendRateAlert_RefiresAfterCooldown(t *testing.T) {
 	t.Parallel()
 	tl := cacheReadTimeline(100, 1_000_000, []string{"Edit"}, spendRateBase, time.Minute)
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	ch, subID := bus.Subscribe(context.Background())
 	defer bus.Unsubscribe(subID)
 
@@ -332,14 +332,14 @@ func TestCapacityMonitor_SpendRateAlert_LongLowRateSessionDoesNotAlert(t *testin
 	t.Parallel()
 	// 5M total tokens (over the old 2M token ceiling) but ~$0.18/h in the window.
 	tl := cacheReadTimeline(500, 10_000, []string{"Edit"}, spendRateBase, time.Minute)
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	assert.Zero(t, countSpendRateAlerts(t, monitor, bus, 2))
 }
 
 func TestCapacityMonitor_SpendRateAlert_NegativeThresholdDisables(t *testing.T) {
 	t.Parallel()
 	tl := cacheReadTimeline(100, 1_000_000, []string{"Edit"}, spendRateBase, time.Minute)
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{SpendRateAlertUSDPerHour: -1}, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleWork, config.CapacityConfig{SpendRateAlertUSDPerHour: -1}, parseResultFrom(tl))
 	assert.Zero(t, countSpendRateAlerts(t, monitor, bus, 2))
 }
 
@@ -349,7 +349,7 @@ func TestCapacityMonitor_SpendRateAlert_UnpricedModelDoesNotAlertOrPanic(t *test
 	for i := range tl {
 		tl[i].Model = "unpriced-model"
 	}
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleWork, config.CapacityConfig{}, parseResultFrom(tl))
 	assert.Zero(t, countSpendRateAlerts(t, monitor, bus, 2))
 }
 
@@ -358,7 +358,7 @@ func TestCapacityMonitor_SpendRateAlert_CustomWindowAndCooldownBoundary(t *testi
 	// 5-minute window, $1/h line: ~5 turns x $0.30 = $1.50 per window -> $18/h.
 	tl := cacheReadTimeline(20, 1_000_000, []string{"Edit"}, spendRateBase, time.Minute)
 	cfg := config.CapacityConfig{SpendRateAlertUSDPerHour: 1, SpendRateWindowMinutes: 5}
-	monitor, bus, _, _ := newGuardrailMonitor(t, session.SessionRoleWork, cfg, parseResultFrom(tl))
+	monitor, bus, _, _ := newGuardrailMonitor(t, instance.SessionRoleWork, cfg, parseResultFrom(tl))
 	ch, subID := bus.Subscribe(context.Background())
 	defer bus.Unsubscribe(subID)
 

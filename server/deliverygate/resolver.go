@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 
 // InstanceDataLister is the refresh-only storage port (session.InstanceStore subset).
 type InstanceDataLister interface {
-	ListInstanceData() ([]session.InstanceData, error)
+	ListInstanceData() ([]domain.InstanceData, error)
 }
 
 // Resolution is the resolver's answer for one event or session identity.
@@ -121,7 +121,7 @@ func (r *Resolver) maybeRefresh() {
 }
 
 type listResult struct {
-	data []session.InstanceData
+	data []domain.InstanceData
 	err  error
 }
 
@@ -158,7 +158,7 @@ func (r *Resolver) runRefresh(l InstanceDataLister) {
 
 // apply merges listed sessions into the index and flags any key that earlier
 // missed but exists in storage: that is an index defect, not an accepted leak.
-func (r *Resolver) apply(data []session.InstanceData) {
+func (r *Resolver) apply(data []domain.InstanceData) {
 	entries := make([]Entry, 0, len(data))
 	r.missMu.Lock()
 	for _, d := range data {

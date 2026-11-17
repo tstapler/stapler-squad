@@ -10,12 +10,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func (f *stallNudgeFixture) inspect(state domain.ObservedState) StaleWorkDisposition {
-	f.svc.AutonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot { return snapshotFor(state) }
+	f.svc.AutonomousSvc.staleSnapshot = func(*instance.Instance) domain.StopSnapshot { return snapshotFor(state) }
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	if err != nil {
 		panic(err)
@@ -26,7 +26,7 @@ func (f *stallNudgeFixture) inspect(state domain.ObservedState) StaleWorkDisposi
 func TestInspectStaleWork_should_nudgeOnlyIdlePrompt_When_AnyObservedState(t *testing.T) {
 	for _, state := range domain.AllObservedStates {
 		t.Run(string(state), func(t *testing.T) {
-			f := newStallNudgeFixture(t, "stale-"+string(state), session.BacklogStatusInProgress, true, true)
+			f := newStallNudgeFixture(t, "stale-"+string(state), domain.BacklogStatusInProgress, true, true)
 
 			got := f.inspect(state)
 
@@ -55,7 +55,7 @@ func TestInspectStaleWork_should_respawn_When_NudgeNotAllowed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newStallNudgeFixture(t, "stale-no-nudge", session.BacklogStatusInProgress, tc.diagnose, tc.stall)
+			f := newStallNudgeFixture(t, "stale-no-nudge", domain.BacklogStatusInProgress, tc.diagnose, tc.stall)
 			if !tc.autonomous {
 				f.inst.SetAutonomousMode(false, "")
 			}
@@ -67,11 +67,11 @@ func TestInspectStaleWork_should_respawn_When_NudgeNotAllowed(t *testing.T) {
 }
 
 func TestInspectStaleWork_should_skip_When_StallRecoveryLive(t *testing.T) {
-	f := newStallNudgeFixture(t, "stale-recovery-live", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "stale-recovery-live", domain.BacklogStatusInProgress, true, true)
 	_, release := f.svc.AutonomousSvc.beginRecovery(f.title)
 	defer release()
 	captured := false
-	f.svc.AutonomousSvc.staleSnapshot = func(*session.Instance) domain.StopSnapshot {
+	f.svc.AutonomousSvc.staleSnapshot = func(*instance.Instance) domain.StopSnapshot {
 		captured = true
 		return snapshotFor(domain.ObservedIdlePrompt)
 	}
@@ -99,7 +99,7 @@ func TestTryBeginRecovery_should_refuseAndKeepLiveEntry_When_RecoveryAlreadyRegi
 }
 
 func TestRecordDeadPane_should_writeStuckRow_When_WorkSessionLive(t *testing.T) {
-	f := newStallNudgeFixture(t, "dead-pane-row", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "dead-pane-row", domain.BacklogStatusInProgress, true, true)
 
 	f.svc.AutonomousSvc.RecordDeadPane(f.inst.UUID, f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
 
@@ -117,7 +117,7 @@ func TestRecordDeadPane_should_storeSanitizedTail_When_SnapshotCarriesPaneTail(t
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			f := newStallNudgeFixture(t, "dead-pane-tail", session.BacklogStatusInProgress, true, true)
+			f := newStallNudgeFixture(t, "dead-pane-tail", domain.BacklogStatusInProgress, true, true)
 			snap := snapshotFor(domain.ObservedCrashed)
 			snap.PaneTail = tc.tail
 
@@ -133,7 +133,7 @@ func TestRecordDeadPane_should_storeSanitizedTail_When_SnapshotCarriesPaneTail(t
 }
 
 func TestRecordDeadPane_should_beNoop_When_SessionHasNoLiveWorkItemSession(t *testing.T) {
-	f := newStallNudgeFixture(t, "dead-pane-noop", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "dead-pane-noop", domain.BacklogStatusInProgress, true, true)
 
 	f.svc.AutonomousSvc.RecordDeadPane("unlinked-uuid", f.title, snapshotFor(domain.ObservedCrashed), domain.ObservedCrashed)
 

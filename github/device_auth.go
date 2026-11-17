@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // defaultClientID is the GitHub OAuth App client ID for Stapler Squad.
@@ -47,7 +49,7 @@ func clientID(host, override string) string {
 	if override != "" {
 		return override
 	}
-	if IsGitHubCom(host) {
+	if domain.IsGitHubCom(host) {
 		if v := os.Getenv("STAPLER_SQUAD_GITHUB_CLIENT_ID"); v != "" {
 			return v
 		}
@@ -171,7 +173,7 @@ func StoreTokenForDiscoveredUser(ctx context.Context, host, token string) error 
 	if err == nil && login != "" {
 		return SetKeychainTokenForAccount(host, login, token)
 	}
-	if IsGitHubCom(host) {
+	if domain.IsGitHubCom(host) {
 		return SetKeychainToken(token)
 	}
 	return err

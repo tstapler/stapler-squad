@@ -8,12 +8,16 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
 // liveWorkState is the listener's live-work wiring and per-item hold bookkeeping.
 type liveWorkState struct {
 	mu    sync.Mutex
-	probe session.LiveWorkProbe
+	probe instance.LiveWorkProbe
 	clock func() time.Time // nil: time.Now
 
 	refresher PRRowRefresher
@@ -24,7 +28,7 @@ type liveWorkState struct {
 
 // SetLiveWorkProbe wires the shared live-work probe. Nil (or the reader:backlog
 // scope off) means today's behavior: no hold.
-func (l *BacklogLifecycleListener) SetLiveWorkProbe(p session.LiveWorkProbe) {
+func (l *BacklogLifecycleListener) SetLiveWorkProbe(p instance.LiveWorkProbe) {
 	l.liveWork.mu.Lock()
 	defer l.liveWork.mu.Unlock()
 	l.liveWork.probe = p
@@ -32,7 +36,7 @@ func (l *BacklogLifecycleListener) SetLiveWorkProbe(p session.LiveWorkProbe) {
 
 // LiveWorkProbe returns the wired probe (nil when unwired); the wiring assertion
 // compares it with the instances held by BacklogService and the gate.
-func (l *BacklogLifecycleListener) LiveWorkProbe() session.LiveWorkProbe {
+func (l *BacklogLifecycleListener) LiveWorkProbe() instance.LiveWorkProbe {
 	l.liveWork.mu.Lock()
 	defer l.liveWork.mu.Unlock()
 	return l.liveWork.probe
@@ -54,7 +58,7 @@ func (l *BacklogLifecycleListener) liveWorkNow() time.Time {
 // with a warning (expiry wins over a probe error). Off unless reader:backlog is on
 // and a probe is wired. A probe error is treated as live; the real probe caps that
 // itself.
-func (l *BacklogLifecycleListener) heldByLiveWork(ctx context.Context, itemID string, prs []session.PRView) (held, maxHoldExpired bool) {
+func (l *BacklogLifecycleListener) heldByLiveWork(ctx context.Context, itemID string, prs []domain.PRView) (held, maxHoldExpired bool) {
 	probe := l.LiveWorkProbe()
 	if probe == nil || !l.backlogReaderEnabled() {
 		return false, false
@@ -69,15 +73,15 @@ func (l *BacklogLifecycleListener) heldByLiveWork(ctx context.Context, itemID st
 		l.clearLiveWorkHold(itemID)
 		return false, false
 	}
-	start := session.LiveWorkHoldStart(prs, l.firstHeldAt(itemID, now))
-	if session.LiveWorkHoldExpired(now, start, session.LiveWorkMaxHold) {
+	start := instance.LiveWorkHoldStart(prs, l.firstHeldAt(itemID, now))
+	if instance.LiveWorkHoldExpired(now, start, instance.LiveWorkMaxHold) {
 		return false, true
 	}
 	session.CountLiveWorkResult(session.LiveWorkResultHeld)
 	return true, false
 }
 
-func (l *BacklogLifecycleListener) anyLive(ctx context.Context, probe session.LiveWorkProbe, itemID string, now time.Time, work []session.ItemSessionSummary) bool {
+func (l *BacklogLifecycleListener) anyLive(ctx context.Context, probe instance.LiveWorkProbe, itemID string, now time.Time, work []backlogdto.ItemSessionSummary) bool {
 	for _, s := range work {
 		live, err := probe.IsLive(ctx, s.SessionUUID, now)
 		if err != nil {
@@ -148,9 +152,9 @@ func (l *BacklogLifecycleListener) reportMaxHold(itemID, title string) {
 		return
 	}
 	session.CountLiveWorkResult(session.LiveWorkResultMaxHold)
-	log.WarningLog().Printf("[LiveWork] item=%s still has a live session %s after its first merge: marking done; the live session keeps its pane and worktree", itemID, session.LiveWorkMaxHold)
+	log.WarningLog().Printf("[LiveWork] item=%s still has a live session %s after its first merge: marking done; the live session keeps its pane and worktree", itemID, instance.LiveWorkMaxHold)
 	l.notify(itemID, "Session still active after merge",
-		fmt.Sprintf("%s: a session was still active %s after the PR merged. The item is marked done; local files are kept until the session ends.", title, session.LiveWorkMaxHold),
+		fmt.Sprintf("%s: a session was still active %s after the PR merged. The item is marked done; local files are kept until the session ends.", title, instance.LiveWorkMaxHold),
 		8, // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 		false, true)
 }
@@ -162,7 +166,7 @@ const prRefreshWait = 10 * time.Second
 // PRRowRefresher refreshes one PR's state row from GitHub and returns once the poll
 // core has written it. *PRStatusPoller implements it.
 type PRRowRefresher interface {
-	Refresh(ctx context.Context, ref session.PRRef, src session.PRObservationSource) error
+	Refresh(ctx context.Context, ref domain.PRRef, src domain.PRObservationSource) error
 }
 
 // SetPRRowRefresher wires the poller's per-PR refresh into the reconcilers.
@@ -177,14 +181,14 @@ func (l *BacklogLifecycleListener) SetPRRowRefresher(r PRRowRefresher) {
 // the tracked PR's row, then reads the verdict from the rows only (the poll core is
 // the single writer). A refresh that fails leaves the row as it was, so the verdict
 // can only be later, never earlier.
-func (l *BacklogLifecycleListener) itemVerdictAfterMerge(ctx context.Context, er *session.EntRepository, itemID, prURL string, prNumber int) (session.ItemVerdict, error) {
+func (l *BacklogLifecycleListener) itemVerdictAfterMerge(ctx context.Context, er *session.EntRepository, itemID, prURL string, prNumber int) (instance.ItemVerdict, error) {
 	l.liveWork.mu.Lock()
 	refresher := l.liveWork.refresher
 	l.liveWork.mu.Unlock()
 	if refresher != nil {
-		if ref, err := session.ParseItemPRRef(prURL, prNumber); err == nil {
+		if ref, err := sessionpr.ParseItemPRRef(prURL, prNumber); err == nil {
 			rctx, cancel := context.WithTimeout(ctx, prRefreshWait)
-			if rerr := refresher.Refresh(rctx, ref, session.PRSourceReconcilerRefresh); rerr != nil {
+			if rerr := refresher.Refresh(rctx, ref, domain.PRSourceReconcilerRefresh); rerr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] item=%s refresh of merged PR %s: %v (verdict from existing rows)", itemID, ref, rerr)
 			}
 			cancel()
@@ -192,14 +196,14 @@ func (l *BacklogLifecycleListener) itemVerdictAfterMerge(ctx context.Context, er
 	}
 	prs, err := er.ItemPRsByID(ctx, itemID)
 	if err != nil {
-		return session.ItemVerdictOpen, err
+		return instance.ItemVerdictOpen, err
 	}
-	return session.ItemPRVerdict(prs), nil
+	return instance.ItemPRVerdict(prs), nil
 }
 
 // ruleLProbe is the probe RULE L consults: nil (skip nothing, today's behavior)
 // unless reader:backlog is on and a probe is wired.
-func (l *BacklogLifecycleListener) ruleLProbe() session.LiveWorkProbe {
+func (l *BacklogLifecycleListener) ruleLProbe() instance.LiveWorkProbe {
 	if !l.backlogReaderEnabled() {
 		return nil
 	}

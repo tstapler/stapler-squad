@@ -2,7 +2,8 @@ package importer
 
 import (
 	"errors"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
 	"time"
 )
@@ -13,33 +14,33 @@ import (
 // rather than silently no-opping, so a test that accidentally exercises an
 // unwired path fails fast instead of masking a bug.
 type fakeInstanceStore struct {
-	instances []session.InstanceData
+	instances []domain.InstanceData
 
-	added     []*session.Instance
+	added     []*instance.Instance
 	addErr    error
 	deleteErr error
 
 	deletedTitle    string
-	deletedInstance *session.Instance
+	deletedInstance *instance.Instance
 }
 
-func (f *fakeInstanceStore) LoadInstances() ([]*session.Instance, error) {
+func (f *fakeInstanceStore) LoadInstances() ([]*instance.Instance, error) {
 	panic("fakeInstanceStore: LoadInstances not implemented")
 }
 
-func (f *fakeInstanceStore) ListInstanceData() ([]session.InstanceData, error) {
+func (f *fakeInstanceStore) ListInstanceData() ([]domain.InstanceData, error) {
 	return f.instances, nil
 }
 
-func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	panic("fakeInstanceStore: FindInstanceDataByID not implemented")
 }
 
-func (f *fakeInstanceStore) SaveInstances([]*session.Instance) error {
+func (f *fakeInstanceStore) SaveInstances([]*instance.Instance) error {
 	panic("fakeInstanceStore: SaveInstances not implemented")
 }
 
-func (f *fakeInstanceStore) AddInstance(inst *session.Instance) error {
+func (f *fakeInstanceStore) AddInstance(inst *instance.Instance) error {
 	if f.addErr != nil {
 		return f.addErr
 	}
@@ -52,7 +53,7 @@ func (f *fakeInstanceStore) DeleteInstance(title string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
-	kept := make([]*session.Instance, 0, len(f.added))
+	kept := make([]*instance.Instance, 0, len(f.added))
 	for _, inst := range f.added {
 		if inst.Title == title {
 			f.deletedInstance = inst
@@ -86,7 +87,7 @@ func (f *fakeInstanceStore) UpdateInstanceMetadata(currentTitle string, newTitle
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExactPathCollides(t *testing.T) {
 	t.Parallel()
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{
+		instances: []domain.InstanceData{
 			{Title: "existing", Path: "/tmp/import-collision/repo"},
 		},
 	}
@@ -101,10 +102,10 @@ func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExactPathC
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_CandidateIsSubdirOfExistingWorktree(t *testing.T) {
 	t.Parallel()
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{
+		instances: []domain.InstanceData{
 			{
 				Title:    "existing",
-				Worktree: session.GitWorktreeData{WorktreePath: "/tmp/import-collision/repo"},
+				Worktree: domain.GitWorktreeData{WorktreePath: "/tmp/import-collision/repo"},
 			},
 		},
 	}
@@ -119,10 +120,10 @@ func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_CandidateI
 func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExistingWorktreeIsSubdirOfCandidate(t *testing.T) {
 	t.Parallel()
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{
+		instances: []domain.InstanceData{
 			{
 				Title:    "existing",
-				Worktree: session.GitWorktreeData{WorktreePath: "/tmp/import-collision/repo/nested"},
+				Worktree: domain.GitWorktreeData{WorktreePath: "/tmp/import-collision/repo/nested"},
 			},
 		},
 	}
@@ -137,7 +138,7 @@ func TestCheckPathNotAlreadyManaged_ReturnsErrPathAlreadyManaged_When_ExistingWo
 func TestCheckPathNotAlreadyManaged_ReturnsNil_When_NoCollision(t *testing.T) {
 	t.Parallel()
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{
+		instances: []domain.InstanceData{
 			{Title: "existing", Path: "/tmp/import-collision/other-repo"},
 		},
 	}

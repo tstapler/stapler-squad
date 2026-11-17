@@ -11,8 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/cdp"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func inspectReq(body string) *http.Request {
@@ -55,7 +55,7 @@ func TestInspectElementHandler_BadBody_Returns400(t *testing.T) {
 
 func stubbedInspectHandler(t *testing.T, fn func(context.Context, int, cdp.Point) (*cdp.InspectResult, error)) *InspectElementHandler {
 	h := NewInspectElementHandler(&fakeInstanceFinder{inst: newTestInstance(t)})
-	h.portOf = func(*session.Instance) int { return 9222 }
+	h.portOf = func(*instance.Instance) int { return 9222 }
 	h.inspect = fn
 	return h
 }
@@ -104,5 +104,5 @@ func TestInspectElementHandler_CDPError_Returns502(t *testing.T) {
 
 func TestCDPPortOf_NilManager_ReturnsZero(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 0, cdpPortOf(&session.Instance{}))
+	assert.Equal(t, 0, cdpPortOf(&instance.Instance{}))
 }

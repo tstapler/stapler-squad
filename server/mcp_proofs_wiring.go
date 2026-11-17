@@ -9,13 +9,13 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // liveInstanceFinder is the slice of SessionService the MCP identity
 // middleware needs to prove a verified caller still has a session.
 type liveInstanceFinder interface {
-	FindLiveInstance(id string) *session.Instance
+	FindLiveInstance(id string) *instance.Instance
 }
 
 // newMCPIdentityMiddleware wraps the /mcp handler so a request whose
@@ -55,7 +55,7 @@ func wireMCPProofs(ctx context.Context, deps *ServerDependencies, goBackground f
 	}
 	log.Info("mcp credential self-check ok")
 	services.SetDefaultMcpProofs(proofs)
-	session.SetMCPProofProvider(proofs.Provider())
+	instance.SetMCPProofProvider(proofs.Provider())
 
 	known := make(map[string]struct{}, len(deps.Instances))
 	for _, inst := range deps.Instances {

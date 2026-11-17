@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"github.com/tstapler/stapler-squad/session/instance"
+	"testing"
+)
 
 // BenchmarkStopController_NoOpFastPath benchmarks the common case where no
 // controller is registered. Enforcement for the mutex-profile fix: the
@@ -10,8 +13,8 @@ import "testing"
 // load even uncontended.
 func BenchmarkStopController_NoOpFastPath(b *testing.B) {
 	b.ReportAllocs()
-	inst := &Instance{Title: "bench-stop-controller"}
-	inst.SetStatusManager(NewInstanceStatusManager())
+	inst := &instance.Instance{Title: "bench-stop-controller"}
+	inst.SetStatusManager(instance.NewInstanceStatusManager())
 
 	b.ResetTimer()
 	for b.Loop() {

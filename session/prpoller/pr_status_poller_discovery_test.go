@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // withGhBaseURL points github.GhBaseURL at ts for the duration of the test.
@@ -30,9 +30,9 @@ func newTestPRStatusPoller() *PRStatusPoller {
 	return p
 }
 
-func newDiscoveryTestInstance(t *testing.T) *session.Instance {
+func newDiscoveryTestInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:       "discovery-test",
 		Path:        t.TempDir(),
 		Branch:      "feature-branch",

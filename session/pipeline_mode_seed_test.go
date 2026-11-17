@@ -7,7 +7,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing verifies the
@@ -17,7 +19,7 @@ func TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing(t *testing.T
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
 	err := EnsureDefaultSDDPipelineMode(t.Context(), repo)
 	require.NoError(t, err)
@@ -40,14 +42,14 @@ func TestEnsureDefaultSDDPipelineMode_should_BeNoOp_When_AlreadyExists(t *testin
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
-	repo := NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
 
 	require.NoError(t, EnsureDefaultSDDPipelineMode(t.Context(), repo))
 
 	// Simulate an operator hand-edit after the first seed.
 	first, err := repo.GetBySlug(t.Context(), DefaultSDDPipelineModeSlug)
 	require.NoError(t, err)
-	edited, err := repo.Update(t.Context(), first.ID, PipelineModeUpdateInput{
+	edited, err := repo.Update(t.Context(), first.ID, stagecfg.PipelineModeUpdateInput{
 		Name: strPtr("Operator's Custom SDD Mode"),
 	})
 	require.NoError(t, err)
@@ -134,19 +136,21 @@ type raceLosingPipelineModeRepo struct {
 	createCalled bool
 }
 
-func (r *raceLosingPipelineModeRepo) Create(_ context.Context, _ PipelineModeCreateInput) (*ent.PipelineMode, error) {
+func (r *raceLosingPipelineModeRepo) Create(_ context.Context, _ stagecfg.PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	r.createCalled = true
-	return nil, ErrConflict
+	return nil, domain.ErrConflict
 }
-func (r *raceLosingPipelineModeRepo) Update(_ context.Context, _ uuid.UUID, _ PipelineModeUpdateInput) (*ent.PipelineMode, error) {
-	return nil, ErrNotFound
+func (r *raceLosingPipelineModeRepo) Update(_ context.Context, _ uuid.UUID, _ stagecfg.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
+	return nil, domain.ErrNotFound
 }
-func (r *raceLosingPipelineModeRepo) Delete(_ context.Context, _ uuid.UUID) error { return ErrNotFound }
+func (r *raceLosingPipelineModeRepo) Delete(_ context.Context, _ uuid.UUID) error {
+	return domain.ErrNotFound
+}
 func (r *raceLosingPipelineModeRepo) GetByID(_ context.Context, _ uuid.UUID) (*ent.PipelineMode, error) {
-	return nil, ErrNotFound
+	return nil, domain.ErrNotFound
 }
 func (r *raceLosingPipelineModeRepo) GetBySlug(_ context.Context, _ string) (*ent.PipelineMode, error) {
-	return nil, ErrNotFound
+	return nil, domain.ErrNotFound
 }
 func (r *raceLosingPipelineModeRepo) ListAll(_ context.Context) ([]*ent.PipelineMode, error) {
 	return nil, nil
@@ -155,6 +159,6 @@ func (r *raceLosingPipelineModeRepo) ListEnabled(_ context.Context) ([]*ent.Pipe
 	return nil, nil
 }
 
-var _ PipelineModeRepository = (*raceLosingPipelineModeRepo)(nil)
+var _ stagecfg.PipelineModeRepository = (*raceLosingPipelineModeRepo)(nil)
 
 func strPtr(s string) *string { return &s }

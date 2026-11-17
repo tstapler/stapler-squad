@@ -1,0 +1,140 @@
+package sessionpr
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	"github.com/google/uuid"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/itemsession"
+	entsessionpr "github.com/tstapler/stapler-squad/session/ent/sessionpr"
+)
+
+// ListItemGuardViews returns one ItemGuardView per requested item id. Statements
+// per chunk of 500 ids: links, states, tombstones (skipped when no id has a
+// direct link) and the item rows; the legacy coverage reads run only for items
+// with pr_number > 0.
+func (r *PRStore) ListItemGuardViews(ctx context.Context, itemIDs []string) (map[string]domain.ItemGuardView, error) {
+	out := make(map[string]domain.ItemGuardView, len(itemIDs))
+	for _, chunk := range chunkSlice(itemIDs, ItemSessionBatchChunk) {
+		if err := r.fillItemGuardChunk(ctx, chunk, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (r *PRStore) fillItemGuardChunk(ctx context.Context, ids []string, out map[string]domain.ItemGuardView) error {
+	direct, err := r.directItemViews(ctx, ids)
+	if err != nil {
+		return err
+	}
+	legacy, err := r.legacyUnrepresentedItems(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		out[id] = domain.ItemGuardView{Direct: direct[id], LegacyUnrepresented: legacy[id]}
+	}
+	return nil
+}
+
+func (r *PRStore) directItemViews(ctx context.Context, ids []string) (map[string][]domain.PRView, error) {
+	byItem := make(map[string][]domain.PRView)
+	linkRows, err := r.client.SessionPR.Query().Where(entsessionpr.BacklogItemIDIn(ids...)).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list item guard links: %w", err)
+	}
+	if len(linkRows) == 0 {
+		return byItem, nil
+	}
+	views, err := r.joinLinkStates(ctx, linkRows)
+	if err != nil {
+		return nil, err
+	}
+	tombs, err := r.ListItemTombstones(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range views {
+		if !ContainsRef(tombs[v.BacklogItemID], v.Ref) {
+			byItem[v.BacklogItemID] = append(byItem[v.BacklogItemID], v)
+		}
+	}
+	return byItem, nil
+}
+
+func (r *PRStore) legacyUnrepresentedItems(ctx context.Context, ids []string) (map[string]bool, error) {
+	uuids := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if u, err := uuid.Parse(id); err == nil {
+			uuids = append(uuids, u)
+		}
+	}
+	out := make(map[string]bool)
+	if len(uuids) == 0 {
+		return out, nil
+	}
+	items, err := r.client.BacklogItem.Query().
+		Where(backlogitem.IDIn(uuids...), backlogitem.PrNumberGT(0)).
+		Select(backlogitem.FieldID, backlogitem.FieldPrURL, backlogitem.FieldPrNumber).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list item guard rows: %w", err)
+	}
+	if len(items) == 0 {
+		return out, nil
+	}
+	itemIDs := make([]string, len(items))
+	itemUUIDs := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		itemIDs[i], itemUUIDs[i] = it.ID.String(), it.ID
+	}
+	cov, err := r.itemCoverage(ctx, itemIDs, itemUUIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		id := it.ID.String()
+		_, unrepresented, perr := ItemHasUnrepresentedLegacyPR(it.PrURL, it.PrNumber, cov(id))
+		out[id] = perr != nil || unrepresented
+	}
+	return out, nil
+}
+
+// ListItemIDsBySessionUUIDs returns every distinct item id of each session in
+// one item_session query per chunk of 500. Unlike
+// ListItemSessionsBySessionUUIDs it does not keep only the newest row per uuid.
+func (r *PRStore) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error) {
+	out := make(map[string][]string)
+	seen := make(map[[2]string]struct{})
+	for _, chunk := range chunkSlice(uuids, ItemSessionBatchChunk) {
+		rows, err := r.client.ItemSession.Query().
+			Where(itemsession.SessionUUIDIn(chunk...)).
+			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
+			All(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list item ids by session uuids: %w", err)
+		}
+		for _, row := range rows {
+			if row.Edges.BacklogItem == nil {
+				continue
+			}
+			id := row.Edges.BacklogItem.ID.String()
+			key := [2]string{row.SessionUUID, id}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out[row.SessionUUID] = append(out[row.SessionUUID], id)
+		}
+	}
+	for k := range out {
+		sort.Strings(out[k])
+	}
+	return out, nil
+}

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
@@ -68,7 +70,7 @@ type ArtifactExtractor struct {
 	// OnScanComplete is called after a successful scan with new artifacts.
 	// Inject event-bus publish logic here; defaults to no-op.
 	// This keeps ArtifactExtractor testable without a live event bus.
-	OnScanComplete func(title string, blob *SessionArtifactsBlob)
+	OnScanComplete func(title string, blob *domain.SessionArtifactsBlob)
 
 	// scanVersion is the version this process scans at; a position recorded at a
 	// lower one is stale and is rescanned from the top only while scanV2 is true.
@@ -96,13 +98,13 @@ func NewArtifactExtractor(
 		positions:      make(map[string]trackedPos),
 		restored:       make(map[string]struct{}),
 		flushEvery:     flushInterval,
-		scanVersion:    ScanVersion,
+		scanVersion:    domain.ScanVersion,
 		scanV2:         func() bool { return false },
 		v2Every:        staleRecheckInterval,
 		storeFn:        storeFn,
 		readFn:         readFn,
 		lookupTitle:    lookupTitle,
-		OnScanComplete: func(_ string, _ *SessionArtifactsBlob) {}, // no-op default
+		OnScanComplete: func(_ string, _ *domain.SessionArtifactsBlob) {}, // no-op default
 	}
 	var qc scanqueue.Config
 	for _, o := range opts {
@@ -176,7 +178,7 @@ func encodeOwner(t trackedPos) []byte {
 	if t.verified {
 		s += verifiedMarker
 	}
-	if v := normalizeVersion(t.version); v > legacyScanVersion {
+	if v := domain.NormalizeScanVersion(t.version); v > domain.LegacyScanVersion {
 		s += versionMarker + strconv.Itoa(v)
 	}
 	return []byte(s)
@@ -184,10 +186,10 @@ func encodeOwner(t trackedPos) []byte {
 
 func decodeOwner(state []byte) (owner string, verified bool, version int) {
 	owner = string(state)
-	version = legacyScanVersion
+	version = domain.LegacyScanVersion
 	if i := strings.LastIndex(owner, versionMarker); i >= 0 {
 		if v, err := strconv.Atoi(owner[i+len(versionMarker):]); err == nil {
-			owner, version = owner[:i], normalizeVersion(v)
+			owner, version = owner[:i], domain.NormalizeScanVersion(v)
 		}
 	}
 	owner, verified = strings.CutSuffix(owner, verifiedMarker)
@@ -196,7 +198,7 @@ func decodeOwner(state []byte) (owner string, verified bool, version int) {
 
 // stale reports whether t was scanned by an older extractor than this process runs.
 func (ae *ArtifactExtractor) stale(t trackedPos) bool {
-	return normalizeVersion(t.version) < ae.scanVersion
+	return domain.NormalizeScanVersion(t.version) < ae.scanVersion
 }
 
 func (ae *ArtifactExtractor) position(filePath string) (scanstate.Position, bool) {
@@ -304,7 +306,7 @@ func (ae *ArtifactExtractor) SeedOffsets(instances []InstanceInfo) {
 		if err != nil || raw == "" {
 			continue
 		}
-		var blob SessionArtifactsBlob
+		var blob domain.SessionArtifactsBlob
 		if err := json.Unmarshal([]byte(raw), &blob); err == nil && blob.ScanOffsetBytes > 0 {
 			ae.positions[inst.HistoryFilePath] = trackedPos{Position: scanstate.Position{Offset: blob.ScanOffsetBytes}, version: blob.Version()}
 		}
@@ -330,16 +332,16 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 	newOffset int64,
 	found *scanFindings,
 	fromTop bool,
-) *SessionArtifactsBlob {
+) *domain.SessionArtifactsBlob {
 	mu := ae.titleLock(title)
 	mu.Lock()
 	defer mu.Unlock()
 
-	existing := &SessionArtifactsBlob{}
+	existing := &domain.SessionArtifactsBlob{}
 	if raw, err := ae.readFn(title); err == nil && raw != "" {
 		if umErr := json.Unmarshal([]byte(raw), existing); umErr != nil {
 			log.Warn("[ArtifactExtractor] existing blob corrupt, starting fresh", "session", title, "err", umErr)
-			existing = &SessionArtifactsBlob{}
+			existing = &domain.SessionArtifactsBlob{}
 		}
 	}
 	if newOffset == keepOffset {
@@ -349,7 +351,7 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 	if fromTop {
 		version = ae.scanVersion
 	}
-	blob := &SessionArtifactsBlob{
+	blob := &domain.SessionArtifactsBlob{
 		PRURLs:          dedup(append(existing.PRURLs, found.prURLs...)),
 		CommitSHAs:      dedup(append(existing.CommitSHAs, found.commitSHAs...)),
 		ExternalURLs:    capNewest(dedup(append(existing.ExternalURLs, found.externalURLs...)), maxExternalURLs),
@@ -357,13 +359,13 @@ func (ae *ArtifactExtractor) mergeAndPersist(
 		ScanOffsetBytes: newOffset,
 		LastScannedAt:   time.Now().UTC(),
 		ScanVersion:     version,
-		Records:         mergeRecords(existing.Records, found.records),
+		Records:         domain.MergeRecords(existing.Records, found.records),
 	}
-	blob.enforceCaps()
-	observeBlobBytes(blob.encodedSize())
-	blob.ScanState = ScanStateNoneFound
+	enforceCaps(blob)
+	observeBlobBytes(encodedSize(blob))
+	blob.ScanState = domain.ScanStateNoneFound
 	if blob.HasData() {
-		blob.ScanState = ScanStateHasData
+		blob.ScanState = domain.ScanStateHasData
 	}
 	return blob
 }
@@ -474,9 +476,9 @@ func (ae *ArtifactExtractor) dropUnseenRestored(ctx context.Context) {
 
 // dedupCommands drops repeats (a rescan after truncation or an owner change
 // re-extracts commands the blob already holds), keeping first occurrences.
-func dedupCommands(cs []CommandArtifact) []CommandArtifact {
-	seen := make(map[CommandArtifact]struct{}, len(cs))
-	out := make([]CommandArtifact, 0, len(cs))
+func dedupCommands(cs []domain.CommandArtifact) []domain.CommandArtifact {
+	seen := make(map[domain.CommandArtifact]struct{}, len(cs))
+	out := make([]domain.CommandArtifact, 0, len(cs))
 	for _, c := range cs {
 		if _, ok := seen[c]; !ok {
 			seen[c] = struct{}{}
@@ -567,8 +569,8 @@ func (ae *ArtifactExtractor) stateRecorded(title string) bool {
 	if err != nil || raw == "" {
 		return false
 	}
-	var b SessionArtifactsBlob
-	if json.Unmarshal([]byte(raw), &b) != nil || b.ScanState == "" || b.ScanState == ScanStateFailed {
+	var b domain.SessionArtifactsBlob
+	if json.Unmarshal([]byte(raw), &b) != nil || b.ScanState == "" || b.ScanState == domain.ScanStateFailed {
 		return false
 	}
 	ae.verified.Store(title, struct{}{})
@@ -588,14 +590,14 @@ func (ae *ArtifactExtractor) markFailed(filePath, title string) {
 	mu := ae.titleLock(title)
 	mu.Lock()
 	defer mu.Unlock()
-	existing := &SessionArtifactsBlob{}
+	existing := &domain.SessionArtifactsBlob{}
 	if raw, err := ae.readFn(title); err == nil && raw != "" {
 		if json.Unmarshal([]byte(raw), existing) != nil {
-			existing = &SessionArtifactsBlob{}
+			existing = &domain.SessionArtifactsBlob{}
 		}
 	}
 	failed := *existing
-	failed.ScanState = ScanStateFailed
+	failed.ScanState = domain.ScanStateFailed
 	failed.LastScannedAt = time.Now().UTC()
 	encoded, err := json.Marshal(&failed)
 	if err != nil {

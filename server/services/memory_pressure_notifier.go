@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -178,7 +179,7 @@ func (n *MemoryPressureNotifier) reclaimOptionsText() string {
 	}
 	var candidates []candidate
 	for _, inst := range n.poller.GetInstances() {
-		if session.Status(inst.GetStatus()) != session.Active {
+		if domain.Status(inst.GetStatus()) != domain.Active {
 			continue
 		}
 		if idle := inst.GetTimeSinceLastMeaningfulOutput(); idle >= memoryPressureIdleFloor {

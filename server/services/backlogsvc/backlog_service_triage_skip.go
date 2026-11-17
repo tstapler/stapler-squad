@@ -12,7 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const triageGateNoteAuthor = "Triage gate"
@@ -52,7 +54,7 @@ func resolveTriageModel(cfg *config.Config, families map[string]string, program,
 // triageInputHash fingerprints the content triage reasons about: title, description and AC
 // text only. AC index/status/notes are excluded — they mutate during work and would make
 // the hash unstable.
-func triageInputHash(title, description string, criteria []session.AcCriterion) string {
+func triageInputHash(title, description string, criteria []domain.AcCriterion) string {
 	h := sha256.New()
 	h.Write([]byte(title))
 	h.Write([]byte{0})
@@ -64,14 +66,14 @@ func triageInputHash(title, description string, criteria []session.AcCriterion) 
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-func itemTriageInputHash(item *session.BacklogItemData) string {
+func itemTriageInputHash(item *backlogdto.BacklogItemData) string {
 	criteria, _ := item.AcceptanceCriteria.Parse()
 	return triageInputHash(item.Title, item.Description, criteria)
 }
 
 // newItemTriageSkipReason returns why a freshly created item needs no triage call ("" = run):
 // it already carries acceptance criteria or an approved plan.
-func newItemTriageSkipReason(item *session.BacklogItemData) string {
+func newItemTriageSkipReason(item *backlogdto.BacklogItemData) string {
 	if criteria, _ := item.AcceptanceCriteria.Parse(); len(criteria) > 0 {
 		return "item already has acceptance criteria"
 	}
@@ -83,7 +85,7 @@ func newItemTriageSkipReason(item *session.BacklogItemData) string {
 
 // unchangedRetriageSkipReason returns why re-triaging is pointless ("" = run): the last
 // completed triage result was produced from input identical to the item's current content.
-func unchangedRetriageSkipReason(item *session.BacklogItemData, sessions []session.ItemSessionSummary) string {
+func unchangedRetriageSkipReason(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary) string {
 	prior, ok := findPriorTriageResult(sessions)
 	if !ok || prior.InputHash == "" || prior.InputHash != itemTriageInputHash(item) {
 		return ""
@@ -136,7 +138,7 @@ func (s *BacklogService) recordTriageSkip(ctx context.Context, itemID, reason st
 
 // triageResultInputHash hashes the item as it will look once result's criteria are applied,
 // so a later automatic retriage of the unmodified item matches.
-func triageResultInputHash(item *session.BacklogItemData, result *backlog.HeadlessTriageResult) string {
+func triageResultInputHash(item *backlogdto.BacklogItemData, result *pipeline.HeadlessTriageResult) string {
 	criteria := result.AcceptanceCriteria
 	if len(criteria) == 0 {
 		criteria, _ = item.AcceptanceCriteria.Parse()

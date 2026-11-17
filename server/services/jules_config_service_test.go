@@ -16,7 +16,10 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -48,19 +51,19 @@ func (f *fakeJulesKeyManager) DeleteJulesAPIKey(_ context.Context) error {
 
 // fakeJulesPollerStorage is a minimal fake session.julesPollerStorage (an
 // unexported interface — satisfied structurally) so a real
-// *session.JulesSessionPoller can be exercised here without a real
+// *sessionjules.JulesSessionPoller can be exercised here without a real
 // *session.Storage. Only ListOpenJulesItemSessions/GetItemSessionBySessionUUID
 // carry test-controlled data; every write is a no-op success.
 type fakeJulesPollerStorage struct {
-	entries []session.ItemSessionBacklogEntry
-	summary session.ItemSessionSummary
+	entries []backlogdto.ItemSessionBacklogEntry
+	summary backlogdto.ItemSessionSummary
 }
 
-func (f *fakeJulesPollerStorage) ListOpenJulesItemSessions(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
+func (f *fakeJulesPollerStorage) ListOpenJulesItemSessions(_ context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	return f.entries, nil
 }
 
-func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (session.ItemSessionSummary, error) {
+func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (backlogdto.ItemSessionSummary, error) {
 	return f.summary, nil
 }
 
@@ -76,16 +79,16 @@ func (f *fakeJulesPollerStorage) AppendProgressNote(_ context.Context, _ string,
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ session.TransitionRequest, _ session.PRAssociation) error {
+func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ backlogdto.TransitionRequest, _ backlogdto.PRAssociation) error {
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ session.AttachSource) (bool, error) {
+func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ domain.AttachSource) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ session.TransitionRequest) (*session.BacklogItemData, error) {
-	return &session.BacklogItemData{}, nil
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
+	return &backlogdto.BacklogItemData{}, nil
 }
 
 // fakeJulesPollStatusClient is a fake session.julesStatusClient whose
@@ -188,19 +191,19 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	svctest.WithIsolatedStateDir(t)
 	client := newFakeJulesPollStatusClient(true)
 	storage := &fakeJulesPollerStorage{
-		entries: []session.ItemSessionBacklogEntry{{
+		entries: []backlogdto.ItemSessionBacklogEntry{{
 			SessionUUID: "jules-sessions/xyz",
-			SessionRole: session.SessionRoleJulesWork,
+			SessionRole: instance.SessionRoleJulesWork,
 			ItemID:      "item-1",
 		}},
-		summary: session.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: session.SessionRoleJulesWork},
+		summary: backlogdto.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: instance.SessionRoleJulesWork},
 	}
-	pollerCfg := session.JulesSessionPollerConfig{
+	pollerCfg := sessionjules.JulesSessionPollerConfig{
 		PollInterval:  5 * time.Millisecond,
 		CallTimeout:   time.Second,
 		MaxSessionAge: time.Hour,
 	}
-	poller := session.NewJulesSessionPoller(client, storage, pollerCfg)
+	poller := sessionjules.NewJulesSessionPoller(client, storage, pollerCfg)
 	svc := NewJulesConfigService(nil, nil, poller)
 
 	poller.Start(t.Context())

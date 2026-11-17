@@ -7,6 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/gatefixturetest"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded
@@ -21,8 +24,8 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	ctx := context.Background()
 
-	from, to := newCustomTransitionWithGates(t, client, engine,
-		[]GateKind{GateKindHumanApproval},
+	from, to := gatefixturetest.NewCustomTransitionWithGates(t, client, engine.InvalidateCache,
+		[]domain.GateKind{domain.GateKindHumanApproval},
 		[]bool{true},
 	)
 
@@ -33,7 +36,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	gateID := gates[0].ID
 
 	itemID := uuid.New()
-	item := BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: acCriteriaAllDone(t)}
+	item := domain.BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: gatefixturetest.ACCriteriaAllDone(t)}
 
 	// Given: no record exists yet — the gate must report unsatisfied.
 	statuses, err := engine.PendingGates(item, to, nil)
@@ -42,7 +45,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	require.False(t, statuses[0].Satisfied, "an unapproved human_approval gate must report unsatisfied")
 
 	// When: RecordGateApproval is called with approved: true.
-	gateSatisfactionRepo := NewEntGateSatisfactionRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
 	record, err := RecordGateApproval(ctx, gateSatisfactionRepo, itemID, gateID, "tester", true)
 	require.NoError(t, err)
 	require.True(t, record.Satisfied)
@@ -59,7 +62,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	// one-shot recorded approval is never re-derived from live item state,
 	// unlike a structural gate (TestPendingGates_should_ReportUnsatisfied_
 	// When_PreviouslySatisfiedStructuralGateHasSinceRegressed's converse).
-	regressedItem := BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: acCriteriaOneUnchecked(t)}
+	regressedItem := domain.BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: gatefixturetest.ACCriteriaOneUnchecked(t)}
 	statuses, err = engine.PendingGates(regressedItem, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
@@ -99,13 +102,13 @@ func TestRecordGateApproval_should_ReturnConflict_When_ItemAndGatePairAlreadySat
 
 	_, err = RecordGateApproval(ctx, repo, itemID, gateID, "second-approver", true)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, domain.ErrConflict)
 
 	// Rejecting an already-approved gate must also fail — approval is final
 	// regardless of the second call's approved value.
 	_, err = RecordGateApproval(ctx, repo, itemID, gateID, "would-be-rejector", false)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, domain.ErrConflict)
 
 	record, err := repo.GetByItemAndGate(ctx, itemID, gateID)
 	require.NoError(t, err)
@@ -135,7 +138,7 @@ func TestRecordGateApproval_should_ReverseIntoApproval_When_PreviouslyRejected(t
 	// Now locked: a further call of either kind must be rejected.
 	_, err = RecordGateApproval(ctx, repo, itemID, gateID, "late-comer", true)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, domain.ErrConflict)
 }
 
 // TestRecordGateApproval_should_RemainRejectedIdempotently_When_RejectedTwice
@@ -173,12 +176,12 @@ func TestRecordGateApproval_should_RemainRejectedIdempotently_When_RejectedTwice
 // rather than depending on which goroutine happens to reach the DB first —
 // the "controlled sequencing... not a flaky real-race" approach.
 type orderedWriteGateSatisfactionRepo struct {
-	GateSatisfactionRepository
+	stagecfg.GateSatisfactionRepository
 	goesFirst bool
 	firstDone chan struct{}
 }
 
-func (r *orderedWriteGateSatisfactionRepo) Update(ctx context.Context, itemID, gateID uuid.UUID, in GateSatisfactionUpdateInput) (*GateSatisfactionData, error) {
+func (r *orderedWriteGateSatisfactionRepo) Update(ctx context.Context, itemID, gateID uuid.UUID, in stagecfg.GateSatisfactionUpdateInput) (*stagecfg.GateSatisfactionData, error) {
 	if !r.goesFirst {
 		<-r.firstDone
 	}
@@ -204,7 +207,7 @@ func TestRecordGateApproval_should_YieldExactlyOneWinner_When_ApproveAndRejectRa
 	ctx := context.Background()
 	itemID := uuid.New()
 
-	_, err := repo.Create(ctx, GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "original-rejector"})
+	_, err := repo.Create(ctx, stagecfg.GateSatisfactionCreateInput{ItemID: itemID, GateID: gateID, Satisfied: false, SatisfiedBy: "original-rejector"})
 	require.NoError(t, err)
 
 	firstDone := make(chan struct{})
@@ -227,7 +230,7 @@ func TestRecordGateApproval_should_YieldExactlyOneWinner_When_ApproveAndRejectRa
 
 	require.NoError(t, approveErr, "the racer whose write lands first must win")
 	require.Error(t, rejectErr, "the racer whose write lands second must lose, never silently clobber the winner")
-	require.ErrorIs(t, rejectErr, ErrConflict)
+	require.ErrorIs(t, rejectErr, domain.ErrConflict)
 
 	// The persisted row must reflect the winner's decision exactly — never a
 	// hybrid/corrupted state, and never silently reverted by the loser.

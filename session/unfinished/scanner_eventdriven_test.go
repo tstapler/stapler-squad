@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -252,7 +252,7 @@ func TestScanner_subscribeToSessionEvents_should_removeRepo_When_SessionDeletedE
 
 	bus.Publish(&pkgevents.Event{
 		Type:    pkgevents.EventSessionCreated,
-		Session: &session.Instance{UUID: "session-uuid-1", Title: "test-session", Path: repoPath},
+		Session: &instance.Instance{UUID: "session-uuid-1", Title: "test-session", Path: repoPath},
 	})
 	err = wait.WaitForCondition(func() bool {
 		_, ok := s.repoSet.Load(repoPath)

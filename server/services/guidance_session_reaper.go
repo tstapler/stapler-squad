@@ -8,7 +8,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -29,7 +28,7 @@ type SessionEnds interface {
 
 type guidanceReaperStore interface {
 	CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reason string) (bool, error)
-	ListAllPendingGuidanceRequests(ctx context.Context) ([]*session.GuidanceRequestData, error)
+	ListAllPendingGuidanceRequests(ctx context.Context) ([]*domain.GuidanceRequestData, error)
 }
 
 // GuidanceSessionReaper cancels open rows whose dialog or peer context dies with
@@ -54,7 +53,7 @@ func reapedSource(s domain.QuestionSource) bool {
 	return s == domain.QuestionSourceHook || s == domain.QuestionSourcePeer
 }
 
-func rowInvolves(row *session.GuidanceRequestData, sessionUUID string) bool {
+func rowInvolves(row *domain.GuidanceRequestData, sessionUUID string) bool {
 	return row.SessionUUID == sessionUUID || row.AskerSessionUUID == sessionUUID || row.AnswererSessionUUID == sessionUUID
 }
 
@@ -67,12 +66,12 @@ func (r *GuidanceSessionReaper) HandleEvent(ctx context.Context, ev *events.Even
 	if sessionUUID == "" {
 		return // the startup pass catches a session that cannot be resolved now
 	}
-	r.reap(ctx, func(row *session.GuidanceRequestData) bool { return rowInvolves(row, sessionUUID) })
+	r.reap(ctx, func(row *domain.GuidanceRequestData) bool { return rowInvolves(row, sessionUUID) })
 }
 
 // StartupPass reaps open rows whose session ended while the service was down.
 func (r *GuidanceSessionReaper) StartupPass(ctx context.Context) {
-	r.reap(ctx, func(row *session.GuidanceRequestData) bool {
+	r.reap(ctx, func(row *domain.GuidanceRequestData) bool {
 		for _, id := range []string{row.AskerSessionUUID, row.AnswererSessionUUID} {
 			if id != "" && r.sessions.Ended(id) {
 				return true
@@ -82,7 +81,7 @@ func (r *GuidanceSessionReaper) StartupPass(ctx context.Context) {
 	})
 }
 
-func (r *GuidanceSessionReaper) reap(ctx context.Context, match func(*session.GuidanceRequestData) bool) {
+func (r *GuidanceSessionReaper) reap(ctx context.Context, match func(*domain.GuidanceRequestData) bool) {
 	rows, err := r.store.ListAllPendingGuidanceRequests(ctx)
 	if err != nil {
 		log.Warn("[GuidanceReaper] list failed", "err", err)

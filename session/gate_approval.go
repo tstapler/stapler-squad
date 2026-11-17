@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // gate_approval.go — Story 2.4.1's human-approval gate: a stateful gate
@@ -37,21 +39,21 @@ import (
 //
 // SatisfiedAt is set only when approved is true — a reject has no "satisfied
 // at" moment.
-func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*GateSatisfactionData, error) {
+func RecordGateApproval(ctx context.Context, repo stagecfg.GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*stagecfg.GateSatisfactionData, error) {
 	if repo == nil {
 		return nil, fmt.Errorf("gate_approval: no GateSatisfactionRepository configured")
 	}
 
 	existing, err := repo.GetByItemAndGate(ctx, itemID, gateID)
 	if err != nil {
-		if !errors.Is(err, ErrNotFound) {
+		if !errors.Is(err, domain.ErrNotFound) {
 			return nil, fmt.Errorf("look up gate satisfaction record for item %s gate %s: %w", itemID, gateID, err)
 		}
 		return createGateApproval(ctx, repo, itemID, gateID, by, approved)
 	}
 
 	if existing.Satisfied {
-		return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s is already approved", ErrConflict, itemID, gateID)
+		return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s is already approved", domain.ErrConflict, itemID, gateID)
 	}
 
 	var satisfiedAt *time.Time
@@ -59,7 +61,7 @@ func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, it
 		now := time.Now()
 		satisfiedAt = &now
 	}
-	record, err := repo.Update(ctx, itemID, gateID, GateSatisfactionUpdateInput{
+	record, err := repo.Update(ctx, itemID, gateID, stagecfg.GateSatisfactionUpdateInput{
 		Satisfied:         &approved,
 		SatisfiedBy:       &by,
 		SatisfiedAt:       satisfiedAt,
@@ -75,13 +77,13 @@ func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, it
 // Returns ErrConflict, via repo.Create, if a concurrent caller created the
 // row between this call's initial lookup and this Create — the schema's
 // UNIQUE(item_id, gate_id) index is the actual enforcement point.
-func createGateApproval(ctx context.Context, repo GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*GateSatisfactionData, error) {
+func createGateApproval(ctx context.Context, repo stagecfg.GateSatisfactionRepository, itemID, gateID uuid.UUID, by string, approved bool) (*stagecfg.GateSatisfactionData, error) {
 	var satisfiedAt *time.Time
 	if approved {
 		now := time.Now()
 		satisfiedAt = &now
 	}
-	record, err := repo.Create(ctx, GateSatisfactionCreateInput{
+	record, err := repo.Create(ctx, stagecfg.GateSatisfactionCreateInput{
 		ItemID:      itemID,
 		GateID:      gateID,
 		Satisfied:   approved,

@@ -39,7 +39,7 @@
 // gate itself reports an agent or system denial (Story 1.5.3's gate test is the
 // guarantee), so only an operator's denial depends on this caller returning
 // the error to a human. TestSilentTransition_OperatorCallerSetMatchesRegistry
-// pins OperatorCallers to session/transition_callers.go.
+// pins OperatorCallers to session/domain/transition_callers.go.
 package silenttransition
 
 import (
@@ -90,7 +90,7 @@ var gatedMethods = map[string]int{
 }
 
 // OperatorCallers are the values of the operator-class entries in
-// session/transition_callers.go (the specOp rows), the callers whose denial the
+// session/domain/transition_callers.go (the specOp rows), the callers whose denial the
 // gate does not report and so must reach a human through the caller's return.
 var OperatorCallers = map[string]bool{
 	"operator_transition_rpc":        true,

@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/session/flow"
 )
 
@@ -21,7 +21,7 @@ func TestGetFlowSummary_should_ReturnLabeledCompactJson_When_WindowDays30(t *tes
 	t.Parallel()
 	agg := &liveShapedAgg{}
 	h := newFakeFlowHandlers(&agg.fakeFlowAgg)
-	h.svc = services.NewBacklogFlowService(agg)
+	h.svc = backlogflow.NewBacklogFlowService(agg)
 
 	_, m := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
 
@@ -44,7 +44,7 @@ func TestGetFlowSummary_should_ReturnLabeledCompactJson_When_WindowDays30(t *tes
 func TestGetFlowSummary_should_PassSectionsCompactAndListLimit_When_Requested(t *testing.T) {
 	t.Parallel()
 	agg := &liveShapedAgg{}
-	h := &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 
 	callFlowTool(t, h.getFlowSummary, map[string]any{
 		"window_days": float64(7), "sections": []any{"tiles", "review"}, "compact": true, "list_limit": float64(500),
@@ -69,7 +69,7 @@ func TestGetFlowSummary_should_SkipUnselectedSections_When_SectionsGiven(t *test
 func TestGetFlowSummary_should_UseDefaultThirtyAndClampTo365_When_WindowOmittedOrHuge(t *testing.T) {
 	t.Parallel()
 	agg := &liveShapedAgg{}
-	h := &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 
 	callFlowTool(t, h.getFlowSummary, map[string]any{})
 	assert.Equal(t, 30, agg.gotSummary.Window.Days)
@@ -81,7 +81,7 @@ func TestGetFlowSummary_should_UseDefaultThirtyAndClampTo365_When_WindowOmittedO
 func TestGetFlowSummary_should_RequireAllTimeFlag_When_WindowDaysZero(t *testing.T) {
 	t.Parallel()
 	agg := &liveShapedAgg{}
-	h := &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 
 	_, m := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(0)})
 	assert.Contains(t, errorMessage(t, m), "use all_time=true for all-time")
@@ -110,7 +110,7 @@ func TestGetFlowSummary_should_ReturnUnavailable_When_FlowServiceNil(t *testing.
 
 func TestGetFlowSummary_should_EmitDrillKeyBesideEveryNumber_When_FixtureMarshalled(t *testing.T) {
 	t.Parallel()
-	h := &flowHandlers{svc: services.NewBacklogFlowService(&liveShapedAgg{})}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(&liveShapedAgg{})}
 	_, m := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
 
 	enum := map[string]bool{}
@@ -398,7 +398,7 @@ const (
 
 func TestGetFlowSummary_should_StayUnderMeasuredBudget_When_LiveShapedFixture(t *testing.T) {
 	t.Parallel()
-	h := &flowHandlers{svc: services.NewBacklogFlowService(&liveShapedAgg{})}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(&liveShapedAgg{})}
 
 	def, _ := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
 	compact, _ := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30), "compact": true})
@@ -436,7 +436,7 @@ func TestGetFlowSummary_should_CarryPROutcomesTriggerDwellAndStuckNotes_When_Cap
 		Stuck: flow.StuckSection{Notes: []string{"open episodes differ from open stuck rows by 2"}},
 	}}
 	h := newFakeFlowHandlers(agg)
-	h.svc = services.NewBacklogFlowService(agg)
+	h.svc = backlogflow.NewBacklogFlowService(agg)
 
 	_, m := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
 

@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/backend/cli"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -92,14 +92,14 @@ func TestCreateSession_RemoteTarget_GitRunsThroughBackendWithTheTargetsRunner(t 
 	_, statErr := os.Stat(filepath.Join(fix.basePath, "remote-backend-wiring"))
 	require.NoError(t, statErr, "the worktree must have been created on the remote host")
 
-	var inst *session.Instance
+	var inst *instance.Instance
 	for _, candidate := range fix.poller.GetInstances() {
 		if candidate.Title == "remote-backend-wiring" {
 			inst = candidate
 		}
 	}
 	require.NotNil(t, inst)
-	target, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget)
+	target, ok := inst.GetExecutionTarget().(instance.RemoteExecutionTarget)
 	require.True(t, ok)
 
 	recorder.mu.Lock()

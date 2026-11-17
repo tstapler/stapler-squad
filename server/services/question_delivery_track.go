@@ -7,8 +7,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // question_delivery_track.go keeps the durable delivery state of a keystroke
@@ -20,7 +20,7 @@ import (
 type SentDelivery struct {
 	RowID       string
 	SessionUUID string
-	Dialog      session.QuestionDialog
+	Dialog      panereply.QuestionDialog
 	// Matches overrides the Dialog check for a dialog DialogMatch cannot describe (the tabbed multi-question shape).
 	Matches func(capture string) bool
 	Route   domain.DeliveryRoute
@@ -102,13 +102,13 @@ func (t deliveryTrack) finish(ctx context.Context, res ActionResult, err error, 
 
 // trackable is a still-open row, or an answered one whose delivery failed and
 // is being retried (the confirmed "Retry anyway" of ux.md row 16).
-func trackable(row *session.GuidanceRequestData) bool {
+func trackable(row *domain.GuidanceRequestData) bool {
 	switch row.Status() {
-	case session.GuidanceRequestStatusPending:
+	case domain.GuidanceRequestStatusPending:
 		return true
-	case session.GuidanceRequestStatusAnswered:
+	case domain.GuidanceRequestStatusAnswered:
 		return row.DeliveryState == domain.DeliveryStateFailed && row.DeliveryRoute == domain.DeliveryRouteLiveKeystroke
-	case session.GuidanceRequestStatusCancelled:
+	case domain.GuidanceRequestStatusCancelled:
 	}
 	return false
 }

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/config/clihelp"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -461,40 +463,40 @@ func aliasConfigToProto(a config.AliasConfig) *sessionv1.AliasProto {
 	}
 }
 
-// aliasSessionTypeToProto converts a config.SessionType to the proto enum.
-func aliasSessionTypeToProto(st config.SessionType) sessionv1.SessionType {
+// aliasSessionTypeToProto converts a domain.SessionType to the proto enum.
+func aliasSessionTypeToProto(st domain.SessionType) sessionv1.SessionType {
 	switch st {
-	case config.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
-	case config.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	case config.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
-	case config.SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT
-	case config.SessionTypeOneOff:
+	case domain.SessionTypeOneOff:
 		return sessionv1.SessionType_SESSION_TYPE_ONE_OFF
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
 	}
 }
 
-// protoToAliasSessionType converts a proto SessionType enum to config.SessionType.
+// protoToAliasSessionType converts a proto SessionType enum to domain.SessionType.
 // UNSPECIFIED maps to SessionTypeDefault (empty, uses default behavior).
-func protoToAliasSessionType(st sessionv1.SessionType) config.SessionType {
+func protoToAliasSessionType(st sessionv1.SessionType) domain.SessionType {
 	switch st {
 	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-		return config.SessionTypeDirectory
+		return domain.SessionTypeDirectory
 	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-		return config.SessionTypeNewWorktree
+		return domain.SessionTypeNewWorktree
 	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-		return config.SessionTypeExistingWorktree
+		return domain.SessionTypeExistingWorktree
 	case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
-		return config.SessionTypeNewProject
+		return domain.SessionTypeNewProject
 	case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
-		return config.SessionTypeOneOff
+		return domain.SessionTypeOneOff
 	default:
-		return config.SessionTypeDefault
+		return domain.SessionTypeDefault
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,11 @@ func goSourceText(t *testing.T, size int) string {
 		require.NoError(t, err)
 		b.Write(src)
 		if b.Len() >= size {
-			return b.String()[:size]
+			all := b.String()
+			for size > 0 && !utf8.RuneStart(all[size]) { // a mid-rune cut is invalid UTF-8, which proto marshalling rejects
+				size--
+			}
+			return all[:size]
 		}
 	}
 	t.Fatalf("only %d bytes of distinct source", b.Len())

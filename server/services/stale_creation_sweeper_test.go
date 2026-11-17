@@ -15,6 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // writeCreationStaleConfig writes a minimal config.json with a creation_stale
@@ -73,7 +75,7 @@ func TestStaleCreationSweeper_should_FlipToFailedStale_When_LastProgressExceedsT
 	sweeper := NewStaleCreationSweeper(poller, storage, bus)
 	sweeper.sweep(context.Background())
 
-	assert.Equal(t, session.Failed, reloaded[0].Status)
+	assert.Equal(t, domain.Failed, reloaded[0].Status)
 	assert.Equal(t, "Stale", reloaded[0].FailureReason())
 
 	select {
@@ -86,7 +88,7 @@ func TestStaleCreationSweeper_should_FlipToFailedStale_When_LastProgressExceedsT
 	persisted, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, persisted, 1)
-	assert.Equal(t, session.Failed, persisted[0].Status, "persisted row must reflect the flip")
+	assert.Equal(t, domain.Failed, persisted[0].Status, "persisted row must reflect the flip")
 }
 
 func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(t *testing.T) {
@@ -108,12 +110,12 @@ func TestStaleCreationSweeper_should_LeaveInstanceUntouched_When_BelowThreshold(
 	sweeper := NewStaleCreationSweeper(poller, storage, nil)
 	sweeper.sweep(context.Background())
 
-	assert.Equal(t, session.Creating, reloaded[0].Status, "instance below threshold must be left untouched")
+	assert.Equal(t, domain.Creating, reloaded[0].Status, "instance below threshold must be left untouched")
 
 	persisted, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, persisted, 1)
-	assert.Equal(t, session.Creating, persisted[0].Status)
+	assert.Equal(t, domain.Creating, persisted[0].Status)
 }
 
 // TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRestart
@@ -163,7 +165,7 @@ func TestStaleCreationSweeper_should_FlipReloadedInstance_When_OrphanedAcrossRes
 	sweeper := NewStaleCreationSweeper(poller, storage, nil)
 	sweeper.sweep(context.Background())
 
-	assert.Equal(t, session.Failed, reloaded[0].Status,
+	assert.Equal(t, domain.Failed, reloaded[0].Status,
 		"orphaned Creating row from a killed process must flip to Failed on this process's first sweep")
 	assert.Equal(t, "Stale", reloaded[0].FailureReason())
 }
@@ -178,11 +180,11 @@ func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateE
 	writeCreationStaleConfig(t, os.Getenv("STAPLER_SQUAD_TEST_DIR"), 10)
 
 	storage := svctest.CreateTestStorage(t)
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "sweeper-never-updated",
 		UUID:      "uuid-sweeper-never-updated",
 		Path:      "/tmp/test",
-		Status:    session.Creating,
+		Status:    domain.Creating,
 		Program:   "claude",
 		CreatedAt: time.Now().Add(-15 * time.Minute), // never had SetCreationProgress called
 		UpdatedAt: time.Now(),
@@ -194,7 +196,7 @@ func TestStaleCreationSweeper_should_UseCreatedAtBaseline_When_NoProgressUpdateE
 	sweeper := NewStaleCreationSweeper(poller, storage, nil)
 	sweeper.sweep(context.Background())
 
-	assert.Equal(t, session.Failed, inst.Status, "must fall back to CreatedAt when progress was never updated")
+	assert.Equal(t, domain.Failed, inst.Status, "must fall back to CreatedAt when progress was never updated")
 	assert.Equal(t, "Stale", inst.FailureReason())
 }
 
@@ -221,13 +223,13 @@ func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePip
 	// goroutines racing TryForceStatusIfEpoch would mutate Instance.Status
 	// directly and unsynchronized -- a real data race, not a race this test is
 	// trying to exercise.
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   "sweeper-race",
 		Path:    "/tmp/test",
 		Program: "claude",
 	})
 	require.NoError(t, err)
-	live := session.NewLiveInstance(inst)
+	live := instance.NewLiveInstance(inst)
 	t.Cleanup(live.Stop)
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -240,7 +242,7 @@ func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePip
 		defer wg.Done()
 		// Simulate the still-alive pipeline's own genuine success commit,
 		// presenting back the same (unbumped) epoch the sweeper also holds.
-		commitTerminalStatus(context.Background(), storage, inst, inst.CreationEpoch(), session.Active, "")
+		commitTerminalStatus(context.Background(), storage, inst, inst.CreationEpoch(), domain.Active, "")
 	}()
 	go func() {
 		defer wg.Done()
@@ -252,10 +254,10 @@ func TestStaleCreationSweeper_should_ResolveDeterministically_When_RacingLatePip
 	wg.Wait()
 
 	status := inst.GetStatus()
-	switch session.Status(status) {
-	case session.Active:
+	switch domain.Status(status) {
+	case domain.Active:
 		assert.Equal(t, "", inst.FailureReason(), "an Active win must not carry a stale failure reason")
-	case session.Failed:
+	case domain.Failed:
 		assert.Equal(t, "Stale", inst.FailureReason(), "a Failed win must be attributed to staleness")
 	default:
 		t.Fatalf("instance must resolve to exactly one terminal status (Active or Failed), got %v", status)

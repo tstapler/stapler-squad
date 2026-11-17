@@ -12,16 +12,21 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 // coreConfig holds the optional dependencies injected through CoreOption, so
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
-	flowSvc *services.BacklogFlowService
+	flowSvc   *backlogflow.BacklogFlowService
+	plugins   *session.PluginRegistry
+	refParser TrackerRefParser
+	// extraModules register after the built-in set (see WithToolModules).
+	extraModules []ToolModule
 }
 
 // CoreOption injects an optional dependency into NewCore, NewHTTPHandler or RunServer.
@@ -30,13 +35,25 @@ type CoreOption func(*coreConfig)
 // WithFlowService enables the flow-observability tools. Without it they are
 // registered but return ErrUnavailable. The HTTP path passes the same instance
 // the RPC handler uses, so one aggregator cache serves both.
-func WithFlowService(svc *services.BacklogFlowService) CoreOption {
+func WithFlowService(svc *backlogflow.BacklogFlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
+}
+
+// WithPluginRegistry supplies the item-source plugins the tracker import tools
+// resolve by ID. Without it import_linear_issue / import_jira_issue return a fetch error.
+func WithPluginRegistry(r *session.PluginRegistry) CoreOption {
+	return func(c *coreConfig) { c.plugins = r }
+}
+
+// WithTrackerRefParser supplies the issue-reference parser behind
+// import_linear_issue / import_jira_issue. Without it those tools return a fetch error.
+func WithTrackerRefParser(p TrackerRefParser) CoreOption {
+	return func(c *coreConfig) { c.refParser = p }
 }
 
 // FlowServiceFromOptions returns the flow service the options carry, or nil.
 // It lets wiring tests prove two call sites hold the same instance.
-func FlowServiceFromOptions(opts ...CoreOption) *services.BacklogFlowService {
+func FlowServiceFromOptions(opts ...CoreOption) *backlogflow.BacklogFlowService {
 	return newCoreConfig(opts).flowSvc
 }
 
@@ -72,7 +89,7 @@ func NewCore(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener backlog.AutoReopenSpawner,
+	autoReopener reviewgate.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
@@ -84,69 +101,11 @@ func NewCore(
 		mcpserver.WithToolCapabilities(false),
 	)
 
-	// diagnoseCheck identifies a dispatched Diagnose & Nudge session so
-	// write_to_session/send_control/run_command/steer_session/resume_session
-	// can refuse it server-side (--allowedTools alone provides no real
-	// enforcement — see server/services/session_service.go's
-	// diagnosticSessionAllowedTools doc comment). nil when storage isn't
-	// wired (e.g. the stdio fallback path), matching every other
-	// storage-gated feature's nil-degrades-to-off convention in this function.
-	var diagnoseCheck diagnoseCallerCheck
-	if storage != nil {
-		diagnoseCheck = storage.IsDiagnoseCaller
-	}
-
-	registerDiscoveryTools(s, &discoveryHandlers{store: store})
-	registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck})
-	// Wrapping a nil *services.SessionService directly in the liveInstanceFinder
-	// interface would produce a non-nil interface value around a nil pointer —
-	// th.live != nil would then be true, and calling FindLiveInstance on it
-	// would panic on the nil receiver. Guard explicitly so the classic Go
-	// nil-interface trap can't reintroduce this.
-	var liveFinder liveInstanceFinder
-	if svc != nil {
-		liveFinder = svc
-	}
-	registerTerminalTools(s, &terminalHandlers{
-		store:         store,
-		live:          liveFinder,
-		scrollback:    sbMgr,
-		writeLim:      newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
-		diagnoseCheck: diagnoseCheck,
-	})
-	registerVCSTools(s, &vcsHandlers{store: store})
-	if svc != nil {
-		registerWorkflowTools(s, &workflowHandlers{svc: svc})
-		registerRulesTools(s, &rulesHandlers{svc: svc})
-		registerTaggingRulesTools(s, &taggingRulesHandlers{svc: svc})
-		registerNotificationTools(s, &notificationHandlers{svc: svc})
-		registerHistoryTools(s, &historyHandlers{svc: svc})
-	}
-	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck}
-		registerBacklogTools(s, h)
-		registerStuckReportTools(s, h)
-		if backlogSvc != nil {
-			registerClaimTools(s, &claimHandlers{svc: backlogSvc, enabledCheck: backlogEnabled})
-		}
-		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus, enabledCheck: backlogEnabled})
-		// registerGuidanceTools shares backlogHandlers (not a separate struct)
-		// so create_guidance_request can call h.resolveItemLink directly —
-		// see durable-guidance-request plan Epic 2.2.
-		registerGuidanceTools(s, h)
-		registerFlowTools(s, &flowHandlers{svc: cfg.flowSvc, enabledCheck: backlogEnabled})
-		// registerDiagnoseTools ("Diagnose & Nudge", backlog item 68964304)
-		// reuses the same liveFinder guard as registerTerminalTools above —
-		// diagnose_nudge_session needs live-instance lookup for the same
-		// reason write_to_session does.
-		registerDiagnoseTools(s, &diagnoseHandlers{storage: storage, live: liveFinder, eventBus: eventBus})
-	}
-	if storage != nil {
-		registerIdentityGatedTools(s, storage, eventBus)
-	}
-	if prCache != nil {
-		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
-	}
+	registerModules(s, defaultToolModules(coreDeps{
+		store: store, svc: svc, sbMgr: sbMgr, storage: storage, eventBus: eventBus,
+		prCache: prCache, backlogEnabled: backlogEnabled, autoReopener: autoReopener,
+		backlogSvc: backlogSvc, liveCheck: liveCheck, cfg: cfg,
+	}))
 	return s
 }
 
@@ -166,7 +125,7 @@ func NewHTTPHandler(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener backlog.AutoReopenSpawner,
+	autoReopener reviewgate.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
@@ -199,7 +158,7 @@ func RunServer(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener backlog.AutoReopenSpawner,
+	autoReopener reviewgate.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,

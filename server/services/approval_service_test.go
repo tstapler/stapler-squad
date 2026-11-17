@@ -20,7 +20,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -523,8 +524,8 @@ func TestResolveApproval_MarksNotificationRead(t *testing.T) {
 // ─── ResolveApproval — block on failing CI (AC5, AC7) ────────────────────────
 
 // failingCIInstance is a shared fixture: PR #42, CI failing.
-func failingCIInstance(sessionID string) *session.Instance {
-	return &session.Instance{
+func failingCIInstance(sessionID string) *instance.Instance {
+	return &instance.Instance{
 		Title:                 sessionID,
 		UUID:                  sessionID,
 		GitHubPRNumber:        42,
@@ -582,7 +583,7 @@ func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 	svc := NewApprovalService(store)
 	// GitHubPRNumber == 0: no PR, so even a "failure" conclusion (which shouldn't occur
 	// in practice without a PR) must not trigger the block.
-	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &session.Instance{
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &instance.Instance{
 		Title:                 "session-X",
 		UUID:                  "session-X",
 		GitHubPRNumber:        0,
@@ -959,19 +960,19 @@ func TestIsApprovalPending_ReflectsStoreState(t *testing.T) {
 
 // ─── active PR drives the CI gate (multi-PR) ─────────────────────────────────
 
-func multiPRInstance(t *testing.T, sessionID, scalarConclusion string, prs ...session.PRView) *session.Instance {
+func multiPRInstance(t *testing.T, sessionID, scalarConclusion string, prs ...domain.PRView) *instance.Instance {
 	t.Helper()
-	return &session.Instance{
+	return &instance.Instance{
 		Title: sessionID, UUID: sessionID, PRs: prs, HasPRLinks: true,
 		GitHubPRNumber: 12, GitHubCheckConclusion: scalarConclusion,
 	}
 }
 
-func prViewFor(t *testing.T, number int, state session.PRState, conclusion string) session.PRView {
+func prViewFor(t *testing.T, number int, state domain.PRState, conclusion string) domain.PRView {
 	t.Helper()
-	ref, err := session.NewPRRef("", "acme", "app", number)
+	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
-	return session.PRView{
+	return domain.PRView{
 		Ref: ref, State: state, StoredTerminal: state.Terminal(), CheckConclusion: conclusion,
 		AttachedAt: time.Date(2026, 11, 1, 0, 0, number, 0, time.UTC),
 	}
@@ -983,8 +984,8 @@ func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(
 
 	// The stale scalar says "success" (left by merged #11); the active PR #12 is red.
 	inst := multiPRInstance(t, "session-M", "success",
-		prViewFor(t, 11, session.PRStateMerged, "success"),
-		prViewFor(t, 12, session.PRStateOpen, ciConclusionFailure))
+		prViewFor(t, 11, domain.PRStateMerged, "success"),
+		prViewFor(t, 12, domain.PRStateOpen, ciConclusionFailure))
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -1004,8 +1005,8 @@ func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T)
 
 	// The scalar still says "failure" from merged #11, but the active PR #12 is green.
 	inst := multiPRInstance(t, "session-N", ciConclusionFailure,
-		prViewFor(t, 11, session.PRStateMerged, ciConclusionFailure),
-		prViewFor(t, 12, session.PRStateOpen, "success"))
+		prViewFor(t, 11, domain.PRStateMerged, ciConclusionFailure),
+		prViewFor(t, 12, domain.PRStateOpen, "success"))
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -1019,7 +1020,7 @@ func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T)
 }
 
 func TestActivePRCIStatus_ShouldFallBackToScalars_WhenNoLinks(t *testing.T) {
-	inst := &session.Instance{GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure}
+	inst := &instance.Instance{GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure}
 	number, conclusion := activePRCIStatus(inst.Snapshot())
 	assert.Equal(t, 42, number)
 	assert.Equal(t, ciConclusionFailure, conclusion)

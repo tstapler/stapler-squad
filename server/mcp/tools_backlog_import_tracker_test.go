@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 func importedItemID(t *testing.T, text string) string {
@@ -24,7 +25,7 @@ func importedItemID(t *testing.T, text string) string {
 func TestImportLinearIssue_should_CreateItemFromIssue(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	var gotID string
-	h := &backlogHandlers{storage: storage, fetchLinearIssue: func(_ context.Context, id string) (session.ExternalItem, error) {
+	h := &backlogHandlers{storage: storage, refParser: testRefParser{}, fetchLinearIssue: func(_ context.Context, id string) (session.ExternalItem, error) {
 		gotID = id
 		return session.ExternalItem{ExternalID: "ENG-123", Title: "Fix login", Description: "body", Labels: []string{"bug"}, Priority: 5, URL: "https://linear.app/acme/issue/ENG-123/fix-login"}, nil
 	}}
@@ -42,7 +43,7 @@ func TestImportLinearIssue_should_CreateItemFromIssue(t *testing.T) {
 }
 
 func TestImportLinearIssue_should_RejectBadInput_And_SurfaceFetchErrors(t *testing.T) {
-	h := &backlogHandlers{storage: newTestBacklogStorage(t), fetchLinearIssue: func(context.Context, string) (session.ExternalItem, error) {
+	h := &backlogHandlers{storage: newTestBacklogStorage(t), refParser: testRefParser{}, fetchLinearIssue: func(context.Context, string) (session.ExternalItem, error) {
 		return session.ExternalItem{}, errors.New("linear: authentication failed (401)")
 	}}
 	for _, args := range []map[string]interface{}{{}, {"issue_url": "https://example.com/x"}} {
@@ -59,7 +60,7 @@ func TestImportLinearIssue_should_RejectBadInput_And_SurfaceFetchErrors(t *testi
 func TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	var gotBase, gotKey string
-	h := &backlogHandlers{storage: storage, fetchJiraIssue: func(_ context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
+	h := &backlogHandlers{storage: storage, refParser: testRefParser{}, fetchJiraIssue: func(_ context.Context, r JiraIssueRef) (session.ExternalItem, error) {
 		gotBase, gotKey = r.BaseURL, r.Key
 		return session.ExternalItem{ExternalID: r.Key, Title: "Crash", Description: "stack", Priority: 4, URL: r.BaseURL + "/browse/" + r.Key}, nil
 	}}
@@ -80,4 +81,62 @@ func TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL(t *test
 	res, err = h.importJiraIssue(context.Background(), makeToolReq(map[string]interface{}{"issue_url": "ENG-11"}))
 	require.NoError(t, err)
 	assert.False(t, parseResult(t, res)["success"].(bool), "bare key without base_url must be rejected")
+}
+
+// testRefParser is the production parser pair, wired through the port.
+type testRefParser struct{}
+
+func (testRefParser) ParseLinearRef(ref string) (string, error) {
+	return itemsources.ParseLinearIssueRef(ref)
+}
+
+func (testRefParser) ParseJiraRef(ref string) (JiraIssueRef, error) {
+	r, err := itemsources.ParseJiraIssueRef(ref)
+	return JiraIssueRef{BaseURL: r.BaseURL, Key: r.Key}, err
+}
+
+// fakeRefParser proves the handlers use the injected port, not a package parser.
+type fakeRefParser struct{}
+
+func (fakeRefParser) ParseLinearRef(string) (string, error) { return "FAKE-1", nil }
+func (fakeRefParser) ParseJiraRef(string) (JiraIssueRef, error) {
+	return JiraIssueRef{BaseURL: "https://fake.example", Key: "FAKE-2"}, nil
+}
+
+func TestImportTrackerIssue_should_UseInjectedRefParser(t *testing.T) {
+	t.Parallel()
+	var gotID string
+	h := &backlogHandlers{storage: newTestBacklogStorage(t), refParser: fakeRefParser{},
+		fetchLinearIssue: func(_ context.Context, id string) (session.ExternalItem, error) {
+			gotID = id
+			return session.ExternalItem{ExternalID: id, Title: "t"}, nil
+		}}
+	_, err := h.importLinearIssue(context.Background(), makeToolReq(map[string]interface{}{"issue_url": "anything"}))
+	require.NoError(t, err)
+	assert.Equal(t, "FAKE-1", gotID)
+
+	res, err := (&backlogHandlers{}).importJiraIssue(context.Background(), makeToolReq(map[string]interface{}{"issue_url": "ENG-1"}))
+	require.NoError(t, err)
+	assert.Contains(t, toolText(t, res), "not wired")
+}
+
+var (
+	_ IssueFetcher = (*itemsources.LinearPlugin)(nil)
+	_ IssueFetcher = (*itemsources.JiraPlugin)(nil)
+)
+
+func TestFetchTrackerIssue_should_ErrorWhenRegistryMissingPluginOrNotFetcher(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, err := (&backlogHandlers{}).fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, "X-1")
+	require.ErrorContains(t, err, "not wired")
+
+	h := &backlogHandlers{plugins: session.NewPluginRegistry()}
+	_, err = h.fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, "X-1")
+	require.ErrorContains(t, err, "no linear plugin registered")
+
+	h = &backlogHandlers{plugins: session.NewPluginRegistry(itemsources.NewGitHubIssuesPlugin())}
+	_, err = h.fetchTrackerIssue(ctx, "github_issues", session.PluginConfig{}, "1")
+	require.ErrorContains(t, err, "cannot fetch a single issue")
 }

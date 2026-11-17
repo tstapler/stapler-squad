@@ -9,10 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/sessionpr"
+
 	"entgo.io/ent/dialect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/pullrequeststate"
 )
@@ -29,9 +34,9 @@ func newPRRepo(t *testing.T) *EntRepository {
 	return NewTestEntRepository(t)
 }
 
-func upsertLink(t *testing.T, repo *EntRepository, owner PROwner, ref PRRef, src AttachSource) PRLinkResult {
+func upsertLink(t *testing.T, repo *EntRepository, owner domain.PROwner, ref domain.PRRef, src domain.AttachSource) domain.PRLinkResult {
 	t.Helper()
-	res, err := repo.UpsertSessionPR(context.Background(), owner, ref, PRLink{Role: PRRolePrimary, Source: src})
+	res, err := repo.UpsertSessionPR(context.Background(), owner, ref, domain.PRLink{Role: domain.PRRolePrimary, Source: src})
 	require.NoError(t, err)
 	return res
 }
@@ -97,21 +102,25 @@ func (t countingTx) Query(ctx context.Context, q string, args, v any) error {
 	return t.Tx.Query(ctx, q, args, v)
 }
 
-// countStatements runs fn with the repository's client swapped for one that
-// counts every SQL statement, and returns the count.
-func countStatements(t *testing.T, repo *EntRepository, fn func()) int64 {
+// countStatements runs fn with a repository over the same database whose client counts every SQL
+// statement, and returns the count. The caller's repo is never mutated, so parallel tests stay safe.
+func countStatements(t *testing.T, repo *EntRepository, fn func(counted *EntRepository)) int64 {
 	t.Helper()
 	return countStatementsMatching(t, repo, nil, fn)
 }
 
 // countStatementsMatching counts only the statements match accepts (nil: all).
-func countStatementsMatching(t *testing.T, repo *EntRepository, match func(string) bool, fn func()) int64 {
+func countStatementsMatching(t *testing.T, repo *EntRepository, match func(string) bool, fn func(counted *EntRepository)) int64 {
 	t.Helper()
 	var n atomic.Int64
-	orig := repo.Client
-	repo.Client = ent.NewClient(ent.Driver(countingDriver{Driver: repo.driver, n: &n, match: match}))
-	defer func() { repo.Client = orig }()
-	fn()
+	drv := countingDriver{Driver: repo.driver, n: &n, match: match}
+	counted := NewEntRepositoryFromClient(ent.NewClient(ent.Driver(drv)))
+	counted.driver = drv
+	counted.SetDriver(drv)
+	if repo.VerifyCountersTrusted() {
+		counted.MarkPRMaintenanceSucceeded()
+	}
+	fn(counted)
 	return n.Load()
 }
 
@@ -120,14 +129,14 @@ func countStatementsMatching(t *testing.T, repo *EntRepository, match func(strin
 func TestUpsertSessionPR_ShouldBeIdempotent_WhenCalledTwice(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "github.com", "acme", "app", 12)
+	ref := fixturetest.MustPRRef(t, "github.com", "acme", "app", 12)
 
-	first := upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual)
+	first := upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceManual)
 	require.True(t, first.Created)
 	before, err := repo.ListBySessionUUIDs(context.Background(), []string{"u1"})
 	require.NoError(t, err)
 
-	second := upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual)
+	second := upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceManual)
 	assert.False(t, second.Created)
 	assert.Equal(t, first.StateID, second.StateID)
 	after, err := repo.ListBySessionUUIDs(context.Background(), []string{"u1"})
@@ -142,14 +151,14 @@ func TestUpsertSessionPR_ShouldBeIdempotent_WhenCalledTwice(t *testing.T) {
 func TestListBySessionUUIDs_ShouldShareOneState_WhenTwoSessionsAttachSamePR(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual)
-	upsertLink(t, repo, SessionPROwner("u2"), ref, AttachSourceBranchDiscovery)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u2"), ref, domain.AttachSourceBranchDiscovery)
 
-	var got map[string][]PRView
-	stmts := countStatements(t, repo, func() {
+	var got map[string][]domain.PRView
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		got, err = repo.ListBySessionUUIDs(context.Background(), []string{"u1", "u2"})
+		got, err = counted.ListBySessionUUIDs(context.Background(), []string{"u1", "u2"})
 		require.NoError(t, err)
 	})
 	assert.LessOrEqual(t, stmts, int64(2), "links then states, 2*ceil(2/500)")
@@ -157,21 +166,21 @@ func TestListBySessionUUIDs_ShouldShareOneState_WhenTwoSessionsAttachSamePR(t *t
 	require.Len(t, got["u2"], 1)
 	assert.Equal(t, got["u1"][0].StateID, got["u2"][0].StateID)
 
-	_, err := repo.UpdatePullRequestState(context.Background(), ref, fetchObs(PRSourceTick, PRStateMerged, prRepoT0))
+	_, err := repo.UpdatePullRequestState(context.Background(), ref, fetchObs(domain.PRSourceTick, domain.PRStateMerged, prRepoT0))
 	require.NoError(t, err)
 	got, err = repo.ListBySessionUUIDs(context.Background(), []string{"u1", "u2"})
 	require.NoError(t, err)
-	assert.Equal(t, PRStateMerged, got["u1"][0].State)
-	assert.Equal(t, PRStateMerged, got["u2"][0].State)
+	assert.Equal(t, domain.PRStateMerged, got["u1"][0].State)
+	assert.Equal(t, domain.PRStateMerged, got["u2"][0].State)
 }
 
 func TestUpsertSessionPR_ShouldKeepOneStateRow_WhenSessionItemAndJulesLinkSamePR(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceBranchDiscovery)
-	upsertLink(t, repo, ItemPROwner("item-1"), ref, AttachSourceReportPRCreated)
-	upsertLink(t, repo, SessionPROwner("u-jules"), ref, AttachSourceJules)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceBranchDiscovery)
+	upsertLink(t, repo, domain.ItemPROwner("item-1"), ref, domain.AttachSourceReportPRCreated)
+	upsertLink(t, repo, domain.SessionPROwner("u-jules"), ref, domain.AttachSourceJules)
 
 	assert.Equal(t, 1, countStates(t, repo))
 	assert.Equal(t, 3, countLinks(t, repo))
@@ -185,17 +194,17 @@ func TestListBySessionUUIDs_ShouldStayWithinStatementBudget_WhenManySessions(t *
 	for s := 0; s < 200; s++ {
 		uuids = append(uuids, fmt.Sprintf("sess-%03d", s))
 		for k := 0; k < 3; k++ {
-			role := PRRoleFollowup
-			ref := mustPRRef(t, "", "acme", "app", s*3+k+1)
-			_, err := repo.UpsertSessionPR(ctx, SessionPROwner(uuids[s]), ref, PRLink{Role: role, Source: AttachSourceBackfill})
+			role := domain.PRRoleFollowup
+			ref := fixturetest.MustPRRef(t, "", "acme", "app", s*3+k+1)
+			_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner(uuids[s]), ref, domain.PRLink{Role: role, Source: domain.AttachSourceBackfill})
 			require.NoError(t, err)
 		}
 	}
 
-	var got map[string][]PRView
-	stmts := countStatements(t, repo, func() {
+	var got map[string][]domain.PRView
+	stmts := countStatements(t, repo, func(counted *EntRepository) {
 		var err error
-		got, err = repo.ListBySessionUUIDs(ctx, uuids)
+		got, err = counted.ListBySessionUUIDs(ctx, uuids)
 		require.NoError(t, err)
 	})
 	assert.Len(t, got, 200)
@@ -204,8 +213,8 @@ func TestListBySessionUUIDs_ShouldStayWithinStatementBudget_WhenManySessions(t *
 	for i := 200; i < 1001; i++ {
 		uuids = append(uuids, fmt.Sprintf("none-%04d", i))
 	}
-	stmts = countStatements(t, repo, func() {
-		_, err := repo.ListBySessionUUIDs(ctx, uuids)
+	stmts = countStatements(t, repo, func(counted *EntRepository) {
+		_, err := counted.ListBySessionUUIDs(ctx, uuids)
 		require.NoError(t, err)
 	})
 	assert.LessOrEqual(t, stmts, int64(6), "1001 uuids: at most 2*ceil(1001/500)")
@@ -214,24 +223,24 @@ func TestListBySessionUUIDs_ShouldStayWithinStatementBudget_WhenManySessions(t *
 func TestUpsertSessionPR_ShouldDowngradeToFollowup_WhenSessionAlreadyHasPrimary(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	a := upsertLink(t, repo, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", 1), AttachSourceManual)
-	b := upsertLink(t, repo, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", 2), AttachSourceManual)
-	assert.Equal(t, PRRolePrimary, a.Role)
-	assert.Equal(t, PRRoleFollowup, b.Role)
+	a := upsertLink(t, repo, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 1), domain.AttachSourceManual)
+	b := upsertLink(t, repo, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 2), domain.AttachSourceManual)
+	assert.Equal(t, domain.PRRolePrimary, a.Role)
+	assert.Equal(t, domain.PRRoleFollowup, b.Role)
 }
 
 func TestUpsertSessionPR_ShouldRejectEleventhLink_WhenCapReached(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	for n := 1; n <= maxSessionPRLinks; n++ {
-		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", n), PRLink{Role: PRRoleFollowup, Source: AttachSourcePushScan})
+	for n := 1; n <= domain.MaxSessionPRLinks; n++ {
+		_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", n), domain.PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourcePushScan})
 		require.NoError(t, err)
 	}
-	_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", 999), PRLink{Source: AttachSourcePushScan})
-	assert.ErrorIs(t, err, ErrSessionPRLinkCap)
+	_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 999), domain.PRLink{Source: domain.AttachSourcePushScan})
+	assert.ErrorIs(t, err, domain.ErrSessionPRLinkCap)
 	// An already-linked PR is still a no-op rather than a cap error.
-	res, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), mustPRRef(t, "", "acme", "app", 1), PRLink{Source: AttachSourcePushScan})
+	res, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u1"), fixturetest.MustPRRef(t, "", "acme", "app", 1), domain.PRLink{Source: domain.AttachSourcePushScan})
 	require.NoError(t, err)
 	assert.False(t, res.Created)
 }
@@ -240,13 +249,13 @@ func TestUpsertSessionPR_ShouldRejectLink_WhenItemOwnerCapReached(t *testing.T) 
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	for n := 1; n <= maxSessionPRLinks; n++ {
-		_, err := repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), mustPRRef(t, "", "acme", "app", n), PRLink{Source: AttachSourceReportPRCreated})
+	for n := 1; n <= domain.MaxSessionPRLinks; n++ {
+		_, err := repo.UpsertSessionPR(ctx, domain.ItemPROwner("item-1"), fixturetest.MustPRRef(t, "", "acme", "app", n), domain.PRLink{Source: domain.AttachSourceReportPRCreated})
 		require.NoError(t, err)
 	}
-	_, err := repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), mustPRRef(t, "", "acme", "app", 999), PRLink{Source: AttachSourceReportPRCreated})
-	assert.ErrorIs(t, err, ErrSessionPRLinkCap)
-	_, err = repo.UpsertSessionPR(ctx, ItemPROwner("item-2"), mustPRRef(t, "", "acme", "app", 999), PRLink{Source: AttachSourceReportPRCreated})
+	_, err := repo.UpsertSessionPR(ctx, domain.ItemPROwner("item-1"), fixturetest.MustPRRef(t, "", "acme", "app", 999), domain.PRLink{Source: domain.AttachSourceReportPRCreated})
+	assert.ErrorIs(t, err, domain.ErrSessionPRLinkCap)
+	_, err = repo.UpsertSessionPR(ctx, domain.ItemPROwner("item-2"), fixturetest.MustPRRef(t, "", "acme", "app", 999), domain.PRLink{Source: domain.AttachSourceReportPRCreated})
 	require.NoError(t, err, "the cap is per owner")
 }
 
@@ -254,12 +263,12 @@ func TestSetPinned_ShouldClearOtherPins_WhenPinningAnotherPR(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	r1, r2 := mustPRRef(t, "", "acme", "app", 1), mustPRRef(t, "", "acme", "app", 2)
-	upsertLink(t, repo, SessionPROwner("u1"), r1, AttachSourceManual)
-	upsertLink(t, repo, SessionPROwner("u1"), r2, AttachSourceManual)
+	r1, r2 := fixturetest.MustPRRef(t, "", "acme", "app", 1), fixturetest.MustPRRef(t, "", "acme", "app", 2)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), r1, domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), r2, domain.AttachSourceManual)
 
-	require.NoError(t, repo.SetPinned(ctx, SessionPROwner("u1"), r1, true))
-	require.NoError(t, repo.SetPinned(ctx, SessionPROwner("u1"), r2, true))
+	require.NoError(t, repo.SetPinned(ctx, domain.SessionPROwner("u1"), r1, true))
+	require.NoError(t, repo.SetPinned(ctx, domain.SessionPROwner("u1"), r2, true))
 	got, err := repo.ListBySessionUUIDs(ctx, []string{"u1"})
 	require.NoError(t, err)
 	pins := map[int]bool{}
@@ -268,27 +277,27 @@ func TestSetPinned_ShouldClearOtherPins_WhenPinningAnotherPR(t *testing.T) {
 	}
 	assert.Equal(t, map[int]bool{1: false, 2: true}, pins)
 
-	require.NoError(t, repo.SetPinned(ctx, SessionPROwner("u1"), r2, false))
+	require.NoError(t, repo.SetPinned(ctx, domain.SessionPROwner("u1"), r2, false))
 	got, _ = repo.ListBySessionUUIDs(ctx, []string{"u1"})
 	for _, v := range got["u1"] {
 		assert.False(t, v.Pinned)
 	}
-	assert.ErrorIs(t, repo.SetPinned(ctx, ItemPROwner("i1"), r1, true), ErrInvalidPROwner)
+	assert.ErrorIs(t, repo.SetPinned(ctx, domain.ItemPROwner("i1"), r1, true), domain.ErrInvalidPROwner)
 }
 
 func TestOwnerRules_ShouldRejectBadOwnersAndUpperCaseIdentity(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref := mustPRRef(t, "", "acme", "app", 1)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 1)
 
-	_, err := repo.UpsertSessionPR(ctx, PROwner{}, ref, PRLink{Source: AttachSourceManual})
-	assert.ErrorIs(t, err, ErrInvalidPROwner)
-	_, err = repo.UpsertSessionPR(ctx, PROwner{SessionUUID: "u", BacklogItemID: "i"}, ref, PRLink{Source: AttachSourceManual})
-	assert.ErrorIs(t, err, ErrInvalidPROwner)
+	_, err := repo.UpsertSessionPR(ctx, domain.PROwner{}, ref, domain.PRLink{Source: domain.AttachSourceManual})
+	assert.ErrorIs(t, err, domain.ErrInvalidPROwner)
+	_, err = repo.UpsertSessionPR(ctx, domain.PROwner{SessionUUID: "u", BacklogItemID: "i"}, ref, domain.PRLink{Source: domain.AttachSourceManual})
+	assert.ErrorIs(t, err, domain.ErrInvalidPROwner)
 
 	// Database backstops for callers that bypass the repository.
-	stateID := upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual).StateID
+	stateID := upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceManual).StateID
 	err = repo.Client.SessionPR.Create().SetPullRequestStateID(stateID).SetAttachSource("manual").Exec(ctx)
 	assert.True(t, ent.IsConstraintError(err), "both owners empty must violate the CHECK, got %v", err)
 	err = repo.Client.SessionPR.Create().SetPullRequestStateID(stateID).SetSessionUUID("a").SetBacklogItemID("b").SetAttachSource("manual").Exec(ctx)
@@ -305,16 +314,16 @@ func TestUpsertSessionPR_ShouldNotRecreateLink_WhenOwnerDetachedThenAutoAttaches
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	owner := SessionPROwner("u1")
-	upsertLink(t, repo, owner, ref, AttachSourceManual)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
+	owner := domain.SessionPROwner("u1")
+	upsertLink(t, repo, owner, ref, domain.AttachSourceManual)
 
 	deleted, err := repo.DeleteSessionPR(ctx, owner, ref)
 	require.NoError(t, err)
 	require.True(t, deleted)
 	assert.Equal(t, 0, countLinks(t, repo))
 
-	for _, src := range []AttachSource{AttachSourceBranchDiscovery, AttachSourceBackfill} {
+	for _, src := range []domain.AttachSource{domain.AttachSourceBranchDiscovery, domain.AttachSourceBackfill} {
 		res := upsertLink(t, repo, owner, ref, src)
 		assert.True(t, res.Tombstoned, "%s must not recreate a detached link", src)
 		assert.False(t, res.Created)
@@ -322,7 +331,7 @@ func TestUpsertSessionPR_ShouldNotRecreateLink_WhenOwnerDetachedThenAutoAttaches
 	assert.Equal(t, 0, countLinks(t, repo))
 
 	require.NoError(t, repo.ClearTombstone(ctx, owner, ref))
-	res := upsertLink(t, repo, owner, ref, AttachSourceManual)
+	res := upsertLink(t, repo, owner, ref, domain.AttachSourceManual)
 	assert.True(t, res.Created)
 	assert.Equal(t, 1, countLinks(t, repo))
 }
@@ -331,100 +340,100 @@ func TestDeleteSessionPR_ShouldAffectOnlyThatOwner_WhenTwoOwnersLinkSamePR(t *te
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual)
-	upsertLink(t, repo, ItemPROwner("item-1"), ref, AttachSourceManual)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, domain.ItemPROwner("item-1"), ref, domain.AttachSourceManual)
 
-	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("u1"), ref)
+	_, err := repo.DeleteSessionPR(ctx, domain.SessionPROwner("u1"), ref)
 	require.NoError(t, err)
 
 	remaining, err := repo.ListByItem(ctx, "item-1")
 	require.NoError(t, err)
 	assert.Len(t, remaining, 1, "the item's link survives a session detach")
-	itemTomb, err := repo.IsTombstoned(ctx, ItemPROwner("item-1"), ref)
+	itemTomb, err := repo.IsTombstoned(ctx, domain.ItemPROwner("item-1"), ref)
 	require.NoError(t, err)
-	sessTomb, err := repo.IsTombstoned(ctx, SessionPROwner("u1"), ref)
+	sessTomb, err := repo.IsTombstoned(ctx, domain.SessionPROwner("u1"), ref)
 	require.NoError(t, err)
 	assert.False(t, itemTomb)
 	assert.True(t, sessTomb)
 
 	st, err := repo.ListSessionTombstonesByUUIDs(ctx, []string{"u1", "u2"})
 	require.NoError(t, err)
-	assert.Equal(t, map[string][]PRRef{"u1": {ref}}, st)
-	_, err = repo.DeleteSessionPR(ctx, ItemPROwner("item-1"), ref)
+	assert.Equal(t, map[string][]domain.PRRef{"u1": {ref}}, st)
+	_, err = repo.DeleteSessionPR(ctx, domain.ItemPROwner("item-1"), ref)
 	require.NoError(t, err)
 	it, err := repo.ListItemTombstones(ctx, []string{"item-1"})
 	require.NoError(t, err)
-	assert.Equal(t, map[string][]PRRef{"item-1": {ref}}, it)
+	assert.Equal(t, map[string][]domain.PRRef{"item-1": {ref}}, it)
 }
 
 // ---- UpdatePullRequestState ---------------------------------------------------
 
-func fetchObs(src PRObservationSource, state PRState, at time.Time) PRObservation {
-	return PRObservation{Source: src, Kind: PRObservationFetch, State: state, ObservedAt: at, Now: prRepoNow}
+func fetchObs(src domain.PRObservationSource, state domain.PRState, at time.Time) domain.PRObservation {
+	return domain.PRObservation{Source: src, Kind: domain.PRObservationFetch, State: state, ObservedAt: at, Now: prRepoNow}
 }
 
-func failObs(at time.Time, kind PRObservationKind, pollErr string) PRObservation {
-	return PRObservation{Source: PRSourceTick, Kind: kind, ObservedAt: at, Now: at.Add(time.Second), PollError: pollErr}
+func failObs(at time.Time, kind domain.PRObservationKind, pollErr string) domain.PRObservation {
+	return domain.PRObservation{Source: domain.PRSourceTick, Kind: kind, ObservedAt: at, Now: at.Add(time.Second), PollError: pollErr}
 }
 
 // seedState inserts ref with the given initial state and applies no observation.
-func seedState(t *testing.T, repo *EntRepository, ref PRRef, state PRState, terminal bool) {
+func seedState(t *testing.T, repo *EntRepository, ref domain.PRRef, state domain.PRState, terminal bool) {
 	t.Helper()
-	_, err := repo.EnsureState(context.Background(), ref, PRInitial{State: state, Terminal: terminal})
+	_, err := repo.EnsureState(context.Background(), ref, domain.PRInitial{State: state, Terminal: terminal})
 	require.NoError(t, err)
 }
 
-func reload(t *testing.T, repo *EntRepository, ref PRRef) *ent.PullRequestState {
+func reload(t *testing.T, repo *EntRepository, ref domain.PRRef) *ent.PullRequestState {
 	t.Helper()
-	row, err := repo.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(context.Background())
+	row, err := repo.Client.PullRequestState.Query().Where(sessionpr.RefPredicate(ref)).Only(context.Background())
 	require.NoError(t, err)
 	return row
 }
 
 // setPolled stamps last_polled_at directly so a test can start from a known clock.
-func setPolled(t *testing.T, repo *EntRepository, ref PRRef, at time.Time) {
+func setPolled(t *testing.T, repo *EntRepository, ref domain.PRRef, at time.Time) {
 	t.Helper()
-	require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).SetLastPolledAt(at).Exec(context.Background()))
+	require.NoError(t, repo.Client.PullRequestState.Update().Where(sessionpr.RefPredicate(ref)).SetLastPolledAt(at).Exec(context.Background()))
 }
 
 func TestUpdatePullRequestState_ShouldFollowTransitionTable(t *testing.T) {
 	t.Parallel()
 	type tc struct {
 		name     string
-		from     PRState
+		from     domain.PRState
 		terminal bool
-		obs      PRObservation
-		want     PRState
-		dropped  PRDropReason
+		obs      domain.PRObservation
+		want     domain.PRState
+		dropped  domain.PRDropReason
 	}
 	later := prRepoT0.Add(time.Hour)
 	tests := []tc{
-		{"open to open", PRStateOpen, false, fetchObs(PRSourceTick, PRStateOpen, later), PRStateOpen, ""},
-		{"open to merged", PRStateOpen, false, fetchObs(PRSourceTick, PRStateMerged, later), PRStateMerged, ""},
-		{"open to closed", PRStateOpen, false, fetchObs(PRSourceTick, PRStateClosed, later), PRStateClosed, ""},
-		{"closed to merged by tick", PRStateClosed, true, fetchObs(PRSourceTick, PRStateMerged, later), PRStateMerged, ""},
-		{"closed to merged by reconciler refresh", PRStateClosed, true, fetchObs(PRSourceReconcilerRefresh, PRStateMerged, later), PRStateMerged, ""},
-		{"closed to open by tick is sticky", PRStateClosed, true, fetchObs(PRSourceTick, PRStateOpen, later), PRStateClosed, PRDropSticky},
-		{"closed to open by reconciler refresh is dropped on source", PRStateClosed, true, fetchObs(PRSourceReconcilerRefresh, PRStateOpen, later), PRStateClosed, PRDropSource},
-		{"closed to open by plain webhook is dropped on source", PRStateClosed, true, fetchObs(PRSourceWebhook, PRStateOpen, later), PRStateClosed, PRDropSource},
-		{"closed to open by webhook_reopened", PRStateClosed, true, fetchObs(PRSourceWebhookReopened, PRStateOpen, later), PRStateOpen, ""},
-		{"closed to open by webhook_reopened at the same instant", PRStateClosed, true, fetchObs(PRSourceWebhookReopened, PRStateOpen, prRepoT0), PRStateClosed, PRDropSticky},
-		{"merged to open", PRStateMerged, true, fetchObs(PRSourceWebhookReopened, PRStateOpen, later), PRStateMerged, PRDropSticky},
-		{"merged to closed", PRStateMerged, true, fetchObs(PRSourceTick, PRStateClosed, later), PRStateMerged, PRDropSticky},
-		{"merged to merged", PRStateMerged, true, fetchObs(PRSourceTick, PRStateMerged, later), PRStateMerged, PRDropSticky},
-		{"unknown to open", PRStateUnknown, false, fetchObs(PRSourceTick, PRStateOpen, later), PRStateOpen, ""},
-		{"unknown to merged", PRStateUnknown, false, fetchObs(PRSourceTick, PRStateMerged, later), PRStateMerged, ""},
-		{"unknown to closed", PRStateUnknown, false, fetchObs(PRSourceTick, PRStateClosed, later), PRStateClosed, ""},
-		{"unverified terminal to open", PRStateUnknown, true, fetchObs(PRSourceTick, PRStateOpen, later), PRStateOpen, ""},
-		{"unverified terminal to merged", PRStateUnknown, true, fetchObs(PRSourceTick, PRStateMerged, later), PRStateMerged, ""},
-		{"older observation on a merged row is stale", PRStateMerged, true, fetchObs(PRSourceTick, PRStateOpen, prRepoT0.Add(-time.Hour)), PRStateMerged, PRDropStale},
+		{"open to open", domain.PRStateOpen, false, fetchObs(domain.PRSourceTick, domain.PRStateOpen, later), domain.PRStateOpen, ""},
+		{"open to merged", domain.PRStateOpen, false, fetchObs(domain.PRSourceTick, domain.PRStateMerged, later), domain.PRStateMerged, ""},
+		{"open to closed", domain.PRStateOpen, false, fetchObs(domain.PRSourceTick, domain.PRStateClosed, later), domain.PRStateClosed, ""},
+		{"closed to merged by tick", domain.PRStateClosed, true, fetchObs(domain.PRSourceTick, domain.PRStateMerged, later), domain.PRStateMerged, ""},
+		{"closed to merged by reconciler refresh", domain.PRStateClosed, true, fetchObs(domain.PRSourceReconcilerRefresh, domain.PRStateMerged, later), domain.PRStateMerged, ""},
+		{"closed to open by tick is sticky", domain.PRStateClosed, true, fetchObs(domain.PRSourceTick, domain.PRStateOpen, later), domain.PRStateClosed, domain.PRDropSticky},
+		{"closed to open by reconciler refresh is dropped on source", domain.PRStateClosed, true, fetchObs(domain.PRSourceReconcilerRefresh, domain.PRStateOpen, later), domain.PRStateClosed, domain.PRDropSource},
+		{"closed to open by plain webhook is dropped on source", domain.PRStateClosed, true, fetchObs(domain.PRSourceWebhook, domain.PRStateOpen, later), domain.PRStateClosed, domain.PRDropSource},
+		{"closed to open by webhook_reopened", domain.PRStateClosed, true, fetchObs(domain.PRSourceWebhookReopened, domain.PRStateOpen, later), domain.PRStateOpen, ""},
+		{"closed to open by webhook_reopened at the same instant", domain.PRStateClosed, true, fetchObs(domain.PRSourceWebhookReopened, domain.PRStateOpen, prRepoT0), domain.PRStateClosed, domain.PRDropSticky},
+		{"merged to open", domain.PRStateMerged, true, fetchObs(domain.PRSourceWebhookReopened, domain.PRStateOpen, later), domain.PRStateMerged, domain.PRDropSticky},
+		{"merged to closed", domain.PRStateMerged, true, fetchObs(domain.PRSourceTick, domain.PRStateClosed, later), domain.PRStateMerged, domain.PRDropSticky},
+		{"merged to merged", domain.PRStateMerged, true, fetchObs(domain.PRSourceTick, domain.PRStateMerged, later), domain.PRStateMerged, domain.PRDropSticky},
+		{"unknown to open", domain.PRStateUnknown, false, fetchObs(domain.PRSourceTick, domain.PRStateOpen, later), domain.PRStateOpen, ""},
+		{"unknown to merged", domain.PRStateUnknown, false, fetchObs(domain.PRSourceTick, domain.PRStateMerged, later), domain.PRStateMerged, ""},
+		{"unknown to closed", domain.PRStateUnknown, false, fetchObs(domain.PRSourceTick, domain.PRStateClosed, later), domain.PRStateClosed, ""},
+		{"unverified terminal to open", domain.PRStateUnknown, true, fetchObs(domain.PRSourceTick, domain.PRStateOpen, later), domain.PRStateOpen, ""},
+		{"unverified terminal to merged", domain.PRStateUnknown, true, fetchObs(domain.PRSourceTick, domain.PRStateMerged, later), domain.PRStateMerged, ""},
+		{"older observation on a merged row is stale", domain.PRStateMerged, true, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0.Add(-time.Hour)), domain.PRStateMerged, domain.PRDropStale},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			repo := newPRRepo(t)
-			ref := mustPRRef(t, "", "acme", "app", i+1)
+			ref := fixturetest.MustPRRef(t, "", "acme", "app", i+1)
 			seedState(t, repo, ref, tt.from, tt.terminal)
 			setPolled(t, repo, ref, prRepoT0)
 
@@ -442,15 +451,15 @@ func TestUpdatePullRequestState_ShouldFollowTransitionTable(t *testing.T) {
 func TestUpdatePullRequestState_ShouldEndMerged_WhenFetchesLandInEitherOrder(t *testing.T) {
 	t.Parallel()
 	t1, t3 := prRepoT0, prRepoT0.Add(2*time.Hour)
-	for name, order := range map[string][]PRObservation{
-		"older first": {fetchObs(PRSourceTick, PRStateOpen, t1), fetchObs(PRSourceTick, PRStateMerged, t3)},
-		"newer first": {fetchObs(PRSourceTick, PRStateMerged, t3), fetchObs(PRSourceTick, PRStateOpen, t1)},
+	for name, order := range map[string][]domain.PRObservation{
+		"older first": {fetchObs(domain.PRSourceTick, domain.PRStateOpen, t1), fetchObs(domain.PRSourceTick, domain.PRStateMerged, t3)},
+		"newer first": {fetchObs(domain.PRSourceTick, domain.PRStateMerged, t3), fetchObs(domain.PRSourceTick, domain.PRStateOpen, t1)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			repo := newPRRepo(t)
-			ref := mustPRRef(t, "", "acme", "app", 5)
-			seedState(t, repo, ref, PRStateOpen, false)
+			ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+			seedState(t, repo, ref, domain.PRStateOpen, false)
 			for _, o := range order {
 				_, err := repo.UpdatePullRequestState(context.Background(), ref, o)
 				require.NoError(t, err)
@@ -463,33 +472,33 @@ func TestUpdatePullRequestState_ShouldEndMerged_WhenFetchesLandInEitherOrder(t *
 func TestUpdatePullRequestState_ShouldApply_WhenLastPolledAtIsInTheFuture(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 5)
-	seedState(t, repo, ref, PRStateOpen, false)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+	seedState(t, repo, ref, domain.PRStateOpen, false)
 	setPolled(t, repo, ref, prRepoT0.Add(48*time.Hour)) // clock stepped back since
 
-	obs := fetchObs(PRSourceTick, PRStateMerged, prRepoT0)
+	obs := fetchObs(domain.PRSourceTick, domain.PRStateMerged, prRepoT0)
 	obs.Now = prRepoT0.Add(time.Hour) // last_polled_at (T0+48h) is later than "now"
 	res, err := repo.UpdatePullRequestState(context.Background(), ref, obs)
 	require.NoError(t, err)
 	assert.True(t, res.Applied)
-	assert.Equal(t, PRObservationDrops{}, repo.PRObservationDropCounts())
+	assert.Equal(t, domain.PRObservationDrops{}, repo.PRObservationDropCounts())
 	assert.True(t, reload(t, repo, ref).LastPolledAt.Equal(prRepoT0), "last_polled_at stores the applied observed_at")
 }
 
 func TestUpdatePullRequestState_ShouldCountDrops_ByReason(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 5)
-	seedState(t, repo, ref, PRStateMerged, true)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+	seedState(t, repo, ref, domain.PRStateMerged, true)
 	setPolled(t, repo, ref, prRepoT0)
 	ctx := context.Background()
 	for i := 0; i < 4; i++ {
-		_, err := repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0.Add(-time.Hour)))
+		_, err := repo.UpdatePullRequestState(ctx, ref, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0.Add(-time.Hour)))
 		require.NoError(t, err)
 	}
-	_, err := repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0.Add(time.Hour)))
+	_, err := repo.UpdatePullRequestState(ctx, ref, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0.Add(time.Hour)))
 	require.NoError(t, err)
-	assert.Equal(t, PRObservationDrops{Stale: 4, Sticky: 1}, repo.PRObservationDropCounts())
+	assert.Equal(t, domain.PRObservationDrops{Stale: 4, Sticky: 1}, repo.PRObservationDropCounts())
 }
 
 func TestUpdatePullRequestState_ShouldMoveOpenToUnknown_OnlyAfterFiveCountedFailuresOverThirtyMinutes(t *testing.T) {
@@ -497,10 +506,10 @@ func TestUpdatePullRequestState_ShouldMoveOpenToUnknown_OnlyAfterFiveCountedFail
 	ctx := context.Background()
 	run := func(t *testing.T, gap time.Duration) *ent.PullRequestState {
 		repo := newPRRepo(t)
-		ref := mustPRRef(t, "", "acme", "app", 5)
-		seedState(t, repo, ref, PRStateOpen, false)
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+		seedState(t, repo, ref, domain.PRStateOpen, false)
 		for i := 0; i < 5; i++ {
-			_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Duration(i)*gap), PRObservationCountedFailure, "network"))
+			_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Duration(i)*gap), domain.PRObservationCountedFailure, "network"))
 			require.NoError(t, err)
 		}
 		return reload(t, repo, ref)
@@ -522,21 +531,21 @@ func TestUpdatePullRequestState_ShouldMoveOpenToUnknown_OnlyAfterFiveCountedFail
 	t.Run("terminal rows never move to unknown", func(t *testing.T) {
 		t.Parallel()
 		repo := newPRRepo(t)
-		ref := mustPRRef(t, "", "acme", "app", 6)
-		seedState(t, repo, ref, PRStateClosed, true)
-		res, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, PRObservationCountedFailure, "network"))
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", 6)
+		seedState(t, repo, ref, domain.PRStateClosed, true)
+		res, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, domain.PRObservationCountedFailure, "network"))
 		require.NoError(t, err)
-		assert.Equal(t, PRDropSticky, res.Dropped)
+		assert.Equal(t, domain.PRDropSticky, res.Dropped)
 		assert.Equal(t, "closed", reload(t, repo, ref).State)
 	})
 	t.Run("a successful fetch ends the streak and clears the error", func(t *testing.T) {
 		t.Parallel()
 		repo := newPRRepo(t)
-		ref := mustPRRef(t, "", "acme", "app", 7)
-		seedState(t, repo, ref, PRStateOpen, false)
-		_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, PRObservationCountedFailure, "auth"))
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", 7)
+		seedState(t, repo, ref, domain.PRStateOpen, false)
+		_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, domain.PRObservationCountedFailure, "auth"))
 		require.NoError(t, err)
-		_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0.Add(time.Minute)))
+		_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0.Add(time.Minute)))
 		require.NoError(t, err)
 		row := reload(t, repo, ref)
 		assert.Equal(t, 0, row.PollFailCount)
@@ -549,13 +558,13 @@ func TestUpdatePullRequestState_ShouldWriteOnlyPollError_WhenErrorNote(t *testin
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref := mustPRRef(t, "", "acme", "app", 5)
-	seedState(t, repo, ref, PRStateOpen, false)
-	_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, PRObservationCountedFailure, "network"))
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+	seedState(t, repo, ref, domain.PRStateOpen, false)
+	_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, domain.PRObservationCountedFailure, "network"))
 	require.NoError(t, err)
 	before := reload(t, repo, ref)
 
-	res, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Minute), PRObservationErrorNote, "rate_limited"))
+	res, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Minute), domain.PRObservationErrorNote, "rate_limited"))
 	require.NoError(t, err)
 	require.True(t, res.Applied)
 	after := reload(t, repo, ref)
@@ -569,17 +578,17 @@ func TestUpdatePullRequestState_ShouldRejectBadInput(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref := mustPRRef(t, "", "acme", "app", 5)
-	_, err := repo.UpdatePullRequestState(ctx, PRRef{}, fetchObs(PRSourceTick, PRStateOpen, prRepoT0))
-	assert.ErrorIs(t, err, ErrZeroPRRef)
-	_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0))
-	assert.ErrorIs(t, err, ErrNotFound, "no state row yet")
-	seedState(t, repo, ref, PRStateOpen, false)
-	_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateUnknown, prRepoT0))
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+	_, err := repo.UpdatePullRequestState(ctx, domain.PRRef{}, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0))
+	assert.ErrorIs(t, err, instance.ErrZeroPRRef)
+	_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(domain.PRSourceTick, domain.PRStateOpen, prRepoT0))
+	assert.ErrorIs(t, err, domain.ErrNotFound, "no state row yet")
+	seedState(t, repo, ref, domain.PRStateOpen, false)
+	_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(domain.PRSourceTick, domain.PRStateUnknown, prRepoT0))
 	assert.Error(t, err, "a fetch cannot report unknown")
-	_, err = repo.UpdatePullRequestState(ctx, ref, PRObservation{Source: PRSourceTick, Kind: PRObservationFetch, State: PRStateOpen})
+	_, err = repo.UpdatePullRequestState(ctx, ref, domain.PRObservation{Source: domain.PRSourceTick, Kind: domain.PRObservationFetch, State: domain.PRStateOpen})
 	assert.Error(t, err, "ObservedAt is required")
-	_, err = repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, PRObservationCountedFailure, "bogus"))
+	_, err = repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0, domain.PRObservationCountedFailure, "bogus"))
 	assert.Error(t, err)
 }
 
@@ -587,13 +596,13 @@ func TestResetVerifyCounters_ShouldTouchOnlyUnverifiedTerminalRows(t *testing.T)
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	unverified := mustPRRef(t, "", "acme", "app", 1)
-	open := mustPRRef(t, "", "acme", "app", 2)
-	seedState(t, repo, unverified, PRStateUnknown, true)
-	seedState(t, repo, open, PRStateOpen, false)
-	for _, ref := range []PRRef{unverified, open} {
+	unverified := fixturetest.MustPRRef(t, "", "acme", "app", 1)
+	open := fixturetest.MustPRRef(t, "", "acme", "app", 2)
+	seedState(t, repo, unverified, domain.PRStateUnknown, true)
+	seedState(t, repo, open, domain.PRStateOpen, false)
+	for _, ref := range []domain.PRRef{unverified, open} {
 		for i := 0; i < 3; i++ {
-			_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), PRObservationCountedFailure, "network"))
+			_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Duration(i)*time.Minute), domain.PRObservationCountedFailure, "network"))
 			require.NoError(t, err)
 		}
 	}
@@ -613,20 +622,20 @@ func TestListPollableStates_ShouldOrderNonTerminalFirstAndSkipExhaustedAndLinkle
 	repo := newPRRepo(t)
 	ctx := context.Background()
 	repo.MarkPRMaintenanceSucceeded()
-	link := func(owner PROwner, n int, state PRState, terminal bool) PRRef {
-		ref := mustPRRef(t, "", "acme", "app", n)
-		_, err := repo.UpsertSessionPR(ctx, owner, ref, PRLink{Role: PRRoleFollowup, Source: AttachSourceBackfill, Initial: PRInitial{State: state, Terminal: terminal}})
+	link := func(owner domain.PROwner, n int, state domain.PRState, terminal bool) domain.PRRef {
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", n)
+		_, err := repo.UpsertSessionPR(ctx, owner, ref, domain.PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourceBackfill, Initial: domain.PRInitial{State: state, Terminal: terminal}})
 		require.NoError(t, err)
 		return ref
 	}
-	link(SessionPROwner("u1"), 1, PRStateOpen, false)             // pollable
-	link(ItemPROwner("item-1"), 2, PRStateUnknown, false)         // item-only, pollable
-	link(SessionPROwner("u1"), 3, PRStateMerged, true)            // terminal: skipped
-	seeded := link(SessionPROwner("u1"), 4, PRStateUnknown, true) // unverified terminal, not exhausted
-	exhausted := link(SessionPROwner("u1"), 5, PRStateUnknown, true)
-	seedState(t, repo, mustPRRef(t, "", "acme", "app", 6), PRStateOpen, false) // no link: skipped
+	link(domain.SessionPROwner("u1"), 1, domain.PRStateOpen, false)             // pollable
+	link(domain.ItemPROwner("item-1"), 2, domain.PRStateUnknown, false)         // item-only, pollable
+	link(domain.SessionPROwner("u1"), 3, domain.PRStateMerged, true)            // terminal: skipped
+	seeded := link(domain.SessionPROwner("u1"), 4, domain.PRStateUnknown, true) // unverified terminal, not exhausted
+	exhausted := link(domain.SessionPROwner("u1"), 5, domain.PRStateUnknown, true)
+	seedState(t, repo, fixturetest.MustPRRef(t, "", "acme", "app", 6), domain.PRStateOpen, false) // no link: skipped
 	for i := 0; i < 5; i++ {
-		_, err := repo.UpdatePullRequestState(ctx, exhausted, failObs(prRepoT0.Add(time.Duration(i)*10*time.Minute), PRObservationCountedFailure, "not_found"))
+		_, err := repo.UpdatePullRequestState(ctx, exhausted, failObs(prRepoT0.Add(time.Duration(i)*10*time.Minute), domain.PRObservationCountedFailure, "not_found"))
 		require.NoError(t, err)
 	}
 	_ = seeded
@@ -646,11 +655,11 @@ func TestVerifyCounters_ShouldReadAsZero_UntilMaintenanceSucceeded(t *testing.T)
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	ref := mustPRRef(t, "", "acme", "app", 5)
-	_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, PRLink{Source: AttachSourceBackfill, Initial: PRInitial{State: PRStateUnknown, Terminal: true}})
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+	_, err := repo.UpsertSessionPR(ctx, domain.SessionPROwner("u1"), ref, domain.PRLink{Source: domain.AttachSourceBackfill, Initial: domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}})
 	require.NoError(t, err)
 	for i := 0; i < 5; i++ {
-		_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Duration(i)*10*time.Minute), PRObservationCountedFailure, "not_found"))
+		_, err := repo.UpdatePullRequestState(ctx, ref, failObs(prRepoT0.Add(time.Duration(i)*10*time.Minute), domain.PRObservationCountedFailure, "not_found"))
 		require.NoError(t, err)
 	}
 	got, _ := repo.ListBySessionUUIDs(ctx, []string{"u1"})
@@ -666,37 +675,37 @@ func TestVerifyCounters_ShouldReadAsZero_UntilMaintenanceSucceeded(t *testing.T)
 func TestEnsureState_ShouldNeverModifyAnExistingRow(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 5)
-	first, err := repo.EnsureState(context.Background(), ref, PRInitial{State: PRStateMerged, Terminal: true, URL: "https://github.com/Acme/App/pull/5"})
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+	first, err := repo.EnsureState(context.Background(), ref, domain.PRInitial{State: domain.PRStateMerged, Terminal: true, URL: "https://github.com/Acme/App/pull/5"})
 	require.NoError(t, err)
-	second, err := repo.EnsureState(context.Background(), ref, PRInitial{State: PRStateOpen, URL: "other"})
+	second, err := repo.EnsureState(context.Background(), ref, domain.PRInitial{State: domain.PRStateOpen, URL: "other"})
 	require.NoError(t, err)
 	assert.Equal(t, first, second)
 	row := reload(t, repo, ref)
 	assert.Equal(t, "merged", row.State)
 	assert.True(t, row.Terminal)
 	assert.Equal(t, "https://github.com/Acme/App/pull/5", row.URL)
-	_, err = repo.EnsureState(context.Background(), PRRef{}, PRInitial{})
-	assert.True(t, errors.Is(err, ErrZeroPRRef))
+	_, err = repo.EnsureState(context.Background(), domain.PRRef{}, domain.PRInitial{})
+	assert.True(t, errors.Is(err, instance.ErrZeroPRRef))
 }
 
 // ---- instance <-> storage dual write (Story 2.3) ---------------------------------
 
 // persistedPRSession adds a started session with a uuid to a fresh storage and
 // returns both plus the instance.
-func persistedPRSession(t *testing.T) (*Storage, *Instance) {
+func persistedPRSession(t *testing.T) (*Storage, *instance.Instance) {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 	t.Cleanup(cleanup)
 	inst := newTestInstance("pr-session")
 	inst.UUID = "uuid-pr-session"
 	inst.GitHubOwner, inst.GitHubRepo, inst.Branch = "acme", "app", "feat/x"
-	finishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	require.NoError(t, storage.AddInstance(inst))
 	return storage, inst
 }
 
-func sessionMirror(t *testing.T, storage *Storage, title string) InstanceData {
+func sessionMirror(t *testing.T, storage *Storage, title string) domain.InstanceData {
 	t.Helper()
 	data, err := storage.Repo.Get(context.Background(), title)
 	require.NoError(t, err)
@@ -706,11 +715,11 @@ func sessionMirror(t *testing.T, storage *Storage, title string) InstanceData {
 func TestAttachSessionPR_ShouldReturnSentinels_WhenNoUUIDOrNoRow(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	_, err := repo.AttachSessionPR(context.Background(), "", ref, PRLink{Source: AttachSourceManual}, PRMirror{})
-	assert.ErrorIs(t, err, ErrNoSessionUUID)
-	_, err = repo.AttachSessionPR(context.Background(), "no-such-uuid", ref, PRLink{Source: AttachSourceManual}, PRMirror{})
-	assert.ErrorIs(t, err, ErrSessionNotPersisted)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
+	_, err := repo.AttachSessionPR(context.Background(), "", ref, domain.PRLink{Source: domain.AttachSourceManual}, instance.PRMirror{})
+	assert.ErrorIs(t, err, domain.ErrNoSessionUUID)
+	_, err = repo.AttachSessionPR(context.Background(), "no-such-uuid", ref, domain.PRLink{Source: domain.AttachSourceManual}, instance.PRMirror{})
+	assert.ErrorIs(t, err, domain.ErrSessionNotPersisted)
 	assert.Equal(t, 0, countLinks(t, repo), "a rejected attach must leave no link behind")
 	assert.Equal(t, 0, countStates(t, repo))
 }
@@ -718,12 +727,12 @@ func TestAttachSessionPR_ShouldReturnSentinels_WhenNoUUIDOrNoRow(t *testing.T) {
 func TestAttachSessionPR_ShouldKeepOneStateAndLink_WhenRefCasingDiffers(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
-	upper, err := NewPRRef("GitHub.com", "Acme", "App", 12)
+	upper, err := domain.NewPRRef("GitHub.com", "Acme", "App", 12)
 	require.NoError(t, err)
-	lower := mustPRRef(t, "", "acme", "app", 12)
+	lower := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	ctx := context.Background()
-	for _, ref := range []PRRef{upper, lower} {
-		_, err := storage.AttachSessionPR(ctx, inst.UUID, ref, PRLink{Source: AttachSourceManual}, PRMirror{Number: 12})
+	for _, ref := range []domain.PRRef{upper, lower} {
+		_, err := storage.AttachSessionPR(ctx, inst.UUID, ref, domain.PRLink{Source: domain.AttachSourceManual}, instance.PRMirror{Number: 12})
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, countStates(t, storage.Repo))
@@ -733,10 +742,10 @@ func TestAttachSessionPR_ShouldKeepOneStateAndLink_WhenRefCasingDiffers(t *testi
 func TestAttachSessionPR_ShouldBeAllOrNothing_WhenFailureBeforeMirrorUpdate(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
-	storage.Repo.afterPRLinkHook = func() error { return errors.New("injected failure before mirror update") }
+	storage.Repo.SetAfterLinkHook(func() error { return errors.New("injected failure before mirror update") })
 
-	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, mustPRRef(t, "", "acme", "app", 12),
-		PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}}, PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12"})
+	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, fixturetest.MustPRRef(t, "", "acme", "app", 12),
+		domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}}, instance.PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12"})
 	require.Error(t, err)
 
 	assert.Equal(t, 0, countLinks(t, storage.Repo), "link must roll back")
@@ -749,13 +758,13 @@ func TestAttachSessionPR_ShouldBeAllOrNothing_WhenFailureBeforeMirrorUpdate(t *t
 func TestPersistPRMirror_ShouldClearLegacyNumber_WhenLastLinkDetached(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, ref,
-		PRLink{Source: AttachSourceManual}, PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12", Terminal: true})
+		domain.PRLink{Source: domain.AttachSourceManual}, instance.PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12", Terminal: true})
 	require.NoError(t, err)
 	require.Equal(t, 12, sessionMirror(t, storage, "pr-session").GitHubPRNumber)
 
-	_, err = storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner(inst.UUID), ref)
+	_, err = storage.Repo.DeleteSessionPR(context.Background(), domain.SessionPROwner(inst.UUID), ref)
 	require.NoError(t, err)
 	require.NoError(t, storage.PersistPRMirror(inst.UUID, "", 0, false))
 
@@ -763,15 +772,15 @@ func TestPersistPRMirror_ShouldClearLegacyNumber_WhenLastLinkDetached(t *testing
 	assert.Zero(t, got.GitHubPRNumber, "the old >0 guard could not clear this")
 	assert.Empty(t, got.GitHubPRURL)
 	assert.False(t, got.GitHubPRStatusTerminal)
-	assert.ErrorIs(t, storage.PersistPRMirror("no-such-uuid", "", 0, false), ErrSessionNotPersisted)
+	assert.ErrorIs(t, storage.PersistPRMirror("no-such-uuid", "", 0, false), domain.ErrSessionNotPersisted)
 }
 
 func TestLegacyReader_ShouldSeeActivePR_WhenOldSchemaLoadsFlagOnData(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 
 	// An old binary reads only the InstanceData JSON tags, i.e. the session columns.
 	rows, err := storage.ListInstanceData()
@@ -788,10 +797,10 @@ func TestAttachPR_ShouldDeferPersist_WhenSessionRowNotYetCreated(t *testing.T) {
 	inst := newTestInstance("deferred-pr")
 	inst.UUID = "uuid-deferred"
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
-	finishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	inst.SetPRPersister(storage)
 
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceCreatedFromURL, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateOpen}))
 	assert.True(t, inst.PRPersistPending(), "no session row yet: the write is deferred")
 	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber, "the in-memory snapshot already holds the PR")
 	assert.Equal(t, 0, countLinks(t, storage.Repo))
@@ -807,18 +816,18 @@ func TestAttachPR_ShouldRetryOnNextSave_WhenPersistFails(t *testing.T) {
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 	failOnce := true
-	storage.Repo.afterPRLinkHook = func() error {
+	storage.Repo.SetAfterLinkHook(func() error {
 		if failOnce {
 			failOnce = false
 			return errors.New("transient")
 		}
 		return nil
-	}
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	})
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	require.True(t, inst.PRPersistPending())
 	require.Equal(t, 0, countLinks(t, storage.Repo))
 
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	assert.Equal(t, 1, countLinks(t, storage.Repo), "the next save retried the link")
 	assert.False(t, inst.PRPersistPending())
 }
@@ -827,15 +836,15 @@ func TestAttachPR_ShouldAllowLinkOnlyChange_WhenMirrorUnchanged(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	// A second link that does not change the mirror still defeats the unchanged-row skip.
-	storage.Repo.afterPRLinkHook = func() error { return errors.New("down") }
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), AttachSourceBranchDiscovery, PRInitial{State: PRStateMerged, Terminal: true, HeadBranch: "x"}))
-	storage.Repo.afterPRLinkHook = nil
+	storage.Repo.SetAfterLinkHook(func() error { return errors.New("down") })
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 13), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateMerged, Terminal: true, HeadBranch: "x"}))
+	storage.Repo.SetAfterLinkHook(nil)
 	require.Equal(t, 1, countLinks(t, storage.Repo))
-	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	assert.Equal(t, 2, countLinks(t, storage.Repo))
 }
 
@@ -846,14 +855,14 @@ func TestFullSave_ShouldClearTerminalFlag_WhenOpenPRAttachedToTerminalSession(t 
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(nil) // force the full-save path, not the narrow AttachSessionPR write
 
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery,
-		PRInitial{State: PRStateMerged, Terminal: true}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
+		domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
 	require.NoError(t, storage.UpdateInstance(inst))
 	got := sessionMirror(t, storage, "pr-session")
 	require.True(t, got.GitHubPRStatusTerminal, "all PRs terminal: the flag is persisted true")
 	require.Equal(t, 11, got.GitHubPRNumber)
 
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	require.NoError(t, storage.UpdateInstance(inst)) // update path
 
 	rows, err := storage.ListInstanceDataWithWorktree()
@@ -868,9 +877,9 @@ func TestFullSave_ShouldClearTerminalFlag_WhenOpenPRAttachedToTerminalSession(t 
 	t.Cleanup(cleanup)
 	clone := newTestInstance("pr-session-clone")
 	clone.UUID, clone.GitHubOwner, clone.GitHubRepo = "uuid-clone", "acme", "app"
-	finishInstanceConstruction(clone)
-	require.NoError(t, clone.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBackfill, PRInitial{State: PRStateMerged, Terminal: true}))
-	require.NoError(t, clone.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBackfill, PRInitial{State: PRStateOpen}))
+	instance.FinishInstanceConstruction(clone)
+	require.NoError(t, clone.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
+	require.NoError(t, clone.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateOpen}))
 	require.NoError(t, fresh.AddInstance(clone))
 	assert.False(t, sessionMirror(t, fresh, "pr-session-clone").GitHubPRStatusTerminal)
 }
@@ -889,8 +898,8 @@ func TestFullSave_ShouldLeaveLegacyColumns_WhenLegacyNumberUnrepresented(t *test
 	inst.SetPRPersister(nil) // exercise the full save; the narrow attach write overwrites the mirror by design
 	inst.UUID = "uuid-legacy-only"
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
-	finishInstanceConstruction(inst)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
+	instance.FinishInstanceConstruction(inst)
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	require.True(t, inst.Snapshot().GitHub.LegacyPRUnrepresented, "an unrelated attach keeps the flag")
 	require.NoError(t, storage.UpdateInstance(inst))
 
@@ -936,33 +945,33 @@ func TestHookProcess_ShouldNotChangeLegacyColumns_WhenLinklessSessionSavedViaSsq
 func TestSessionUUIDsByPR_ShouldReturnSessionLinksOnly_WhenItemAndOtherPRLinked(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
-	upsertLink(t, repo, SessionPROwner("u2"), ref, AttachSourceManual)
-	upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual)
-	upsertLink(t, repo, ItemPROwner("item-1"), ref, AttachSourceManual)
-	upsertLink(t, repo, SessionPROwner("u3"), mustPRRef(t, "", "acme", "app", 13), AttachSourceManual)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
+	upsertLink(t, repo, domain.SessionPROwner("u2"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u1"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, domain.ItemPROwner("item-1"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, domain.SessionPROwner("u3"), fixturetest.MustPRRef(t, "", "acme", "app", 13), domain.AttachSourceManual)
 
-	got, err := repo.SessionUUIDsByPR(context.Background(), mustPRRef(t, "", "Acme", "App", 12))
+	got, err := repo.SessionUUIDsByPR(context.Background(), fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"u1", "u2"}, got)
 
-	none, err := repo.SessionUUIDsByPR(context.Background(), mustPRRef(t, "", "acme", "app", 99))
+	none, err := repo.SessionUUIDsByPR(context.Background(), fixturetest.MustPRRef(t, "", "acme", "app", 99))
 	require.NoError(t, err)
 	assert.Empty(t, none)
 
-	_, err = repo.SessionUUIDsByPR(context.Background(), PRRef{})
-	assert.ErrorIs(t, err, ErrZeroPRRef)
+	_, err = repo.SessionUUIDsByPR(context.Background(), domain.PRRef{})
+	assert.ErrorIs(t, err, instance.ErrZeroPRRef)
 }
 
 func TestUpdatePullRequestState_ShouldPersistRateLimitReset_OnNoteAndCountedFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for _, kind := range []PRObservationKind{PRObservationErrorNote, PRObservationCountedFailure} {
+	for _, kind := range []domain.PRObservationKind{domain.PRObservationErrorNote, domain.PRObservationCountedFailure} {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
 			repo := newPRRepo(t)
-			ref := mustPRRef(t, "", "acme", "app", 5)
-			seedState(t, repo, ref, PRStateOpen, false)
+			ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
+			seedState(t, repo, ref, domain.PRStateOpen, false)
 			reset := prRepoT0.Add(30 * time.Minute)
 
 			obs := failObs(prRepoT0, kind, "rate_limited")

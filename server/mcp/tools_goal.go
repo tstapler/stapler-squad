@@ -12,6 +12,8 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // goalHandlers implements session goal MCP tools.
@@ -99,7 +101,7 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 
 	// Priority: (1) session_id param if provided, (2) callerSessionUUID from context.
 	var targetUUID string
-	var resolvedInst *session.Instance
+	var resolvedInst *instance.Instance
 	if sessionID, ok := args["session_id"].(string); ok && sessionID != "" {
 		inst, errR := h.findInstanceByID(sessionID)
 		if errR != nil {
@@ -132,7 +134,7 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 	}
 
 	// Parse tasks array if provided.
-	var tasks []session.TaskNode
+	var tasks []instance.TaskNode
 	if tasksRaw, ok := args["tasks"]; ok && tasksRaw != nil {
 		b, err := json.Marshal(tasksRaw)
 		if err != nil {
@@ -143,7 +145,7 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 		}
 	}
 
-	if err := session.ValidateTaskDepth(tasks, 1); err != nil {
+	if err := instance.ValidateTaskDepth(tasks, 1); err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), ""), nil
 	}
 
@@ -202,7 +204,7 @@ func (h *goalHandlers) getSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 
 	goalData, err := h.storage.GetSessionGoal(ctx, inst.UUID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("no goal set for session %q", sessionID), "Use set_session_goal to create one."), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("failed to get goal: %v", err), ""), nil
@@ -242,14 +244,14 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 	if !ok || newStatus == "" {
 		return errResult(ErrInvalidArgument, "status is required", ""), nil
 	}
-	if !session.IsValidTaskStatus(newStatus) {
+	if !instance.IsValidTaskStatus(newStatus) {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid status %q: must be one of pending, in_progress, done, blocked", newStatus), ""), nil
 	}
 
 	// Verify the existing goal belongs to the caller session.
 	existingGoal, err := h.storage.GetSessionGoal(ctx, callerUUID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, "no goal set for this session", "Use set_session_goal first."), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("failed to retrieve goal: %v", err), ""), nil
@@ -260,7 +262,7 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 
 	updatedGoal, err := h.storage.UpdateSessionTaskStatus(ctx, callerUUID, taskID, newStatus)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, "no goal set for this session", ""), nil
 		}
 		if strings.Contains(err.Error(), "not found") {
@@ -371,7 +373,7 @@ func (h *goalHandlers) listWorkspacePeers(ctx context.Context, _ mcpgo.CallToolR
 // Shared by goalHandlers and backlogHandlers (both carry a
 // session.InstanceStore field) so the lookup body exists exactly once rather
 // than being copy-pasted onto each new handler struct that needs it.
-func findInstanceByIDInStore(store session.InstanceStore, sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func findInstanceByIDInStore(store session.InstanceStore, sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	instances, err := store.LoadInstances()
 	if err != nil {
 		return nil, errResult(ErrInternalError, "failed to load sessions", "")
@@ -387,7 +389,7 @@ func findInstanceByIDInStore(store session.InstanceStore, sessionID string) (*se
 // findInstanceByUUIDInStore finds an instance by its UUID. Returns nil, nil
 // if not found (non-fatal) — see findInstanceByIDInStore's doc comment for
 // why this is a shared free function rather than a per-handler method body.
-func findInstanceByUUIDInStore(store session.InstanceStore, uuid string) (*session.Instance, *mcpgo.CallToolResult) {
+func findInstanceByUUIDInStore(store session.InstanceStore, uuid string) (*instance.Instance, *mcpgo.CallToolResult) {
 	instances, err := store.LoadInstances()
 	if err != nil {
 		return nil, nil
@@ -401,20 +403,20 @@ func findInstanceByUUIDInStore(store session.InstanceStore, uuid string) (*sessi
 }
 
 // findInstanceByID finds an instance by session title/ID from the store.
-func (h *goalHandlers) findInstanceByID(sessionID string) (*session.Instance, *mcpgo.CallToolResult) {
+func (h *goalHandlers) findInstanceByID(sessionID string) (*instance.Instance, *mcpgo.CallToolResult) {
 	return findInstanceByIDInStore(h.store, sessionID)
 }
 
 // findInstanceByUUID finds an instance by its UUID (used for cache updates).
 // Returns nil, nil if not found (non-fatal).
-func (h *goalHandlers) findInstanceByUUID(uuid string) (*session.Instance, *mcpgo.CallToolResult) {
+func (h *goalHandlers) findInstanceByUUID(uuid string) (*instance.Instance, *mcpgo.CallToolResult) {
 	return findInstanceByUUIDInStore(h.store, uuid)
 }
 
 // isValidGoalStatus returns true if s is a recognized goal status value.
 func isValidGoalStatus(s string) bool {
 	switch s {
-	case session.GoalStatusIdle, session.GoalStatusWorking, session.GoalStatusBlocked, session.GoalStatusDone:
+	case instance.GoalStatusIdle, instance.GoalStatusWorking, instance.GoalStatusBlocked, instance.GoalStatusDone:
 		return true
 	}
 	return false

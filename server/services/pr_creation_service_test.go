@@ -10,7 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Characterization of today's single-PR short-circuit (session-multi-pr-tracking
@@ -22,7 +23,7 @@ func TestCreatePullRequest_should_KeepExistingPRColumns_When_ShortCircuiting(t *
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-legacy-shortcircuit", "feature/legacy", mock)
-	inst := &session.Instance{Title: "Legacy short-circuit", UUID: uuid.New().String()}
+	inst := &instance.Instance{Title: "Legacy short-circuit", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 	inst.GitHubPRURL = "https://github.com/tstapler/stapler-squad/pull/999"
 	inst.GitHubPRNumber = 999
@@ -50,7 +51,7 @@ func TestCreatePullRequest_ShouldAttachAsPRCreationService_WhenSessionHasResolve
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-attach", "feature/attach", mock)
-	inst := &session.Instance{Title: "Attach via service", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst := &instance.Instance{Title: "Attach via service", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
 	inst.SetGitWorktree(wt)
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-attach", inst))
 
@@ -63,7 +64,7 @@ func TestCreatePullRequest_ShouldAttachAsPRCreationService_WhenSessionHasResolve
 	prs := inst.Snapshot().GitHub.PRs
 	require.Len(t, prs, 1)
 	assert.Equal(t, 1000, prs[0].Ref.Number())
-	assert.Equal(t, session.AttachSourcePRCreationService, prs[0].AttachSource)
+	assert.Equal(t, domain.AttachSourcePRCreationService, prs[0].AttachSource)
 	assert.Equal(t, 1000, inst.Snapshot().GitHub.GitHubPRNumber)
 }
 
@@ -73,12 +74,12 @@ func TestCreatePullRequest_ShouldCreateAndAttach_WhenPriorPRMerged(t *testing.T)
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-after-merge", "feat-b", mock)
-	inst := &session.Instance{Title: "After merge", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst := &instance.Instance{Title: "After merge", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
 	inst.SetGitWorktree(wt)
-	r11, err := session.NewPRRef("", "tstapler", "stapler-squad", 11)
+	r11, err := domain.NewPRRef("", "tstapler", "stapler-squad", 11)
 	require.NoError(t, err)
-	require.NoError(t, inst.AttachPR(r11, session.AttachSourceBranchDiscovery,
-		session.PRInitial{State: session.PRStateMerged, Terminal: true, HeadBranch: "feat-a"}))
+	require.NoError(t, inst.AttachPR(r11, domain.AttachSourceBranchDiscovery,
+		domain.PRInitial{State: domain.PRStateMerged, Terminal: true, HeadBranch: "feat-a"}))
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-after-merge", inst))
 
 	resp, err := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{
@@ -96,12 +97,12 @@ func TestCreatePullRequest_ShouldReturnExistingPR_WhenOpenPROnCurrentBranch(t *t
 	t.Parallel()
 	mock := &fakePRGitExecutor{createOut: "https://github.com/tstapler/stapler-squad/pull/1000\n"}
 	wt := newFakePRWorktree(t, "sess-open-here", "feat-b", mock)
-	inst := &session.Instance{Title: "Open here", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
+	inst := &instance.Instance{Title: "Open here", UUID: uuid.New().String(), GitHubOwner: "tstapler", GitHubRepo: "stapler-squad"}
 	inst.SetGitWorktree(wt)
-	r12, err := session.NewPRRef("", "tstapler", "stapler-squad", 12)
+	r12, err := domain.NewPRRef("", "tstapler", "stapler-squad", 12)
 	require.NoError(t, err)
-	require.NoError(t, inst.AttachPR(r12, session.AttachSourceBranchDiscovery,
-		session.PRInitial{State: session.PRStateOpen, HeadBranch: "feat-b"}))
+	require.NoError(t, inst.AttachPR(r12, domain.AttachSourceBranchDiscovery,
+		domain.PRInitial{State: domain.PRStateOpen, HeadBranch: "feat-b"}))
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-open-here", inst))
 
 	resp, err := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{
@@ -116,17 +117,17 @@ func TestCreatePullRequest_ShouldReturnExistingPR_WhenOpenPROnCurrentBranch(t *t
 
 func TestOpenPROnBranch_ShouldMatchOnlyNonTerminalPRsWithThatHead(t *testing.T) {
 	t.Parallel()
-	mk := func(n int, st session.PRState, head string) session.PRView {
-		ref, err := session.NewPRRef("", "acme", "app", n)
+	mk := func(n int, st domain.PRState, head string) domain.PRView {
+		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)
-		return session.PRView{Ref: ref, State: st, StoredTerminal: st.Terminal(), HeadBranch: head}
+		return domain.PRView{Ref: ref, State: st, StoredTerminal: st.Terminal(), HeadBranch: head}
 	}
-	prs := []session.PRView{mk(11, session.PRStateMerged, "feat-b"), mk(12, session.PRStateOpen, "feat-a"), mk(13, session.PRStateOpen, "feat-b")}
-	got, ok := session.OpenPROnBranch(prs, "feat-b")
+	prs := []domain.PRView{mk(11, domain.PRStateMerged, "feat-b"), mk(12, domain.PRStateOpen, "feat-a"), mk(13, domain.PRStateOpen, "feat-b")}
+	got, ok := instance.OpenPROnBranch(prs, "feat-b")
 	require.True(t, ok)
 	assert.Equal(t, 13, got.Ref.Number())
-	_, ok = session.OpenPROnBranch(prs[:1], "feat-b")
+	_, ok = instance.OpenPROnBranch(prs[:1], "feat-b")
 	assert.False(t, ok, "a merged PR on the branch does not count")
-	_, ok = session.OpenPROnBranch(prs, "")
+	_, ok = instance.OpenPROnBranch(prs, "")
 	assert.False(t, ok, "no current branch, no match")
 }

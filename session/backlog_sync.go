@@ -10,7 +10,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // defaultSyncInterval is the time between sync ticks.
@@ -43,20 +47,20 @@ type SyncLoop struct {
 	// GitHub-driven sync writes (Phase 2/3 backward sync). Defaults to
 	// NewDefaultWorkflowEngine() so existing NewSyncLoop(...) call sites
 	// continue to compile unchanged.
-	workflowEngine WorkflowEngine
+	workflowEngine domain.WorkflowEngine
 }
 
 // SetWorkflowEngine replaces the engine that guards backward-sync transitions
 // (server/dependencies.go injects the shared SwitchableWorkflowEngine). nil is
 // ignored so a loop never ends up with no engine. Call before Start.
-func (sl *SyncLoop) SetWorkflowEngine(engine WorkflowEngine) {
+func (sl *SyncLoop) SetWorkflowEngine(engine domain.WorkflowEngine) {
 	if engine != nil {
 		sl.workflowEngine = engine
 	}
 }
 
 // WorkflowEngine returns the engine guarding backward-sync transitions.
-func (sl *SyncLoop) WorkflowEngine() WorkflowEngine { return sl.workflowEngine }
+func (sl *SyncLoop) WorkflowEngine() domain.WorkflowEngine { return sl.workflowEngine }
 
 // NewSyncLoop creates a SyncLoop with the default interval and no key provider.
 func NewSyncLoop(storage *Storage, registry *PluginRegistry) *SyncLoop {
@@ -66,7 +70,7 @@ func NewSyncLoop(storage *Storage, registry *PluginRegistry) *SyncLoop {
 		interval:       defaultSyncInterval,
 		stopCh:         make(chan struct{}),
 		keyFunc:        nil,
-		workflowEngine: NewDefaultWorkflowEngine(),
+		workflowEngine: workflowengine.NewDefaultWorkflowEngine(),
 	}
 }
 
@@ -78,7 +82,7 @@ func NewSyncLoopWithKeyProvider(storage *Storage, registry *PluginRegistry, keyF
 		interval:       defaultSyncInterval,
 		stopCh:         make(chan struct{}),
 		keyFunc:        keyFunc,
-		workflowEngine: NewDefaultWorkflowEngine(),
+		workflowEngine: workflowengine.NewDefaultWorkflowEngine(),
 	}
 }
 
@@ -172,7 +176,7 @@ func (sl *SyncLoop) DecryptConfigToken(raw string) (string, error) {
 		return "", fmt.Errorf("get key: %w", err)
 	}
 
-	plainToken, err := DecryptToken(key, encToken)
+	plainToken, err := domain.DecryptToken(key, encToken)
 	if err != nil {
 		return "", fmt.Errorf("decrypt token: %w", err)
 	}
@@ -289,7 +293,7 @@ func (sl *SyncLoop) PreviewBackwardSyncImpact(ctx context.Context, source *ent.I
 			// Not a locally-imported item — excluded rather than counted.
 			continue
 		}
-		if _, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
+		if _, ok := domain.DetermineBackwardSyncTarget(domain.BacklogStatus(existing.Status)); ok {
 			itemCount++
 			if len(sampleTitles) < maxBackwardSyncPreviewSamples {
 				sampleTitles = append(sampleTitles, existing.Title)
@@ -309,15 +313,15 @@ type backwardSyncOutcome struct{ updated, skipped, errored int }
 //
 // from is the status target was chosen for: pinning the write to it stops a
 // live item that moved since the sync read from being archived.
-func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target BacklogStatus) backwardSyncOutcome {
-	_, err := sl.storage.GatedTransition(ctx, TransitionRequest{
-		Caller: CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
-		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(from)},
+func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target domain.BacklogStatus) backwardSyncOutcome {
+	_, err := sl.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: instance.TriggeredByGitHubSync,
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(from)},
 	})
 	switch {
 	case err == nil:
 		return backwardSyncOutcome{updated: 1}
-	case IsGateDenial(err) || errors.Is(err, ErrPreconditionFailed):
+	case domain.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed):
 		log.Debug("[SyncLoop] backward-sync transition skipped, retried next tick", "item", itemID, "error", err)
 		return backwardSyncOutcome{skipped: 1}
 	default:
@@ -330,11 +334,11 @@ func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from,
 // SwitchableWorkflowEngine answers as the operator class, not the system class
 // the write runs as, so a denial there would skip the gate and its
 // transition_denied row; the gate is the authority, so it decides instead.
-func (sl *SyncLoop) backwardPrecheckAllows(in BacklogItemTransitionInput, target BacklogStatus) bool {
-	if _, selector := sl.workflowEngine.(*SwitchableWorkflowEngine); selector {
+func (sl *SyncLoop) backwardPrecheckAllows(in domain.BacklogItemTransitionInput, target domain.BacklogStatus) bool {
+	if _, selector := sl.workflowEngine.(*workflowengine.SwitchableWorkflowEngine); selector {
 		return true
 	}
-	return GuardedTransitionAllowed(sl.workflowEngine, in, target)
+	return workflowengine.GuardedTransitionAllowed(sl.workflowEngine, in, target)
 }
 
 // SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
@@ -384,13 +388,13 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// source — two different repos can both have an issue #1 — so the lookup
 		// must never match across sources.
 		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, source.ID.String(), extItem.ExternalID)
-		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
+		if lookupErr != nil && !errors.Is(lookupErr, domain.ErrNotFound) {
 			log.ErrorLog().Printf("[SyncLoop] GetBacklogItemByExternalID(%s) error: %v", extItem.ExternalID, lookupErr)
 			errored++
 			continue
 		}
 
-		if errors.Is(lookupErr, ErrNotFound) || existing == nil {
+		if errors.Is(lookupErr, domain.ErrNotFound) || existing == nil {
 			// New item — create it, unless another host already holds the claim.
 			// Local-only on purpose: a background sweep must not fan out to peers.
 			if claim, blocked := sl.storage.ForeignClaim(data.ExternalURL); blocked {
@@ -409,9 +413,9 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		}
 
 		// Existing item — apply local-wins: only update fields not in UserModifiedFields.
-		modifiedFields := ParseUserModifiedFields(existing.UserModifiedFields)
+		modifiedFields := domain.ParseUserModifiedFields(existing.UserModifiedFields)
 
-		update := BacklogItemUpdate{}
+		update := backlogdto.BacklogItemUpdate{}
 		anyField := false
 		// anyChange tracks whether the closed/reopened blocks below already
 		// accounted for this item this tick (via their own updated/errored/
@@ -424,15 +428,15 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// partition-of-item-count invariant.
 		anyChange := false
 
-		if !ContainsModifiedField(modifiedFields, "title") {
+		if !domain.ContainsModifiedField(modifiedFields, "title") {
 			update.Title = &data.Title
 			anyField = true
 		}
-		if !ContainsModifiedField(modifiedFields, "description") {
+		if !domain.ContainsModifiedField(modifiedFields, "description") {
 			update.Description = &data.Description
 			anyField = true
 		}
-		if !ContainsModifiedField(modifiedFields, "priority") {
+		if !domain.ContainsModifiedField(modifiedFields, "priority") {
 			update.Priority = &data.Priority
 			anyField = true
 		}
@@ -445,7 +449,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// Task 2.3.1a: without the BackwardSyncEnabled gate, Labels would sync
 		// unconditionally regardless of the per-source opt-in, unlike the
 		// status blocks below (Epic 2.1/2.2), which already gate on it.
-		if source.BackwardSyncEnabled && !ContainsModifiedField(modifiedFields, "labels") {
+		if source.BackwardSyncEnabled && !domain.ContainsModifiedField(modifiedFields, "labels") {
 			update.Labels = &data.Labels
 			anyField = true
 		}
@@ -487,17 +491,17 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 				if !alreadyReconciled {
 					anyChange = true
 					advanceWatermark := true
-					if target, ok := determineBackwardSyncTarget(BacklogStatus(existing.Status)); ok {
-						guardInput := BacklogItemTransitionInput{
-							Status:            BacklogStatus(existing.Status),
-							AcCriteria:        AcCriteriaJSON(existing.AcceptanceCriteria),
+					if target, ok := domain.DetermineBackwardSyncTarget(domain.BacklogStatus(existing.Status)); ok {
+						guardInput := domain.BacklogItemTransitionInput{
+							Status:            domain.BacklogStatus(existing.Status),
+							AcCriteria:        domain.AcCriteriaJSON(existing.AcceptanceCriteria),
 							PlanApproved:      existing.PlanApproved,
 							SkipPlanning:      existing.SkipPlanning,
 							PlanArtifactsPath: existing.PlanArtifactsPath,
 						}
 						if sl.backwardPrecheckAllows(guardInput, target) {
 							// A skip or failure leaves the watermark alone so the next tick retries.
-							res := sl.transitionBackward(ctx, existing.ID.String(), BacklogStatus(existing.Status), target)
+							res := sl.transitionBackward(ctx, existing.ID.String(), domain.BacklogStatus(existing.Status), target)
 							updated, skipped, errored = updated+res.updated, skipped+res.skipped, errored+res.errored
 							advanceWatermark = res.updated > 0
 						} else {
@@ -517,7 +521,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 					}
 					if advanceWatermark {
 						watermark := extItem.IssueUpdatedAt
-						if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+						if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), backlogdto.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
 							log.WarningLog().Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
 						}
 					}
@@ -525,7 +529,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 			}
 		}
 
-		if source.BackwardSyncEnabled && extItem.State == "open" && IsTerminalStatus(BacklogStatus(existing.Status)) {
+		if source.BackwardSyncEnabled && extItem.State == "open" && IsTerminalStatus(domain.BacklogStatus(existing.Status)) {
 			// See the zero-time guard comment in the closed-issue block above —
 			// same rationale applies here.
 			if extItem.IssueUpdatedAt.IsZero() {
@@ -535,7 +539,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 				if !alreadyLogged {
 					log.InfoLog().Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
 					watermark := extItem.IssueUpdatedAt
-					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), backlogdto.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
 						log.WarningLog().Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
 					} else {
 						// This is a real (if content-free) change to the item's
@@ -578,75 +582,4 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 	log.InfoLog().Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d errored=%d",
 		source.ID, source.PluginID, created, updated, skipped, errored)
 	return nil
-}
-
-// determineBackwardSyncTarget implements ADR-002's policy: a closed GitHub
-// issue maps to BacklogStatusArchived for pre-work statuses only. It never
-// targets "done" (would require porting HasUnshippedCode/OverallOutcome
-// computation cross-package and risks conflating "closed" with "shipped").
-// Returns ok=false when there is no valid target under this policy (item is
-// already done/archived, or mid-flight in_progress/review/pr_pending).
-func determineBackwardSyncTarget(current BacklogStatus) (target BacklogStatus, ok bool) {
-	switch current {
-	case BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued:
-		return BacklogStatusArchived, true
-	default:
-		// A custom stage (or in_progress/review/pr_pending/done/archived)
-		// falls here: no auto-archive target is known for it, so none is
-		// computed — correct fail-safe per the "BacklogStatus becomes the
-		// open stage-slug type" decision (Epic 2.1, Story 2.1.3e). Whether a
-		// custom pre-work stage should also backward-sync to archived is an
-		// explicit opt-in for a future epic, not something this default
-		// should guess at.
-		return "", false
-	}
-}
-
-// ParseUserModifiedFields deserializes UserModifiedFields JSON (e.g. ["title","description"]).
-func ParseUserModifiedFields(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	var fields []string
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return nil
-	}
-	return fields
-}
-
-// ContainsModifiedField returns true if name is in the fields slice.
-func ContainsModifiedField(fields []string, name string) bool {
-	for _, f := range fields {
-		if f == name {
-			return true
-		}
-	}
-	return false
-}
-
-// MergeUserModifiedFields adds newFields to the existing JSON-encoded set of
-// user-modified field names, deduplicating, and returns the re-serialized JSON.
-func MergeUserModifiedFields(raw string, newFields ...string) (string, error) {
-	existing := ParseUserModifiedFields(raw)
-
-	seen := make(map[string]bool, len(existing)+len(newFields))
-	merged := make([]string, 0, len(existing)+len(newFields))
-	for _, f := range existing {
-		if !seen[f] {
-			seen[f] = true
-			merged = append(merged, f)
-		}
-	}
-	for _, f := range newFields {
-		if !seen[f] {
-			seen[f] = true
-			merged = append(merged, f)
-		}
-	}
-
-	out, err := json.Marshal(merged)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal user modified fields: %w", err)
-	}
-	return string(out), nil
 }

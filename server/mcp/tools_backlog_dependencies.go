@@ -12,8 +12,10 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const errBacklogSvcNotWired = "backlog service not wired"
@@ -57,14 +59,14 @@ func requireUUIDArg(args map[string]any, name string) (string, *mcpgo.CallToolRe
 type dependencyOp struct {
 	tool  string
 	verb  string
-	apply func(session.BacklogItemDependencyEdge) error
+	apply func(backlogdto.BacklogItemDependencyEdge) error
 }
 
 func (h *backlogHandlers) addBacklogItemDependency(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return h.mutateDependency(ctx, req, dependencyOp{
 		tool: "add_backlog_item_dependency",
 		verb: "Added",
-		apply: func(e session.BacklogItemDependencyEdge) error {
+		apply: func(e backlogdto.BacklogItemDependencyEdge) error {
 			_, err := h.backlogSvc.AddBacklogItemDependency(ctx, connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
 				BlockerItemId: e.BlockerID,
 				BlockedItemId: e.BlockedID,
@@ -78,7 +80,7 @@ func (h *backlogHandlers) removeBacklogItemDependency(ctx context.Context, req m
 	return h.mutateDependency(ctx, req, dependencyOp{
 		tool: "remove_backlog_item_dependency",
 		verb: "Removed (or already absent)",
-		apply: func(e session.BacklogItemDependencyEdge) error {
+		apply: func(e backlogdto.BacklogItemDependencyEdge) error {
 			_, err := h.backlogSvc.RemoveBacklogItemDependency(ctx, connect.NewRequest(&sessionv1.RemoveBacklogItemDependencyRequest{
 				BlockerItemId: e.BlockerID,
 				BlockedItemId: e.BlockedID,
@@ -104,7 +106,7 @@ func (h *backlogHandlers) mutateDependency(_ context.Context, req mcpgo.CallTool
 	if bad != nil {
 		return bad, nil
 	}
-	if err := op.apply(session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: blocked}); err != nil {
+	if err := op.apply(backlogdto.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: blocked}); err != nil {
 		return connectErrResult(op.tool, err), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("%s dependency: %s is blocked by %s.", op.verb, blocked, blocker)), nil
@@ -161,7 +163,7 @@ func (h *backlogHandlers) transitionBacklogItemStatus(ctx context.Context, req m
 	if expected == "" {
 		return errResult(ErrInvalidArgument, "expected_status is required", "Pass the status you last observed via get_backlog_item; the transition is rejected if the item has moved since."), nil
 	}
-	resp, err := h.backlogSvc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, session.TriggeredByAgent), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+	resp, err := h.backlogSvc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, instance.TriggeredByAgent), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         itemID,
 		TargetStatus:   target,
 		ExpectedStatus: expected,
@@ -202,7 +204,7 @@ func (h *backlogHandlers) parseDependsOn(ctx context.Context, args map[string]an
 		}
 		seen[id] = true
 		if _, err := h.storage.GetBacklogItem(ctx, id); err != nil {
-			if errors.Is(err, session.ErrNotFound) {
+			if errors.Is(err, domain.ErrNotFound) {
 				return nil, errResult(ErrItemNotFound, fmt.Sprintf("depends_on: backlog item %q not found", id), itemNotFoundRemediation)
 			}
 			return nil, errResult(ErrInternalError, fmt.Sprintf("depends_on: look up %s: %v", id, err), "")
@@ -264,13 +266,13 @@ func (h *backlogHandlers) writeDependenciesSection(ctx context.Context, sb *stri
 		return
 	}
 	sb.WriteString("## Dependencies\n")
-	writeRefs := func(label string, refs []session.BacklogItemDependencyRef) {
+	writeRefs := func(label string, refs []backlogdto.BacklogItemDependencyRef) {
 		if len(refs) == 0 {
 			return
 		}
 		fmt.Fprintf(sb, "%s:\n", label)
 		for _, r := range refs {
-			fmt.Fprintf(sb, "- %s \"%s\" (status: %s)\n", r.ItemID, backlog.SanitizeForAgentContext(r.Title, 200), r.Status)
+			fmt.Fprintf(sb, "- %s \"%s\" (status: %s)\n", r.ItemID, pipeline.SanitizeForAgentContext(r.Title, 200), r.Status)
 		}
 	}
 	writeRefs("blocked_by", blockedBy)

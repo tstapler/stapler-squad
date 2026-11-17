@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "streammetrics",
+    srcs = ["watch_stream_metrics.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/internal/streammetrics",
+    visibility = ["//server/services:__subpackages__"],
+    deps = [
+        "//log",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":streammetrics",
+    visibility = ["//server/services:__subpackages__"],
+)

@@ -7,7 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // DismissWorkflowSuggestion marks a diagnose-session recommendation dismissed.
@@ -23,7 +23,7 @@ func (s *BacklogService) DismissWorkflowSuggestion(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("item_id and suggestion_id are required"))
 	}
 	if err := s.storage.DismissWorkflowSuggestion(ctx, req.Msg.ItemId, req.Msg.SuggestionId); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)

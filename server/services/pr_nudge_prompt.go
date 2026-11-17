@@ -9,6 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -140,8 +141,8 @@ func nudgePRLink(k githubpkg.PRKey) string {
 // UTF-8 boundary. The note is PR-specific; buildSteerMessage's "see item
 // notes" pointer would be wrong for a PR with no backlog item.
 func boundNudgePrompt(p string) string {
-	if len(p) <= session.MaxSteerMessageLength {
+	if len(p) <= instance.MaxSteerMessageLength {
 		return p
 	}
-	return session.TruncateUTF8Bytes(p, session.MaxSteerMessageLength-len(nudgeTruncationNote)) + nudgeTruncationNote
+	return session.TruncateUTF8Bytes(p, instance.MaxSteerMessageLength-len(nudgeTruncationNote)) + nudgeTruncationNote
 }

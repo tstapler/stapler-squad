@@ -21,7 +21,8 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -626,11 +627,11 @@ func TestHandlePermissionRequest_SessionIdleMinutes_PopulatedFromLiveInstance(t 
 
 	const uuid = "eeeeeeee-1111-2222-3333-ffffffffffff"
 	now := time.Now()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "idle-session",
 		UUID:      uuid,
 		Path:      "/projects/idle",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: now.Add(-75 * time.Minute), // no meaningful output recorded — falls back to time since creation
 		UpdatedAt: now,

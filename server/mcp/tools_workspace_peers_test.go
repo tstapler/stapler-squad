@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo covers AC0: the MCP tool
@@ -20,7 +20,7 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 	unrelated := makeTestInstance("unrelated-session", "other-uuid")
 	unrelated.GitHubOwner, unrelated.GitHubRepo = "acme", "other-repo"
 
-	store := &stubStore{instances: []*session.Instance{caller, peer, unrelated}}
+	store := &stubStore{instances: []*instance.Instance{caller, peer, unrelated}}
 	h, _ := makeGoalHandlers(t, store)
 	// Storage.ListWorkspacePeers queries its own real ent-backed ListInstanceData, so the
 	// same instances need to be persisted there too (mirrors how caller resolution uses
@@ -28,7 +28,7 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 	require.NoError(t, h.storage.AddInstance(caller))
 	require.NoError(t, h.storage.AddInstance(peer))
 	require.NoError(t, h.storage.AddInstance(unrelated))
-	_, err := h.storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", session.GoalStatusWorking, nil, "", "")
+	_, err := h.storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, h.storage.SetSessionGoalWorkspaceKey(context.Background(), "peer-uuid", peer.WorkspaceKey()))
 
@@ -59,7 +59,7 @@ func TestListWorkspacePeersMCP_returnsEmptyWhenCallerHasNoWorkspace(t *testing.T
 	// which does yield a path-based key — clear it to simulate a truly bare session.
 	caller.Path = ""
 
-	store := &stubStore{instances: []*session.Instance{caller}}
+	store := &stubStore{instances: []*instance.Instance{caller}}
 	h, _ := makeGoalHandlers(t, store)
 
 	ctx := WithSessionUUID(context.Background(), callerUUID)

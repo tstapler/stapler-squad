@@ -4,23 +4,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // reactiveTestStatusProvider implements StatusProvider for reactive queue tests.
 type reactiveTestStatusProvider struct {
-	statusByTitle map[string]InstanceStatusInfo
+	statusByTitle map[string]instance.InstanceStatusInfo
 }
 
-func (m *reactiveTestStatusProvider) GetStatus(inst *Instance) InstanceStatusInfo {
+func (m *reactiveTestStatusProvider) GetStatus(inst *instance.Instance) instance.InstanceStatusInfo {
 	if info, ok := m.statusByTitle[inst.Title]; ok {
 		return info
 	}
-	return InstanceStatusInfo{}
+	return instance.InstanceStatusInfo{}
 }
 
-func (m *reactiveTestStatusProvider) GetController(title string) (*ClaudeController, bool) {
+func (m *reactiveTestStatusProvider) GetController(title string) (*claudectl.ClaudeController, bool) {
 	return nil, false
 }
 
@@ -29,9 +33,9 @@ func (m *reactiveTestStatusProvider) GetController(title string) (*ClaudeControl
 func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 	t.Parallel()
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusProvider := &reactiveTestStatusProvider{
-		statusByTitle: make(map[string]InstanceStatusInfo),
+		statusByTitle: make(map[string]instance.InstanceStatusInfo),
 	}
 
 	cfg := DefaultReviewQueuePollerConfig()
@@ -41,11 +45,11 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 
 	poller := NewReviewQueuePollerWithConfig(queue, statusProvider, nil, cfg)
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "reactive-test",
-		Status: Active,
+		Status: domain.Active,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
 
 	poller.AddInstance(inst)
@@ -53,8 +57,8 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 	idleContent := "✻ Perambulated for 1h 5m\n\n> ▌\n? for shortcuts"
 	poller.injectCachedContent(inst.Title, idleContent)
 
-	statusProvider.statusByTitle[inst.Title] = InstanceStatusInfo{
-		BasicStatus:        Active,
+	statusProvider.statusByTitle[inst.Title] = instance.InstanceStatusInfo{
+		BasicStatus:        domain.Active,
 		IsControllerActive: false,
 		ClaudeStatus:       detection.StatusIdle,
 	}
@@ -78,27 +82,27 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 	t.Parallel()
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusProvider := &reactiveTestStatusProvider{
-		statusByTitle: make(map[string]InstanceStatusInfo),
+		statusByTitle: make(map[string]instance.InstanceStatusInfo),
 	}
 
 	cfg := DefaultReviewQueuePollerConfig()
 	cfg.PollInterval = 50 * time.Millisecond
 	poller := NewReviewQueuePollerWithConfig(queue, statusProvider, nil, cfg)
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:  "active-test",
-		Status: Active,
+		Status: domain.Active,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.LastMeaningfulOutput = time.Now()
 
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    inst.Title,
 		SessionName:  inst.Title,
-		Reason:       ReasonIdleTimeout,
-		Priority:     PriorityLow,
+		Reason:       queuepkg.ReasonIdleTimeout,
+		Priority:     queuepkg.PriorityLow,
 		DetectedAt:   time.Now().Add(-1 * time.Minute),
 		LastActivity: time.Now().Add(-1 * time.Minute),
 	})
@@ -110,8 +114,8 @@ func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 
 	inst.LastUserResponse = time.Now().Add(-100 * time.Millisecond)
 
-	statusProvider.statusByTitle[inst.Title] = InstanceStatusInfo{
-		BasicStatus:        Active,
+	statusProvider.statusByTitle[inst.Title] = instance.InstanceStatusInfo{
+		BasicStatus:        domain.Active,
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusExecuting,
 		IdleState: detection.IdleStateInfo{

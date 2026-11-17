@@ -8,6 +8,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // staleCreationSweeperCheckInterval is how often the sweeper re-evaluates every live
@@ -87,7 +89,7 @@ func (s *StaleCreationSweeper) sweep(ctx context.Context) {
 	threshold := time.Duration(cfg.CreationStale.ThresholdMinutesOrDefault()) * time.Minute
 
 	for _, inst := range s.poller.GetInstances() {
-		if session.Status(inst.GetStatus()) != session.Creating {
+		if domain.Status(inst.GetStatus()) != domain.Creating {
 			continue
 		}
 
@@ -111,13 +113,13 @@ func (s *StaleCreationSweeper) sweep(ctx context.Context) {
 // during sweep. Captures CreationEpoch() immediately before the write so the fence
 // presented to commitTerminalStatus reflects this scan, per the sweeper's own
 // race-safety guarantee (Task 4.1.2e).
-func (s *StaleCreationSweeper) flipStale(ctx context.Context, inst *session.Instance) {
+func (s *StaleCreationSweeper) flipStale(ctx context.Context, inst *instance.Instance) {
 	epoch := inst.CreationEpoch()
 
 	writeCtx, cancel := context.WithTimeout(ctx, staleCreationWriteTimeout)
 	defer cancel()
 
-	applied := commitTerminalStatus(writeCtx, s.storage, inst, epoch, session.Failed, "Stale")
+	applied := commitTerminalStatus(writeCtx, s.storage, inst, epoch, domain.Failed, "Stale")
 	if !applied {
 		log.Info("stale creation sweeper: terminal write skipped, epoch already advanced",
 			"session", inst.GetStableID(), "epoch", epoch)

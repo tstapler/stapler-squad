@@ -11,7 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // FilesFlags is the global flag read FileOps needs; production reads the live config.
@@ -67,7 +67,7 @@ type opsRequest struct {
 	Root      FileRoot
 	Resolved  ResolvedPath
 	ViaLink   bool
-	Workspace session.Workspace
+	Workspace domain.Workspace
 }
 
 // resolve is the only place a request path becomes a ResolvedPath for the backend.

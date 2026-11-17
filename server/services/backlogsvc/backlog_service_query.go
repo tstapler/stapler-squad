@@ -15,15 +15,18 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // sourceSyncEventToProto converts a SourceSyncEventData to its proto representation.
-func sourceSyncEventToProto(ev session.SourceSyncEventData) *sessionv1.SourceSyncEvent {
+func sourceSyncEventToProto(ev backlogdto.SourceSyncEventData) *sessionv1.SourceSyncEvent {
 	// Counts below are per-sync-run tallies of GitHub issues processed in a single
 	// SyncGitHubIssues call, bounded by that run's result-page size — nowhere near
 	// int32 overflow.
@@ -56,7 +59,7 @@ func (s *BacklogService) GetBacklogItem(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -74,9 +77,9 @@ func (s *BacklogService) GetBacklogItem(
 		now := time.Now()
 		for i := range isSessions {
 			is := &isSessions[i]
-			if is.Role == string(session.SessionRoleTriage) &&
+			if is.Role == string(instance.SessionRoleTriage) &&
 				is.EndedAt == nil &&
-				strings.HasPrefix(is.SessionUUID, services.HeadlessTriageUUIDPrefix) &&
+				domain.IsHeadlessRole(is.SessionUUID, domain.HeadlessRoleTriage) &&
 				time.Since(is.CreatedAt) > maxTriageSessionAge {
 				_ = s.storage.UpdateItemSessionEnded(ctx, is.ID, now) //nolint:silenttransition ended-at bookkeeping on a read-side stale-triage sweep; the next sweep retries
 				is.EndedAt = &now
@@ -168,7 +171,7 @@ func (s *BacklogService) ListBacklogItems(
 		return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{}), nil
 	}
 
-	filter := session.BacklogItemFilter{
+	filter := backlogdto.BacklogItemFilter{
 		SortBy:          req.Msg.SortBy,
 		ExcludeDone:     !req.Msg.IncludeTerminal,
 		ExcludeArchived: !req.Msg.IncludeArchived,
@@ -241,8 +244,8 @@ func (s *BacklogService) SuggestNextItem(
 	}
 
 	// Load ready items ordered by priority (lower number = higher priority).
-	items, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusReady)},
+	items, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
+		Statuses: []string{string(domain.BacklogStatusReady)},
 		SortBy:   "priority",
 	})
 	if err != nil {
@@ -395,7 +398,7 @@ func (s *BacklogService) GetBacklogItemDiff(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -428,10 +431,10 @@ func (s *BacklogService) GetBacklogItemDiff(
 	// ListItemSessions returns sessions ordered oldest-first (see
 	// EntRepository.ListItemSessions), but we compare CreatedAt explicitly
 	// rather than depending on that ordering.
-	var earliestWorkSession, mostRecentWorkSession *session.ItemSessionSummary
+	var earliestWorkSession, mostRecentWorkSession *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if is.Role != session.SessionRoleWork {
+		if is.Role != instance.SessionRoleWork {
 			continue
 		}
 		if earliestWorkSession == nil || is.CreatedAt.Before(earliestWorkSession.CreatedAt) {
@@ -480,7 +483,7 @@ func (s *BacklogService) GetBacklogItemDiff(
 	// makes the diff work identically whether the work session's worktree
 	// directory still exists or has already been cleaned up (the normal state
 	// once an item is done) — see GetGitDiffRef's doc comment.
-	diffContent, _, diffErr := backlog.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
+	diffContent, _, diffErr := pipeline.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
 	if diffErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to compute diff: %w", diffErr))
 	}
@@ -515,7 +518,7 @@ func (s *BacklogService) GetBacklogItemCost(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -600,11 +603,11 @@ func (s *BacklogService) GetSessionBacklogIndex(
 // annotateDuplicatePending sets duplicate_pending/duplicate_ref on a list-view
 // item from the item sessions ListBacklogItemSummaries already batch-loaded, so
 // no per-item query is needed. Only review items can be pending.
-func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []session.ItemSessionSummary) {
-	if p.Status != string(session.BacklogStatusReview) {
+func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []backlogdto.ItemSessionSummary) {
+	if p.Status != string(domain.BacklogStatusReview) {
 		return
 	}
-	if ref := backlog.PendingDuplicateRef(sessions); ref != "" {
+	if ref := stuck.PendingDuplicateRef(sessions); ref != "" {
 		p.DuplicatePending = true
 		p.DuplicateRef = ref
 	}

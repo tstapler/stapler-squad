@@ -4,7 +4,7 @@ package session
 // remediation gate (backlog_remediation.go), Phase A of
 // docs/tasks/backlog-stuck-item-auto-remediation.md. Split into pure
 // table-driven tests for evaluateRemediation/nextRemediationAt (mirroring
-// stuck_decisions_test.go's style for the same reason: fuzzy
+// stuck/decisions_test.go's style for the same reason: fuzzy
 // threshold/schedule arithmetic deserves exhaustive DB-independent coverage)
 // and a Storage-level integration test proving the actual safety property
 // the design doc calls out: an item stuck 5 times in rapid succession
@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -35,32 +36,32 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 
 	tests := []struct {
 		name string
-		row  OpenStuckStateData
+		row  backlogdto.OpenStuckStateData
 		want remediationDecision
 	}{
 		{
 			name: "fresh row, no attempts yet, no next_remediation_at -> granted",
-			row:  OpenStuckStateData{RemediationAttempts: 0, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 0, LastCheckedAt: now},
 			want: remediationGranted,
 		},
 		{
 			name: "attempts at cap, no next_remediation_at -> parked (no cold-retry deadline recorded)",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "attempts over cap (defensive) -> parked",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + 1, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + 1, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "cold retries spent, deadline in the past -> permanently parked",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries, NextRemediationAt: &past, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "one cold retry left, deadline in the past -> granted cold retry",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries - 1, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries - 1, NextRemediationAt: &past, LastCheckedAt: now},
 			want: remediationGrantedColdRetry,
 		},
 		{
@@ -68,47 +69,47 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 			// repurposed while parked to hold the cold-retry deadline, gates a
 			// slow automatic heartbeat instead.
 			name: "attempts at cap, cold-retry deadline in the future -> still parked",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &future, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &future, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "attempts at cap, cold-retry deadline in the past -> granted cold retry",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &past, LastCheckedAt: now},
 			want: remediationGrantedColdRetry,
 		},
 		{
 			name: "attempts at cap, cold-retry deadline exactly now -> granted cold retry (not before now, so due)",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &now, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &now, LastCheckedAt: now},
 			want: remediationGrantedColdRetry,
 		},
 		{
 			name: "next_remediation_at in the future -> not due",
-			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &future, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &future, LastCheckedAt: now},
 			want: RemediationSkippedNotDue,
 		},
 		{
 			name: "next_remediation_at in the past -> granted",
-			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &past, LastCheckedAt: now},
 			want: remediationGranted,
 		},
 		{
 			name: "next_remediation_at exactly now -> granted (not before now, so due)",
-			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &now, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &now, LastCheckedAt: now},
 			want: remediationGranted,
 		},
 		{
 			name: "boot after last_checked_at, no grace consumed yet -> restart grace",
-			row:  OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute)},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute)},
 			want: remediationGrantedRestartGrace,
 		},
 		{
 			name: "boot after last_checked_at, grace already consumed this boot -> granted (normal attempt)",
-			row:  OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute), GraceBootTime: &boot},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute), GraceBootTime: &boot},
 			want: remediationGranted,
 		},
 		{
 			name: "boot before last_checked_at (no restart since) -> granted",
-			row:  OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(1 * time.Minute)},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(1 * time.Minute)},
 			want: remediationGranted,
 		},
 	}
@@ -167,9 +168,9 @@ func TestRemediationDue_should_capAtFiveAttemptsWithDelayedRetries_When_StuckRap
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	dueCount := 0
@@ -208,8 +209,8 @@ func TestRemediationDue_should_advanceThroughFullScheduleThenPark_When_EachAttem
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	wantDelays := []time.Duration{30 * time.Minute, 2 * time.Hour, 8 * time.Hour, 24 * time.Hour}
@@ -268,8 +269,8 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusIdea)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "orphaned triage")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusIdea)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonOrphanedTriage, domain.BacklogStatusIdea, "orphaned triage")
 	require.NoError(t, err)
 
 	// Simulate a row that is ALREADY parked (as if it hit the cap long ago,
@@ -320,8 +321,8 @@ func TestRecordManualRemediationAttempt_should_rejectParked_When_AttemptsAtCap(t
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	applied, recErr := repo.RecordRemediationAttempt(ctx, itemID, domain.StuckReasonBouncing, MaxRemediationAttempts, nil)
@@ -348,7 +349,7 @@ func TestRecordManualRemediationAttempt_should_error_When_NoOpenRowExists(t *tes
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
 	_, err = storage.RecordManualRemediationAttempt(ctx, itemID, domain.StuckReasonBouncing)
 	require.ErrorIs(t, err, ErrNoOpenStuckState)
@@ -366,8 +367,8 @@ func TestRecordManualRemediationAttempt_should_incrementLikeANormalAttempt_When_
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	justParked, err := storage.RecordManualRemediationAttempt(ctx, itemID, domain.StuckReasonBouncing)
@@ -398,8 +399,8 @@ func TestResetStuckRemediation_should_clearCountersAndNotifiedAt_When_RowIsOpen(
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 	_, err = repo.MarkStuckNotified(ctx, itemID, domain.StuckReasonBouncing)
 	require.NoError(t, err)
@@ -431,14 +432,14 @@ func TestBulkResetStuckRemediation_should_onlyResetParkedRows_When_OnlyParkedTru
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	parkedItemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, parkedItemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	parkedItemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, parkedItemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 	_, err = repo.RecordRemediationAttempt(ctx, parkedItemID, domain.StuckReasonBouncing, MaxRemediationAttempts, nil)
 	require.NoError(t, err)
 
-	midBackoffItemID := createStuckTestItem(t, repo, ctx, BacklogStatusReview)
-	_, err = repo.MarkStuck(ctx, midBackoffItemID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "abandoned")
+	midBackoffItemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusReview)
+	_, err = repo.MarkStuck(ctx, midBackoffItemID, domain.StuckReasonAbandonedReview, domain.BacklogStatusReview, "abandoned")
 	require.NoError(t, err)
 	next := time.Now().Add(2 * time.Hour)
 	_, err = repo.RecordRemediationAttempt(ctx, midBackoffItemID, domain.StuckReasonAbandonedReview, 2, &next)

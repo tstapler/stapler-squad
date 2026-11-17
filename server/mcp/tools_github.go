@@ -17,6 +17,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type githubHandlers struct {
@@ -254,7 +256,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			Session: &SessionDetail{SessionSummary: SessionSummary{
 				ID:     sessionID,
 				Title:  title,
-				Status: session.Creating.String(),
+				Status: domain.Creating.String(),
 			}},
 			StillCreating:  true,
 			ProgramWarning: programWarning,
@@ -274,7 +276,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 		log.Warn("mcp hook injection failed for PR session", "title", title, "err", err)
 	}
 
-	if err := gh.store.SaveInstances([]*session.Instance{inst}); err != nil {
+	if err := gh.store.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save session: %v", err), ""), nil
 	}
 

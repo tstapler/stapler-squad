@@ -90,10 +90,20 @@ linters:
             - "**/session/prpoller/**"
             - "**/services/sessionbundle/**"
             - "**/services/devtools/**"
+            - "**/services/insights/**"
+            - "**/services/debugseed/**"
             - "!**/*_test.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "ADR-010 scoped packages must not import the ent ORM directly"
+        # Tracker plugins are leaves: the session core consumes them only through ItemSourcePlugin.
+        session_core_off_itemsources:
+          files:
+            - "**/session/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/itemsources"
+              desc: "session core must not import tracker plugins; the composition root injects them"
         push_no_services:
           files:
             - "**/server/push/**"
@@ -109,8 +119,169 @@ linters:
             - "**/pkg/threatscan/*.go"
           allow:
             - $gostd
+        # session/migrations is ent-bound startup-migration infrastructure: session hands it behaviour
+        # through Hooks/Env, so it never imports session, github or server (TestNonTestFiles_*, boundaries.txt).
+        isolate_migrations:
+          list-mode: strict
+          files:
+            - "**/session/migrations/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/log
+        # session/webhookstore is a persistence leaf embedded by session.EntRepository: it never imports
+        # session, github or server.
+        isolate_webhookstore:
+          list-mode: strict
+          files:
+            - "**/session/webhookstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+        # session/guidancestore is a persistence leaf embedded by session.EntRepository: it never imports
+        # session, github or server; the one call back into backlog publishing is a constructor argument.
+        isolate_guidancestore:
+          list-mode: strict
+          files:
+            - "**/session/guidancestore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - go.opentelemetry.io/otel
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+        # session/flowstore is the flow-analytics ent reader: it never imports session, github or server
+        # (the workflow engine is injected through New).
+        isolate_flowstore:
+          list-mode: strict
+          files:
+            - "**/session/flowstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/flow
+        # session/wakestore is a persistence leaf embedded by session.EntRepository: it never imports
+        # session, github or server.
+        isolate_wakestore:
+          list-mode: strict
+          files:
+            - "**/session/wakestore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+        # session/markerstore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_markerstore:
+          list-mode: strict
+          files:
+            - "**/session/markerstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/backlogflowmarker
+            - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/backlogstuckepisode
+        # session/sessionpr persists PullRequestState, session PR links and tombstones and is embedded by
+        # session.EntRepository: it never imports session or server.
+        isolate_sessionpr:
+          list-mode: strict
+          files:
+            - "**/session/sessionpr/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/config
+            - github.com/tstapler/stapler-squad/github
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/itemsession
+            - github.com/tstapler/stapler-squad/session/ent/predicate
+            - github.com/tstapler/stapler-squad/session/ent/pullrequeststate
+            - github.com/tstapler/stapler-squad/session/ent/session
+            - github.com/tstapler/stapler-squad/session/ent/sessionpr
+            - github.com/tstapler/stapler-squad/session/ent/sessionprtombstone
+            - github.com/tstapler/stapler-squad/session/instance
+        # session/backlogstore persists backlog item sources, sync events and (as E10 proceeds) backlog items; it is
+        # embedded by session.EntRepository and never imports session, github or server.
+        isolate_backlogstore:
+          list-mode: strict
+          files:
+            - "**/session/backlogstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/itemsource
+            - github.com/tstapler/stapler-squad/session/ent/sourcesyncevent
+        # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
+        # imports session, github or server.
+        isolate_stagecfg:
+          list-mode: strict
+          files:
+            - "**/session/stagecfg/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+        # session/workflowengine is the transition-gate engine leaf: ent-backed repositories stay in
+        # session and satisfy its stagecfg ports, so it never imports session, github or server.
+        isolate_workflowengine:
+          list-mode: strict
+          files:
+            - "**/session/workflowengine/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect
+            - entgo.io/ent/dialect/sql
+            - github.com/google/uuid
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/metric
+            - golang.org/x/sync/singleflight
+            - github.com/tstapler/stapler-squad/config
+            - github.com/tstapler/stapler-squad/internal/sqlitedsn
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/hostclaim
+            - github.com/tstapler/stapler-squad/session/stagecfg
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
-        # BacklogFlowService, the MCP tools and EntFlowReader depend on it, never the reverse.
+        # BacklogFlowService, the MCP tools and flowstore.Reader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.
         isolate_flow_core:
           list-mode: strict
@@ -121,6 +292,26 @@ linters:
             - $gostd
             - github.com/tstapler/stapler-squad/session/domain
             - golang.org/x/sync/singleflight
+        # session/domain/backlogdto is the volatile backlog DTO layer: stdlib, the stable session/domain, and the ulid/uuid id value types.
+        isolate_backlogdto:
+          list-mode: strict
+          files:
+            - "**/session/domain/backlogdto/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/oklog/ulid/v2
+            - github.com/google/uuid
+        # server/services/featureflags is the flag-registry leaf (Spec, Registry, FeatureController): stdlib and config only.
+        isolate_featureflags:
+          list-mode: strict
+          files:
+            - "**/services/featureflags/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/config
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict
@@ -284,6 +475,7 @@ linters:
             - "!**/server/services/backlogsvc/backlog_service_query.go"
             - "!**/server/services/backlogsvc/backlog_service_lifecycle.go"
             - "!**/server/services/backlogsvc/backlog_service_triage.go"
+            - "!**/server/services/backlogsvc/backlog_service_headless_run.go"
             # TriggerTriage's ent.IsNotFound check moved here from
             # backlog_service_triage.go above (2026-09-12 hotspot split) — same
             # pre-existing usage, not newly introduced.
@@ -315,7 +507,7 @@ linters:
             # instead of importing session/ent directly.
             - "!**/server/services/handoff_summary_service_test.go"
             # github_webhook_pr_fix_test.go's erroringWorkflowRepo wraps the real
-            # session.WorkflowRepository and overrides only ListByTriggerType to
+            # stagecfg.WorkflowRepository and overrides only ListByTriggerType to
             # simulate an infra failure (e.g. a DB error) — the interface method's
             # signature itself returns []*ent.Workflow, so implementing that one
             # override requires naming the type. Same justification as

@@ -7,6 +7,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SessionArchiver soft-archives a session by UUID so it stops accumulating in the
@@ -88,12 +91,12 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	}
 	archived := 0
 	for _, item := range items {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusDone)}
-		if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerArchiveStaleDone, ItemID: item.ID, To: session.BacklogStatusArchived, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusDone)}
+		if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerArchiveStaleDone, ItemID: item.ID, To: domain.BacklogStatusArchived, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 		}); transErr != nil {
 			// A denial is reported once by the gate; the item stays done and is retried next tick.
-			logSystemTransitionFailure("archiveStaleDoneItems", item.ID, session.BacklogStatusArchived, transErr)
+			logSystemTransitionFailure("archiveStaleDoneItems", item.ID, domain.BacklogStatusArchived, transErr)
 			continue
 		}
 		archived++
@@ -120,8 +123,8 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 	if archiver == nil {
 		return
 	}
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusDone), string(session.BacklogStatusArchived)},
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
+		Statuses: []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived)},
 	})
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListBacklogItems error: %v", err)
@@ -151,7 +154,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			session.CountLiveWorkResult(session.LiveWorkResultRuleLSkip)
 		}
 		for _, is := range sessions {
-			if is.SessionUUID == "" || !session.IsTmuxBackedSessionRole(is.Role) {
+			if is.SessionUUID == "" || !instance.IsTmuxBackedSessionRole(is.Role) {
 				continue
 			}
 			if archErr := archiver.ArchiveSessionByUUID(ctx, is.SessionUUID); archErr != nil {
@@ -202,8 +205,8 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 	if l.getWorktreeCleaner() == nil {
 		return
 	}
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusDone), string(session.BacklogStatusArchived)},
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
+		Statuses: []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived)},
 	})
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees ListBacklogItems error: %v", err)
@@ -240,7 +243,7 @@ func (l *BacklogLifecycleListener) sweepNow() time.Time {
 // terminalSweepKey scopes a settled entry to one sweep and one version of the item.
 // sessionCount is part of the key because attaching an item session does not bump
 // the item's updated_at, and a session attached late must re-enter the sweep.
-func terminalSweepKey(sweep string, item session.BacklogItemData, sessionCount int) string {
+func terminalSweepKey(sweep string, item backlogdto.BacklogItemData, sessionCount int) string {
 	return sweep + "/" + item.ID + "@" + strconv.FormatInt(item.UpdatedAt.UnixNano(), 10) + "#" + strconv.Itoa(sessionCount)
 }
 

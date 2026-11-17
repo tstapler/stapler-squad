@@ -34,11 +34,14 @@ import (
 	mcpserver "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -176,7 +179,9 @@ var (
 				// The flow service is built from storage alone and keeps its own
 				// aggregator cache; its as_of makes that visible to the agent.
 				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil,
-					mcpserver.WithFlowService(services.NewFlowServiceFromStorage(storage)))
+					mcpserver.WithFlowService(backlogflow.NewFlowServiceFromStorage(storage)),
+					mcpserver.WithPluginRegistry(server.NewItemSourceRegistry()),
+					mcpserver.WithTrackerRefParser(server.NewTrackerRefParser()))
 			}
 
 			// Enable test mode if flag is set
@@ -204,7 +209,7 @@ var (
 			// for tymuxNeeded's startup-supervision decision below: whether
 			// tymuxd needs to be running *right now*, given the flag's value at
 			// this instant.
-			resolvedBackend := session.ResolveSessionBackend(cfg, "", "")
+			resolvedBackend := instance.ResolveSessionBackend(cfg, "", "")
 
 			// Load discovery config
 			discoveryCfg := config.LoadDiscoveryConfig()
@@ -439,7 +444,7 @@ var (
 					}
 					tymux.MonitorDaemon(ctx, daemonCfg, func() bool {
 						current := config.LoadConfig()
-						if tymuxNeeded(current, session.ResolveSessionBackend(current, "", "")) {
+						if tymuxNeeded(current, instance.ResolveSessionBackend(current, "", "")) {
 							return true
 						}
 						rows, err := coreDeps.Storage.ListInstanceData()
@@ -448,7 +453,7 @@ var (
 							return true
 						}
 						for _, row := range rows {
-							if row.Backend == session.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
+							if row.Backend == domain.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
 								return true
 							}
 						}
@@ -995,8 +1000,8 @@ func init() {
 // this process started must also trigger startup supervision, otherwise a
 // session already pinned to tymux from a prior process would find no daemon
 // running when it starts.
-func tymuxNeeded(cfg *config.Config, resolvedBackend session.ProcessManagerBackend) bool {
-	if resolvedBackend == session.BackendTymux {
+func tymuxNeeded(cfg *config.Config, resolvedBackend domain.ProcessManagerBackend) bool {
+	if resolvedBackend == domain.BackendTymux {
 		return true
 	}
 	if cfg == nil {

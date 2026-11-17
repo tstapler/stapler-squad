@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -69,7 +69,7 @@ type ItemPRHold struct {
 // and the non-terminal link's attached_at, the only durable per-link timestamp.
 // Items with no timestamp (no evidence, unrepresented legacy number) are held
 // but cannot be aged, so they are not listed.
-func (p *sweepPRData) itemHolds(d session.InstanceData, expiry time.Time) []ItemPRHold {
+func (p *sweepPRData) itemHolds(d domain.InstanceData, expiry time.Time) []ItemPRHold {
 	var out []ItemPRHold
 	for _, id := range p.itemIDs[d.UUID] {
 		since := time.Time{}

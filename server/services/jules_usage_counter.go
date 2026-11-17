@@ -5,7 +5,7 @@ package services
 // (project_plans/google-jules-integration/implementation/plan.md's
 // Observability Plan section) — jules.session.dispatched,
 // jules.session.completed, jules.session.failed, jules.api.rate_limited,
-// jules.api.error. JulesDispatchService and session.JulesSessionPoller each
+// jules.api.error. JulesDispatchService and sessionjules.JulesSessionPoller each
 // hold this behind a narrow, locally-declared interface (julesUsageRecorder
 // in each of those files) rather than importing this concrete type, so
 // SetUsageCounter is optional and every existing test call site that never
@@ -18,7 +18,7 @@ import "sync/atomic"
 // JulesUsageCounter tracks Jules dispatch/poll activity as plain atomic
 // counters — one process-wide instance, constructed once in
 // server/dependencies.go and shared by JulesDispatchService,
-// session.JulesSessionPoller, and JulesConfigService (for GetJulesConfig's
+// sessionjules.JulesSessionPoller, and JulesConfigService (for GetJulesConfig's
 // response). Mirrors session/tmux/fork_metrics.go's forkMonitor shape
 // (atomic.Int64 fields + a value-struct Snapshot()).
 type JulesUsageCounter struct {

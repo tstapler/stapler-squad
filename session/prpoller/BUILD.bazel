@@ -19,6 +19,8 @@ go_library(
         "//internal/qos",
         "//log",
         "//session",
+        "//session/domain",
+        "//session/instance",
         "//telemetry",
         "@com_github_linkdata_deadlock//:deadlock",
         "@io_opentelemetry_go_otel//attribute",
@@ -57,6 +59,8 @@ go_test(
         "//executor/safeexec",
         "//github",
         "//session",
+        "//session/domain",
+        "//session/instance",
         "//testutil/wait",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
@@ -67,4 +71,14 @@ go_test(
 exports_files(
     ["pr_status_poller.go"],
     visibility = ["//session:__pkg__"],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
 )

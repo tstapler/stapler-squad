@@ -20,7 +20,8 @@ import (
 
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeWorkspaceProvider implements WorkspaceProvider for tests.
@@ -28,11 +29,11 @@ type fakeWorkspaceProvider struct {
 	existingDir string
 }
 
-func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (session.Workspace, error) {
+func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (domain.Workspace, error) {
 	if sessionID != "test-session" {
-		return session.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
+		return domain.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
 	}
-	return session.Workspace{ExistingDir: f.existingDir}, nil
+	return domain.Workspace{ExistingDir: f.existingDir}, nil
 }
 
 // testFileService wraps FileService with a fake findInstance for unit tests.
@@ -50,11 +51,11 @@ func newTestFileService(root string) *testFileService {
 }
 
 // findInstance overrides the base findInstance to use testRoot.
-func (t *testFileService) findInstance(id string) (*session.Instance, error) {
+func (t *testFileService) findInstance(id string) (*instance.Instance, error) {
 	if id != "test-session" {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
-	return &session.Instance{Title: "test-session", Path: t.testRoot}, nil
+	return &instance.Instance{Title: "test-session", Path: t.testRoot}, nil
 }
 
 // listFilesTest is a testable version of ListFiles that uses the overridden findInstance.

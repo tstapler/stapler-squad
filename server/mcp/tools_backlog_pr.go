@@ -14,7 +14,9 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // --- report_pr_created ---
@@ -28,9 +30,9 @@ import (
 // Scope boundary (Story 2.1.4): intentionally built-in-only, not sourced
 // from any stage engine — same "does not automatically inherit" resolution
 // as allowedSelfResolveSourceStatuses in tools_backlog.go.
-var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
-	session.BacklogStatusReview:    true,
-	session.BacklogStatusPRPending: true,
+var reportPRCreatedAllowedSourceStatuses = map[domain.BacklogStatus]bool{
+	domain.BacklogStatusReview:    true,
+	domain.BacklogStatusPRPending: true,
 }
 
 // sessionBranch resolves the branch sessionUUID is working on, via the
@@ -128,7 +130,7 @@ const prProvenanceStampTimeout = 10 * time.Second
 // the PR so any host can trace it back (webhook read-back: handlePRFixEvent).
 // Best-effort: the PR/item transition already succeeded, so a failure is logged
 // and never returned.
-func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *session.BacklogItemData, ref githubpkg.RepoRef, prNumber int) {
+func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *backlogdto.BacklogItemData, ref githubpkg.RepoRef, prNumber int) {
 	body, ok := h.storage.PRProvenanceComment(item)
 	if !ok {
 		return
@@ -215,13 +217,13 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	if errRes != nil {
 		return errRes, nil
 	}
-	if itemSession.Role != session.SessionRoleWork {
+	if itemSession.Role != instance.SessionRoleWork {
 		return errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only 'work' role may report a created PR", itemSession.Role), ""), nil
 	}
 
 	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
-		if errors.Is(getErr, session.ErrNotFound) {
+		if errors.Is(getErr, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
@@ -234,7 +236,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// surface as the generic "item state changed since your last read..."
 	// CAS-race message below, indistinguishable from a genuine concurrent
 	// write race (AC7's message, which this check must not alter).
-	if !reportPRCreatedAllowedSourceStatuses[session.BacklogStatus(item.Status)] {
+	if !reportPRCreatedAllowedSourceStatuses[domain.BacklogStatus(item.Status)] {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
 			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
 	}
@@ -252,7 +254,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	}
 
 	// Idempotency: already pr_pending with this exact PR number is a no-op success.
-	if item.Status == string(session.BacklogStatusPRPending) && item.PrNumber == prNumber {
+	if item.Status == string(domain.BacklogStatusPRPending) && item.PrNumber == prNumber {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
 			"PR #%d already recorded for item %s (status already pr_pending) — no changes made.", prNumber, itemID,
 		)), nil
@@ -271,8 +273,8 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// override_reason, no reassignment guard, status unchanged. The branch check below
 	// still applies. Scope off: today's reassignment rules.
 	_, replacesPresent := args["replaces_pr_number"]
-	additive := item.Status == string(session.BacklogStatusPRPending) && !replacesPresent && h.backlogReaderEnabled()
-	isReassignment := item.Status == string(session.BacklogStatusPRPending) && !additive
+	additive := item.Status == string(domain.BacklogStatusPRPending) && !replacesPresent && h.backlogReaderEnabled()
+	isReassignment := item.Status == string(domain.BacklogStatusPRPending) && !additive
 	if isReassignment && overrideReason == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
 			"item %s already has PR #%d tracked (status pr_pending) — reassigning it to PR #%d requires override_reason explaining why, even if the new PR's branch matches this item's tracked branch. "+
@@ -284,7 +286,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		// failure below — this is the one check the tool description
 		// promises has no override, so an unparseable stored PrURL must
 		// never silently skip it and let the reassignment through.
-		curRef, curParseErr := session.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
+		curRef, curParseErr := instance.ParseGitHubURLWithHosts(item.PrURL, h.enterpriseHosts())
 		if curParseErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf(
 				"could not parse the currently tracked PR URL (%q) to verify it isn't merged before reassigning — retry, or contact an operator if this persists: %v",
@@ -316,7 +318,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 			return errResult(ErrInvalidArgument, "pr_url must be an http(s) GitHub PR URL", ""), nil
 		}
 	}
-	ref, parseErr := session.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
+	ref, parseErr := instance.ParseGitHubURLWithHosts(prURL, h.enterpriseHosts())
 	if parseErr != nil || ref.Owner == "" || ref.Repo == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("pr_url is not a recognizable GitHub PR URL: %v", parseErr), ""), nil
 	}
@@ -422,22 +424,22 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// just accepted with forceOverride=true, which requires
 	// verification.Author == callerLogin. nil when this isn't a
 	// reassignment — SetBacklogItemPRAndTransition ignores it in that case.
-	var guard *session.PRReassignmentGuard
+	var guard *backlogdto.PRReassignmentGuard
 	if isReassignment {
-		guard = &session.PRReassignmentGuard{
+		guard = &backlogdto.PRReassignmentGuard{
 			OverrideReason:      overrideReason,
 			CurrentPRMerged:     false,
 			NewPRAuthorVerified: true,
 		}
 	}
 
-	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
-	}, session.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: session.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
+	if setErr := h.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPReportPRCreated, Observed: item, TriggeredBy: instance.TriggeredByAgent,
+	}, backlogdto.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: domain.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
-			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
+			return transitionDeniedResult(setErr, domain.BacklogStatus(item.Status), domain.BacklogStatusPRPending), nil
 		}
-		if errors.Is(setErr, session.ErrPreconditionFailed) {
+		if errors.Is(setErr, domain.ErrPreconditionFailed) {
 			// AC8: the item's status changed out from under this call between
 			// our read above and the atomic write (another action resolved it,
 			// or a racing report_pr_created call won first) — a friendly,
@@ -445,7 +447,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 			// report_duplicate's identical CAS-failure message).
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it, or a concurrent report_pr_created call won first) — call get_backlog_item to see its current status", ""), nil
 		}
-		if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
+		if errors.Is(setErr, backlogdto.ErrPRReassignmentNotAllowed) {
 			// Should be unreachable — this handler always constructs a valid
 			// guard whenever isReassignment is true — but surfaces distinctly
 			// rather than as a generic internal error if storage's own
@@ -493,9 +495,9 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 // itemAnchorRepo is the repository a reported PR must live in: the repo of the
 // PR the item already tracks, else the session's own repo. An error means no
 // anchor could be resolved, which callers treat as "not in the item's repo".
-func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *session.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
+func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *backlogdto.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
 	if item.PrURL != "" {
-		cur, err := session.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
+		cur, err := instance.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
 		if err != nil {
 			return githubpkg.RepoRef{}, fmt.Errorf("tracked PR URL %q is unparseable: %w", item.PrURL, err)
 		}
@@ -512,7 +514,7 @@ func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (
 		return h.resolveSessionRepo(ctx, sessionUUID)
 	}
 	if wt, err := h.storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID); err == nil && wt.RepoPath != "" {
-		if owner, repo, host, ok := session.OriginGitHubRepo(wt.RepoPath); ok {
+		if owner, repo, host, ok := instance.OriginGitHubRepo(wt.RepoPath); ok {
 			return githubpkg.NewRepoRefWithHost(owner, repo, host)
 		}
 	}
@@ -531,7 +533,7 @@ func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (
 func sameRepo(a, b githubpkg.RepoRef) bool { return repoIdentity(a) == repoIdentity(b) }
 
 func repoIdentity(r githubpkg.RepoRef) string {
-	host := strings.TrimPrefix(githubpkg.NormalizeHost(r.Host()), "www.")
+	host := strings.TrimPrefix(domain.NormalizeHost(r.Host()), "www.")
 	return host + "/" + strings.ToLower(r.Owner()) + "/" + strings.TrimSuffix(strings.ToLower(r.Repo()), ".git")
 }
 

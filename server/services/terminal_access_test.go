@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeTmuxSender counts calls on the tmuxInputSender seam.
@@ -37,9 +37,9 @@ func (f *fakeTmuxSender) counts() (inputs, resizes int) {
 	return len(f.inputs), len(f.resizes)
 }
 
-func hiddenInstance(t *testing.T, hidden bool) *session.Instance {
+func hiddenInstance(t *testing.T, hidden bool) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   "access-" + t.Name(),
 		Path:    t.TempDir(),
 		Program: "claude",

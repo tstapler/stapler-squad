@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // Regenerate goldens with: go test ./session -run TestDetermineGolden -update
@@ -52,8 +54,8 @@ type determineGolden struct {
 // goldenInstance takes its timestamps from time.Now() at construction: Determine reads the
 // wall clock directly, and parallel subtests start late enough that a shared early instant
 // would drift past the 5s idle threshold.
-func goldenInstance(title string) *Instance {
-	return startedInstance(title, func(inst *Instance, now time.Time) {
+func goldenInstance(title string) *instance.Instance {
+	return startedInstance(title, func(inst *instance.Instance, now time.Time) {
 		inst.LastMeaningfulOutput = now.Add(-time.Second)
 	})
 }
@@ -82,15 +84,15 @@ func labelOf(name string) string {
 func labelMatched(label string, r DetectionResult) bool {
 	switch label {
 	case "approval":
-		return r.Action == DetectionActionAdd && r.Reason == ReasonApprovalPending
+		return r.Action == DetectionActionAdd && r.Reason == queue.ReasonApprovalPending
 	case "prose_question":
-		return r.Action == DetectionActionAdd && r.Reason == ReasonInputRequired
+		return r.Action == DetectionActionAdd && r.Reason == queue.ReasonInputRequired
 	case "finished":
-		return r.Action == DetectionActionAdd && r.Reason == ReasonTaskComplete
+		return r.Action == DetectionActionAdd && r.Reason == queue.ReasonTaskComplete
 	case "executing":
 		return r.Action == DetectionActionRemove
 	case "idle":
-		return r.Action != DetectionActionRemove && r.Reason != ReasonApprovalPending && r.Reason != ReasonInputRequired
+		return r.Action != DetectionActionRemove && r.Reason != queue.ReasonApprovalPending && r.Reason != queue.ReasonInputRequired
 	}
 	return false
 }
@@ -100,10 +102,10 @@ func determineCase(program, name, content string) determineGolden {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 	title := program + "-" + name
 
-	noController := determiner.Determine(goldenInstance(title), content, InstanceStatusInfo{}, detector, DeterminerOptions{})
+	noController := determiner.Determine(goldenInstance(title), content, instance.InstanceStatusInfo{}, detector, DeterminerOptions{})
 
 	detected, detectedCtx := detector.DetectWithContextFromLines(strings.Split(content, "\n"))
-	withController := determiner.Determine(goldenInstance(title), "", InstanceStatusInfo{
+	withController := determiner.Determine(goldenInstance(title), "", instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detected,
 		StatusContext:      detectedCtx,

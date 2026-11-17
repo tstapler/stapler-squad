@@ -164,7 +164,7 @@ func (BacklogItem) Fields() []ent.Field {
 		field.String("public_id").
 			Optional().
 			Unique().
-			Comment("Type-prefixed sortable public ID (\"bl_<ULID>\", see session.BacklogItemID). " +
+			Comment("Type-prefixed sortable public ID (\"bl_<ULID>\", see backlogdto.BacklogItemID). " +
 				"Deliberately NOT .Nillable(): .Nillable() only changes the generated Go field " +
 				"from string to *string — it does not affect SQL column nullability. .Optional() " +
 				"alone already makes the underlying column NULLable (confirmed in " +

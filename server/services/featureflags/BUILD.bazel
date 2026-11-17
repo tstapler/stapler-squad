@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "featureflags",
+    srcs = [
+        "feature_flag_audit_policy.go",
+        "feature_flag_controller.go",
+        "feature_flag_names.go",
+        "registry.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/featureflags",
+    visibility = ["//visibility:public"],
+    deps = ["//config"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":featureflags",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "featureflags_test",
+    srcs = ["registry_test.go"],
+    embed = [":featureflags"],
+)
+
+# Read by server/services' flag-registration guard, which scans flag-name consts from source.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
+)

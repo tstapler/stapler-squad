@@ -10,37 +10,39 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // Twins of the session/backlog test fixtures of the same names; copied, not
 // exported, so this leaf package needs nothing from its parent.
 
-func newSeededConfiguredWorkflowEngine(t *testing.T) (*session.ConfiguredWorkflowEngine, *ent.Client) {
+func newSeededConfiguredWorkflowEngine(t *testing.T) (*workflowengine.ConfiguredWorkflowEngine, *ent.Client) {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
 	ctx := context.Background()
 	client := repo.Client
 
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
+	require.NoError(t, workflowengine.EnsureBuiltInWorkflowStages(ctx, client))
 
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
+	stageRepo := stagecfg.NewEntStageConfigRepository(client)
+	gateSatisfactionRepo := stagecfg.NewEntGateSatisfactionRepository(client)
+	engine, err := workflowengine.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 	return engine, client
 }
 
-type fixedMode struct{ m session.EngineMode }
+type fixedMode struct{ m workflowengine.EngineMode }
 
-func (f fixedMode) Mode() session.EngineMode { return f.m }
+func (f fixedMode) Mode() workflowengine.EngineMode { return f.m }
 
 type selectorHarness struct {
-	sel    *session.SwitchableWorkflowEngine
-	cfg    *session.ConfiguredWorkflowEngine
+	sel    *workflowengine.SwitchableWorkflowEngine
+	cfg    *workflowengine.ConfiguredWorkflowEngine
 	client *ent.Client
 }
 
-func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, enabled bool) {
+func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, enabled bool) {
 	t.Helper()
 	ctx := context.Background()
 	n, err := client.StageTransition.Update().
@@ -55,7 +57,7 @@ func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWor
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind session.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().
@@ -64,7 +66,7 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
 		).Only(ctx)
 	require.NoError(t, err)
-	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(session.IsStatefulGateKind(kind)).SetEnabled(true)
+	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(workflowengine.IsStatefulGateKind(kind)).SetEnabled(true)
 	if config != nil {
 		c = c.SetConfig(config)
 	}
@@ -73,12 +75,12 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func passingReviewItem() session.BacklogItemTransitionInput {
-	return session.BacklogItemTransitionInput{Status: session.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
+func passingReviewItem() domain.BacklogItemTransitionInput {
+	return domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
-type classModes map[session.CallerClass]session.EngineMode
+type classModes map[domain.CallerClass]workflowengine.EngineMode
 
-func (c classModes) Mode() session.EngineMode { return c[session.ClassOperator] }
+func (c classModes) Mode() workflowengine.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k session.CallerClass) session.EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) workflowengine.EngineMode { return c[k] }

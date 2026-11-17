@@ -1,5 +1,11 @@
 package session
 
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
+)
+
 // BackgroundOutcome is the server-computed result of a hidden (background)
 // session, surfaced as Session.background_outcome. See ADR-001 decision 6.
 type BackgroundOutcome string
@@ -51,24 +57,24 @@ func IsFailureEndReason(endReason string) bool {
 // ComputeBackgroundOutcome derives a hidden session's outcome. is is nil when
 // the session has no ItemSession. A recorded verdict wins over a failure
 // reason; the diagnose role records no verdict, so it is always unknown.
-func ComputeBackgroundOutcome(status Status, is *ItemSessionSummary) BackgroundOutcome {
-	if is != nil && is.Role == SessionRoleDiagnose {
+func ComputeBackgroundOutcome(status domain.Status, is *backlogdto.ItemSessionSummary) BackgroundOutcome {
+	if is != nil && is.Role == instance.SessionRoleDiagnose {
 		return BackgroundOutcomeUnknown
 	}
 	if is != nil && hasRecordedResult(is) {
 		return BackgroundOutcomeCompleted
 	}
-	if status == Crashed || (is != nil && IsFailureEndReason(is.EndReason)) {
+	if status == domain.Crashed || (is != nil && IsFailureEndReason(is.EndReason)) {
 		return BackgroundOutcomeFailed
 	}
 	return BackgroundOutcomeUnknown
 }
 
-func hasRecordedResult(is *ItemSessionSummary) bool {
+func hasRecordedResult(is *backlogdto.ItemSessionSummary) bool {
 	switch is.Role {
-	case SessionRoleReview:
+	case instance.SessionRoleReview:
 		return is.ReviewVerdict != nil
-	case SessionRoleTriage:
+	case instance.SessionRoleTriage:
 		return is.TriageResult != ""
 	}
 	return false

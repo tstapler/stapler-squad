@@ -3,21 +3,23 @@ package backlogsvc
 import (
 	"context"
 	"fmt"
-	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---------------------------------------------------------------------------
@@ -256,22 +258,22 @@ func TestBuildSteerMessage_NonClaudeProgram_NoSuffix(t *testing.T) {
 }
 
 func TestBuildSteerMessage_OverLength_Truncates(t *testing.T) {
-	fixContext := strings.Repeat("x", session.MaxSteerMessageLength+500)
+	fixContext := strings.Repeat("x", instance.MaxSteerMessageLength+500)
 
 	got := buildSteerMessage("claude", fixContext)
 
-	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(got), instance.MaxSteerMessageLength)
 	require.Contains(t, got, truncationPointer)
 	require.True(t, strings.HasSuffix(got, prShipSuffix))
 }
 
 func TestBuildSteerMessage_TruncatedResult_NeverExceedsMaxLength(t *testing.T) {
 	for _, program := range []string{"claude", "", "aider", "proxy-claude"} {
-		fixContext := strings.Repeat("y", session.MaxSteerMessageLength*2)
+		fixContext := strings.Repeat("y", instance.MaxSteerMessageLength*2)
 
 		got := buildSteerMessage(program, fixContext)
 
-		require.LessOrEqualf(t, len(got), session.MaxSteerMessageLength, "program=%q", program)
+		require.LessOrEqualf(t, len(got), instance.MaxSteerMessageLength, "program=%q", program)
 	}
 }
 
@@ -290,11 +292,11 @@ func TestBuildSteerMessage_RealisticComposedLongFixContext_SuffixSurvivesTruncat
 	sb.WriteString("\n## Review: changes requested by @reviewer1\n")
 	sb.WriteString(strings.Repeat("This needs a substantial rework of the retry logic. ", 300))
 	fixContext := sb.String()
-	require.Greater(t, len(fixContext)+len(prShipSuffix), session.MaxSteerMessageLength, "fixture must actually require truncation")
+	require.Greater(t, len(fixContext)+len(prShipSuffix), instance.MaxSteerMessageLength, "fixture must actually require truncation")
 
 	got := buildSteerMessage("claude", fixContext)
 
-	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(got), instance.MaxSteerMessageLength)
 	require.True(t, strings.HasSuffix(got, prShipSuffix), "suffix must survive truncation, got %q", got)
 }
 
@@ -309,7 +311,7 @@ func TestBuildSteerMessage_RealisticComposedLongFixContext_SuffixSurvivesTruncat
 // after only that first byte, producing invalid UTF-8 in the PTY-bound
 // steer message.
 func TestBuildSteerMessage_MultiByteRuneAtTruncationBoundary_NeverSplitsRune(t *testing.T) {
-	budget := session.MaxSteerMessageLength - len(prShipSuffix) - len(truncationPointer)
+	budget := instance.MaxSteerMessageLength - len(prShipSuffix) - len(truncationPointer)
 	require.Positive(t, budget)
 
 	fixContext := strings.Repeat("a", budget-1) + "€" + strings.Repeat("b", 200)
@@ -318,7 +320,7 @@ func TestBuildSteerMessage_MultiByteRuneAtTruncationBoundary_NeverSplitsRune(t *
 	got := buildSteerMessage("claude", fixContext)
 
 	require.Truef(t, utf8.ValidString(got), "truncated steer message must be valid UTF-8, got %q", got)
-	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(got), instance.MaxSteerMessageLength)
 	require.True(t, strings.HasSuffix(got, prShipSuffix))
 }
 
@@ -434,9 +436,9 @@ func newTestBacklogServiceForSteerNotify(t *testing.T) (*BacklogService, *events
 
 func createTestBacklogItemForSteerNotify(t *testing.T, svc *BacklogService) string {
 	t.Helper()
-	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "Steer notify test item",
-		Status: string(session.BacklogStatusPRPending),
+		Status: string(domain.BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 	return item.ID
@@ -462,7 +464,7 @@ func TestNotifyActiveSessionSteered_Success_PublishesInfoAndDoesNotMarkStuck(t *
 	ch, _ := bus.Subscribe(subCtx)
 
 	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, nil)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, nil)
 
 	select {
 	case ev := <-ch:
@@ -482,10 +484,10 @@ func TestNotifyActiveSessionSteered_Success_ResolvesOpenRespawnBlockedActiveRow(
 	itemID := createTestBacklogItemForSteerNotify(t, svc)
 	ctx := context.Background()
 
-	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, session.BacklogStatusPRPending, "previously skipped")
+	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, domain.BacklogStatusPRPending, "previously skipped")
 	require.NoError(t, err)
 
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, nil)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, nil)
 
 	reasons := openStuckReasons(t, svc)
 	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive], "a successful steer must resolve a stale respawn_blocked_active row")
@@ -500,10 +502,10 @@ func TestNotifyActiveSessionSteered_Success_ResolvesOpenSteerFailedRow(t *testin
 	itemID := createTestBacklogItemForSteerNotify(t, svc)
 	ctx := context.Background()
 
-	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonSteerFailed, session.BacklogStatusPRPending, "previous tick failed")
+	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonSteerFailed, domain.BacklogStatusPRPending, "previous tick failed")
 	require.NoError(t, err)
 
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, nil)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, nil)
 
 	reasons := openStuckReasons(t, svc)
 	assert.False(t, reasons[domain.StuckReasonSteerFailed], "success on a later tick must resolve a prior steer_failed row")
@@ -518,7 +520,7 @@ func TestNotifyActiveSessionSteered_Success_TitleAndBodyNameTheReason(t *testing
 	ch, _ := bus.Subscribe(subCtx)
 
 	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, nil)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, nil)
 
 	ev := requireNotificationEvent(t, ch)
 	assert.Equal(t, "Steered active session — My Item has a merge conflict and failing CI", ev.NotificationTitle)
@@ -536,7 +538,7 @@ func TestNotifyActiveSessionSteered_Failure_MarksStuckAndPublishesWarning(t *tes
 
 	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
 	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, deliverErr)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reason, deliverErr)
 
 	select {
 	case ev := <-ch:
@@ -555,11 +557,11 @@ func TestNotifyActiveSessionSteered_Failure_ResolvesOpenRespawnBlockedActiveRow(
 	itemID := createTestBacklogItemForSteerNotify(t, svc)
 	ctx := context.Background()
 
-	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, session.BacklogStatusPRPending, "previously skipped")
+	_, err := svc.storage.MarkStuck(ctx, itemID, domain.StuckReasonRespawnBlockedActive, domain.BacklogStatusPRPending, "previously skipped")
 	require.NoError(t, err)
 
 	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
 
 	reasons := openStuckReasons(t, svc)
 	assert.False(t, reasons[domain.StuckReasonRespawnBlockedActive], "a failed steer must resolve a stale respawn_blocked_active row — the two reasons are mutually exclusive")
@@ -576,7 +578,7 @@ func TestNotifyActiveSessionSteered_Failure_TitleAndBodyNameTheReasonAndError(t 
 
 	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
 	reason := reasonSignature{headers: []string{"## Merge conflict", "## Failing CI checks"}}
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "aider", reason, deliverErr)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "aider", reason, deliverErr)
 
 	ev := requireNotificationEvent(t, ch)
 	assert.Equal(t, "Failed to steer active session — My Item needs attention for a merge conflict and failing CI", ev.NotificationTitle)
@@ -594,7 +596,7 @@ func TestNotifyActiveSessionSteered_Failure_ClaudeCodeProgram_AppendsRemediation
 	ch, _ := bus.Subscribe(subCtx)
 
 	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
 
 	ev := requireNotificationEvent(t, ch)
 	assert.Contains(t, ev.NotificationMessage, " — try /github:pr-ship manually")
@@ -609,7 +611,7 @@ func TestNotifyActiveSessionSteered_Failure_NonClaudeCodeProgram_NoRemediationPa
 	ch, _ := bus.Subscribe(subCtx)
 
 	deliverErr := fmt.Errorf("SendKeys failed: pty closed")
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "aider", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "aider", reasonSignature{headers: []string{"## Failing CI checks"}}, deliverErr)
 
 	ev := requireNotificationEvent(t, ch)
 	assert.NotContains(t, ev.NotificationMessage, "/github:pr-ship")
@@ -624,7 +626,7 @@ func TestNotifyActiveSessionSteered_HeaderlessReason_FallsBackToGenericPhrase(t 
 	ch, _ := bus.Subscribe(subCtx)
 
 	headerless := buildReasonSignature("PR #42 (https://github.com/tstapler/stapler-squad/pull/42) was closed without merging.")
-	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", session.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", headerless, nil)
+	svc.notifyActiveSessionSteered(ctx, itemID, "My Item", domain.BacklogStatusPRPending, "session-uuid-1", "steer message", "claude", headerless, nil)
 
 	ev := requireNotificationEvent(t, ch)
 	assert.Contains(t, ev.NotificationTitle, "a PR problem")
@@ -653,8 +655,8 @@ func requireNotificationEvent(t *testing.T, ch <-chan *events.Event) *events.Eve
 
 func pinnedBaselineSteer(t *testing.T, svc *BacklogService, itemID, fixContext string) {
 	t.Helper()
-	svc.steerActiveSessionForPRFix(context.Background(), itemID, "pinned item", session.BacklogStatusPRPending,
-		&session.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: session.SessionRoleWork}, fixContext)
+	svc.steerActiveSessionForPRFix(context.Background(), itemID, "pinned item", domain.BacklogStatusPRPending,
+		&backlogdto.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: instance.SessionRoleWork}, fixContext)
 }
 
 func TestSteerActiveSessionForPRFix_should_DeliverWhenReady_When_PinnedBaseline(t *testing.T) {
@@ -760,7 +762,7 @@ func TestSteerActiveSessionForPRFix_should_NotCallDegradeAndKeepItemUnblocked_Wh
 			pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
 
 			assert.Empty(t, openStuckReasons(t, svc))
-			requireItemStatus(t, svc.storage, itemID, string(session.BacklogStatusPRPending))
+			requireItemStatus(t, svc.storage, itemID, string(domain.BacklogStatusPRPending))
 
 			// Not recorded as delivered: the next tick, once the guard clears, delivers.
 			steerer.guardedOutcome = nil
@@ -819,9 +821,9 @@ func TestSteerActiveSessionForPRFix_should_DeliverBothSignatures_When_FailingChe
 func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
-	inst := &session.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	inst := &instance.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	svctest.AddInstanceToPoller(fix.poller, inst)
-	active := &session.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
+	active := &backlogdto.ItemSessionSummary{SessionUUID: inst.UUID, Role: instance.SessionRoleWork}
 
 	live := fix.svc.FindLiveInstance(active.SessionUUID)
 

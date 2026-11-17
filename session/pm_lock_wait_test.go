@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func pmLockWaitTotal() uint64 {
@@ -21,18 +22,18 @@ func pmLockWaitTotal() uint64 {
 
 func TestInstancePM_should_RecordTheWaitOnlyWhenPmMuIsContended(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "pm-wait"}
-	inst.processManager = &fakeSendKeysProcessManager{}
+	inst := &instance.Instance{Title: "pm-wait"}
+	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
 	before := pmLockWaitTotal()
 
-	inst.pm()
+	inst.PMForTest()
 	assert.Equal(t, before, pmLockWaitTotal(), "an uncontended call must record nothing")
 
-	inst.pmMu.Lock()
+	releasePM := inst.HoldPMLockForTest()
 	done := make(chan struct{})
-	go func() { inst.pm(); close(done) }()
+	go func() { inst.PMForTest(); close(done) }()
 	time.Sleep(20 * time.Millisecond) //nolint:notimesleeptest holds a real mutex long enough for the waiter to measure a real wait
-	inst.pmMu.Unlock()
+	releasePM()
 	<-done
 
 	assert.Greater(t, pmLockWaitTotal(), before)

@@ -1,0 +1,454 @@
+package pipeline
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
+)
+
+// renderDefault renders a section for the Go-built prompts, substituting placeholder values.
+func renderDefault(section string, values map[string]string) string {
+	return renderTemplate(session.ForDefault(section), values)
+}
+
+// backlogCommandsDir is the relative path from worktree root for slash command files.
+const backlogCommandsDir = ".claude/commands/backlog"
+
+// WriteSlashCommands creates the .claude/commands/backlog/ directory and writes
+// per-item slash command markdown files. Retries directory creation up to 3 times.
+//
+// Content generation is delegated to engine.SlashCommandSet (Epic 1.5, Story 1.5.2) —
+// this function only owns directory creation and the disk-write loop. engine may be
+// nil, in which case content generation falls back to buildDefaultSlashCommandSet
+// directly, matching CachingPipelineEngine's own default-mode behavior; this keeps
+// tests that don't care about PipelineEngine free to pass nil. Both real callers
+// (server/services/backlog_service_triage.go's SpawnSessionFromItem and
+// backlog_service_sync.go's AttachSessionToItem) must pass the SAME shared engine
+// instance (BacklogService.pipelineEngine) — passing two different engines would
+// reintroduce the "2 independent callers can drift" regression this seam closes.
+func WriteSlashCommands(engine PipelineEngine, item *backlogdto.BacklogItemData, worktreePath string) error {
+	// Writing into $HOME would create ~/.claude/commands/backlog/, which Claude Code loads as
+	// user-scope commands for EVERY session — a later item's sessions then see this item's ID.
+	if isUserHomeDir(worktreePath) {
+		return fmt.Errorf("WriteSlashCommands: refusing to write per-item commands into the home directory %s", worktreePath)
+	}
+
+	// Self-heal before writing: if a prior version of this branch ever got any backlog
+	// scaffolding file committed (see git.ScaffoldingExcludePatterns), untrack it now so this
+	// spawn doesn't perpetuate the pollution forward. See selfHealWorktreeScaffolding's doc comment.
+	selfHealWorktreeScaffolding(worktreePath)
+
+	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+
+	var mkErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		mkErr = os.MkdirAll(cmdDir, 0o750)
+		if mkErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if mkErr != nil {
+		return fmt.Errorf("WriteSlashCommands: failed to create commands dir %s: %w", cmdDir, mkErr)
+	}
+
+	var files map[string]string
+	var err error
+	if engine != nil {
+		files, err = engine.SlashCommandSet(item)
+	} else {
+		files, err = buildDefaultSlashCommandSet(item)
+	}
+	if err != nil {
+		return err
+	}
+
+	// block.md/duplicate.md wrap report_blocked/report_duplicate. Written here,
+	// outside both the default and any DB-configured pipeline mode's template
+	// set, because these two MCP tools' contracts (role=work gating, rationale/
+	// duplicate_ref/reason shape) are identical regardless of pipeline mode —
+	// unlike review.md/ship.md, nothing about them needs to vary by mode. This
+	// also sidesteps needing a PipelineMode schema migration (a new template
+	// column per mode) just to cover two mode-agnostic commands.
+	for name, content := range buildBlockAndDuplicateCommands(item.ID) {
+		files[name] = content
+	}
+
+	pruneStaleSlashCommandFiles(cmdDir, files)
+
+	for name, content := range files {
+		if err := writeFile(filepath.Join(cmdDir, name), content); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func isUserHomeDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || path == "" {
+		return false
+	}
+	a, errA := filepath.EvalSymlinks(path)
+	b, errB := filepath.EvalSymlinks(home)
+	if errA != nil || errB != nil {
+		return filepath.Clean(path) == filepath.Clean(home)
+	}
+	return a == b
+}
+
+// fixedSlashCommandNames are the non-per-criterion files WriteSlashCommands generates; the
+// per-criterion done-N/fail-N files match perCriterionSlashCommandName. Kept next to the
+// generators and cross-checked by TestIsGeneratedSlashCommandName_should_CoverEveryGeneratedFile,
+// so a new generated command can't silently escape the user-scope cleanup.
+var fixedSlashCommandNames = map[string]bool{
+	"status.md": true, "review.md": true, "ship.md": true,
+	"help.md": true, "block.md": true, "duplicate.md": true,
+}
+
+var perCriterionSlashCommandName = regexp.MustCompile(`^(done|fail)-\d+\.md$`)
+
+func isGeneratedSlashCommandName(name string) bool {
+	return fixedSlashCommandNames[name] || perCriterionSlashCommandName.MatchString(name)
+}
+
+// Root cause of the wrong-item-ID report (backlog item 3fe1321c): a ~/.claude/commands/backlog/
+// written 2026-08-12 by an old build that used $HOME as the target held item b608ab1e's ID in every
+// file. Claude Code treats it as user-scope, so any session lacking project-level copies (triage
+// worktrees, or sessions started before the per-item files were written) listed those commands.
+// The per-worktree generator was correct; see also the $HOME guard in WriteSlashCommands.
+//
+// RemoveStaleUserLevelBacklogCommands deletes <home>/.claude/commands/backlog when it holds only
+// stapler-squad-generated command files. Per-item commands belong in the session worktree; a copy
+// at user scope (written by an old build that targeted $HOME) is loaded by every session lacking
+// its own project-level copy and embeds one long-gone item's ID. A directory containing anything
+// else — or one that resolves outside home (e.g. ~/.claude/commands symlinked into a dotfiles
+// repo, where these files may be version-controlled) — is left untouched. Returns whether the
+// directory was removed.
+func RemoveStaleUserLevelBacklogCommands(home string) (bool, error) {
+	dir := filepath.Join(home, backlogCommandsDir)
+	realHome, errH := filepath.EvalSymlinks(home)
+	realDir, errD := filepath.EvalSymlinks(dir)
+	if errD != nil {
+		if os.IsNotExist(errD) {
+			return false, nil
+		}
+		return false, errD
+	}
+	if errH != nil {
+		return false, errH
+	}
+	if rel, err := filepath.Rel(realHome, realDir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(entries) == 0 {
+		return false, nil // an empty directory holds nothing generated; leave it alone
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !isGeneratedSlashCommandName(e.Name()) {
+			return false, nil
+		}
+		// Name alone is a weak ownership signal; require the generator's item_id= marker.
+		b, rErr := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- name is a regexp-matched entry of the fixed user commands dir
+		if rErr != nil || !strings.Contains(string(b), "item_id=") {
+			return false, nil
+		}
+	}
+	if err := os.RemoveAll(realDir); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// pruneStaleSlashCommandFiles removes every file in cmdDir not present in newFiles: leftovers
+// from a prior item (more acceptance criteria) or a different pipeline mode's template set
+// would otherwise keep a stale item_id callable. cmdDir is stapler-squad-owned scaffolding.
+// Best-effort — logs and continues past a single removal failure rather than failing the write.
+func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
+	entries, err := os.ReadDir(cmdDir)
+	if err != nil {
+		return // directory just created / unreadable — nothing to prune
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if _, keep := newFiles[name]; keep {
+			continue
+		}
+		if rmErr := os.Remove(filepath.Join(cmdDir, name)); rmErr != nil {
+			log.WarningLog().Printf("[pruneStaleSlashCommandFiles] failed to remove stale %s: %v", name, rmErr)
+		}
+	}
+}
+
+// buildDefaultSlashCommandSet returns the filename→rendered-content map for
+// the built-in default pipeline's slash commands: status.md, one done-N.md/
+// fail-N.md pair per acceptance criterion, review.md, ship.md, and help.md.
+//
+// This is exactly the content-generation logic WriteSlashCommands used to
+// build inline before the PipelineEngine refactor (backlog-configurable-
+// pipeline, Epic 1.3) — extracted unchanged so CachingPipelineEngine's
+// default-mode short-circuit (session/pipeline_engine.go) and this on-disk
+// writer share one source of truth with zero behavior drift.
+func buildDefaultSlashCommandSet(item *backlogdto.BacklogItemData) (map[string]string, error) {
+	itemID := item.ID
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil {
+		return nil, fmt.Errorf("buildDefaultSlashCommandSet: failed to parse AC criteria: %w", err)
+	}
+
+	files := make(map[string]string, len(criteria)*2+4)
+
+	// status.md
+	files["status.md"] = fmt.Sprintf("Call the get_backlog_item MCP tool with item_id=%s.\nFormat the response as a numbered checklist.\n", itemID)
+
+	// Per-criterion done-N.md and fail-N.md
+	for _, c := range criteria {
+		values := map[string]string{"item_id": itemID, "criteria_index": strconv.Itoa(c.Index)}
+		files[fmt.Sprintf("done-%d.md", c.Index)] = renderDefault(session.SecDoneNote, values) + "\n"
+		files[fmt.Sprintf("fail-%d.md", c.Index)] = renderDefault(session.SecFailNote, values) + "\n"
+	}
+
+	// review.md
+	files["review.md"] = withWakeGuidance(fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n", itemID) +
+		"Then " + session.ForDefault(session.SecAwaitVerdict) + "\n\n" + session.ForDefault(session.SecOnPass) + "\n\n" + session.ForDefault(session.OnFailSection()) + "\n")
+
+	// ship.md
+	files["ship.md"] = withWakeGuidance(renderDefault(session.SecShipIntro+"\n\n"+session.SecShipSteps, map[string]string{"item_id": itemID}) + "\n")
+
+	// help.md — list all available commands
+	var helpSb strings.Builder
+	helpSb.WriteString("# Available Backlog Commands\n\n")
+	helpSb.WriteString("- `/backlog/status` — Show current item status and checklist\n")
+	for _, c := range criteria {
+		fmt.Fprintf(&helpSb, "- `/backlog/done-%d` — Mark criterion %d as complete\n", c.Index, c.Index)
+		fmt.Fprintf(&helpSb, "- `/backlog/fail-%d` — Mark criterion %d as failed\n", c.Index, c.Index)
+	}
+	helpSb.WriteString("- `/backlog/review` — Submit for review with a summary\n")
+	helpSb.WriteString("- `/backlog/ship` — Create a PR with /github:pr-ship and submit for review\n")
+	helpSb.WriteString("- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)\n")
+	helpSb.WriteString("- " + session.HelpOwnerActionLine + "\n")
+	helpSb.WriteString("- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit\n")
+	files["help.md"] = helpSb.String()
+
+	return files, nil
+}
+
+// buildBlockAndDuplicateCommands returns block.md and duplicate.md, wrapping
+// the report_blocked/report_duplicate MCP tools. Shared by every pipeline
+// mode (see WriteSlashCommands' call site) since neither tool's contract
+// changes based on pipeline mode.
+func buildBlockAndDuplicateCommands(itemID string) map[string]string {
+	return map[string]string{
+		"block.md": fmt.Sprintf("Call report_blocked with item_id=%s and a rationale (1-3 sentences) ONLY for an "+
+			"external blocker: a missing credential or access grant, or a hard dependency on another backlog item "+
+			"or an external team.\n\n"+
+			"If the blocker is an acceptance criterion that is ambiguous, contradictory or unattainable, or a decision "+
+			"only the owner can make, call request_owner_action instead (item_id=%s, a question that includes your "+
+			"evidence, allowed_responses; waive_criterion_index=N offers a one-click waiver of criterion N). It pins a "+
+			"banner, notifies the owner, and wakes you with their answer, whereas report_blocked gives the owner "+
+			"nothing to answer.\n\n"+
+			"Do NOT use this for a bug, failing test, or error you are able to fix yourself — fix it and keep "+
+			"going instead of blocking. Blocking returns the item to ready so a human or another session can "+
+			"pick it up; if this item has been blocked repeatedly, it escalates straight to review instead so a "+
+			"human sees the recurring pattern directly rather than the item bouncing in the queue indefinitely. "+
+			"This call is rejected unless it comes from a work-role session actively assigned to this item.\n", itemID, itemID),
+
+		"duplicate.md": fmt.Sprintf("Call report_duplicate with item_id=%s, duplicate_ref=<the GitHub URL of the "+
+			"pull request, issue, or commit that already covers this exact work>, and reason=<1-2 sentences "+
+			"explaining why this item is the same work as that reference>.\n\n"+
+			"duplicate_ref must be a real GitHub PR/issue/commit URL — it is verified against GitHub before the "+
+			"call succeeds, and a link to something that doesn't exist there is rejected. This routes the item "+
+			"to review rather than closing it outright, because a duplicate claim always needs a human or "+
+			"reviewer to confirm before the item is archived — never assume your own claim is enough. This call "+
+			"is rejected unless it comes from a work-role session, and is unavailable on items configured to "+
+			"skip the review gate (use /backlog/review instead for those).\n", itemID),
+	}
+}
+
+// CleanupSlashCommands removes the backlog slash command directory.
+// Logs but does not return an error if the directory is absent.
+//
+// Called from ReconcilePRPending (session/backlog_lifecycle_pr.go) once an item's PR
+// merges, and from cleanupItemWorktreesExcept (server/services/backlog_service.go) on
+// archive/reopen/tombstone. Both exclude worktrees with a live/EndedAt==nil work
+// session, so ship.md — which shipViaAgentOrFallback needs present to re-invoke
+// `/backlog/ship` as a one-shot headless call — is never removed out from under it.
+// Also exported for direct/manual invocation and exercised by tests.
+func CleanupSlashCommands(worktreePath string) error {
+	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+	if err := os.RemoveAll(cmdDir); err != nil {
+		if !os.IsNotExist(err) {
+			log.WarningLog().Printf("CleanupSlashCommands: failed to remove %s: %v", cmdDir, err)
+		}
+	}
+	return nil
+}
+
+// WriteBacklogContextFile builds the full context prompt and writes it atomically
+// to .backlog-context.md in the worktree root. Appends a fallback instructions block.
+// priorSessions must match what was passed to the live CLI prompt (BuildTokenBudgetedPrompt)
+// so the on-disk fallback the agent re-reads after context compaction doesn't lose history.
+func WriteBacklogContextFile(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary, worktreePath string) error {
+	// Self-heal before writing: see WriteSlashCommands' identical call for why.
+	selfHealWorktreeScaffolding(worktreePath)
+
+	prompt := BuildSessionInitialPrompt(item, priorSessions)
+
+	var sb strings.Builder
+	sb.WriteString(prompt)
+	sb.WriteString("\n## Fallback Instructions\n")
+	sb.WriteString("If MCP tools are unavailable, continue using the acceptance criteria above.\n")
+	sb.WriteString("Record completed criteria in commit messages. Run git commit after each criterion is done.\n")
+	sb.WriteString("\n## Before You Start\n")
+	sb.WriteString(session.ForDefault(session.SecSyncMain) + "\n")
+
+	content := sb.String()
+
+	destPath := filepath.Join(worktreePath, ".backlog-context.md")
+
+	// Unique tmp name (not destPath+".tmp"): this is called on every spawn AND re-attach
+	// for the same worktreePath (see doc comment above), so two concurrent callers writing
+	// the same fixed name could interleave writes and rename a torn/corrupt file into place.
+	// Mirrors config.go's saveConfigLocked fix for the identical hazard.
+	tmpFile, err := os.CreateTemp(worktreePath, ".backlog-context.md.*.tmp")
+	if err != nil {
+		return fmt.Errorf("WriteBacklogContextFile: failed to create tmp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_, writeErr := tmpFile.Write([]byte(content))
+	closeErr := tmpFile.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to write tmp file: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to close tmp file: %w", closeErr)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to chmod tmp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("WriteBacklogContextFile: failed to rename tmp to dest: %w", err)
+	}
+	return nil
+}
+
+// CleanupBacklogContextFile removes .backlog-context.md from the worktree root.
+// Logs but does not fail if the file is absent.
+//
+// Called from ReconcilePRPending (session/backlog_lifecycle_pr.go) once an item's PR
+// merges, and from cleanupItemWorktreesExcept (server/services/backlog_service.go) on
+// archive/reopen/tombstone — see CleanupSlashCommands' doc comment for why neither call
+// site can race a live ship.md-dependent session. Worktree teardown (Instance.Kill,
+// Instance.Pause) often already removes the entire worktree directory by that point, so
+// this is frequently a no-op — the file is untracked anyway (via addWorktreeExcludes +
+// selfHealWorktreeScaffolding + the commit-time staging guard), so it never appears in a
+// git diff/PR regardless of how long it lingers on disk. Kept as a best-effort cleanup
+// for the case where the worktree is still around, and exported for direct/manual
+// invocation and exercised by tests.
+func CleanupBacklogContextFile(worktreePath string) error {
+	path := filepath.Join(worktreePath, ".backlog-context.md")
+	if err := os.Remove(path); err != nil {
+		if !os.IsNotExist(err) {
+			log.WarningLog().Printf("CleanupBacklogContextFile: failed to remove %s: %v", path, err)
+		}
+	}
+	return nil
+}
+
+// writeFile is a helper that writes content to a file, creating it if needed.
+func writeFile(path, content string) error {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("writeFile: failed to write %s: %w", path, err)
+	}
+	return nil
+}
+
+// addWorktreeExcludes writes backlog-generated file patterns to
+// $GIT_COMMON_DIR/info/exclude so they are invisible to git without touching
+// .gitignore (which would pollute the target repo). Resolving via
+// --git-common-dir (not --git-dir) matters for linked worktrees (`git worktree
+// add`): --git-dir there returns the worktree-private admin directory
+// (<common>/.git/worktrees/<name>), and git status never reads an info/exclude
+// written there — only the one under the shared common dir is honored. See
+// session/git/util.go's findMainRepoPathForWorktree for the same resolution.
+func addWorktreeExcludes(worktreePath string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	commonDir, err := gitprovider.Backend().CommonDir(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)})
+	if err != nil {
+		log.WarningLog().Printf("[addWorktreeExcludes] git rev-parse --git-common-dir in %s: %v", worktreePath, err)
+		return
+	}
+	gitCommonDir := string(commonDir)
+
+	excludeFile := filepath.Join(gitCommonDir, "info", "exclude")
+	if mkErr := os.MkdirAll(filepath.Dir(excludeFile), 0o750); mkErr != nil {
+		log.WarningLog().Printf("[addWorktreeExcludes] mkdir %s: %v", filepath.Dir(excludeFile), mkErr)
+		return
+	}
+
+	existingBytes, _ := os.ReadFile(excludeFile) // #nosec G304 -- excludeFile is derived from `git rev-parse --git-common-dir` output for the session's own worktree, not external input
+	existing := string(existingBytes)
+
+	f, openErr := os.OpenFile(excludeFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- same excludeFile as above, derived from git's own git-common-dir resolution
+	if openErr != nil {
+		log.WarningLog().Printf("[addWorktreeExcludes] open %s: %v", excludeFile, openErr)
+		return
+	}
+	defer f.Close()
+
+	for _, p := range git.ScaffoldingExcludePatterns {
+		if !strings.Contains(existing, p) {
+			fmt.Fprintln(f, p)
+		}
+	}
+}
+
+// selfHealWorktreeScaffolding is called at the start of every backlog scaffolding write
+// (WriteSlashCommands, WriteBacklogContextFile). It closes the gap that $GIT_DIR/info/exclude
+// and a tracked .gitignore entry both share: neither stops a file that is ALREADY tracked in
+// the branch's history from continuing to be committed by a later broad `git add`/`git commit
+// -a`. Untracking here means a branch that got one of these files committed once — however it
+// happened — self-heals the next time stapler-squad spawns/reattaches/reopens a session on it,
+// instead of requiring a manual "untrack" commit (this repo's own history has ~20 of those; see
+// git.ScaffoldingExcludePatterns and the PR that added this function for the full incident
+// history). GitWorktree.StageAllExceptScaffolding (session/git/worktree_git.go) is the
+// complementary guard that closes the same gap at commit time, for scaffolding that gets
+// tracked mid-session rather than inherited from a stale branch.
+func selfHealWorktreeScaffolding(worktreePath string) {
+	removed, err := git.UntrackScaffolding(worktreePath, git.ScaffoldingExcludePatterns)
+	if err != nil {
+		log.WarningLog().Printf("[selfHealWorktreeScaffolding] untrack in %s: %v", worktreePath, err)
+	} else if len(removed) > 0 {
+		log.InfoLog().Printf("[selfHealWorktreeScaffolding] auto-untracked previously committed scaffolding file(s) in %s: %v", worktreePath, removed)
+	}
+	addWorktreeExcludes(worktreePath)
+}

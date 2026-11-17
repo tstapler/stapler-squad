@@ -51,6 +51,7 @@ jobs:
           bash tools/bzl/check-make-help.sh
           bash tools/bzl/check-test-tags_test.sh
           bash tools/bzl/check-test-tags.sh
+          go run ./tools/bzl/scandata .
 
       # Agent-enablement and reviewability guards (Stories 11.1-11.8). Pure shell, no Bazel build.
       - name: Skill, docs and reviewability guards
@@ -155,29 +156,32 @@ jobs:
 
       # Full graph on a clean checkout: no generation step precedes it (Task 2.6a). Failures left are
       # Epic 3/4 items listed in tools/bzl/test-exclusions.yaml.
-      - name: Build the full graph
-        run: |
-          bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
-            --keep_going --build_event_json_file=bep.json --profile=profile.gz //...
-
-      - name: Test the full graph
+      # One invocation, not `build //...` then `test //...`: tests start as soon as their own deps are built instead of
+      # waiting for the woven-binary actions (OtelWeaveHermetic: three actions of 218-355s, 218s on the critical path), and the test BEP/profile now
+      # cover tests too. docs/explanation/bazel-parallelism.md has the profile numbers.
+      - name: Build and test the full graph
         run: |
           bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false \
-            --keep_going \
+            --keep_going --build_event_json_file=bep.json --profile=profile.gz \
             --test_env=HOME="$RUNNER_TEMP/home" --sandbox_writable_path="$RUNNER_TEMP/home" \
             --test_env=GO_TEST_WRAP_TESTV=1 //...
 
-      # Windows is cross-compile only (ADR-005): build both goreleaser windows arches and check the
-      # PE header; the windows-only probe must be reported incompatible, not failed (Task 6.1b).
+      # Windows is cross-compile only (ADR-005). The cross targets are `manual` (tools/bzl/windows/BUILD.bazel)
+      # because building them nogo-validates the whole closure per arch; so they build only off pull requests.
       - name: Cross-compile Windows
+        if: github.event_name != 'pull_request'
         run: |
           bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
             //tools/bzl/windows:stapler-squad_windows_amd64 //tools/bzl/windows:stapler-squad_windows_arm64 \
             //tools/bzl/windows:ssq-mux_windows_amd64 //tools/bzl/windows:ssq-mux_windows_arm64 \
             //tools/bzl/windows:ssq-hooks_windows_amd64 //tools/bzl/windows:ssq-hooks_windows_arm64
-          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false //tools/bzl/windows:all
+          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            //tools/bzl/windows:pe_header_test
           file -L bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe | grep -q 'PE32+'
-          bash tools/bzl/check-platform-targets.sh
+
+      # The windows-only canary must be reported incompatible, not failed (Task 6.1b); analysis only, so it runs on PRs too.
+      - name: Platform target check
+        run: bash tools/bzl/check-platform-targets.sh
 
       # The woven build runs from a committed otelc overlay; this fails when go.mod, go.sum, the otelc version or the
       # custom rule changed without `tools/bzl/otel_overlay/gen.sh` being re-run (S15b-6).
@@ -215,6 +219,26 @@ jobs:
             bazel-trend.jsonl
             affected.txt
           if-no-files-found: warn
+
+      # Bazel truncates test output past --experimental_ui_max_stdouterr_bytes, so keep the jest shards' own logs.
+      - name: Collect jest shard evidence
+        if: always()
+        run: |
+          testlogs="$(bazel info bazel-testlogs --config=ci 2>/dev/null)" || exit 0
+          src="$testlogs/web-app/jest"
+          [ -d "$src" ] || { echo "no jest testlogs at $src"; exit 0; }
+          mkdir -p jest-evidence
+          (cd "$src" && find . -type f \( -name test.log -o -name test.xml -o -name outputs.zip \) -print0 \
+            | xargs -0 -r cp --parents -t "$GITHUB_WORKSPACE/jest-evidence")
+
+      - name: Upload jest shard evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bazel-jest-evidence
+          path: jest-evidence
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload profile
         if: always()

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestGetBacklogItemByExternalURL_DedupsManualImports guards the dedup lookup
@@ -20,9 +22,9 @@ func TestGetBacklogItemByExternalURL_DedupsManualImports(t *testing.T) {
 	ctx := context.Background()
 
 	const url = "https://github.com/acme/widgets/issues/42"
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Widget bug",
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "42",
 		ExternalURL: url,
 	})
@@ -33,5 +35,5 @@ func TestGetBacklogItemByExternalURL_DedupsManualImports(t *testing.T) {
 	require.Equal(t, created.ID, found.ID)
 
 	_, err = storage.GetBacklogItemByExternalURL(ctx, "https://github.com/acme/widgets/issues/999")
-	require.True(t, errors.Is(err, ErrNotFound))
+	require.True(t, errors.Is(err, domain.ErrNotFound))
 }

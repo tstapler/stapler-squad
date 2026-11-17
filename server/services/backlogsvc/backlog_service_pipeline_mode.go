@@ -33,8 +33,10 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // pipelineModeToProto converts an ent.PipelineMode to its proto representation,
@@ -63,7 +65,7 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 		InitialPromptTemplate: pm.InitialPromptTemplate,
 		CreatedAt:             timestamppb.New(pm.CreatedAt),
 		UpdatedAt:             timestamppb.New(pm.UpdatedAt),
-		ContentHash: backlog.ComputeContentHash(
+		ContentHash: pipeline.ComputeContentHash(
 			pm.StatusCommandTemplate,
 			pm.DoneCommandTemplate,
 			pm.FailCommandTemplate,
@@ -82,10 +84,10 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 // allStageRoles is the fixed iteration order for the DENSE
 // stage_executor_hashes map built by stageExecutorHashesToProto — every role
 // gets an entry below, whether or not it has a configured override.
-var allStageRoles = [...]session.StageRole{
-	session.StageRoleTriage,
-	session.StageRoleReview,
-	session.StageRoleWork,
+var allStageRoles = [...]stagecfg.StageRole{
+	stagecfg.StageRoleTriage,
+	stagecfg.StageRoleReview,
+	stagecfg.StageRoleWork,
 }
 
 // parseStageExecutorsForProto parses pm's stage_executors_json once, shared by
@@ -94,11 +96,11 @@ var allStageRoles = [...]session.StageRole{
 // session.SerializeStageExecutors is the only writer) — logged and treated as
 // no overrides configured rather than failing the whole response for one bad
 // row.
-func parseStageExecutorsForProto(pm *ent.PipelineMode) map[session.StageRole]session.PipelineStageExecutor {
-	stageExecutors, err := session.ParseStageExecutors(pm.StageExecutorsJSON)
+func parseStageExecutorsForProto(pm *ent.PipelineMode) map[stagecfg.StageRole]stagecfg.PipelineStageExecutor {
+	stageExecutors, err := stagecfg.ParseStageExecutors(pm.StageExecutorsJSON)
 	if err != nil {
 		log.WarningLog().Printf("[PipelineMode] failed to parse stage_executors_json for pipeline mode %s: %v — treating as empty", pm.ID, err)
-		return map[session.StageRole]session.PipelineStageExecutor{}
+		return map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{}
 	}
 	return stageExecutors
 }
@@ -106,7 +108,7 @@ func parseStageExecutorsForProto(pm *ent.PipelineMode) map[session.StageRole]ses
 // stageExecutorsToProto converts the already-parsed stage executor map to the
 // proto map shape — sparse, only configured roles appear (unchanged from
 // Task 1.2.2c's original behavior).
-func stageExecutorsToProto(stageExecutors map[session.StageRole]session.PipelineStageExecutor) map[string]*sessionv1.PipelineStageExecutor {
+func stageExecutorsToProto(stageExecutors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor) map[string]*sessionv1.PipelineStageExecutor {
 	protoStageExecutors := make(map[string]*sessionv1.PipelineStageExecutor, len(stageExecutors))
 	for role, executor := range stageExecutors {
 		protoStageExecutors[string(role)] = &sessionv1.PipelineStageExecutor{
@@ -126,11 +128,11 @@ func stageExecutorsToProto(stageExecutors map[session.StageRole]session.Pipeline
 // "no entry" against a real per-session hash, falsely flagging every
 // ordinary default-executor session as drifted. See plan.md Story 5.2.4's
 // Engineering-lens design note for the full rationale.
-func stageExecutorHashesToProto(stageExecutors map[session.StageRole]session.PipelineStageExecutor) map[string]string {
+func stageExecutorHashesToProto(stageExecutors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor) map[string]string {
 	hashes := make(map[string]string, len(allStageRoles))
 	for _, role := range allStageRoles {
 		entry := stageExecutors[role] // zero-value PipelineStageExecutor{} when absent
-		hashes[string(role)] = backlog.ComputeExecutorHash(entry.Program, entry.Model)
+		hashes[string(role)] = pipeline.ComputeExecutorHash(entry.Program, entry.Model)
 	}
 	return hashes
 }
@@ -139,16 +141,16 @@ func stageExecutorHashesToProto(stageExecutors map[session.StageRole]session.Pip
 // keyed by session.StageRole. Key validation against the 3 known roles is
 // Epic 1.3's responsibility (ValidatePipelineModeContent); this function
 // performs no validation of its own.
-func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[session.StageRole]session.PipelineStageExecutor {
+func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[stagecfg.StageRole]stagecfg.PipelineStageExecutor {
 	if len(m) == 0 {
 		return nil
 	}
-	out := make(map[session.StageRole]session.PipelineStageExecutor, len(m))
+	out := make(map[stagecfg.StageRole]stagecfg.PipelineStageExecutor, len(m))
 	for role, executor := range m {
 		if executor == nil {
 			continue
 		}
-		out[session.StageRole(role)] = session.PipelineStageExecutor{
+		out[stagecfg.StageRole(role)] = stagecfg.PipelineStageExecutor{
 			Program: executor.Program,
 			Model:   executor.Model,
 		}
@@ -156,34 +158,10 @@ func stageExecutorsFromProto(m map[string]*sessionv1.PipelineStageExecutor) map[
 	return out
 }
 
-// pipelineCacheInvalidator is a narrow, consumer-defined interface (per
-// the `interface-pollution-checklist` skill — defined where consumed,
-// not next to CachingPipelineEngine) matched via duck typing against
-// s.pipelineEngine. CachingPipelineEngine.InvalidateCache satisfies it;
-// PipelineEngine itself intentionally does NOT declare this method (it is a
-// write-side operational concern, not part of the read-side resolution
-// contract every PipelineEngine implementation must offer).
-type pipelineCacheInvalidator interface {
-	InvalidateCache(ctx context.Context) error
-}
-
-// invalidatePipelineCache re-fetches enabled pipeline modes into
-// s.pipelineEngine's cache after a successful Create/Update/Delete. id is
-// used only for the Warn log line if invalidation fails. No-op (silently) if
-// pipelineEngine is unwired or doesn't support cache invalidation — neither
-// case is an error worth surfacing here.
-//
-// Deliberately returns nothing: per Story 2.2.1's acceptance criteria, an
-// invalidation failure after a successful DB write must never fail the RPC,
-// so there is no error for callers to (mis)propagate.
+// invalidatePipelineCache refreshes s.pipelineEngine's cache after a successful
+// Create/Update/Delete (Story 2.2.1: an invalidation failure never fails the RPC).
 func (s *BacklogService) invalidatePipelineCache(ctx context.Context, id string) {
-	invalidator, ok := s.pipelineEngine.(pipelineCacheInvalidator)
-	if !ok {
-		return
-	}
-	if err := invalidator.InvalidateCache(ctx); err != nil {
-		log.WarningLog().Printf("[PipelineEngine] cache invalidation failed after successful write id=%s: %v — cache may be stale until next successful invalidation", id, err)
-	}
+	invalidateEngineCache(ctx, s.pipelineEngine, engineLabelPipeline, id)
 }
 
 // CreatePipelineMode registers a new runtime-definable pipeline mode.
@@ -216,7 +194,7 @@ func (s *BacklogService) CreatePipelineMode(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	input := session.PipelineModeCreateInput{
+	input := stagecfg.PipelineModeCreateInput{
 		Slug:                  req.Msg.Slug,
 		Name:                  req.Msg.Name,
 		Description:           req.Msg.Description,
@@ -235,7 +213,7 @@ func (s *BacklogService) CreatePipelineMode(
 
 	pm, err := s.pipelineModeRepo.Create(ctx, input)
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("pipeline mode with slug %q already exists", req.Msg.Slug))
 		}
@@ -301,11 +279,11 @@ func (s *BacklogService) UpdatePipelineMode(
 	// nil req.Msg.StageExecutors means "leave untouched" (see the field's own
 	// doc comment) — nothing new to validate in that case. When present,
 	// validate the same map that's about to be written below.
-	var stageExecutors map[session.StageRole]session.PipelineStageExecutor
+	var stageExecutors map[stagecfg.StageRole]stagecfg.PipelineStageExecutor
 	if req.Msg.StageExecutors != nil {
 		stageExecutors = stageExecutorsFromProto(req.Msg.StageExecutors.Values)
 		if stageExecutors == nil {
-			stageExecutors = map[session.StageRole]session.PipelineStageExecutor{}
+			stageExecutors = map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{}
 		}
 		contentFields.StageExecutors = stageExecutors
 	}
@@ -314,7 +292,7 @@ func (s *BacklogService) UpdatePipelineMode(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	update := session.PipelineModeUpdateInput{
+	update := stagecfg.PipelineModeUpdateInput{
 		Name:                  req.Msg.Name,
 		Description:           req.Msg.Description,
 		Enabled:               req.Msg.Enabled,
@@ -337,10 +315,10 @@ func (s *BacklogService) UpdatePipelineMode(
 
 	pm, err := s.pipelineModeRepo.Update(ctx, id, update)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("pipeline mode %s not found", req.Msg.Id))
 		}
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("pipeline mode slug already exists"))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update pipeline mode: %w", err))
@@ -377,7 +355,7 @@ func (s *BacklogService) DeletePipelineMode(
 	}
 
 	if err := s.pipelineModeRepo.Delete(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("pipeline mode %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete pipeline mode: %w", err))
@@ -400,7 +378,7 @@ func (s *BacklogService) GetPipelineMode(
 
 	pm, err := s.pipelineModeRepo.GetBySlug(ctx, req.Msg.Slug)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("pipeline mode %q not found", req.Msg.Slug))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get pipeline mode: %w", err))

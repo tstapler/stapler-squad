@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/integrationcredential"
 )
@@ -55,7 +56,7 @@ func (r *EntRepository) IssueIntegrationCredential(ctx context.Context, info Int
 		Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
-			return "", fmt.Errorf("%w: credential for principal %q already exists", ErrConflict, info.PrincipalID)
+			return "", fmt.Errorf("%w: credential for principal %q already exists", domain.ErrConflict, info.PrincipalID)
 		}
 		return "", fmt.Errorf("create integration credential: %w", err)
 	}
@@ -66,7 +67,7 @@ func (r *EntRepository) IssueIntegrationCredential(ctx context.Context, info Int
 // revoked token returns ErrNotFound, deliberately indistinguishable from each other.
 func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token string) (*IntegrationCredentialInfo, error) {
 	if token == "" {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	cred, err := r.Client.IntegrationCredential.Query().
 		Where(
@@ -76,7 +77,7 @@ func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token 
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ErrNotFound
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("lookup integration credential: %w", err)
 	}
@@ -98,7 +99,7 @@ func (r *EntRepository) RevokeIntegrationCredential(ctx context.Context, princip
 		return fmt.Errorf("revoke integration credential: %w", err)
 	}
 	if n == 0 {
-		return ErrNotFound
+		return domain.ErrNotFound
 	}
 	return nil
 }
