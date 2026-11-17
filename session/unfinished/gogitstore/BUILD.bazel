@@ -86,5 +86,8 @@ go_test(
 filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
-    visibility = ["//session/unfinished:__subpackages__"],
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
 )

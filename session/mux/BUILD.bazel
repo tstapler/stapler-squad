@@ -62,3 +62,13 @@ exports_files(
     ["hooks.go"],
     visibility = ["//server/services:__pkg__"],
 )
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

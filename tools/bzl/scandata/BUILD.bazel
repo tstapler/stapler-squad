@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scandata_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/scandata",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "scandata",
+    embed = [":scandata_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scandata_test",
+    srcs = ["main_test.go"],
+    embed = [":scandata_lib"],
+    deps = ["@com_github_stretchr_testify//require"],
+)
