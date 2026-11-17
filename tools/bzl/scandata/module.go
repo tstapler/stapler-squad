@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -20,8 +19,14 @@ const (
 // files and a BUILD.bazel ("." is the root package), skipping the trees the
 // scanners skip plus testdata.
 func moduleDirs(root string) ([]string, error) {
-	seen := map[string]bool{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	dirs, _, err := moduleScan(root)
+	return dirs, err
+}
+
+// moduleScan also returns the in-scope dirs with non-test Go files but no BUILD.bazel.
+func moduleScan(root string) (withBuild, noBuild []string, err error) {
+	seen, missing := map[string]bool{}, map[string]bool{}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -40,16 +45,13 @@ func moduleDirs(root string) ([]string, error) {
 			dir := filepath.ToSlash(filepath.Dir(rel))
 			if _, serr := os.Stat(filepath.Join(root, dir, "BUILD.bazel")); serr == nil {
 				seen[dir] = true
+			} else {
+				missing[dir] = true
 			}
 		}
 		return nil
 	})
-	out := make([]string, 0, len(seen))
-	for d := range seen {
-		out = append(out, d)
-	}
-	sort.Strings(out)
-	return out, err
+	return sortedKeys(seen), sortedKeys(missing), err
 }
 
 func labelFor(dir string) string {
@@ -62,7 +64,7 @@ func labelFor(dir string) string {
 // checkModule checks every non-session package's go_sources filegroup and the
 // aggregator that carries them into both scanner tests.
 func checkModule(root string, data map[string]map[string]bool) ([]string, error) {
-	dirs, err := moduleDirs(root)
+	dirs, noBuild, err := moduleScan(root)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +82,10 @@ func checkModule(root string, data map[string]map[string]bool) ([]string, error)
 	}
 	listed := stringSet(srcsExpr)
 
-	var out []string
+	out, err := checkNoBuild(root, noBuild)
+	if err != nil {
+		return nil, err
+	}
 	vis := strRe.FindAllStringSubmatch(attr(agg, "visibility"), -1)
 	for _, s := range scanners {
 		if msg := visibleTo(vis, s); msg != "" {
@@ -154,11 +159,8 @@ func appendLeafGroup(buildPath string) error {
 	if _, ok := findCall(stripComments(string(b)), "filegroup", "go_sources"); ok {
 		return nil
 	}
-	text := string(b)
-	if !strings.HasSuffix(text, "\n") {
-		text += "\n"
-	}
-	return os.WriteFile(buildPath, []byte(text+leafGroup), 0o644)
+	text := strings.TrimRight(string(b), "\n")
+	return os.WriteFile(buildPath, []byte(text+"\n"+leafGroup), 0o644)
 }
 
 func writeAggregator(p string, dirs []string) error {

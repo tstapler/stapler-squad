@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "main.go",
         "module.go",
+        "nobuild.go",
         "parse.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/tools/bzl/scandata",

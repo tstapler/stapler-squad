@@ -75,6 +75,7 @@ func fixture(t *testing.T, leafBuild, data, deps string) string {
 	write(t, root, "session/BUILD.bazel", buildWith("session_test", data, deps))
 	write(t, root, "server/services/BUILD.bazel", buildWith("services_test", data, deps))
 	write(t, root, "tools/bzl/scandata/BUILD.bazel", aggregator())
+	write(t, root, noBuildFile, "# header comment\n")
 	write(t, root, "session/leaf/x.go", "package leaf\n")
 	write(t, root, "session/leaf/x_test.go", "package leaf\n")
 	write(t, root, "session/ent/gen.go", "package ent\n")
@@ -244,4 +245,50 @@ func TestFix_ShouldAddMissingFilegroupAndRegenerateAggregator_WhenModulePackageU
 	require.NoError(t, err)
 	require.Contains(t, string(b), `"//server/adapters:go_sources"`)
 	require.NoError(t, fix(root), "fix is idempotent")
+}
+
+func noBuildFixture(t *testing.T, listing string) string {
+	t.Helper()
+	root := moduleFixture(t, scandataGroup, "//server/adapters:go_sources")
+	write(t, root, "spikes/s1/x.go", "package s1\n")
+	write(t, root, "spikes/s1/x_test.go", "package s1\n")
+	write(t, root, "spikes/testdata/y.go", "package y\n")
+	write(t, root, noBuildFile, listing)
+	return root
+}
+
+func TestCheck_ShouldFlagGoDirWithoutBuild_WhenNotListedInNoBuildFile(t *testing.T) {
+	t.Parallel()
+	got, err := check(noBuildFixture(t, "# none\n"))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Contains(t, got[0], "spikes/s1: Go files but no BUILD.bazel and not listed in "+noBuildFile)
+}
+
+func TestCheck_ShouldPass_WhenGoDirWithoutBuildIsListed(t *testing.T) {
+	t.Parallel()
+	got, err := check(noBuildFixture(t, "spikes/s1  # a spike\n# comment\n\ngen/proto/x  # generated, absent here\n"))
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestCheck_ShouldFlagStaleNoBuildEntry_WhenDirGoneOrNowHasBuild(t *testing.T) {
+	t.Parallel()
+	root := noBuildFixture(t, "spikes/s1\nspikes/gone\nserver/adapters  # now has a BUILD\n")
+	got, err := check(root)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"server/adapters: stale " + noBuildFile + " entry, directory now has a BUILD.bazel",
+		"spikes/gone: stale " + noBuildFile + " entry, directory does not exist",
+	}, got)
+}
+
+func TestFix_ShouldNotDoubleBlankLine_WhenBuildFileEndsInBlankLines(t *testing.T) {
+	t.Parallel()
+	root := moduleFixture(t, "# nothing\n\n\n")
+	require.NoError(t, fix(root))
+	b, err := os.ReadFile(filepath.Join(root, "server/adapters/BUILD.bazel"))
+	require.NoError(t, err)
+	require.NotContains(t, string(b), "\n\n\n")
+	require.True(t, strings.HasSuffix(string(b), ")\n"))
 }
