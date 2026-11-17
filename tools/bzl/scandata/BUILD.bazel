@@ -4,6 +4,7 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "scandata_lib",
     srcs = [
+        "consumers.go",
         "main.go",
         "module.go",
         "nobuild.go",

@@ -98,6 +98,11 @@ func check(root string) ([]string, error) {
 		return nil, err
 	}
 	out = append(out, more...)
+	refs, err := checkConsumers(root)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, refs...)
 	sort.Strings(out)
 	return out, nil
 }
