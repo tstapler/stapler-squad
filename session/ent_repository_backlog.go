@@ -191,7 +191,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data backlogdto.B
 }
 
 // GetBacklogItem retrieves a backlog item by either its legacy UUID string
-// or its bl_-prefixed public id (see resolveBacklogItemLookup).
+// or its bl_-prefixed public id (see ResolveBacklogItemLookup).
 func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error) {
 	parsedID, err := r.ResolveBacklogItemLookup(ctx, id)
 	if err != nil {

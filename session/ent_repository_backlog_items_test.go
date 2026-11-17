@@ -38,7 +38,7 @@ func TestResolveBacklogItemLookup_should_RouteToPublicIdBranch_When_BlPrefixedSt
 
 	gotID, err := repo.ResolveBacklogItemLookup(ctx, created.PublicIDRaw)
 	require.NoError(t, err, "resolving a valid public id must not error")
-	assert.Equal(t, wantID, gotID, "resolveBacklogItemLookup(public_id) must return the row's real primary key")
+	assert.Equal(t, wantID, gotID, "ResolveBacklogItemLookup(public_id) must return the row's real primary key")
 }
 
 // TestResolveBacklogItemLookup_should_ReturnInvalidError_When_NeitherUUIDNorPublicIdShape
@@ -55,7 +55,7 @@ func TestResolveBacklogItemLookup_should_ReturnInvalidError_When_NeitherUUIDNorP
 	for _, in := range tests {
 		t.Run(in, func(t *testing.T) {
 			_, err := repo.ResolveBacklogItemLookup(ctx, in)
-			require.Error(t, err, "resolveBacklogItemLookup(%q) must return an error, not a valid id", in)
+			require.Error(t, err, "ResolveBacklogItemLookup(%q) must return an error, not a valid id", in)
 		})
 	}
 }

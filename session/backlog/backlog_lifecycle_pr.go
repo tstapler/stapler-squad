@@ -2437,7 +2437,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	// non-empty value. BaseCommitSha reads "" both for ItemSession rows written
 	// before BaseCommitSha/LastCommitSha were split into separate fields, and
 	// for any session that spawned and died/was retried before its base commit
-	// was ever seeded — GetBaseCommitSHAsForSessions (ent_repository_backlog_items.go)
+	// was ever seeded — GetBaseCommitSHAsForSessions (backlogstore/item_session_queries.go)
 	// already documents and works around this exact legacy-row shape. When
 	// BaseCommitSha is unknown, fall back to this session's own bookkeeping of
 	// whether it ever authored anything: CommitCountSinceSpawn is written
