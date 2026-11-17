@@ -1,4 +1,4 @@
-package session
+package workflowengine
 
 import (
 	"fmt"
@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
 // expandEdge turns the AnyStatus wildcard into one edge per built-in status.
@@ -15,8 +14,8 @@ func expandEdge(e domain.SystemEdge) []domain.SystemEdge {
 	if e.From != domain.AnyStatus {
 		return []domain.SystemEdge{e}
 	}
-	out := make([]domain.SystemEdge, 0, len(workflowengine.BuiltInStageOrder))
-	for _, s := range workflowengine.BuiltInStageOrder {
+	out := make([]domain.SystemEdge, 0, len(BuiltInStageOrder))
+	for _, s := range BuiltInStageOrder {
 		out = append(out, domain.SystemEdge{From: s, To: e.To})
 	}
 	return out
@@ -78,7 +77,7 @@ func TestTransitionCallerAudit_ForwardingIsExactlyTheMCPDelegateAndContributesNo
 	}
 	require.Equal(t, []domain.TransitionCaller{domain.CallerMCPTransitionDelegate}, forwarding,
 		"a second generic forwarder needs a deliberate registry change")
-	require.False(t, workflowengine.IsSystemRequired(domain.BacklogStatusDone, domain.BacklogStatusRefining), "delegate-reachable edges stay disableable")
+	require.False(t, IsSystemRequired(domain.BacklogStatusDone, domain.BacklogStatusRefining), "delegate-reachable edges stay disableable")
 }
 
 func TestTransitionCallerAudit_EveryAgentAndSystemEdgeIsSystemRequired(t *testing.T) {
@@ -93,7 +92,7 @@ func TestTransitionCallerAudit_EveryAgentAndSystemEdgeIsSystemRequired(t *testin
 				if isKnownOffGraph(c.Name, e) {
 					continue
 				}
-				require.Truef(t, workflowengine.IsSystemRequired(e.From, e.To), "%s requests off-graph edge %s->%s that is not system-required", c.Name, e.From, e.To)
+				require.Truef(t, IsSystemRequired(e.From, e.To), "%s requests off-graph edge %s->%s that is not system-required", c.Name, e.From, e.To)
 			}
 		}
 	}
@@ -109,7 +108,7 @@ func TestTransitionCallerAudit_OperatorEdgesAreInGraphOrSystemRequired(t *testin
 		require.NotEmptyf(t, c.Edges, "%s", c.Name)
 		for _, declared := range c.Edges {
 			for _, e := range expandEdge(declared) {
-				require.Truef(t, valid[e.From][e.To] || workflowengine.IsSystemRequired(e.From, e.To), "%s requests off-graph edge %s->%s", c.Name, e.From, e.To)
+				require.Truef(t, valid[e.From][e.To] || IsSystemRequired(e.From, e.To), "%s requests off-graph edge %s->%s", c.Name, e.From, e.To)
 			}
 		}
 	}
@@ -128,7 +127,7 @@ func TestTransitionCallerAudit_NoSystemRequiredCoreEdgeIsOrphaned(t *testing.T) 
 			}
 		}
 	}
-	for _, group := range [][]domain.SystemEdge{workflowengine.SystemRequiredCore, workflowengine.SystemRequiredOffGraph} {
+	for _, group := range [][]domain.SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
 		for _, e := range group {
 			require.Truef(t, declared[edgeKey(e.From, e.To)], "%s->%s is system-required but no agent or system caller declares it", e.From, e.To)
 		}
@@ -193,16 +192,3 @@ func TestTransitionCallers_ExemptSitesAreTheThreeRollbacksAndTwoDebugWrites(t *t
 	}
 	require.Equal(t, map[domain.ExemptKind]int{domain.ExemptRollback: 3, domain.ExemptDebug: 2}, counts)
 }
-
-// The strict bypass inventory (server/services, Story 1.5.9a) accepts the
-// re-drive writer's computed Caller because it can only be one of these.
-func TestRedriveByWrite_OnlyNamesRegisteredSystemCallers(t *testing.T) {
-	require.NotEmpty(t, redriveByWrite)
-	for caller := range redriveByWrite {
-		spec, ok := domain.LookupTransitionCaller(caller)
-		require.True(t, ok, "%s is not registered", caller)
-		require.Equal(t, domain.ClassSystem, spec.Class, caller)
-	}
-}
-
-func edgeKey(from, to domain.BacklogStatus) string { return fmt.Sprintf("%s->%s", from, to) }

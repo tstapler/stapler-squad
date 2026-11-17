@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
@@ -286,99 +284,6 @@ func (h *gateHarness) newStuckInProgressItem(t *testing.T) *backlogdto.BacklogIt
 	return item
 }
 
-type fixedMode struct{ m workflowengine.EngineMode }
-
-func (f fixedMode) Mode() workflowengine.EngineMode { return f.m }
-
-type divergenceKey struct {
-	Method workflowengine.EngineMethod
-	Class  workflowengine.DivergenceClass
-	Config string
-	Path   workflowengine.CallPath
-}
-
-type callKey struct {
-	Method workflowengine.EngineMethod
-	Path   workflowengine.CallPath
-}
-
-type recordingShadow struct {
-	mu          sync.Mutex
-	calls       map[callKey]int
-	divergences map[divergenceKey]int
-	notCompared map[workflowengine.NotComparedReason]int
-}
-
-func (r *recordingShadow) RecordShadowCall(m workflowengine.EngineMethod, p workflowengine.CallPath) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls[callKey{m, p}]++
-}
-
-func (r *recordingShadow) RecordDivergence(m workflowengine.EngineMethod, c workflowengine.DivergenceClass, config string, p workflowengine.CallPath) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.divergences[divergenceKey{m, c, config, p}]++
-}
-
-func (r *recordingShadow) RecordNotCompared(reason workflowengine.NotComparedReason) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.notCompared[reason]++
-}
-
-func (r *recordingShadow) totalDivergences() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := 0
-	for _, v := range r.divergences {
-		n += v
-	}
-	return n
-}
-
-type lineSink struct {
-	mu    sync.Mutex
-	lines []string
-}
-
-func (l *lineSink) logf(format string, args ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lines = append(l.lines, fmt.Sprintf(format, args...))
-}
-
-func (l *lineSink) snapshot() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]string(nil), l.lines...)
-}
-
-type selectorHarness struct {
-	sel      *workflowengine.SwitchableWorkflowEngine
-	cfg      *workflowengine.ConfiguredWorkflowEngine
-	client   *ent.Client
-	recorder *recordingShadow
-	warns    *lineSink
-	infos    *lineSink
-	clock    *sessiontest.SelectorClock
-}
-
-func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, enabled bool) {
-	t.Helper()
-	ctx := context.Background()
-	n, err := client.StageTransition.Update().
-		Where(
-			stagetransition.HasFromStageWith(backlogstage.Slug(string(from))),
-			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
-		).
-		SetEnabled(enabled).
-		Save(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, n, "edge %s->%s must exist", from, to)
-	require.NoError(t, cfg.InvalidateCache(ctx))
-}
-
 func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *workflowengine.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
@@ -395,10 +300,6 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *workflowengine.C
 	_, err = c.Save(ctx)
 	require.NoError(t, err)
 	require.NoError(t, cfg.InvalidateCache(ctx))
-}
-
-func passingReviewItem() domain.BacklogItemTransitionInput {
-	return domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
 type classModes map[domain.CallerClass]workflowengine.EngineMode
