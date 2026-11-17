@@ -34,6 +34,7 @@ esac`,
     `[ "$1" = ls-files ] || exit 0
 case "$GIT_MODE" in
   fail) exit 1 ;;
+  partial) echo 'tests/e2e/touch-targets.spec.ts'; exit 1 ;;
   onlynm) echo 'tests/e2e/node_modules/x.spec.ts' ;;
   *) printf 'tests/e2e/touch-targets.spec.ts\\ntests/e2e/a.spec.ts\\n' ;;
 esac`,
@@ -42,11 +43,15 @@ esac`,
     "bun",
     `if printf '%s ' "$@" | grep -q -- '--summary'; then
   [ "$BUN_MODE" = crash1 ] && exit 1
-  echo '### summary'; exit 0
+  echo '### summary'
+  [ "$BUN_MODE" = crash1-output ] && exit 1
+  exit 0
 fi
 [ "$BUN_MODE" = crash2 ] && exit 1
 [ "$BUN_MODE" = badjson ] && { echo 'not json'; exit 0; }
-echo '{"mode":"subset","shards":2,"specs":["touch-targets.spec.ts"]}'`,
+echo '{"mode":"subset","shards":2,"specs":["touch-targets.spec.ts"]}'
+[ "$BUN_MODE" = crash2-valid-json ] && exit 1
+exit 0`,
   );
 });
 
@@ -104,9 +109,12 @@ describe("plan-e2e-shards.sh", () => {
     ["3500 changed files (3000 cap)", { GH_MODE: "many" }],
     ["empty changed list", { GH_MODE: "empty" }],
     ["git ls-files fails", { GIT_MODE: "fail" }],
+    ["git ls-files fails after a partial list", { GIT_MODE: "partial" }],
     ["every spec filtered out", { GIT_MODE: "onlynm" }],
     ["first select-specs call crashes", { BUN_MODE: "crash1" }],
+    ["first select-specs call prints a summary then exits non-zero", { BUN_MODE: "crash1-output" }],
     ["second select-specs call crashes", { BUN_MODE: "crash2" }],
+    ["second select-specs call prints valid JSON then exits non-zero", { BUN_MODE: "crash2-valid-json" }],
     ["select-specs prints invalid JSON", { BUN_MODE: "badjson" }],
   ];
   test.each(failures)("PS2: %s -> full suite, skip-baseline empty", (_name, env) => {
