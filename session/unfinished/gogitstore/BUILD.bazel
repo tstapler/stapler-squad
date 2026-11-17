@@ -89,5 +89,6 @@ filegroup(
     visibility = [
         "//server/services:__pkg__",
         "//session:__pkg__",
+        "//session/unfinished:__subpackages__",
     ],
 )

@@ -60,10 +60,29 @@ func main() {
 		fmt.Fprintln(os.Stderr, p)
 	}
 	if len(problems) > 0 {
-		fmt.Fprintf(os.Stderr, "scandata: %d problem(s). Run `go run ./tools/bzl/scandata -fix .` to add missing go_sources filegroups and\n"+
-			"regenerate the aggregator (a session/ leaf also needs its label in the go_test data of session/BUILD.bazel\n"+
-			"and server/services/BUILD.bazel).\n", len(problems))
+		printFooter(problems)
 		os.Exit(1)
+	}
+}
+
+// printFooter gives each class of problem its own remedy: -fix only adds filegroups and the aggregator.
+func printFooter(problems []string) {
+	fmt.Fprintf(os.Stderr, "scandata: %d problem(s).\n", len(problems))
+	var fixable, visibility bool
+	for _, p := range problems {
+		if strings.Contains(p, consumerVisibilityHint) {
+			visibility = true
+		} else {
+			fixable = true
+		}
+	}
+	if fixable {
+		fmt.Fprintln(os.Stderr, "Run `go run ./tools/bzl/scandata -fix .` to add missing go_sources filegroups and regenerate the aggregator\n"+
+			"(a session/ leaf also needs its label in the go_test data of session/BUILD.bazel and server/services/BUILD.bazel).")
+	}
+	if visibility {
+		fmt.Fprintln(os.Stderr, "For a go_sources reference that is not visible: -fix does not change visibility. Add the referencing package's\n"+
+			"spec (e.g. \"//pkg:__pkg__\" or \"//pkg:__subpackages__\") to that go_sources filegroup's visibility in its BUILD.bazel.")
 	}
 }
 
@@ -98,6 +117,11 @@ func check(root string) ([]string, error) {
 		return nil, err
 	}
 	out = append(out, more...)
+	refs, err := checkConsumers(root)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, refs...)
 	sort.Strings(out)
 	return out, nil
 }
