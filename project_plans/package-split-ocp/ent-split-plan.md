@@ -4,6 +4,8 @@ Date 2026-11-14, measured at `efcbe4db7` (main after #1646). The owner decided t
 
 Evidence labels: VERIFIED = command run in this worktree (command given); INFERRED = reasoned from verified data. All numbers were taken on a fresh worktree with generated ent code (`go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema`, flags from `tools/bzl/ent/ent_flags.txt`). The helper that produced the identifier-level edge tables was a throwaway `go/packages` + `go/types` program (not committed). Its method: for every identifier use in package `session` (test variant), record the declaring file; classify files into clusters; count distinct symbols crossing a cluster boundary.
 
+**Program status (verified 2026-11-18, `origin/main` 032071a07, leaf directories checked with `ls -d session/<leaf>`).** Done: E1 (`webhookstore`), E2 (`flowstore`), E3/E5 (wake and guidance DTOs in `session/domain`), E4 (`wakestore`), E6 (`guidancestore`), E8 (`stagecfg`), E9 (`sessionpr`), E10 (`backlogstore`), E11 small slices (`shellstore`, `projectstore`, `rulestore`), E12 (`markerstore`, #1671). NO-GO: E7 (no second implementation) and the E11 core instance-CRUD/analytics residue (needs the instance DTO lowering; owner-approved: small slices only). The "Go/no-go summary" table in section 5 is the pre-execution call and is kept as history.
+
 ## Verdict in six lines
 
 1. The roadmap's blockers are mostly stale. The hard remaining one is real but narrow: Go methods must live with their receiver, so a leaf can only host a store that is its own struct, never `func (r *EntRepository)` bodies.
@@ -286,6 +288,7 @@ Rollback for every PR below: the change has no schema, data or flag effect (ent 
 | E11 | entcore (2,826 + 1,443): instance CRUD, rules, analytics, projects, shells | Instance DTO lowering; rule/project/shell slices (about 250, 100, 70 lines) could be small stores but each is under the SC6 floor | 91 commits touching it, 82 also core; `ent_repository.go` is 2,436 lines | **NO-GO** as a split; shell residue stays by design |
 | E11 (small slices done, owner-approved override; core split stays NO-GO) | Three leaves, each embedded in `EntRepository` and built in `initStores`: `session/shellstore.Shells` (4 methods), `session/projectstore.Projects` (5), `session/rulestore.Rules` (8: approval and tagging rules plus the fire log). All Client-only: no publisher, hook, guidance or driver, no status write. `ProjectData`, `ApprovalRuleData`, `TaggingRuleData` and `ShellStatusRunning` lowered to `session/domain`. `DismissFinding` and the analytics block stay in core. `ent_repository.go` 2,413 to 2,030 lines. The instance CRUD residue is untouched (needs the instance DTO lowering). | | |
 | E12 | markers writer and stuck-episode (`ent_repository_flow_markers.go` writer half 130, `ent_repository_stuck_episode.go` 84) | `MarkerLimiter`, `FlowMarkerData` (core, [flow_marker_limiter.go](../../session/flow_marker_limiter.go) 105 lines, [flow_marker.go](../../session/flow_marker.go) 89) moved with it; the two tests that reassign `Client` made injectable | `repo.Client =` at the two test sites in 1.2 | **NO-GO** now; small enough for a later E2 follow-up |
+| E12 (done, owner-approved override of NO-GO) | Landed 2026-11-15 as [508b777ac](https://github.com/tstapler/stapler-squad/commit/508b777ac) (#1671): leaf `session/markerstore` (7 files, 617 lines incl. 148 + 32 lines of moved tests). Moved: `MarkerLimiter`, `FlowMarkerKind` and constants, `FlowMarkerData`, the marker writer/reader and the stuck-episode tx helpers. `EntRepository` embeds `*markerstore.Markers`, built by `markerstore.New(r.Client)` in `initStores` (`session/ent_repository.go:53,277`). `ent_repository_flow_markers_test.go` (330 lines) and `ent_repository_stuck_episode_test.go` (383) stay in `session`. The 'tests reassign `Client`' blocker is resolved: both now build a second repository with `NewEntRepositoryFromClient(ent.NewClient(ent.Driver(drv)))` over an injected counting driver. `ent_repository.go` is 2,022 lines now. | | | |
 
 ## 4. What can go first with no prerequisite
 
@@ -312,7 +315,7 @@ Wake store (E4) needs E3 and C3; guidance store (E6b) needs E5 and E6a. The road
 | `scoping criteria` for guidance fails SC1 on forwarder counts | section 1.5 | Embedding removes the forwarders from the count; re-run after E5 |
 | Stale-instruction and parallel-work drift | repo memory: check live state at ship | Re-read `git log origin/main -- session/ent_*` before each PR |
 
-Go/no-go summary:
+Go/no-go summary (historical, pre-execution; see Program status at the top for current state):
 
 | PR | Call | Basis |
 |---|---|---|
@@ -325,11 +328,11 @@ Go/no-go summary:
 | E6a | GO | in place |
 | E6b | GO after E5, E6a | edges 0 after hooks; cache install risk tested |
 | E7 | NO-GO as standing item | no second implementation exists |
-| E8 | NO-GO | DTO gate unmet, ports return `*ent.*` |
-| E9 | NO-GO until prerequisites a-c | 32+31 back-edge symbols, 3 guards |
-| E10 | NO-GO | hot, 56 back-edge symbols, BL series open |
+| E8 | NO-GO (later done, see section 3) | DTO gate unmet, ports return `*ent.*` |
+| E9 | NO-GO (later done, see section 3) until prerequisites a-c | 32+31 back-edge symbols, 3 guards |
+| E10 | NO-GO (later done, see section 3) | hot, 56 back-edge symbols, BL series open |
 | E11 | NO-GO | hot, no leaf shape |
-| E12 | NO-GO now | tests reassign `Client` |
+| E12 | NO-GO now (later done, see section 3) | tests reassign `Client` |
 
 What stays in `session` after A and B: about 9.0k of the 12.0k ent_* production lines (moved: webhook 553, flow reader about 870, wake about 620, guidance 950 = about 3.0k, about 6.8% of `session`'s 44.3k; the session budget row should drop by the measured delta). That is a ceiling for this project until the hub DTOs are lowered; claiming more would be unsupported.
 
