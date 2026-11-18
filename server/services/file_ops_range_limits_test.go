@@ -73,11 +73,26 @@ func TestReadRange_ShouldRefuseWithRangeBusy_When_FifthCallPerClientOrNinthPerIP
 			go func() { defer wg.Done(); assert.NoError(t, call(session)) }()
 		}
 	}
+	// refused runs call off the test goroutine: if a cap regressed the call is
+	// admitted and parks on the gate, which must fail the test, not hang it.
+	refused := func(session, msg string) {
+		res := make(chan error, 1)
+		go func() { res <- call(session) }()
+		select {
+		case err := <-res:
+			if err == nil {
+				require.FailNow(t, "call was admitted when it should be refused", msg)
+			}
+			assert.Equal(t, msg, rangeBusyReason(t, err))
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "call was admitted when it should be refused", msg)
+		}
+	}
 	waitAdmitted := func(n int) {
 		for i := 0; i < n; i++ {
 			select {
 			case <-admitted:
-			case <-time.After(30 * time.Second):
+			case <-time.After(10 * time.Second):
 				require.FailNow(t, "held calls were not admitted")
 			}
 		}
@@ -85,11 +100,11 @@ func TestReadRange_ShouldRefuseWithRangeBusy_When_FifthCallPerClientOrNinthPerIP
 
 	hold("s1", maxRangesPerClient)
 	waitAdmitted(maxRangesPerClient)
-	assert.Equal(t, string(rangeBusyPerClient), rangeBusyReason(t, call("s1")), "fifth call from one client")
+	refused("s1", string(rangeBusyPerClient)) // fifth call from one client
 
 	hold("s2", maxRangesPerClient)
 	waitAdmitted(maxRangesPerClient)
-	assert.Equal(t, string(rangeBusyPerIP), rangeBusyReason(t, call("s3")), "ninth call from one IP")
+	refused("s3", string(rangeBusyPerIP)) // ninth call from one IP
 
 	openGate()
 	wg.Wait()
