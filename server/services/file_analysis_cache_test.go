@@ -34,6 +34,23 @@ func gatedRunner(started chan<- struct{}, release <-chan struct{}) analysisRunne
 	}
 }
 
+// closeOnce returns an idempotent closer, so a gate can be opened on the happy
+// path and again from a defer/cleanup that runs when a require aborts the test.
+func closeOnce(ch chan struct{}) func() {
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
+}
+
+// awaitSignal bounds a wait on ch so a missed signal fails the test instead of hanging it.
+func awaitSignal(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the pass to start")
+	}
+}
+
 func analysisEventually(t *testing.T, cond func() bool) {
 	t.Helper()
 	require.Eventually(t, cond, 30*time.Second, time.Millisecond) // ceiling only; returns as soon as cond holds
@@ -44,13 +61,15 @@ func TestAnalysisCache_ShouldReportPendingThenReady_And_RebuildInFullOnValidator
 	c := newAnalysisCache(analysisCacheEntries, 1)
 	defer c.Close()
 	started, release := make(chan struct{}, 2), make(chan struct{})
+	openRelease := closeOnce(release)
+	defer openRelease() // after defer Close, so it runs first
 
 	k1 := keyOf("/w/a.log", 100)
 	state, a := c.Start(k1, gatedRunner(started, release))
 	assert.Equal(t, analysisStatePending, state)
 	assert.Nil(t, a)
-	<-started
-	close(release)
+	awaitSignal(t, started)
+	openRelease()
 	analysisEventually(t, func() bool { s, _ := c.State(k1); return s == analysisStateReady })
 	_, a = c.State(k1)
 	assert.Equal(t, int64(3), a.LineCount)
@@ -80,7 +99,7 @@ func TestAnalysisCache_ShouldCancelPass_When_LastWaiterLeavesAndNotCacheOwned(t 
 	for _, ctx := range []context.Context{ctx1, ctx2} {
 		go func() { _, err := c.Await(ctx, k, run); errs <- err }()
 	}
-	<-started
+	awaitSignal(t, started)
 	// started only proves waiter 1 registered; cancelling before waiter 2 joins would drop the entry.
 	analysisEventually(t, func() bool {
 		c.mu.Lock()
@@ -102,6 +121,8 @@ func TestAnalysisCache_ShouldDetachEntryImmediately_When_LastWaiterCancelsAPassT
 	c := newAnalysisCache(analysisCacheEntries, 1)
 	defer c.Close()
 	started, proceed := make(chan struct{}, 1), make(chan struct{})
+	openProceed := closeOnce(proceed)
+	defer openProceed() // after defer Close, so it runs first
 	k := keyOf("/w/slow-stop.log", 10)
 	slowStop := func(ctx context.Context) (*Analysis, error) {
 		started <- struct{}{}
@@ -113,7 +134,7 @@ func TestAnalysisCache_ShouldDetachEntryImmediately_When_LastWaiterCancelsAPassT
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { _, err := c.Await(ctx, k, slowStop); done <- err }()
-	<-started
+	awaitSignal(t, started)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 
@@ -121,7 +142,7 @@ func TestAnalysisCache_ShouldDetachEntryImmediately_When_LastWaiterCancelsAPassT
 	_, stillCached := c.entries[k]
 	c.mu.Unlock()
 	assert.False(t, stillCached, "a joiner must not be handed the doomed entry")
-	close(proceed)
+	openProceed()
 }
 
 func TestAnalysisCache_ShouldNotCacheFailure_When_PassFailsWithTransientError(t *testing.T) {
@@ -203,18 +224,20 @@ func TestAnalysisCache_ShouldKeepPassRunning_When_StartedCacheOwnedAndWaiterLeav
 	c := newAnalysisCache(analysisCacheEntries, 1)
 	defer c.Close()
 	started, release := make(chan struct{}, 1), make(chan struct{})
+	openRelease := closeOnce(release)
+	defer openRelease() // after defer Close, so it runs first
 	k := keyOf("/w/c.log", 10)
 	run := gatedRunner(started, release)
 	c.Start(k, run)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { _, err := c.Await(ctx, k, run); done <- err }()
-	<-started
+	awaitSignal(t, started)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	s, _ := c.State(k)
 	assert.Equal(t, analysisStatePending, s)
-	close(release)
+	openRelease()
 	analysisEventually(t, func() bool { s, _ := c.State(k); return s == analysisStateReady })
 }
 
@@ -310,6 +333,8 @@ func TestStatFile_ShouldKeepDashToken_When_AnalysisPending(t *testing.T) {
 	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, mem)
 	defer ops.analysis.Close()
 	gate := make(chan struct{})
+	openGate := closeOnce(gate)
+	defer openGate() // after defer analysis.Close, so it runs first
 	mem.SetOnRead(func(n int) {
 		if n == analyzeChunkBytes { // only the background pass, not the stat's sniff
 			<-gate
@@ -319,5 +344,5 @@ func TestStatFile_ShouldKeepDashToken_When_AnalysisPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, analysisStatePending, resp.Analysis)
 	assert.True(t, strings.HasSuffix(resp.VersionToken, ":-"))
-	close(gate)
+	openGate()
 }
