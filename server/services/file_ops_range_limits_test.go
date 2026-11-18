@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -43,9 +44,20 @@ func TestReadRange_ShouldRefuseWithRangeBusy_When_FifthCallPerClientOrNinthPerIP
 	t.Cleanup(ops.analysis.Close)
 	svc := &FileService{ops: ops, ranges: newRangeLimiter()}
 
+	// admitted gets one token per call that holds both limiter slots: the sniff
+	// read runs inside the slot, so it is the only point where "held" is exact.
+	// (perIP.total alone is not: Acquire bumps perIP before perClient.)
 	gate := make(chan struct{})
+	var openOnce sync.Once
+	openGate := func() { openOnce.Do(func() { close(gate) }) }
+	admitted := make(chan struct{}, 64)
+	t.Cleanup(openGate) // registered after analysis.Close, so it runs first
 	mem.SetOnRead(func(n int) {
 		if n == 512 { // the sniff read, inside the limiter slot
+			select {
+			case admitted <- struct{}{}:
+			default:
+			}
 			<-gate
 		}
 	})
@@ -61,23 +73,25 @@ func TestReadRange_ShouldRefuseWithRangeBusy_When_FifthCallPerClientOrNinthPerIP
 			go func() { defer wg.Done(); assert.NoError(t, call(session)) }()
 		}
 	}
-	waitHeld := func(want int) {
-		require.Eventually(t, func() bool {
-			svc.ranges.perIP.mu.Lock()
-			defer svc.ranges.perIP.mu.Unlock()
-			return svc.ranges.perIP.total == want
-		}, 2e9, 1e6)
+	waitAdmitted := func(n int) {
+		for i := 0; i < n; i++ {
+			select {
+			case <-admitted:
+			case <-time.After(30 * time.Second):
+				require.FailNow(t, "held calls were not admitted")
+			}
+		}
 	}
 
 	hold("s1", maxRangesPerClient)
-	waitHeld(maxRangesPerClient)
+	waitAdmitted(maxRangesPerClient)
 	assert.Equal(t, string(rangeBusyPerClient), rangeBusyReason(t, call("s1")), "fifth call from one client")
 
 	hold("s2", maxRangesPerClient)
-	waitHeld(maxRangesPerIP)
+	waitAdmitted(maxRangesPerClient)
 	assert.Equal(t, string(rangeBusyPerIP), rangeBusyReason(t, call("s3")), "ninth call from one IP")
 
-	close(gate)
+	openGate()
 	wg.Wait()
 	assert.NoError(t, call("s1"), "slots are released")
 }
