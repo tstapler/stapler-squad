@@ -205,7 +205,7 @@ func (l *prwatchBacklogLinks) Pending(ctx context.Context, uuids []string) (pend
 		itemID := link.BacklogItemID
 		if itemID == "" {
 			// The batched query does not load the BacklogItem edge
-			// (session/ent_repository_backlog_items.go), so BacklogItemID is empty;
+			// (session/backlogstore), so BacklogItemID is empty;
 			// the single-session query does load it.
 			one, oerr := l.store.GetItemSessionBySessionUUID(ctx, sessionUUID)
 			if oerr != nil || one.BacklogItemID == "" {

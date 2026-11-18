@@ -58,7 +58,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/backlogstore/stuck_queries.go":                      {itemScalarOK, "stuck-state rows carry the item's stored PR columns"},
 	"session/sessionpr/session_pr_backfill.go":                   {itemScalarOK, "backfill imports the stored scalar into links"},
 	"session/storage.go":                                         {itemScalarOK, "PR reassignment guard compares the stored scalar"},
-	"session/ent_repository_backlog_items.go":                    {itemScalarOK, "storage helpers derive a number from the stored URL"},
+	"session/backlogstore/backfill.go":                           {itemScalarOK, "BackfillMissingPRNumbers derives pr_number from the stored pr_url of pr_pending rows"},
 }
 
 var legacyItemPRFieldRe = regexp.MustCompile(`\b(PrNumber|PrURL)\b`)

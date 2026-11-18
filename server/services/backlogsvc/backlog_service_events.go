@@ -434,7 +434,7 @@ func activityNoteDataToProto(n *backlogdto.ActivityNoteData) *sessionv1.BacklogA
 // reviewVerdictDataToProto converts a backlogdto.ReviewVerdictData (the payload
 // carried by BacklogChangeVerdictRecorded) to the wire sessionv1.ReviewVerdict.
 // ReviewVerdictData has no Id/CreatedAt of its own (it is a save-input DTO,
-// session/ent_repository_backlog_items.go), so CreatedAt is set from the event's own
+// session/backlogstore), so CreatedAt is set from the event's own
 // timestamp and Id is left empty — this mirrors itemSessionToProto's
 // ReviewVerdict-building logic (backlog_service.go) minus those two fields.
 func reviewVerdictDataToProto(v *backlogdto.ReviewVerdictData, occurredAt time.Time) *sessionv1.ReviewVerdict {
