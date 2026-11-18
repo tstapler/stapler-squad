@@ -11,13 +11,17 @@ import (
 // Backlog owns the item-source, sync-event and (later) backlog item tables and
 // the late-bound hooks its mutations call after commit.
 type Backlog struct {
-	client *ent.Client
-	hooks  BacklogHooks
+	client   *ent.Client
+	guidance Guidance
+	// deleteOwnerPRRows removes an owner's PR rows inside DeleteBacklogItem's transaction.
+	deleteOwnerPRRows OwnerPRRowsDeleter
+	hooks             BacklogHooks
 }
 
 // New returns a Backlog over client, which must already hold the migrated schema.
-func New(client *ent.Client) *Backlog {
-	return &Backlog{client: client}
+// ports.Guidance must be the guidance store over the same client.
+func New(client *ent.Client, ports Ports) *Backlog {
+	return &Backlog{client: client, guidance: ports.Guidance, deleteOwnerPRRows: ports.DeleteOwnerPRRows}
 }
 
 // Hooks returns the late-bound publisher/callback/chain ports. A bare

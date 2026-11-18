@@ -9,13 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func ownerCtx() context.Context {
-	return session.WithAcActor(context.Background(), session.AcActor{
-		Class: session.AcActorAuthenticatedSession, Source: "ui", RemoteAddr: "127.0.0.1:1", UserAgent: "ua",
+	return domain.WithAcActor(context.Background(), domain.AcActor{
+		Class: domain.AcActorAuthenticatedSession, Source: "ui", RemoteAddr: "127.0.0.1:1", UserAgent: "ua",
 	})
 }
 
@@ -33,7 +34,7 @@ func TestAcAudit_should_RecordPreviousStatusAndActor_When_WaiveApplied(t *testin
 	assert.Equal(t, "waived", rows[0].NewStatus)
 	assert.Equal(t, "applied", rows[0].Outcome)
 	assert.Equal(t, "owner call", rows[0].Reason)
-	assert.Equal(t, string(session.AcActorAuthenticatedSession), rows[0].ActorClass)
+	assert.Equal(t, string(domain.AcActorAuthenticatedSession), rows[0].ActorClass)
 	assert.Equal(t, "ui", rows[0].Source)
 	assert.Equal(t, "127.0.0.1:1", rows[0].RemoteAddr)
 	assert.Equal(t, "ua", rows[0].UserAgent)
@@ -62,8 +63,8 @@ func TestAcAudit_should_RecordOneRowPerMutation_When_AgentChangesStatusAndHitsWa
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
 	id := newWaiverItem(t, repo)
-	agent := session.WithAcActor(context.Background(), session.AcActor{
-		Class: session.AcActorMCPSession, SessionUUID: "sess-1", SessionVerified: true, Source: "mcp",
+	agent := domain.WithAcActor(context.Background(), domain.AcActor{
+		Class: domain.AcActorMCPSession, SessionUUID: "sess-1", SessionVerified: true, Source: "mcp",
 	})
 
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "working"))
@@ -191,7 +192,7 @@ func TestAcAudit_should_SkipRepeatedSameStatusAndRefuseRewaive(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
 	id := newWaiverItem(t, repo)
-	agent := session.WithAcActor(context.Background(), session.AcActor{Class: session.AcActorMCPSession, Source: "mcp"})
+	agent := domain.WithAcActor(context.Background(), domain.AcActor{Class: domain.AcActorMCPSession, Source: "mcp"})
 
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "a"))
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "b"))
@@ -249,7 +250,7 @@ func TestAcAudit_should_KeepWaiverRow_When_DeniedFloodExceedsRefusalCap(t *testi
 		}
 	}
 	assert.Equal(t, 1, applied, "the waiver's own row must survive")
-	assert.Equal(t, session.MaxAcAuditRefusalsPerItem, refused)
+	assert.Equal(t, backlogstore.MaxAcAuditRefusalsPerItem, refused)
 }
 
 func TestPruneAcAuditOlderThan_should_KeepLiveItemWaiverRow_But_DropOldRefusals(t *testing.T) {
@@ -269,13 +270,6 @@ func TestPruneAcAuditOlderThan_should_KeepLiveItemWaiverRow_But_DropOldRefusals(
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "applied", rows[0].Outcome)
-}
-
-func TestAcActorFrom_should_DefaultToSystem_When_NoActorAttached(t *testing.T) {
-	t.Parallel()
-	a := session.AcActorFrom(context.Background())
-	assert.Equal(t, session.AcActorSystem, a.Class)
-	assert.Equal(t, "system (automated)", a.Label())
 }
 
 func TestUpdateBacklogItem_should_CarryWaivedByAtAndHandleDuplicateAndEmptyTexts(t *testing.T) {

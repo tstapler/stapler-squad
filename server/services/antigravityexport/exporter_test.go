@@ -11,10 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestRulesToAntigravityPermissions_FormatsCorrectly(t *testing.T) {
-	rules := []session.ApprovalRuleData{
+	rules := []domain.ApprovalRuleData{
 		{
 			ID:          "rule-git",
 			Name:        "Git commands",
@@ -73,7 +74,7 @@ func TestExportRulesToAntigravitySettings_MergesWithoutDuplicates(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(settingsPath, raw, 0600))
 
-	rules := []session.ApprovalRuleData{
+	rules := []domain.ApprovalRuleData{
 		{
 			ID:          "rule-git",
 			Name:        "Git commands",
@@ -137,7 +138,7 @@ func TestExportAntigravityRulesFromDB_ExportsToHomeGemini(t *testing.T) {
 	defer storage.Close()
 
 	// Seed a rule
-	require.NoError(t, storage.UpsertRule(context.Background(), session.ApprovalRuleData{
+	require.NoError(t, storage.UpsertRule(context.Background(), domain.ApprovalRuleData{
 		ID:          "rule-make",
 		Name:        "Allow make",
 		Enabled:     true,

@@ -53,6 +53,17 @@ jobs:
           bash tools/bzl/check-test-tags.sh
           go run ./tools/bzl/scandata .
 
+      # Analysis errors (visibility, missing deps) are deterministic and cheap, but the non-blocking `bazel` job
+      # hid them (#1690). No --keep_going: with --nobuild it silently skips the failing target.
+      - name: Set up Bazel (repository cache)
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+
+      - name: Analyze the full graph
+        run: bazel build --config=ci --lockfile_mode=error --nobuild //...
+
       # Agent-enablement and reviewability guards (Stories 11.1-11.8). Pure shell, no Bazel build.
       - name: Skill, docs and reviewability guards
         run: |

@@ -186,6 +186,46 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/shellstore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_shellstore:
+          list-mode: strict
+          files:
+            - "**/session/shellstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/session
+            - github.com/tstapler/stapler-squad/session/ent/shell
+        # session/projectstore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_projectstore:
+          list-mode: strict
+          files:
+            - "**/session/projectstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/project
+            - github.com/tstapler/stapler-squad/session/ent/session
+        # session/rulestore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_rulestore:
+          list-mode: strict
+          files:
+            - "**/session/rulestore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/approvalrule
+            - github.com/tstapler/stapler-squad/session/ent/taggingrule
+            - github.com/tstapler/stapler-squad/session/ent/taggingrulefire
         # session/markerstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_markerstore:
@@ -236,14 +276,26 @@ linters:
             - "!**/*_test.go"
           allow:
             - $gostd
+            - entgo.io/ent/dialect/sql
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/log
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/domain/backlogdto
             - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/acauditevent
+            - github.com/tstapler/stapler-squad/session/ent/backlogactivitynote
             - github.com/tstapler/stapler-squad/session/ent/backlogitem
+            - github.com/tstapler/stapler-squad/session/ent/backlogitemdependency
+            - github.com/tstapler/stapler-squad/session/ent/backlogprogressnote
+            - github.com/tstapler/stapler-squad/session/ent/backlogstatusevent
+            - github.com/tstapler/stapler-squad/session/ent/backlogstuckstate
+            - github.com/tstapler/stapler-squad/session/ent/itemsession
             - github.com/tstapler/stapler-squad/session/ent/itemsource
+            - github.com/tstapler/stapler-squad/session/ent/predicate
+            - github.com/tstapler/stapler-squad/session/ent/reviewverdict
+            - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/sourcesyncevent
+            - github.com/tstapler/stapler-squad/session/markerstore
         # session/stagecfg holds the stage, transition, gate, workflow and pipeline-mode repositories: it never
         # imports session, github or server.
         isolate_stagecfg:

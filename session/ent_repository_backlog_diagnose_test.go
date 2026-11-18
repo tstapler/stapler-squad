@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -25,7 +26,7 @@ func TestParseDiagnoseResult(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			d, ok := ParseDiagnoseResult(tc.raw)
+			d, ok := backlogstore.ParseDiagnoseResult(tc.raw)
 			assert.Equal(t, tc.ok, ok)
 			if ok {
 				assert.Equal(t, "NOTE_ONLY", d.Outcome)
@@ -47,7 +48,7 @@ func TestParseWorkflowSuggestions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Len(t, ParseWorkflowSuggestions(tc.raw), tc.want)
+			assert.Len(t, backlogstore.ParseWorkflowSuggestions(tc.raw), tc.want)
 		})
 	}
 }
@@ -100,5 +101,5 @@ func TestAppendWorkflowSuggestion_ParallelAppendsPersist(t *testing.T) {
 	}
 	item, err := repo.GetBacklogItem(ctx, itemID)
 	require.NoError(t, err)
-	assert.Len(t, ParseWorkflowSuggestions(item.WorkflowSuggestions), n)
+	assert.Len(t, backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions), n)
 }

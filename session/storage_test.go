@@ -1170,7 +1170,7 @@ func TestStorage_UpsertTaggingRule_should_PersistRow_When_ValidDataGiven(t *test
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	err := storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+	err := storage.UpsertTaggingRule(context.Background(), domain.TaggingRuleData{
 		RuleID:        "seed-bugfix",
 		Name:          "Bugfix branch",
 		BranchPattern: "^(bugfix|fix)/",
@@ -1194,7 +1194,7 @@ func TestStorage_DeleteTaggingRule_should_RemoveRow_When_RuleIDExists(t *testing
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	require.NoError(t, storage.UpsertTaggingRule(context.Background(), TaggingRuleData{
+	require.NoError(t, storage.UpsertTaggingRule(context.Background(), domain.TaggingRuleData{
 		RuleID:        "seed-bugfix",
 		Name:          "Bugfix branch",
 		BranchPattern: "^(bugfix|fix)/",
@@ -1234,7 +1234,7 @@ func TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurre
 	defer cleanup()
 
 	const ruleID = "concurrent-rule"
-	writeA := TaggingRuleData{
+	writeA := domain.TaggingRuleData{
 		RuleID:        ruleID,
 		Name:          "Writer A",
 		BranchPattern: "^a/",
@@ -1243,7 +1243,7 @@ func TestStorage_UpsertTaggingRule_should_NotDuplicateOrCorrupt_When_TwoConcurre
 		Enabled:       true,
 		Source:        "seed",
 	}
-	writeB := TaggingRuleData{
+	writeB := domain.TaggingRuleData{
 		RuleID:        ruleID,
 		Name:          "Writer B",
 		BranchPattern: "^b/",

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -511,7 +512,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		if len(item.Edges.ItemSessions) == 0 {
 			continue
 		}
-		itemData := session.BacklogItemToData(item)
+		itemData := backlogstore.BacklogItemToData(item)
 		if l.heldByTransitionDenial(ctx, &itemData, "unprocessed_review_verdict") {
 			continue // reprocessing the verdict would reopen or ship the item under the open denial
 		}

@@ -432,7 +432,7 @@ func clsMentionsBacklogItemBuilder(fd *ast.FuncDecl, e ast.Expr, depth int) bool
 
 func clsIsBacklogItemName(name string) bool {
 	switch name {
-	case "BacklogItem", "BacklogItemUpdate", "BacklogItemUpdateOne", "BacklogItemCreate", "BacklogItemUpsert", "BacklogItemMutation":
+	case "BacklogItem", "BacklogItemUpdate", "BacklogItemUpdateOne", "BacklogItemCreate", "BacklogItemUpsert", "BacklogItemUpsertOne", "BacklogItemUpsertBulk", "BacklogItemCreateBulk", "BacklogItemMutation":
 		return true
 	}
 	return false
@@ -500,17 +500,18 @@ func clsSetStatusViolations(t *testing.T, root string, allowed map[string]string
 		}
 		key := rel + " " + funcDisplayName(fd)
 		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+			what := ""
+			if call, ok := n.(*ast.CallExpr); ok {
+				what = clsStatusWriterName(fd, call)
+			} else if clsRawStatusSQLLiteral(n) {
+				what = "raw SQL"
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "SetStatus" || !clsMentionsBacklogItemBuilder(fd, sel.X, 0) {
+			if what == "" {
 				return true
 			}
 			hit[key] = true
 			if allowed[key] == "" {
-				problems = append(problems, fmt.Sprintf("%s calls SetStatus on a BacklogItem ent builder outside the allow-listed writers: a status write must go through Storage.Gated* (ADR-007 D1)", key))
+				problems = append(problems, fmt.Sprintf("%s writes BacklogItem status via %s outside the allow-listed writers: a status write must go through Storage.Gated* (ADR-007 D1)", key, what))
 			}
 			return true
 		})

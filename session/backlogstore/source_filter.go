@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"github.com/tstapler/stapler-squad/session/ent"

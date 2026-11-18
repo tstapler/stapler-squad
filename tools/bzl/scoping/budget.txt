@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # Values are the measured tree rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered; raising one
 # needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`).
-session files=122 loc=31744 imports=80
+session files=118 loc=26931 imports=72
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/historyadapters files=10 loc=1863 imports=6
@@ -12,8 +12,11 @@ session/wakestore files=5 loc=615 imports=4
 session/stagecfg files=11 loc=1832 imports=11
 session/workflowengine files=14 loc=3842 imports=12
 session/markerstore files=6 loc=451 imports=6
+session/shellstore files=2 loc=111 imports=5
+session/projectstore files=2 loc=136 imports=5
+session/rulestore files=2 loc=233 imports=6
 session/sessionpr files=6 loc=1900 imports=14
-session/backlogstore files=4 loc=518 imports=8
+session/backlogstore files=27 loc=4989 imports=19
 session/claudectl files=3 loc=1400 imports=9
 session/claudectl/claudectltest files=1 loc=45 imports=3
 session/panereply files=6 loc=1303 imports=7
@@ -28,7 +31,7 @@ session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
 session/importer files=13 loc=2173 imports=8
 session/itemsources files=8 loc=1731 imports=7
-session/backlog files=13 loc=8148 imports=20
+session/backlog files=13 loc=8148 imports=21
 session/backlog/chains files=3 loc=733 imports=9
 session/backlog/reviewgate files=3 loc=990 imports=10
 session/backlog/pipeline files=8 loc=2565 imports=15
@@ -42,11 +45,11 @@ server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
 server/services/wsconn files=23 loc=9895 imports=24
-server/services/backlogsvc files=35 loc=15547 imports=32
+server/services/backlogsvc files=35 loc=15547 imports=33
 server/services/internal/svctest files=36 loc=1459 imports=19
 server/services/sessionbundle files=4 loc=862 imports=8
 server/services/devtools files=4 loc=501 imports=4
 server/services/antigravityexport files=2 loc=400 imports=3
 server/services/backlogflow files=4 loc=748 imports=8
-session/domain/backlogdto files=15 loc=1494 imports=2
+session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=190 imports=2

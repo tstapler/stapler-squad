@@ -19,7 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
@@ -30,13 +29,13 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	entshell "github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
-	"github.com/tstapler/stapler-squad/session/ent/taggingrule"
-	"github.com/tstapler/stapler-squad/session/ent/taggingrulefire"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/guidancestore"
-	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/projectstore"
+	"github.com/tstapler/stapler-squad/session/rulestore"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
+	"github.com/tstapler/stapler-squad/session/shellstore"
 	"github.com/tstapler/stapler-squad/session/wakestore"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
@@ -54,6 +53,9 @@ type EntRepository struct {
 	*markerstore.Markers
 	*sessionpr.PRStore
 	*backlogstore.Backlog
+	*shellstore.Shells
+	*projectstore.Projects
+	*rulestore.Rules
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -274,12 +276,17 @@ func (r *EntRepository) initStores() {
 	r.Triggers = wakestore.New(r.Client)
 	r.Markers = markerstore.New(r.Client)
 	r.PRStore = sessionpr.New(r.Client)
-	r.Backlog = backlogstore.New(r.Client)
+	r.Shells = shellstore.New(r.Client)
+	r.Projects = projectstore.New(r.Client)
+	r.Rules = rulestore.New(r.Client)
 	r.SetDriver(r.driver)
+	// Built before Backlog, which takes it as its guidance port; the callback resolves r.Backlog
+	// at call time, so it publishes through the Backlog built on the next line.
 	r.Repo = guidancestore.New(r.Client, func(ctx context.Context, row *ent.BacklogItem) {
-		item := BacklogItemToData(row)
-		r.publishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
+		item := backlogstore.BacklogItemToData(row)
+		r.PublishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
 	})
+	r.Backlog = backlogstore.New(r.Client, backlogstore.Ports{Guidance: r.Repo, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
@@ -1778,168 +1785,6 @@ func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string
 
 // --- Permissions & Analytics --------------------------------------------------
 
-func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
-	//nolint:entfullscan approval rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
-	rules, err := r.Client.ApprovalRule.Query().
-		Order(ent.Asc(approvalrule.FieldPriority)).
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]ApprovalRuleData, len(rules))
-	for i, rule := range rules {
-		result[i] = ApprovalRuleData{
-			ID:             rule.RuleID,
-			Name:           rule.Name,
-			ToolName:       rule.ToolName,
-			ToolPattern:    rule.ToolPattern,
-			ToolCategory:   rule.ToolCategory,
-			CommandPattern: rule.CommandPattern,
-			FilePattern:    rule.FilePattern,
-			Decision:       rule.Decision,
-			RiskLevel:      rule.RiskLevel,
-			Reason:         rule.Reason,
-			Alternative:    rule.Alternative,
-			Priority:       rule.Priority,
-			Enabled:        rule.Enabled,
-			Source:         rule.Source,
-			CreatedAt:      rule.CreatedAt,
-			UpdatedAt:      rule.UpdatedAt,
-
-			Programs:              rule.Programs,
-			Subcommands:           rule.Subcommands,
-			BlockedSubcommands:    rule.BlockedSubcommands,
-			RequiredFlags:         rule.RequiredFlags,
-			ForbiddenFlags:        rule.ForbiddenFlags,
-			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
-			PythonModes:           rule.PythonModes,
-			SafePythonImportsOnly: rule.SafePythonImportsOnly,
-			RequireCIPassing:      rule.RequireCiPassing,
-			MinSessionIdleMinutes: rule.MinSessionIdleMinutes,
-		}
-	}
-	return result, nil
-}
-
-func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) error {
-	programs := data.Programs
-	if programs == nil {
-		programs = []string{}
-	}
-	subcommands := data.Subcommands
-	if subcommands == nil {
-		subcommands = []string{}
-	}
-	blockedSubcommands := data.BlockedSubcommands
-	if blockedSubcommands == nil {
-		blockedSubcommands = []string{}
-	}
-	requiredFlags := data.RequiredFlags
-	if requiredFlags == nil {
-		requiredFlags = []string{}
-	}
-	forbiddenFlags := data.ForbiddenFlags
-	if forbiddenFlags == nil {
-		forbiddenFlags = []string{}
-	}
-	requiredFlagPrefixes := data.RequiredFlagPrefixes
-	if requiredFlagPrefixes == nil {
-		requiredFlagPrefixes = []string{}
-	}
-	pythonModes := data.PythonModes
-	if pythonModes == nil {
-		pythonModes = []string{}
-	}
-	return r.Client.ApprovalRule.Create().
-		SetRuleID(data.ID).
-		SetName(data.Name).
-		SetToolName(data.ToolName).
-		SetToolPattern(data.ToolPattern).
-		SetToolCategory(data.ToolCategory).
-		SetCommandPattern(data.CommandPattern).
-		SetFilePattern(data.FilePattern).
-		SetDecision(data.Decision).
-		SetRiskLevel(data.RiskLevel).
-		SetReason(data.Reason).
-		SetAlternative(data.Alternative).
-		SetPriority(data.Priority).
-		SetEnabled(data.Enabled).
-		SetSource(data.Source).
-		SetPrograms(programs).
-		SetSubcommands(subcommands).
-		SetBlockedSubcommands(blockedSubcommands).
-		SetRequiredFlags(requiredFlags).
-		SetForbiddenFlags(forbiddenFlags).
-		SetRequiredFlagPrefixes(requiredFlagPrefixes).
-		SetPythonModes(pythonModes).
-		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
-		SetRequireCiPassing(data.RequireCIPassing).
-		SetMinSessionIdleMinutes(data.MinSessionIdleMinutes).
-		OnConflictColumns(approvalrule.FieldRuleID).
-		UpdateNewValues().
-		Exec(ctx)
-}
-
-func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
-	_, err := r.Client.ApprovalRule.Delete().
-		Where(approvalrule.RuleID(id)).
-		Exec(ctx)
-	return err
-}
-
-func (r *EntRepository) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
-	//nolint:entfullscan tagging rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
-	rules, err := r.Client.TaggingRule.Query().
-		Order(ent.Asc(taggingrule.FieldPriority)).
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]TaggingRuleData, len(rules))
-	for i, rule := range rules {
-		result[i] = TaggingRuleData{
-			RuleID:         rule.RuleID,
-			Name:           rule.Name,
-			NamePattern:    rule.NamePattern,
-			BranchPattern:  rule.BranchPattern,
-			PathPattern:    rule.PathPattern,
-			ProgramPattern: rule.ProgramPattern,
-			RequiredTags:   rule.RequiredTags,
-			OutputTag:      rule.OutputTag,
-			Priority:       rule.Priority,
-			Enabled:        rule.Enabled,
-			Source:         rule.Source,
-			CreatedAt:      rule.CreatedAt,
-			UpdatedAt:      rule.UpdatedAt,
-		}
-	}
-	return result, nil
-}
-
-func (r *EntRepository) UpsertTaggingRule(ctx context.Context, data TaggingRuleData) error {
-	requiredTags := data.RequiredTags
-	if requiredTags == nil {
-		requiredTags = []string{}
-	}
-	return r.Client.TaggingRule.Create().
-		SetRuleID(data.RuleID).
-		SetName(data.Name).
-		SetNamePattern(data.NamePattern).
-		SetBranchPattern(data.BranchPattern).
-		SetPathPattern(data.PathPattern).
-		SetProgramPattern(data.ProgramPattern).
-		SetRequiredTags(requiredTags).
-		SetOutputTag(data.OutputTag).
-		SetPriority(data.Priority).
-		SetEnabled(data.Enabled).
-		SetSource(data.Source).
-		OnConflictColumns(taggingrule.FieldRuleID).
-		UpdateNewValues().
-		Exec(ctx)
-}
-
 // DismissFinding upserts a DismissedFinding row keyed by data.FindingID.
 // Idempotent — dismissing an already-dismissed finding_id just refreshes
 // session_id/conversation_id/finding_type (dismissed_at is immutable, so a
@@ -1958,44 +1803,6 @@ func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindin
 		OnConflictColumns(dismissedfinding.FieldFindingID).
 		UpdateNewValues().
 		Exec(ctx)
-}
-
-func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error {
-	_, err := r.Client.TaggingRule.Delete().
-		Where(taggingrule.RuleID(id)).
-		Exec(ctx)
-	return err
-}
-
-// RecordTaggingRuleFire inserts a fire record for ruleID at firedAt.
-func (r *EntRepository) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
-	return r.Client.TaggingRuleFire.Create().
-		SetRuleID(ruleID).
-		SetFiredAt(firedAt).
-		Exec(ctx)
-}
-
-// GetTaggingRuleFireCounts returns a rule_id -> count map of fires recorded at or after since.
-func (r *EntRepository) GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error) {
-	type fireCountRow struct {
-		RuleID string `json:"rule_id"`
-		Count  int    `json:"count"`
-	}
-	var rows []fireCountRow
-	err := r.Client.TaggingRuleFire.Query().
-		Where(taggingrulefire.FiredAtGTE(since)).
-		GroupBy(taggingrulefire.FieldRuleID).
-		Aggregate(ent.Count()).
-		Scan(ctx, &rows)
-	if err != nil {
-		return nil, fmt.Errorf("get tagging rule fire counts since %s: %w", since.Format(time.RFC3339), err)
-	}
-
-	result := make(map[string]int, len(rows))
-	for _, row := range rows {
-		result[row.RuleID] = row.Count
-	}
-	return result, nil
 }
 
 // ListDismissedFindingIDs returns the set of currently-dismissed finding_id
@@ -2222,192 +2029,4 @@ func (r *EntRepository) GetSubcommandTrend(ctx context.Context, program, subcomm
 		return nil, fmt.Errorf("subcommand trend for %q/%q: %w", program, subcommand, err)
 	}
 	return convertAnalyticsEntries(entries), nil
-}
-
-// --- Project CRUD ---
-
-func projectToData(p *ent.Project) ProjectData {
-	return ProjectData{
-		ID:          p.Name, // Name is the string external ID
-		Name:        p.Name,
-		Description: p.Description,
-		CreatedAt:   p.CreatedAt,
-		UpdatedAt:   p.UpdatedAt,
-	}
-}
-
-// CreateProject inserts a new project.
-func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
-	c := r.Client.Project.Create().
-		SetName(data.Name).
-		SetCreatedAt(data.CreatedAt).
-		SetUpdatedAt(data.UpdatedAt)
-	if data.Description != "" {
-		c.SetDescription(data.Description)
-	}
-	p, err := c.Save(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create project: %w", err)
-	}
-	result := projectToData(p)
-	return &result, nil
-}
-
-// ListProjects returns all projects.
-func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
-	//nolint:entfullscan small, bounded-by-nature table (one row per configured repo), intentionally returns all.
-	projects, err := r.Client.Project.Query().All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list projects: %w", err)
-	}
-	result := make([]ProjectData, len(projects))
-	for i, p := range projects {
-		result[i] = projectToData(p)
-	}
-	return result, nil
-}
-
-// UpdateProject modifies an existing project.
-func (r *EntRepository) UpdateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
-	p, err := r.Client.Project.Query().Where(project.Name(data.Name)).Only(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find project '%s': %w", data.Name, err)
-	}
-	u := r.Client.Project.UpdateOne(p).SetUpdatedAt(data.UpdatedAt)
-	if data.Description != "" {
-		u.SetDescription(data.Description)
-	}
-	updated, err := u.Save(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to update project: %w", err)
-	}
-	result := projectToData(updated)
-	return &result, nil
-}
-
-// DeleteProject removes a project; sessions are unassigned (FK cleared) atomically.
-func (r *EntRepository) DeleteProject(ctx context.Context, name string) error {
-	tx, err := r.Client.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	p, err := tx.Project.Query().Where(project.Name(name)).Only(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to find project '%s': %w", name, err)
-	}
-
-	// Clear the project FK on all sessions that belong to this project before deleting.
-	if err = tx.Session.Update().
-		Where(session.HasProjectWith(project.Name(name))).
-		ClearProject().
-		Exec(ctx); err != nil {
-		return fmt.Errorf("failed to unassign sessions from project '%s': %w", name, err)
-	}
-
-	if err = tx.Project.DeleteOne(p).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete project '%s': %w", name, err)
-	}
-
-	return tx.Commit()
-}
-
-// AssignSessionsToProject links sessions (by title) to a project (by name).
-func (r *EntRepository) AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error {
-	proj, err := r.Client.Project.Query().Where(project.Name(projectName)).Only(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to find project '%s': %w", projectName, err)
-	}
-	for _, title := range sessionTitles {
-		sess, err := r.Client.Session.Query().Where(session.Title(title)).Only(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to find session '%s': %w", title, err)
-		}
-		if err := r.Client.Session.UpdateOne(sess).SetProjectID(proj.ID).Exec(ctx); err != nil {
-			return fmt.Errorf("failed to assign session '%s' to project '%s': %w", title, projectName, err)
-		}
-	}
-	return nil
-}
-
-// ---- Shell repository methods ----
-
-// CreateShell persists a new Shell entity for the given session title.
-func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, data domain.ShellData) error {
-	sess, err := r.Client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
-	if err != nil {
-		return fmt.Errorf("CreateShell: session '%s' not found: %w", sessionTitle, err)
-	}
-	_, err = r.Client.Shell.Create().
-		SetID(data.ID).
-		SetName(data.Name).
-		SetCommand(data.Command).
-		SetNillableWorkingDir(nilIfEmpty(data.WorkingDir)).
-		SetTmuxSessionName(data.TmuxSessionName).
-		SetStatus(string(instance.ShellStatusRunning)).
-		SetOrderIndex(data.OrderIndex).
-		SetSessionID(sess.ID).
-		Save(ctx)
-	if err != nil {
-		return fmt.Errorf("CreateShell: %w", err)
-	}
-	return nil
-}
-
-// ListShells returns all shells for the given session title, ordered by order_index.
-func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]domain.ShellData, error) {
-	sess, err := r.Client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("ListShells: session '%s' not found: %w", sessionTitle, err)
-	}
-	shells, err := r.Client.Shell.Query().
-		Where(entshell.HasSessionWith(session.ID(sess.ID))).
-		Order(ent.Asc(entshell.FieldOrderIndex)).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("ListShells: %w", err)
-	}
-	out := make([]domain.ShellData, len(shells))
-	for idx, sh := range shells {
-		out[idx] = domain.ShellData{
-			ID:              sh.ID,
-			Name:            sh.Name,
-			Command:         sh.Command,
-			WorkingDir:      sh.WorkingDir,
-			TmuxSessionName: sh.TmuxSessionName,
-			OrderIndex:      sh.OrderIndex,
-			Status:          sh.Status,
-			ExitCode:        sh.ExitCode,
-			StartedAt:       sh.StartedAt,
-		}
-	}
-	return out, nil
-}
-
-// UpdateShellStatus updates the status (and optionally exit code + stopped_at) for a shell.
-func (r *EntRepository) UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error {
-	upd := r.Client.Shell.UpdateOneID(shellID).SetStatus(status)
-	if exitCode != nil {
-		upd = upd.SetExitCode(*exitCode)
-	}
-	if status != string(instance.ShellStatusRunning) {
-		upd = upd.SetStoppedAt(time.Now())
-	}
-	if err := upd.Exec(ctx); err != nil {
-		return fmt.Errorf("UpdateShellStatus: %w", err)
-	}
-	return nil
-}
-
-// DeleteShell removes a Shell entity by ID.
-func (r *EntRepository) DeleteShell(ctx context.Context, shellID string) error {
-	if err := r.Client.Shell.DeleteOneID(shellID).Exec(ctx); err != nil {
-		return fmt.Errorf("DeleteShell: %w", err)
-	}
-	return nil
 }

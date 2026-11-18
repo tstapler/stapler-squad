@@ -55,3 +55,11 @@ session/ent/webhookregistration  # gitignored generated ent code; built by //too
 session/ent/webhookrequestledger  # gitignored generated ent code; built by //tools/bzl/ent (S2)
 session/ent/workflow  # gitignored generated ent code; built by //tools/bzl/ent (S2)
 session/ent/worktree  # gitignored generated ent code; built by //tools/bzl/ent (S2)
+project_plans/bazel-conversion/research/scoping-tools/astdump  # research/spike source under project_plans; not built by Bazel
+project_plans/bazel-conversion/research/scoping-tools/typed  # research/spike source under project_plans; not built by Bazel
+project_plans/go-git-fork-full-git-replacement/implementation/spikes/S4-src  # research/spike source under project_plans; not built by Bazel
+project_plans/go-git-fork-full-git-replacement/implementation/spikes/S5-src/credential  # research/spike source under project_plans; not built by Bazel
+project_plans/go-git-fork-full-git-replacement/implementation/spikes/S6-src  # research/spike source under project_plans; not built by Bazel
+project_plans/go-git-fork-full-git-replacement/implementation/spikes/S7-src/determ  # research/spike source under project_plans; not built by Bazel
+project_plans/go-git-fork-full-git-replacement/implementation/spikes/S7-src/longlived  # research/spike source under project_plans; not built by Bazel
+project_plans/go-git-fork-full-git-replacement/implementation/spikes/S7-src/stress  # research/spike source under project_plans; not built by Bazel

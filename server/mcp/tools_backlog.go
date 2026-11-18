@@ -1187,8 +1187,8 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 	}
 
 	_, verified := verifiedCallerSessionUUID(ctx)
-	auditCtx := session.WithAcActor(ctx, session.AcActor{
-		Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: verified, Source: "mcp",
+	auditCtx := domain.WithAcActor(ctx, domain.AcActor{
+		Class: domain.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: verified, Source: "mcp",
 	})
 	if err := h.storage.UpdateAcCriterionStatus(auditCtx, itemID, criteriaIndex, acStatus, note); err != nil {
 		if errors.Is(err, backlogdto.ErrAcCriterionWaived) {
@@ -2966,7 +2966,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	if itemUpdate.PlanArtifactsPath != nil || itemUpdate.AcceptanceCriteria != nil || itemUpdate.Priority != nil || itemUpdate.Category != nil {
 		_, triageVerified := verifiedCallerSessionUUID(ctx)
-		triageCtx := session.WithAcActor(ctx, session.AcActor{Class: session.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: triageVerified, Source: "mcp"})
+		triageCtx := domain.WithAcActor(ctx, domain.AcActor{Class: domain.AcActorMCPSession, SessionUUID: callerUUID, SessionVerified: triageVerified, Source: "mcp"})
 		if _, updateErr := h.storage.UpdateBacklogItem(triageCtx, itemID, itemUpdate, nil); updateErr != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("update backlog item: %v", updateErr), ""), nil
 		}

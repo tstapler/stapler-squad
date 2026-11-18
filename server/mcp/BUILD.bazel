@@ -171,6 +171,7 @@ go_test(
         "//server/services/backlogsvc",
         "//server/wakes",
         "//session",
+        "//session/backlogstore",
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/flow",
@@ -210,5 +211,6 @@ filegroup(
         "//server/services:__pkg__",
         "//session:__pkg__",
         "//session/markerstore:__pkg__",
+        "//tools/bzl/scandata:__pkg__",
     ],
 )

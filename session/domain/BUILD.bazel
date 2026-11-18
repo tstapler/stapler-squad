@@ -4,6 +4,7 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "domain",
     srcs = [
+        "ac_actor.go",
         "approval_metadata.go",
         "artifact_records.go",
         "artifacts_blob.go",
@@ -11,6 +12,7 @@ go_library(
         "backlog.go",
         "backlog_crypto.go",
         "backlog_jules_end_reason.go",
+        "backlog_limits.go",
         "backlog_shared.go",
         "backlog_sync_fields.go",
         "context_health.go",
@@ -32,9 +34,13 @@ go_library(
         "pr_set.go",
         "pr_values.go",
         "process_manager_backend.go",
+        "project_data.go",
         "review_state.go",
+        "rule_data.go",
+        "session_roles.go",
         "session_type.go",
         "status.go",
+        "terminal_status.go",
         "transition_callers.go",
         "uuid.go",
         "wake_trigger.go",
@@ -55,6 +61,7 @@ alias(
 go_test(
     name = "domain_test",
     srcs = [
+        "ac_actor_test.go",
         "autonomous_stop_test.go",
         "backlog_crypto_test.go",
         "backlog_test.go",

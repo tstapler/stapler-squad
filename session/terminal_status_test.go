@@ -65,6 +65,6 @@ func TestTerminalStatusStrings_should_ReturnExactlyDoneAndArchived(t *testing.T)
 	SetTerminalStatusChecker(func(domain.BacklogStatus) bool { return true })
 	t.Cleanup(func() { SetTerminalStatusChecker(nil) })
 
-	got := TerminalStatusStrings()
+	got := domain.TerminalStatusStrings()
 	require.ElementsMatch(t, []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived)}, got)
 }

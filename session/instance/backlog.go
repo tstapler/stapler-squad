@@ -17,15 +17,15 @@ func IsValidBacklogCategory(s string) bool {
 
 // Session role constants.
 const (
-	SessionRoleWork      = "work"
+	SessionRoleWork      = domain.SessionRoleWork
 	SessionRoleTriage    = "triage"
-	SessionRoleReview    = "review"
-	SessionRoleJulesWork = "jules_work"
+	SessionRoleReview    = domain.SessionRoleReview
+	SessionRoleJulesWork = domain.SessionRoleJulesWork
 	// SessionRoleDiagnose is the Diagnose & Nudge dispatched session's role
 	// (backlog item 68964304): a hidden, one-shot investigation agent, never
 	// a work/review/triage session. submit_diagnosis_result checks this role
 	// the same way submit_review_verdict checks SessionRoleReview.
-	SessionRoleDiagnose = "diagnose"
+	SessionRoleDiagnose = domain.SessionRoleDiagnose
 	// SessionRoleExternal is never persisted to ItemSession.session_role — it's
 	// Insights' synthetic label (server/services/insights_service.go's
 	// groupUnattributed) for a session with no backlog attribution at all,

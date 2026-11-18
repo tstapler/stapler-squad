@@ -69,7 +69,7 @@ func TestWaiveAcceptanceCriterion_should_DenyAndAudit_When_RequestCarriesSession
 	rows := f.audit(t)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "denied:agent_session", rows[0].Outcome)
-	assert.Equal(t, string(session.AcActorAgentSession), rows[0].ActorClass)
+	assert.Equal(t, string(domain.AcActorAgentSession), rows[0].ActorClass)
 	assert.Equal(t, "11111111-1111-4111-8111-111111111111", rows[0].ActorSessionUUID)
 	assert.False(t, rows[0].SessionVerified, "an unproven claim must not be recorded as verified")
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
@@ -87,7 +87,7 @@ func TestWaiveAcceptanceCriterion_should_RecordUnverifiedCaller_When_NoIdentityS
 	rows := f.audit(t)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "applied", rows[0].Outcome)
-	assert.Equal(t, string(session.AcActorUnverified), rows[0].ActorClass)
+	assert.Equal(t, string(domain.AcActorUnverified), rows[0].ActorClass)
 	assert.Equal(t, "ui", rows[0].Source)
 	assert.Equal(t, "curl/8", rows[0].UserAgent)
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
@@ -129,7 +129,7 @@ func TestWaiveAcceptanceCriterion_should_RefuseAndAudit_When_ItemTerminalOrCrite
 
 func TestAcActorFromRequest_should_ClassifyOperator_When_PasskeyMiddlewareAuthenticated(t *testing.T) {
 	t.Parallel()
-	var got session.AcActor
+	var got domain.AcActor
 	h := middleware.Auth(stubValidator{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = acActorFromRequest(r.Context(), r.Header, r.RemoteAddr)
 	}))
@@ -138,7 +138,7 @@ func TestAcActorFromRequest_should_ClassifyOperator_When_PasskeyMiddlewareAuthen
 
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
-	assert.Equal(t, session.AcActorAuthenticatedBearer, got.Class)
+	assert.Equal(t, domain.AcActorAuthenticatedBearer, got.Class)
 }
 
 type stubValidator struct{}
@@ -196,14 +196,14 @@ func TestAcActorFromRequest_should_ClassifyCookieAndBearerSeparately(t *testing.
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		set  func(*http.Request)
-		want session.AcActorClass
+		want domain.AcActorClass
 	}{
-		"cookie": {func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "cs_auth", Value: "good"}) }, session.AcActorAuthenticatedSession},
-		"bearer": {func(r *http.Request) { r.Header.Set("Authorization", "Bearer good") }, session.AcActorAuthenticatedBearer},
+		"cookie": {func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "cs_auth", Value: "good"}) }, domain.AcActorAuthenticatedSession},
+		"bearer": {func(r *http.Request) { r.Header.Set("Authorization", "Bearer good") }, domain.AcActorAuthenticatedBearer},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			var got session.AcActor
+			var got domain.AcActor
 			h := middleware.Auth(stubValidator{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				got = acActorFromRequest(r.Context(), r.Header, r.RemoteAddr)
 			}))
@@ -222,7 +222,7 @@ func TestAcActorFromRequest_should_MarkInvalidSessionIDAndCapRemoteAddr(t *testi
 
 	a := acActorFromRequest(t.Context(), h, strings.Repeat("x", 500))
 
-	assert.Equal(t, session.AcActorAgentSession, a.Class)
+	assert.Equal(t, domain.AcActorAgentSession, a.Class)
 	assert.Equal(t, "(invalid id)", a.SessionUUID)
 	assert.False(t, a.SessionVerified)
 	assert.Len(t, a.RemoteAddr, 100)
@@ -257,7 +257,7 @@ func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesE
 	}}
 	var update backlogdto.BacklogItemUpdate
 	applyTriageResultToUpdate(result, &update)
-	_, err := f.storage.UpdateBacklogItem(session.WithAcActor(t.Context(), session.AcActor{Class: session.AcActorSystem, Source: "api"}), f.itemID, update, nil)
+	_, err := f.storage.UpdateBacklogItem(domain.WithAcActor(t.Context(), domain.AcActor{Class: domain.AcActorSystem, Source: "api"}), f.itemID, update, nil)
 	require.NoError(t, err)
 
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
