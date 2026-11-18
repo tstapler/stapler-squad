@@ -103,10 +103,10 @@ const CategoryBacklog = "Backlog"
 // TriggeredBy values for BacklogStatusEvent records. Agent-initiated
 // transitions (e.g. request_review, report_duplicate) use TriggeredByAgent.
 const (
-	TriggeredByUser       = "user"
-	TriggeredBySystem     = "system"
-	TriggeredByAgent      = "agent"
-	TriggeredByGitHubSync = "github_sync"
+	TriggeredByUser       = domain.TriggeredByUser
+	TriggeredBySystem     = domain.TriggeredBySystem
+	TriggeredByAgent      = domain.TriggeredByAgent
+	TriggeredByGitHubSync = domain.TriggeredByGitHubSync
 )
 
 // MergeAcCriteria merges incoming criteria into existing by index.

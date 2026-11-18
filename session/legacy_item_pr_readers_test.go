@@ -51,7 +51,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/domain/backlog.go":                                  {itemScalarOK, "domain field definitions and their doc comments"},
 	"session/domain/backlogdto/backlog_item.go":                  {itemScalarOK, "backlog item DTOs carrying the stored columns"},
 	"session/domain/backlogdto/stuck.go":                         {itemScalarOK, "stuck-state row DTO carrying the stored columns"},
-	"session/ent_repository_backlog.go":                          {itemScalarOK, "persistence mapping of the stored columns"},
+	"session/backlogstore/status_writers.go":                     {itemScalarOK, "the PR-fields transition writes the stored PR columns together with the status"},
 	"session/backlogstore/mappers.go":                            {itemScalarOK, "persistence mapping of the stored columns"},
 	"session/backlogstore/item_reads_guidance.go":                {itemScalarOK, "persistence mapping of the stored columns onto the summary DTO"},
 	"session/backlogstore/item_update.go":                        {itemScalarOK, "applies an explicit item update's PR columns and lists them as updated fields"},

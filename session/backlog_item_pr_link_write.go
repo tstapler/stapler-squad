@@ -42,9 +42,9 @@ func newItemPRLinkWrite(pr backlogdto.PRAssociation, replaced *domain.PRRef) *it
 	return &itemPRLinkWrite{Ref: ref, Source: src, URL: pr.URL, Drop: replaced}
 }
 
-// writeTx upserts the item-direct link and drops the replaced one inside tx. A nil
+// WriteTx upserts the item-direct link and drops the replaced one inside tx. A nil
 // receiver is a no-op.
-func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string, afterLink func() error) error {
+func (w *itemPRLinkWrite) WriteTx(ctx context.Context, tx *ent.Tx, itemID string, afterLink func() error) error {
 	if w == nil {
 		return nil
 	}
@@ -101,6 +101,6 @@ func setItemPRFieldsWithLink(ctx context.Context, client *ent.Client, afterLink 
 		} else if n == 0 {
 			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
-		return link.writeTx(ctx, tx, itemID, afterLink)
+		return link.WriteTx(ctx, tx, itemID, afterLink)
 	})
 }

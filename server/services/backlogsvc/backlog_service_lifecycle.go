@@ -1330,7 +1330,7 @@ func (s *BacklogService) UpdateItemSource(
 	updated, err := s.sourceBackend.UpdateItemSource(ctx, req.Msg.SourceId, update)
 	if err != nil {
 		// EntRepository.UpdateItemSource re-wraps ent's *ent.NotFoundError as
-		// domain.ErrNotFound before returning (session/ent_repository_backlog.go),
+		// domain.ErrNotFound before returning (session/backlogstore/status_writers.go),
 		// so the check here must match against that sentinel — ent.IsNotFound
 		// would never match since the original *ent.NotFoundError is not preserved
 		// in the wrap chain.
