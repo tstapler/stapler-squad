@@ -30,7 +30,7 @@ type ItemLinkWriter interface {
 	WriteTx(ctx context.Context, tx *ent.Tx, itemID string, afterLink func() error) error
 }
 
-// Ports are the consumer-side dependencies New requires, all non-nil: a nil
+// Ports are the consumer-side dependencies New requires, all non-nil except DbPath: a nil
 // Guidance, DeleteOwnerPRRows or AfterLinkHook panics on first use, as the nil
 // embedded stores did before the ports existed. New has one caller,
 // session.EntRepository.initStores.
@@ -40,4 +40,8 @@ type Ports struct {
 	// AfterLinkHook returns the test hook (sessionpr.PRStore.AfterLinkHook), or nil,
 	// read at call time because tests install it after construction.
 	AfterLinkHook func() func() error
+	// DbPath returns the database path used to place the cross-process backfill lock,
+	// read at call time (NewEntRepository resolves "~/" after options run). nil or ""
+	// means no on-disk directory, so the backfill runs unlocked.
+	DbPath func() string
 }

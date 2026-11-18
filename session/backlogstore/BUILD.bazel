@@ -7,6 +7,7 @@ go_library(
         "ac_audit.go",
         "ac_criterion_writers.go",
         "activity_note.go",
+        "backfill.go",
         "chain_fire.go",
         "dependency_queries.go",
         "dependency_writers.go",
@@ -57,6 +58,7 @@ go_library(
         "//tools/bzl/ent:session",
         "//tools/bzl/ent:sourcesyncevent",
         "//tools/bzl/ent:stagetransition",
+        "@com_github_gofrs_flock//:flock",
         "@com_github_google_uuid//:uuid",
         "@io_entgo_ent//dialect/sql",
     ],
@@ -72,6 +74,7 @@ go_test(
     name = "backlogstore_test",
     srcs = [
         "activity_note_test.go",
+        "backfill_test.go",
         "hooks_test.go",
     ],
     embed = [":backlogstore"],

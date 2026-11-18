@@ -1,4 +1,4 @@
-package session
+package backlogstore
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -24,24 +23,34 @@ const backlogItemPublicIDBackfillLockFileName = "backlog_item_public_id_backfill
 
 // backlogItemPublicIDBackfillLockTimeout bounds how long
 // BackfillBacklogItemPublicIDs waits to acquire its flock before giving up.
-// Mirrors hostRegistryLockTimeout (session/host_registry.go).
+// Mirrors hostRegistryLockTimeout (session/hostclaim/host_registry.go).
 const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 
 // backfillLockFilePath returns the filesystem path to use for a
 // flock-guarded cross-process backfill lock named name, derived from
-// r.dbPath. Returns "" when there is no real on-disk directory to
+// the DbPath port. Returns "" when there is no real on-disk directory to
 // coordinate on: a "file:" URI DSN (e.g. the shared-cache in-memory
 // database some tests use) or an EntRepository constructed via
 // NewEntRepositoryFromClient with no dbPath set at all. Callers must treat
 // "" as "skip locking" — there is no filesystem location to coordinate on,
 // and no plausible second OS process to race against in either case.
-func (r *EntRepository) backfillLockFilePath(name string) string {
+func (b *Backlog) backfillLockFilePath(name string) string {
 	// A bare ":memory:" DSN has no directory; filepath.Dir would resolve it to the
 	// process cwd and litter the working tree with a lock file.
-	if r.DbPath == "" || r.DbPath == ":memory:" || strings.HasPrefix(r.DbPath, "file:") {
+	dbPath := b.dbPath()
+	if dbPath == "" || dbPath == ":memory:" || strings.HasPrefix(dbPath, "file:") {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(r.DbPath), name)
+	return filepath.Join(filepath.Dir(dbPath), name)
+}
+
+// dbPath reads the database path at call time; a Backlog built without the port
+// (or over NewEntRepositoryFromClient, which has no path) reports "".
+func (b *Backlog) dbPath() string {
+	if b.dbPathFn == nil {
+		return ""
+	}
+	return b.dbPathFn()
 }
 
 // BackfillBacklogItemPublicIDs assigns a freshly minted BacklogItemID to
@@ -56,10 +65,10 @@ func (r *EntRepository) backfillLockFilePath(name string) string {
 // same state dir can't each assign a different id to the same row; when no
 // real lock path is available the backfill still runs, unguarded, since
 // there's no second process to race against in that case.
-func (r *EntRepository) BackfillBacklogItemPublicIDs(ctx context.Context) error {
-	lockPath := r.backfillLockFilePath(backlogItemPublicIDBackfillLockFileName)
+func (b *Backlog) BackfillBacklogItemPublicIDs(ctx context.Context) error {
+	lockPath := b.backfillLockFilePath(backlogItemPublicIDBackfillLockFileName)
 	if lockPath == "" {
-		return r.backfillBacklogItemPublicIDsLocked(ctx)
+		return b.backfillBacklogItemPublicIDsLocked(ctx)
 	}
 
 	fl := flock.New(lockPath)
@@ -74,15 +83,15 @@ func (r *EntRepository) BackfillBacklogItemPublicIDs(ctx context.Context) error 
 	}
 	defer func() { _ = fl.Unlock() }()
 
-	return r.backfillBacklogItemPublicIDsLocked(ctx)
+	return b.backfillBacklogItemPublicIDsLocked(ctx)
 }
 
 // backfillBacklogItemPublicIDsLocked does the actual query-and-save work for
 // BackfillBacklogItemPublicIDs. Split out so the exported method can wrap it
 // with (or, when no real lock path exists, skip) the flock guard without
 // duplicating the query/save logic.
-func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) error {
-	rows, err := r.Client.BacklogItem.Query().
+func (b *Backlog) backfillBacklogItemPublicIDsLocked(ctx context.Context) error {
+	rows, err := b.client.BacklogItem.Query().
 		Where(backlogitem.PublicIDIsNil()).
 		All(ctx)
 	if err != nil {
@@ -107,7 +116,7 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 		if err != nil {
 			return fmt.Errorf("failed to mint backlog item public id for row %s: %w", row.ID, err)
 		}
-		if _, saveErr := r.Client.BacklogItem.UpdateOneID(row.ID).
+		if _, saveErr := b.client.BacklogItem.UpdateOneID(row.ID).
 			SetPublicID(newID.String()).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] backlog item public id backfill: item=%s: %v", row.ID, saveErr)
@@ -121,12 +130,6 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 	return nil
 }
 
-// --- ItemSession ---
-
-// --- ReviewVerdict ---
-
-// --- Reconciler ---
-
 // BackfillMissingPRNumbers finds pr_pending items with a pr_url but no
 // pr_number (pr_number == 0) and parses the number out of the URL. Such items
 // are otherwise permanently invisible to FindPRPendingItems' PrNumberGT(0)
@@ -134,8 +137,8 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 // found via manual QA against live data, not something the loop itself would
 // ever have surfaced. Best-effort: a URL that doesn't match is left as-is and
 // logged, not treated as fatal.
-func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, error) {
-	items, err := r.Client.BacklogItem.Query().
+func (b *Backlog) BackfillMissingPRNumbers(ctx context.Context) (int, error) {
+	items, err := b.client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(domain.BacklogStatusPRPending)),
 			backlogitem.PrNumberEQ(0),
@@ -157,7 +160,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		if convErr != nil || num <= 0 {
 			continue
 		}
-		updated, updateErr := r.Client.BacklogItem.UpdateOneID(item.ID).SetPrNumber(num).Save(ctx)
+		updated, updateErr := b.client.BacklogItem.UpdateOneID(item.ID).SetPrNumber(num).Save(ctx)
 		if updateErr != nil {
 			return backfilled, fmt.Errorf("failed to backfill pr_number for item %s: %w", item.ID, updateErr)
 		}
@@ -166,25 +169,11 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		// Best-effort publish: never blocks or fails the backfill itself. Found
 		// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 		// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
-		result := backlogstore.BacklogItemToData(updated)
-		r.PublishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
+		result := BacklogItemToData(updated)
+		b.PublishItemChanged(ctx, &result, backlogdto.BacklogItemChange{
 			Kind:          backlogdto.ChangeItemUpdated,
 			UpdatedFields: []string{"prNumber"},
 		})
 	}
 	return backfilled, nil
 }
-
-// --- BacklogStuckState queries ---
-
-// --- ReviewVerdict lookup ---
-
-// --- AC criterion update ---
-
-// --- Zombie-session review detection (pre-mortem F3) ---
-
-// --- Bouncing (non-converging cycle) detection ---
-
-// Jules-specific queries (ListOpenJulesItemSessions, CountJulesItemSessionsSince,
-// TouchItemSessionProgress) live in backlogstore/item_session_progress.go, split out to
-// keep this file under the file-length-limit gate.
