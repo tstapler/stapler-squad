@@ -23,7 +23,7 @@ const backlogItemPublicIDBackfillLockFileName = "backlog_item_public_id_backfill
 
 // backlogItemPublicIDBackfillLockTimeout bounds how long
 // BackfillBacklogItemPublicIDs waits to acquire its flock before giving up.
-// Mirrors hostRegistryLockTimeout (session/host_registry.go).
+// Mirrors hostRegistryLockTimeout (session/hostclaim/host_registry.go).
 const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 
 // backfillLockFilePath returns the filesystem path to use for a

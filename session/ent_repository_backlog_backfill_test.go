@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 const publicIDBackfillLockName = "backlog_item_public_id_backfill.lock"
@@ -164,4 +166,92 @@ func TestBackfillMissingPRNumbers_should_OnlyTouchPendingItemsWithURLAndNoNumber
 	n, err = repo.BackfillMissingPRNumbers(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, n, "a second run must be a no-op")
+}
+
+// failUpdatesFor makes every BacklogItem update of the given row fail.
+func failUpdatesFor(repo *EntRepository, failID uuid.UUID) {
+	repo.Client.BacklogItem.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if bm, ok := m.(*ent.BacklogItemMutation); ok && m.Op().Is(ent.OpUpdateOne) {
+				if id, has := bm.ID(); has && id == failID {
+					return nil, errors.New("injected update failure")
+				}
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+}
+
+func TestBackfillBacklogItemPublicIDs_should_HoldLockWhileBodyRuns(t *testing.T) {
+	t.Parallel()
+	repo, dir := newOnDiskRepo(t)
+	seedBacklogItemWithNoPublicID(t, repo, "held row")
+	lockPath := filepath.Join(dir, publicIDBackfillLockName)
+
+	var duringBody []bool
+	repo.Client.BacklogItem.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if m.Op().Is(ent.OpUpdateOne) {
+				probe := flock.New(lockPath)
+				ok, err := probe.TryLock()
+				if err == nil && ok {
+					_ = probe.Unlock()
+				}
+				duringBody = append(duringBody, ok)
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+
+	require.NoError(t, backfillWithin(repo, 5*time.Second))
+	require.Equal(t, []bool{false}, duringBody, "the lock must still be held by the backfill while it writes")
+
+	probe := flock.New(lockPath)
+	ok, err := probe.TryLock()
+	require.NoError(t, err)
+	require.True(t, ok, "the lock must be free once the backfill returns")
+	_ = probe.Unlock()
+}
+
+func TestBackfillBacklogItemPublicIDs_should_ContinuePastRowThatFailsToSave(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	bad := seedBacklogItemWithNoPublicID(t, repo, "bad")
+	good := seedBacklogItemWithNoPublicID(t, repo, "good")
+	failUpdatesFor(repo, bad)
+
+	require.NoError(t, repo.BackfillBacklogItemPublicIDs(ctx), "a per-row save failure is logged, not returned")
+
+	badRow, err := repo.Client.BacklogItem.Get(ctx, bad)
+	require.NoError(t, err)
+	assert.Empty(t, badRow.PublicID)
+	goodRow, err := repo.Client.BacklogItem.Get(ctx, good)
+	require.NoError(t, err)
+	assert.True(t, backlogdto.IsBacklogItemIDShape(goodRow.PublicID), "the row after a failed save must still be backfilled")
+}
+
+func TestBackfillMissingPRNumbers_should_ReturnErrorAndCountDone_When_UpdateFails(t *testing.T) {
+	t.Parallel()
+	repo := NewTestEntRepository(t)
+	ctx := context.Background()
+	pending := string(domain.BacklogStatusPRPending)
+	bad := seedPRRow(t, repo, pending, "https://github.com/o/r/pull/11", 0)
+	other := seedPRRow(t, repo, pending, "https://github.com/o/r/pull/12", 0)
+	failUpdatesFor(repo, bad)
+
+	n, err := repo.BackfillMissingPRNumbers(ctx)
+	require.Error(t, err, "an update failure aborts the backfill with an error")
+	assert.Contains(t, err.Error(), "failed to backfill pr_number for item "+bad.String())
+
+	badRow, getErr := repo.Client.BacklogItem.Get(ctx, bad)
+	require.NoError(t, getErr)
+	assert.Zero(t, badRow.PrNumber)
+	otherRow, getErr := repo.Client.BacklogItem.Get(ctx, other)
+	require.NoError(t, getErr)
+	done := 0
+	if otherRow.PrNumber == 12 {
+		done = 1
+	}
+	assert.Equal(t, done, n, "the count returned is the number of rows updated before the failure")
 }

@@ -21,7 +21,7 @@ import (
 )
 
 // This file covers the Epic 2.2 publish hooks that live in
-// session/ent_repository_backlog_items.go (Stories 2.2.3, 2.2.4, 2.2.5). It lives in the
+// session/backlogstore (Stories 2.2.3, 2.2.4, 2.2.5). It lives in the
 // external session_test package for the same reason
 // ent_repository_backlog_events_test.go does: these tests need to wire the
 // real server/services.BacklogItemEventPublisher adapter, which imports

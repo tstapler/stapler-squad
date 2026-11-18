@@ -35,7 +35,7 @@ Three independent in-place or leaf-creating stages with no wide codemod. Each op
 - Files moved:
   - The 7 ent-only migration implementation files listed in DefaultStartupMigrations (4 backlog_item_*_migration/backfill files, status_corruption_repair.go, workflow_updated_at_utc_migration.go, github_pr_url_backfill.go; confirm exact names with `grep -n` in ent_repository_migrations.go), about 600 LOC
   - session/ent_repository_migrations.go keeps only the thin adapter (funcMigration wrapper, WithMigrations, the call into migrations.Default)
-  - BackfillBacklogItemPublicIDs stays in session because it needs hub helpers (resolveBacklogItemLookup, BacklogItemToData). It is injected into migrations.Default at its current pinned slot.
+  - BackfillBacklogItemPublicIDs lives in `session/backlogstore` (E10 PR E; it reaches `DbPath` through the `Ports.DbPath` getter) and is promoted through `EntRepository`. It is injected into migrations.Default at its current pinned slot.
 - Exports:
   - migrations.Migration{Name string; Run func(ctx, Env) error}
   - migrations.Env{Client *ent.Client; Driver dialect.Driver /* may be nil */}

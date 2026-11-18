@@ -51,6 +51,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/domain/backlog.go":                                  {itemScalarOK, "domain field definitions and their doc comments"},
 	"session/domain/backlogdto/backlog_item.go":                  {itemScalarOK, "backlog item DTOs carrying the stored columns"},
 	"session/domain/backlogdto/stuck.go":                         {itemScalarOK, "stuck-state row DTO carrying the stored columns"},
+	"session/backlogstore/backfill.go":                           {itemScalarOK, "BackfillMissingPRNumbers derives pr_number from the stored pr_url of pr_pending rows"},
 	"session/backlogstore/status_writers.go":                     {itemScalarOK, "the PR-fields transition writes the stored PR columns together with the status"},
 	"session/backlogstore/mappers.go":                            {itemScalarOK, "persistence mapping of the stored columns"},
 	"session/backlogstore/item_reads_guidance.go":                {itemScalarOK, "persistence mapping of the stored columns onto the summary DTO"},
@@ -58,7 +59,6 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/backlogstore/stuck_queries.go":                      {itemScalarOK, "stuck-state rows carry the item's stored PR columns"},
 	"session/sessionpr/session_pr_backfill.go":                   {itemScalarOK, "backfill imports the stored scalar into links"},
 	"session/storage.go":                                         {itemScalarOK, "PR reassignment guard compares the stored scalar"},
-	"session/backlogstore/backfill.go":                           {itemScalarOK, "BackfillMissingPRNumbers derives pr_number from the stored pr_url of pr_pending rows"},
 }
 
 var legacyItemPRFieldRe = regexp.MustCompile(`\b(PrNumber|PrURL)\b`)
