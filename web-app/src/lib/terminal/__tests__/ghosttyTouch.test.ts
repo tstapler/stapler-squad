@@ -16,7 +16,7 @@ function setup(uri?: string) {
     linkDetector: { getLinkAt: jest.fn().mockResolvedValue(uri ? { text: uri } : undefined) },
   } as unknown as GhosttyWebTerminal;
   const events: string[] = [];
-  for (const t of ["mousedown", "mousemove", "dblclick"]) canvas.addEventListener(t, () => events.push(t));
+  for (const t of ["mousedown", "mousemove", "dblclick", "wheel"]) canvas.addEventListener(t, () => events.push(t));
   document.addEventListener("mouseup", () => events.push("mouseup"));
   const touch = (type: string, x = 5, y = 5) => {
     const e = new Event(type, { bubbles: true, cancelable: true }) as Event & Record<string, unknown>;
@@ -62,6 +62,19 @@ describe("attachGhosttyTouch", () => {
     expect(events).toEqual(["mousedown", "mousemove", "mouseup"]);
   });
 
+  it("a drag scrolls via wheel events with finger-down as negative delta", () => {
+    const { term, touch, events } = setup();
+    attachGhosttyTouch(term, { onLink: jest.fn() });
+    const deltas: number[] = [];
+    term.element?.querySelector("canvas")?.addEventListener("wheel", (e) => deltas.push((e as WheelEvent).deltaY));
+    touch("touchstart", 5, 100);
+    touch("touchmove", 5, 130);
+    touch("touchmove", 5, 150);
+    touch("touchend", 5, 150);
+    expect(deltas).toEqual([-30, -20]);
+    expect(events.filter((e) => e === "wheel")).toHaveLength(2);
+  });
+
   it("a drag before the long-press fires is not a tap or a selection", async () => {
     const { term, touch, events } = setup("https://example.com");
     const onLink = jest.fn();
@@ -71,7 +84,7 @@ describe("attachGhosttyTouch", () => {
     jest.advanceTimersByTime(LONG_PRESS_MS);
     touch("touchend", 5, 80);
     await Promise.resolve();
-    expect(events).toEqual([]);
+    expect(events.filter((e) => e !== "wheel")).toEqual([]);
     expect(onLink).not.toHaveBeenCalled();
   });
 });

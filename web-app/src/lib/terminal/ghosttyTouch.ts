@@ -1,7 +1,8 @@
 /**
  * Touch support for ghostty-web, which only listens to mouse events (and swallows touchend, so the browser
  * never synthesizes a click): tap opens the link menu, long-press then drag selects, long-press alone
- * selects the word. Selection is driven by replaying mouse events at the canvas so ghostty's own
+ * selects the word, and a drag scrolls (replayed as wheel events, so ghostty's own wheel handling and the
+ * mouse-tracking forwarder apply). Selection is driven by replaying mouse events at the canvas so ghostty's own
  * SelectionManager stays the single owner of selection state.
  */
 import type { Terminal as GhosttyWebTerminal } from "ghostty-web";
@@ -40,6 +41,7 @@ export function attachGhosttyTouch(term: GhosttyWebTerminal, { onLink }: Ghostty
   if (!el) return () => {};
 
   let start: { x: number; y: number; at: number } | null = null;
+  let lastY = 0;
   let moved = false;
   let selecting = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -61,6 +63,7 @@ export function attachGhosttyTouch(term: GhosttyWebTerminal, { onLink }: Ghostty
     if (e.touches.length !== 1 || e.target !== canvas()) return;
     const { clientX: x, clientY: y } = e.touches[0];
     start = { x, y, at: Date.now() };
+    lastY = y;
     timer = setTimeout(() => {
       selecting = true;
       suppressContextMenuUntil = Date.now() + CONTEXT_MENU_SUPPRESS_MS;
@@ -76,9 +79,16 @@ export function attachGhosttyTouch(term: GhosttyWebTerminal, { onLink }: Ghostty
       moved = true;
       if (!selecting) clearTimeout(timer);
     }
-    if (!selecting) return;
+    if (selecting) {
+      e.preventDefault();
+      replay("mousemove", x, y);
+      return;
+    }
+    if (!moved) return;
     e.preventDefault();
-    replay("mousemove", x, y);
+    // Finger down moves content down, which is a negative wheel delta.
+    canvas()?.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: lastY - y, deltaMode: 0, clientX: x, clientY: y }));
+    lastY = y;
   };
 
   const finish = (e: TouchEvent, cancelled: boolean) => {
