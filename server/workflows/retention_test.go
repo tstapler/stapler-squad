@@ -242,7 +242,7 @@ func TestRunRetentionSweep_StuckReaper_NilOutputFallbackAndStopper(t *testing.T)
 	mk("kill-fails", time.Now().Add(-26*time.Hour))
 
 	var stopped []string
-	RunRetentionSweep(ctx, client, wfRepo, WithLiveSessionStopper(func(title string) error {
+	RunRetentionSweep(ctx, client, wfRepo, WithLiveSessionStopper(func(title, _ string, _ time.Time) error {
 		if title == "kill-fails" {
 			return assert.AnError
 		}

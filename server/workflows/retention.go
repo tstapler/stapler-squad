@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -15,7 +16,11 @@ import (
 // LiveSessionStopper kills the process behind a live session (by title) and marks its
 // in-memory Instance archived, so archiving the DB row does not leak a tmux pane or let the
 // instance write Active back. A nil stopper archives rows only (tests, no live instances).
-type LiveSessionStopper func(title string) error
+type LiveSessionStopper func(title, workflowID string, staleBefore time.Time) error
+
+// ErrSessionStillActive is returned by a LiveSessionStopper whose in-memory instance has
+// produced output since staleBefore (the DB's last_meaningful_output can lag it).
+var ErrSessionStillActive = errors.New("session produced output since the staleness cutoff")
 
 // Option configures the retention enforcer.
 type Option func(*sweepConfig)
@@ -135,7 +140,10 @@ func archiveStuckLiveSessions(ctx context.Context, entClient *ent.Client, cfg sw
 	ids := make([]int, 0, len(rows))
 	for _, r := range rows {
 		if cfg.stopper != nil {
-			if err := cfg.stopper(r.Title); err != nil {
+			if err := cfg.stopper(r.Title, workflowID, cutoff); err != nil {
+				if errors.Is(err, ErrSessionStillActive) {
+					continue
+				}
 				log.Warn("[workflows/retention] failed to stop stuck session; will retry next sweep",
 					"session", r.Title, "err", err)
 				continue

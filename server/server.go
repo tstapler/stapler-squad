@@ -2382,24 +2382,32 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 	}
 }
 
-// liveSessionStopper kills the pane of the in-memory instance titled title and marks it
-// archived so it cannot be revived or write Active back over the archived row.
-// A title with no in-memory instance has nothing to stop.
+// liveSessionStopper kills the pane of the in-memory instance with this title and workflow
+// and marks it archived so it cannot be revived or write Active back over the archived row.
+// An instance with output newer than staleBefore is left alone (the DB timestamp can lag).
+// No matching in-memory instance means nothing to stop.
 func liveSessionStopper(poller *session.ReviewQueuePoller) workflows.LiveSessionStopper {
-	return func(title string) error {
+	return func(title, workflowID string, staleBefore time.Time) error {
 		if poller == nil {
 			return nil
 		}
-		for _, inst := range poller.GetInstances() {
-			if inst.Title != title {
-				continue
-			}
-			if err := inst.KillSession(); err != nil {
-				return err
-			}
-			inst.SetArchivedAtIfNilAndStop(time.Now()) // also flips in-memory Status so a later save cannot write Active over the Stopped row
-			return nil
+		return stopStuckInstance(poller.GetInstances(), title, workflowID, staleBefore)
+	}
+}
+
+func stopStuckInstance(insts []*instance.Instance, title, workflowID string, staleBefore time.Time) error {
+	for _, inst := range insts {
+		if inst.Title != title || inst.Snapshot().WorkflowID != workflowID || inst.IsArchived() {
+			continue
 		}
+		if t := inst.LastMeaningfulOutputTime(); t.After(staleBefore) {
+			return workflows.ErrSessionStillActive
+		}
+		if err := inst.KillSession(); err != nil {
+			return err
+		}
+		inst.SetArchivedAtIfNilAndStop(time.Now()) // also flips in-memory Status so a later save cannot write Active over the Stopped row
 		return nil
 	}
+	return nil
 }
