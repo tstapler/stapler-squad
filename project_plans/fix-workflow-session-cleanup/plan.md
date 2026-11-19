@@ -121,3 +121,10 @@ Existing interactive callers are unaffected.
 | C1: autonomous-stall-causes doc update | 30m | docs |
 
 Total: ~7 hours
+
+## Implementation correction (verified against live DB, 2026-11-19)
+
+`updated_at` is not a usable staleness proxy: 5 of 7 stuck nightly sessions had `updated_at` ≈ now
+(restart rewrite). Phase 0 uses `last_meaningful_output`, falling back to `updated_at` only when
+it is NULL, and sets status Stopped alongside `archived_at`. B3 (metric) not implemented; the
+Warn log per sweep is the operator signal.
