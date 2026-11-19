@@ -184,3 +184,41 @@ func TestRunRetentionSweep_NilGuard_DoesNotPanic(t *testing.T) {
 		StartRetentionEnforcer(context.Background(), nil, nil, time.Second, &sync.WaitGroup{})
 	})
 }
+
+func TestRunRetentionSweep_ArchivesStuckActiveBeyondThreshold(t *testing.T) {
+	t.Parallel()
+	entRepo, wfRepo := newTestInfra(t)
+	ctx := context.Background()
+	createWorkflowWithRetention(t, wfRepo, "stuck-wf", 1, 24)
+	wf, err := wfRepo.GetBySlug(ctx, "stuck-wf")
+	require.NoError(t, err)
+	client := entRepo.GetEntClient()
+
+	insert := func(title string, status domain.Status, output time.Time) int {
+		s, err := client.Session.Create().SetTitle(title).SetPath("/tmp").SetProgram("claude").
+			SetStatus(int(status)).SetWorkflowID(wf.ID.String()).
+			SetLastMeaningfulOutput(output).Save(ctx)
+		require.NoError(t, err)
+		return s.ID
+	}
+	// updated_at is "now" for all of them (restart rewrite) — must not mask staleness.
+	stuck := insert("stuck", domain.Active, time.Now().Add(-25*time.Hour))
+	stuckCreating := insert("stuck-creating", domain.Creating, time.Now().Add(-30*time.Hour))
+	fresh := insert("fresh", domain.Active, time.Now().Add(-23*time.Hour))
+	paused := insert("paused", domain.Paused, time.Now().Add(-48*time.Hour))
+
+	RunRetentionSweep(ctx, client, wfRepo)
+
+	archived := func(id int) bool {
+		s, err := client.Session.Get(ctx, id)
+		require.NoError(t, err)
+		return s.ArchivedAt != nil
+	}
+	assert.True(t, archived(stuck), "Active session silent >24h must be archived")
+	assert.True(t, archived(stuckCreating), "Creating session silent >24h must be archived")
+	assert.False(t, archived(fresh), "Active session within threshold must not be archived")
+	assert.False(t, archived(paused), "Paused session must never be archived")
+	s, err := client.Session.Get(ctx, stuck)
+	require.NoError(t, err)
+	assert.Equal(t, int(domain.Stopped), s.Status, "archived stuck session must be marked Stopped")
+}

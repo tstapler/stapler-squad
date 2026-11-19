@@ -21,7 +21,8 @@ import (
 //     older ones
 //
 // Guards:
-//   - Never archives sessions with status Active (1), Creating (0), or Paused (2)
+//   - Phases 1-2 never archive Active (1), Creating (0), or Paused (2); only Phase 0
+//     reaps Active/Creating sessions, and only after archive_after_hours of silence
 //   - archive_after_hours == 0 means disabled (skip time-based archival for that workflow)
 //   - keep_sessions == 0 means disabled (keep all sessions)
 //
@@ -82,6 +83,30 @@ func archiveExcessSessions(ctx context.Context, entClient *ent.Client, excess []
 		Save(ctx)
 }
 
+// archiveStuckLiveSessions archives Active/Creating sessions with no activity since cutoff,
+// marking them Stopped so they don't persist as Active+archived. Activity is
+// last_meaningful_output, falling back to updated_at when it was never set:
+// updated_at alone is unusable because a service restart rewrites it for every row.
+// Paused is excluded — it is a deliberate user state.
+func archiveStuckLiveSessions(ctx context.Context, entClient *ent.Client, workflowID string, now, cutoff time.Time) (int, error) {
+	return entClient.Session.Update().
+		Where(
+			entsession.WorkflowID(workflowID),
+			entsession.ArchivedAtIsNil(),
+			entsession.StatusIn(int(domain.Active), int(domain.Creating)),
+			entsession.Or(
+				entsession.LastMeaningfulOutputLT(cutoff),
+				entsession.And(
+					entsession.LastMeaningfulOutputIsNil(),
+					entsession.UpdatedAtLT(cutoff),
+				),
+			),
+		).
+		SetStatus(int(domain.Stopped)).
+		SetArchivedAt(now).
+		Save(ctx)
+}
+
 func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
 	workflows, err := workflowRepo.ListAll(ctx)
 	if err != nil {
@@ -94,6 +119,21 @@ func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo 
 
 	for _, wf := range workflows {
 		archived := 0
+
+		// Phase 0: reap workflow sessions stuck Active/Creating past archive_after_hours
+		// (e.g. blocked at an unanswerable confirmation prompt), so Phases 1-2 see them.
+		if wf.ArchiveAfterHours > 0 {
+			n, err := archiveStuckLiveSessions(ctx, entClient, wf.ID.String(), now,
+				now.Add(-time.Duration(wf.ArchiveAfterHours)*time.Hour))
+			if err != nil {
+				log.Warn("[workflows/retention] stuck-active archive failed",
+					"workflow", wf.Slug, "err", err)
+			} else if n > 0 {
+				log.Warn("[workflows/retention] archived stuck Active/Creating sessions",
+					"workflow", wf.Slug, "count", n, "archive_after_hours", wf.ArchiveAfterHours)
+				archived += n
+			}
+		}
 
 		// Phase 1: time-based archival (archive_after_hours > 0)
 		if wf.ArchiveAfterHours > 0 {

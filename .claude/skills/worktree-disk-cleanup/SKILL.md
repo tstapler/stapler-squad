@@ -214,6 +214,20 @@ confirmation on removal *scope* (which buckets) before running any
 is a bulk destructive operation over other people's (or your own past
 sessions') work.
 
+### Unattended mode (`UNATTENDED=true`)
+
+When the invoking prompt contains `UNATTENDED=true`, no human is present, so do not ask or
+wait for confirmation (a blocked prompt leaves the scheduled session Active forever):
+
+- The prompt itself is the pre-authorization, **for the Safe bucket only** (MERGED/CLOSED PR,
+  dirty files are build junk only). Run Step 4's snapshot, then remove. Before each removal print
+  `Auto-removing Safe-bucket worktree <path>: <PR state> #<N>`.
+- Classification (Steps 0-2, including the Step 1b liveness gate) is unchanged; it only skips
+  the scope confirmation.
+- **Manual-review and Keep buckets, and anything LIVE/CONFIGURED/RECENT, are never deleted.**
+  Emit a summary (path, bucket, reason) and stop. Do not call AskUserQuestion.
+- Apply the same rule to Step 5: report node_modules candidates, delete none.
+
 ## Step 5 — Prune orphaned shared node_modules directories
 
 `web-app/`'s `node_modules` is a symlink into
@@ -292,3 +306,14 @@ the shared disk cache size against its 100 GB GC cap, and stale test temp direct
 base whose workspace exists, the shared disk cache, or the repository cache. `bazel shutdown` cannot be used on an
 orphan (its workspace is gone), so the script kills the server named by `server/server.pid.txt` only when
 `/proc/<pid>/cmdline` carries `--output_base=<base>`, waits for it to exit, then removes the base.
+
+## Scheduling / automation
+
+A scheduled workflow (e.g. `worktree-disk-cleanup-nightly`) has nobody to answer the Step 4
+confirmation. Its prompt MUST include `UNATTENDED=true`, for example:
+
+> Run the worktree-disk-cleanup skill against this repo with UNATTENDED=true. Auto-remove
+> Safe-bucket worktrees; summarize Manual-review and Keep buckets and stop without deleting them.
+
+As a backstop, the workflow retention enforcer archives workflow sessions left Active past
+`archive_after_hours` (`server/workflows/retention.go`, Phase 0).
