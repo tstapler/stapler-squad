@@ -2397,7 +2397,7 @@ func liveSessionStopper(poller *session.ReviewQueuePoller) workflows.LiveSession
 			if err := inst.KillSession(); err != nil {
 				return err
 			}
-			inst.SetArchivedAtIfNil(time.Now())
+			inst.SetArchivedAtIfNilAndStop(time.Now()) // also flips in-memory Status so a later save cannot write Active over the Stopped row
 			return nil
 		}
 		return nil
