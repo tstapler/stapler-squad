@@ -310,10 +310,15 @@ orphan (its workspace is gone), so the script kills the server named by `server/
 ## Scheduling / automation
 
 A scheduled workflow (e.g. `worktree-disk-cleanup-nightly`) has nobody to answer the Step 4
-confirmation. Its prompt MUST include `UNATTENDED=true`, for example:
+confirmation. Its prompt MUST begin with `UNATTENDED=true`. The nightly workflow is stored in the
+DB (not in this repo); as of 2026-11-19 its `command` opens with exactly:
 
-> Run the worktree-disk-cleanup skill against this repo with UNATTENDED=true. Auto-remove
-> Safe-bucket worktrees; summarize Manual-review and Keep buckets and stop without deleting them.
+> UNATTENDED=true — no human is present; never ask for confirmation or call AskUserQuestion. The
+> skill's unattended mode (SKILL.md, "Unattended mode") pre-authorizes Safe-bucket removal only.
+
+followed by the Step 0-2 instructions and a Safe-bucket-only auto-removal policy. Check with
+`sqlite3 -readonly <workspace>/sessions.db "select command from workflows where slug='worktree-disk-cleanup-nightly'"`;
+re-apply with `update_workflow` if it was reset.
 
 As a backstop, the workflow retention enforcer archives workflow sessions left Active past
 `archive_after_hours` (`server/workflows/retention.go`, Phase 0).
