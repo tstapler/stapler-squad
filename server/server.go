@@ -2397,7 +2397,7 @@ func liveSessionStopper(poller *session.ReviewQueuePoller) workflows.LiveSession
 
 func stopStuckInstance(insts []*instance.Instance, title, workflowID string, staleBefore time.Time) error {
 	for _, inst := range insts {
-		if inst.Title != title || inst.Snapshot().WorkflowID != workflowID || inst.IsArchived() {
+		if snap := inst.Snapshot(); snap.Title != title || snap.WorkflowID != workflowID || inst.IsArchived() {
 			continue
 		}
 		if t := inst.LastMeaningfulOutputTime(); t.After(staleBefore) {
