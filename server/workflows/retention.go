@@ -12,11 +12,35 @@ import (
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
+// LiveSessionStopper kills the process behind a live session (by title) and marks its
+// in-memory Instance archived, so archiving the DB row does not leak a tmux pane or let the
+// instance write Active back. A nil stopper archives rows only (tests, no live instances).
+type LiveSessionStopper func(title string) error
+
+// Option configures the retention enforcer.
+type Option func(*sweepConfig)
+
+type sweepConfig struct{ stopper LiveSessionStopper }
+
+// WithLiveSessionStopper makes Phase 0 stop live instances before archiving their rows.
+func WithLiveSessionStopper(s LiveSessionStopper) Option {
+	return func(c *sweepConfig) { c.stopper = s }
+}
+
+func newSweepConfig(opts []Option) sweepConfig {
+	var c sweepConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	return c
+}
+
 // StartRetentionEnforcer starts a background goroutine that periodically archives
 // completed workflow sessions according to per-workflow retention settings:
 //
 //   - archive_after_hours > 0: archive completed sessions that stopped more than
-//     N hours ago (requires maybeAutoArchive to be suppressed for these workflows)
+//     N hours ago (requires maybeAutoArchive to be suppressed for these workflows),
+//     and reap Active/Creating sessions silent for that long (Phase 0)
 //   - keep_sessions > 0: keep only the N most recent completed sessions, archiving
 //     older ones
 //
@@ -34,7 +58,9 @@ func StartRetentionEnforcer(
 	workflowRepo stagecfg.WorkflowRepository,
 	interval time.Duration,
 	wg *sync.WaitGroup,
+	opts ...Option,
 ) {
+	cfg := newSweepConfig(opts)
 	if entClient == nil || workflowRepo == nil {
 		return
 	}
@@ -43,14 +69,14 @@ func StartRetentionEnforcer(
 		defer ticker.Stop()
 
 		// Run once immediately after startup.
-		runRetentionSweep(ctx, entClient, workflowRepo)
+		runRetentionSweep(ctx, entClient, workflowRepo, cfg)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runRetentionSweep(ctx, entClient, workflowRepo)
+				runRetentionSweep(ctx, entClient, workflowRepo, cfg)
 			}
 		}
 	})
@@ -58,8 +84,8 @@ func StartRetentionEnforcer(
 }
 
 // RunRetentionSweep performs a single retention sweep. Exported for use in tests.
-func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
-	runRetentionSweep(ctx, entClient, workflowRepo)
+func RunRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository, opts ...Option) {
+	runRetentionSweep(ctx, entClient, workflowRepo, newSweepConfig(opts))
 }
 
 // archiveExcessSessions archives the keep_sessions overflow, re-applying the
@@ -83,31 +109,51 @@ func archiveExcessSessions(ctx context.Context, entClient *ent.Client, excess []
 		Save(ctx)
 }
 
-// archiveStuckLiveSessions archives Active/Creating sessions with no activity since cutoff,
-// marking them Stopped so they don't persist as Active+archived. Activity is
-// last_meaningful_output, falling back to updated_at when it was never set:
+// archiveStuckLiveSessions reaps Active/Creating sessions with no activity since cutoff.
+// Activity is last_meaningful_output, falling back to updated_at when it was never set:
 // updated_at alone is unusable because a service restart rewrites it for every row.
-// Paused is excluded — it is a deliberate user state.
-func archiveStuckLiveSessions(ctx context.Context, entClient *ent.Client, workflowID string, now, cutoff time.Time) (int, error) {
-	return entClient.Session.Update().
-		Where(
-			entsession.WorkflowID(workflowID),
-			entsession.ArchivedAtIsNil(),
-			entsession.StatusIn(int(domain.Active), int(domain.Creating)),
-			entsession.Or(
-				entsession.LastMeaningfulOutputLT(cutoff),
-				entsession.And(
-					entsession.LastMeaningfulOutputIsNil(),
-					entsession.UpdatedAtLT(cutoff),
-				),
+// Paused is excluded — it is a deliberate user state. Each candidate's process is stopped
+// via cfg.stopper first; a session whose stop fails is left for the next sweep rather than
+// archived with a live pane. The final UPDATE re-applies the predicate and is atomic.
+func archiveStuckLiveSessions(ctx context.Context, entClient *ent.Client, cfg sweepConfig, workflowID string, now, cutoff time.Time) (int, error) {
+	stuck := entsession.And(
+		entsession.WorkflowID(workflowID),
+		entsession.ArchivedAtIsNil(),
+		entsession.StatusIn(int(domain.Active), int(domain.Creating)),
+		entsession.Or(
+			entsession.LastMeaningfulOutputLT(cutoff),
+			entsession.And(
+				entsession.LastMeaningfulOutputIsNil(),
+				entsession.UpdatedAtLT(cutoff),
 			),
-		).
+		),
+	)
+	rows, err := entClient.Session.Query().Where(stuck).All(ctx)
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+	ids := make([]int, 0, len(rows))
+	for _, r := range rows {
+		if cfg.stopper != nil {
+			if err := cfg.stopper(r.Title); err != nil {
+				log.Warn("[workflows/retention] failed to stop stuck session; will retry next sweep",
+					"session", r.Title, "err", err)
+				continue
+			}
+		}
+		ids = append(ids, r.ID)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return entClient.Session.Update().
+		Where(entsession.IDIn(ids...), stuck).
 		SetStatus(int(domain.Stopped)).
 		SetArchivedAt(now).
 		Save(ctx)
 }
 
-func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository) {
+func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo stagecfg.WorkflowRepository, cfg sweepConfig) {
 	workflows, err := workflowRepo.ListAll(ctx)
 	if err != nil {
 		log.Warn("[workflows/retention] failed to list workflows", "err", err)
@@ -121,9 +167,9 @@ func runRetentionSweep(ctx context.Context, entClient *ent.Client, workflowRepo 
 		archived := 0
 
 		// Phase 0: reap workflow sessions stuck Active/Creating past archive_after_hours
-		// (e.g. blocked at an unanswerable confirmation prompt), so Phases 1-2 see them.
+		// (e.g. blocked at an unanswerable confirmation prompt).
 		if wf.ArchiveAfterHours > 0 {
-			n, err := archiveStuckLiveSessions(ctx, entClient, wf.ID.String(), now,
+			n, err := archiveStuckLiveSessions(ctx, entClient, cfg, wf.ID.String(), now,
 				now.Add(-time.Duration(wf.ArchiveAfterHours)*time.Hour))
 			if err != nil {
 				log.Warn("[workflows/retention] stuck-active archive failed",

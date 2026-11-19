@@ -222,3 +222,64 @@ func TestRunRetentionSweep_ArchivesStuckActiveBeyondThreshold(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int(domain.Stopped), s.Status, "archived stuck session must be marked Stopped")
 }
+
+func TestRunRetentionSweep_StuckReaper_NilOutputFallbackAndStopper(t *testing.T) {
+	t.Parallel()
+	entRepo, wfRepo := newTestInfra(t)
+	ctx := context.Background()
+	createWorkflowWithRetention(t, wfRepo, "fallback-wf", 0, 24)
+	wf, err := wfRepo.GetBySlug(ctx, "fallback-wf")
+	require.NoError(t, err)
+	client := entRepo.GetEntClient()
+
+	mk := func(title string, updated time.Time) {
+		_, err := client.Session.Create().SetTitle(title).SetPath("/tmp").SetProgram("claude").
+			SetStatus(int(domain.Active)).SetWorkflowID(wf.ID.String()).SetUpdatedAt(updated).Save(ctx)
+		require.NoError(t, err)
+	}
+	mk("nil-old", time.Now().Add(-25*time.Hour))
+	mk("nil-fresh", time.Now().Add(-1*time.Hour))
+	mk("kill-fails", time.Now().Add(-26*time.Hour))
+
+	var stopped []string
+	RunRetentionSweep(ctx, client, wfRepo, WithLiveSessionStopper(func(title string) error {
+		if title == "kill-fails" {
+			return assert.AnError
+		}
+		stopped = append(stopped, title)
+		return nil
+	}))
+
+	isArchived := func(title string) bool {
+		s, err := client.Session.Query().Where(entsession.Title(title)).Only(ctx)
+		require.NoError(t, err)
+		return s.ArchivedAt != nil
+	}
+	assert.True(t, isArchived("nil-old"), "nil output + stale updated_at is stuck")
+	assert.False(t, isArchived("nil-fresh"), "nil output + fresh updated_at is live")
+	assert.False(t, isArchived("kill-fails"), "failed stop must not archive the row")
+	assert.Equal(t, []string{"nil-old"}, stopped, "stopper runs only for sessions being reaped")
+}
+
+func TestRunRetentionSweep_StuckReaper_SkipsOtherWorkflowAndDisabled(t *testing.T) {
+	t.Parallel()
+	entRepo, wfRepo := newTestInfra(t)
+	ctx := context.Background()
+	createWorkflowWithRetention(t, wfRepo, "off-wf", 0, 0) // archive_after_hours disabled
+	wf, err := wfRepo.GetBySlug(ctx, "off-wf")
+	require.NoError(t, err)
+	client := entRepo.GetEntClient()
+	_, err = client.Session.Create().SetTitle("old").SetPath("/tmp").SetProgram("claude").
+		SetStatus(int(domain.Active)).SetWorkflowID(wf.ID.String()).
+		SetLastMeaningfulOutput(time.Now().Add(-100 * time.Hour)).Save(ctx)
+	require.NoError(t, err)
+	_, err = client.Session.Create().SetTitle("not-a-workflow").SetPath("/tmp").SetProgram("claude").
+		SetStatus(int(domain.Active)).SetLastMeaningfulOutput(time.Now().Add(-100 * time.Hour)).Save(ctx)
+	require.NoError(t, err)
+
+	RunRetentionSweep(ctx, client, wfRepo)
+
+	n, err := client.Session.Query().Where(entsession.ArchivedAtNotNil()).Count(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, n, "archive_after_hours=0 disables Phase 0; non-workflow sessions are never touched")
+}

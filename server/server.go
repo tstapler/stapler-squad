@@ -902,7 +902,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Requires both the session ent client and a workflow repository.
 	if deps.WorkflowRepo != nil && deps.Storage != nil {
 		if entClient := deps.Storage.GetEntClient(); entClient != nil {
-			workflows.StartRetentionEnforcer(serverCtx, entClient, deps.WorkflowRepo, time.Hour, &srv.backgroundTasksWG)
+			workflows.StartRetentionEnforcer(serverCtx, entClient, deps.WorkflowRepo, time.Hour, &srv.backgroundTasksWG,
+				workflows.WithLiveSessionStopper(liveSessionStopper(deps.ReviewQueuePoller)))
 			log.Info("WorkflowRetentionEnforcer started")
 		}
 	}
@@ -2378,5 +2379,27 @@ func ConnectOptions(registry interceptors.ErrorRecorder) []connect.HandlerOption
 			interceptors.NewDBQueryCountInterceptor(),
 			interceptors.NewRequestFlowInterceptor(),
 		),
+	}
+}
+
+// liveSessionStopper kills the pane of the in-memory instance titled title and marks it
+// archived so it cannot be revived or write Active back over the archived row.
+// A title with no in-memory instance has nothing to stop.
+func liveSessionStopper(poller *session.ReviewQueuePoller) workflows.LiveSessionStopper {
+	return func(title string) error {
+		if poller == nil {
+			return nil
+		}
+		for _, inst := range poller.GetInstances() {
+			if inst.Title != title {
+				continue
+			}
+			if err := inst.KillSession(); err != nil {
+				return err
+			}
+			inst.SetArchivedAtIfNil(time.Now())
+			return nil
+		}
+		return nil
 	}
 }
