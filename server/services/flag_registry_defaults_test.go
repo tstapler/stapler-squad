@@ -15,7 +15,8 @@ func TestFlagRegistrySites_ShouldPanicOnNil(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { NewFeatureFlagServiceWithRegistry(nil) })
 	assert.Panics(t, func() { NewFileService(nil).SetFlagRegistry(nil) })
-	assert.Panics(t, func() { flagReader{}.enabled(nil, "x") })
+	assert.PanicsWithValue(t, "services: flagReader has no registry; inject one from the composition root",
+		func() { flagReader{}.enabled(nil, "x") })
 }
 
 func TestNewFeatureFlagService_ShouldHoldDefaultRegistry(t *testing.T) {
@@ -37,5 +38,14 @@ func TestNewFileService_ShouldReadFlagsFromDefaultRegistry(t *testing.T) {
 	assert.NotPanics(t, func() {
 		assert.Equal(t, want, svc.search.viewerV2(ctx))
 		assert.Equal(t, testFlagRegistry().Default(filesEditingFlagName), svc.ops.policy.Flags.Editing(ctx))
+	})
+}
+
+func TestNewFileOps_ShouldReadFlagsFromDefaultRegistry_WhenPolicyHasNone(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	ops := NewFileOps(FilePolicy{}, nil)
+	ctx := t.Context()
+	assert.NotPanics(t, func() {
+		assert.Equal(t, testFlagRegistry().Default(filesEditingFlagName), ops.policy.Flags.Editing(ctx))
 	})
 }
