@@ -15,7 +15,7 @@ import (
 // populated directly from the session row, but child-relation fields gated by
 // a domain.LoadOptions flag (e.g. Tags, gated by LoadTags) are only populated when
 // that flag — or an option preset that implies it — is set. See
-// applyLoadOptions in ent_repository.go.
+// applyLoadOptions in session/instancestore/reads.go.
 func TestSelectiveLoading(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")

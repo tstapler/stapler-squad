@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"encoding/json"
-
 	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
@@ -29,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/guidancestore"
+	"github.com/tstapler/stapler-squad/session/instancestore"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/projectstore"
 	"github.com/tstapler/stapler-squad/session/rulestore"
@@ -55,6 +54,7 @@ type EntRepository struct {
 	*projectstore.Projects
 	*rulestore.Rules
 	*analyticsstore.Analytics
+	*instancestore.Instances
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -279,6 +279,7 @@ func (r *EntRepository) initStores() {
 	r.Projects = projectstore.New(r.Client)
 	r.Rules = rulestore.New(r.Client)
 	r.Analytics = analyticsstore.New(r.Client)
+	r.Instances = instancestore.New(r.Client)
 	r.SetDriver(r.driver)
 	// Built before Backlog, which takes it as its guidance port; the callback resolves r.Backlog
 	// at call time, so it publishes through the Backlog built on the next line.
@@ -1077,119 +1078,6 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	return nil
 }
 
-// GetClaudeConversationUUIDBySessionUUID returns the Claude conversation UUID
-// for the session whose title (tmux session name) matches sessionUUID.
-// Returns "" if the session has no associated ClaudeSession.
-func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
-	sess, err := r.Client.Session.Query().
-		Where(session.Title(sessionUUID)).
-		WithClaudeSession().
-		Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return "", domain.ErrNotFound
-		}
-		return "", fmt.Errorf("GetClaudeConversationUUIDBySessionUUID: %w", err)
-	}
-	if sess.Edges.ClaudeSession == nil {
-		return "", nil
-	}
-	return sess.Edges.ClaudeSession.ClaudeSessionID, nil
-}
-
-// Get retrieves a single session by title
-func (r *EntRepository) Get(ctx context.Context, title string) (*domain.InstanceData, error) {
-	// Find session with all relationships eagerly loaded
-	sess, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.Title(title)),
-		domain.LoadFull,
-	).Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("session not found: %s", title)
-		}
-		return nil, fmt.Errorf("failed to query session: %w", err)
-	}
-
-	// Convert to InstanceData
-	return r.sessionToInstanceData(sess), nil
-}
-
-// listLoadOptions mirrors the eager-loading historically done by List/ListByStatus/ListByTag
-// (worktree, tags, project, claude session+metadata — but NOT diff stats, unlike Get).
-var listLoadOptions = domain.LoadOptions{
-	LoadWorktree:      true,
-	LoadTags:          true,
-	LoadClaudeSession: true,
-}
-
-// applyLoadOptions conditionally chains eager-load edges onto a session query based on
-// options. WithProject() stays unconditional since domain.LoadOptions has no corresponding field
-// and every existing caller expects the project edge to be populated.
-func applyLoadOptions(q *ent.SessionQuery, options domain.LoadOptions) *ent.SessionQuery {
-	if options.LoadWorktree {
-		q = q.WithWorktree()
-	}
-	if options.LoadDiffStats || options.LoadDiffContent {
-		q = q.WithDiffStats()
-	}
-	if options.LoadTags {
-		q = q.WithTags()
-	}
-	q = q.WithProject()
-	if options.LoadClaudeSession {
-		q = q.WithClaudeSession(func(cq *ent.ClaudeSessionQuery) {
-			cq.WithMetadata()
-		})
-	}
-	return q
-}
-
-// List retrieves all sessions from the database
-func (r *EntRepository) List(ctx context.Context) ([]domain.InstanceData, error) {
-	return r.ListWithOptions(ctx, listLoadOptions)
-}
-
-// ListByStatus retrieves sessions filtered by status
-func (r *EntRepository) ListByStatus(ctx context.Context, status domain.Status) ([]domain.InstanceData, error) {
-	// Query sessions by status with relationships
-	sessions, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.Status(int(status))),
-		listLoadOptions,
-	).All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
-	}
-
-	// Convert to InstanceData
-	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-
-	return result, nil
-}
-
-// ListByTag retrieves sessions that have a specific tag
-func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]domain.InstanceData, error) {
-	// Query sessions that have the specified tag
-	sessions, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
-		listLoadOptions,
-	).All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
-	}
-
-	// Convert to InstanceData
-	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-
-	return result, nil
-}
-
 // UpdateGitHubPRNumber persists a discovered PR number for a session.
 // Called by PRStatusPoller when it auto-discovers a PR for a branch-based session.
 func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, prNumber int) error {
@@ -1246,59 +1134,6 @@ func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string
 		return fmt.Errorf("session not found: %s", title)
 	}
 	return tx.Commit()
-}
-
-// GetSessionArtifacts loads the raw JSON artifact blob for a session.
-// Returns ("", nil) if the session exists but has no artifacts stored yet.
-func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (string, error) {
-	sess, err := r.Client.Session.Query().
-		Where(session.Title(title)).
-		Select(session.FieldSessionArtifacts).
-		Only(ctx)
-	if err != nil {
-		return "", fmt.Errorf("GetSessionArtifacts: %w", err)
-	}
-	return sess.SessionArtifacts, nil
-}
-
-// GetAllSessionArtifacts returns a map of title → raw artifacts JSON for all sessions
-// that have a non-empty session_artifacts column. Single query replaces N per-session
-// queries in LoadInstances (M-4 fix).
-func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]string, error) {
-	rows, err := r.Client.Session.Query().
-		Where(session.SessionArtifactsNEQ("")).
-		Select(session.FieldTitle, session.FieldSessionArtifacts).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("GetAllSessionArtifacts: %w", err)
-	}
-	result := make(map[string]string, len(rows))
-	for _, row := range rows {
-		result[row.Title] = row.SessionArtifacts
-	}
-	return result, nil
-}
-
-// GetSessionArtifactsByUUID loads and parses the artifact blob for the session
-// identified by its stable UUID (not its title). Returns (nil, nil) when the
-// session exists but has no stored artifacts. Returns ErrNotFound when no
-// session with that UUID exists.
-func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*domain.SessionArtifactsBlob, error) {
-	sess, err := r.Client.Session.Query().
-		Where(session.UUIDEQ(sessionUUID)).
-		Select(session.FieldSessionArtifacts).
-		Only(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("GetSessionArtifactsByUUID: %w", err)
-	}
-	if sess.SessionArtifacts == "" {
-		return nil, nil //nolint:nilnil // documented contract: no stored artifacts is not an error
-	}
-	var blob domain.SessionArtifactsBlob
-	if err := json.Unmarshal([]byte(sess.SessionArtifacts), &blob); err != nil {
-		return nil, fmt.Errorf("GetSessionArtifactsByUUID: unmarshal: %w", err)
-	}
-	return &blob, nil
 }
 
 // UpdateReviewQueueState efficiently updates only the review-queue interaction fields
@@ -1519,256 +1354,4 @@ func suppressedRuleTagsToSlice(m map[string]bool) []string {
 		}
 	}
 	return out
-}
-
-// suppressedRuleTagsFromSlice is suppressedRuleTagsToSlice's inverse, used when
-// loading a session back from the suppressed_rule_tags JSON column.
-func suppressedRuleTagsFromSlice(s []string) map[string]bool {
-	if len(s) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(s))
-	for _, tag := range s {
-		out[tag] = true
-	}
-	return out
-}
-
-// sessionToInstanceData converts an Ent Session entity to InstanceData
-func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *domain.InstanceData {
-	data := &domain.InstanceData{
-		Title:               sess.Title,
-		UUID:                sess.UUID,
-		Path:                sess.Path,
-		WorkingDir:          sess.WorkingDir,
-		Branch:              sess.Branch,
-		Status:              domain.Status(sess.Status),
-		Height:              sess.Height,
-		Width:               sess.Width,
-		CreatedAt:           sess.CreatedAt,
-		UpdatedAt:           sess.UpdatedAt,
-		AutoYes:             sess.AutoYes,
-		AutoApprove:         sess.AutoApprove,
-		AutonomousMode:      sess.AutonomousMode,
-		Prompt:              sess.Prompt,
-		InitialPrompt:       sess.InitialPrompt,
-		Program:             sess.Program,
-		ExistingWorktree:    sess.ExistingWorktree,
-		Category:            sess.Category,
-		Note:                sess.Note,
-		IsExpanded:          sess.IsExpanded,
-		TmuxPrefix:          sess.TmuxPrefix,
-		Backend:             domain.ProcessManagerBackend(sess.Backend),
-		TymuxSessionID:      sess.TymuxSessionID,
-		LastOutputSignature: sess.LastOutputSignature,
-		MCPServerURL:        sess.McpServerURL,
-		OneShot:             sess.OneShot,
-		Hidden:              sess.Hidden,
-		Pinned:              sess.Pinned,
-	}
-
-	// Set optional time fields
-	if sess.LastTerminalUpdate != nil {
-		data.LastTerminalUpdate = *sess.LastTerminalUpdate
-	}
-	if sess.LastMeaningfulOutput != nil {
-		data.LastMeaningfulOutput = *sess.LastMeaningfulOutput
-	}
-	if sess.LastAddedToQueue != nil {
-		data.LastAddedToQueue = *sess.LastAddedToQueue
-	}
-	if sess.LastViewed != nil {
-		data.LastViewed = *sess.LastViewed
-	}
-	if sess.LastAcknowledged != nil {
-		data.LastAcknowledged = *sess.LastAcknowledged
-	}
-	if sess.LastUserResponse != nil {
-		data.LastUserResponse = *sess.LastUserResponse
-	}
-	if sess.ProcessingGraceUntil != nil {
-		data.ProcessingGraceUntil = *sess.ProcessingGraceUntil
-	}
-	if sess.LastPromptDetected != nil {
-		data.LastPromptDetected = *sess.LastPromptDetected
-	}
-	if sess.InitialPromptSentAt != nil {
-		data.InitialPromptSentAt = *sess.InitialPromptSentAt
-	}
-	data.LastPromptSignature = sess.LastPromptSignature
-	data.PauseReason = sess.PauseReason
-	data.ExitReason = sess.ExitReason
-	data.WorkflowID = sess.WorkflowID
-	data.ArchivedAt = sess.ArchivedAt
-	if sess.CreationProgressUpdatedAt != nil {
-		data.CreationProgressUpdatedAt = *sess.CreationProgressUpdatedAt
-	}
-	data.GitHubPRURL = sess.GithubPrURL
-	data.GitHubPRNumber = sess.GithubPrNumber
-	data.GitHubPRStatusTerminal = sess.GithubPrStatusTerminal
-	data.GitHubOwner = sess.GithubOwner
-	data.GitHubRepo = sess.GithubRepo
-	data.GitHubHost = sess.GithubHost
-
-	// Set session type
-	if sess.SessionType != "" {
-		data.SessionType = domain.SessionType(sess.SessionType)
-	}
-
-	// Convert worktree if present
-	if sess.Edges.Worktree != nil {
-		data.Worktree = domain.GitWorktreeData{
-			RepoPath:      sess.Edges.Worktree.RepoPath,
-			WorktreePath:  sess.Edges.Worktree.WorktreePath,
-			SessionName:   sess.Edges.Worktree.SessionName,
-			BranchName:    sess.Edges.Worktree.BranchName,
-			BaseCommitSHA: sess.Edges.Worktree.BaseCommitSha,
-		}
-	}
-
-	// Convert diff stats if present
-	if sess.Edges.DiffStats != nil {
-		data.DiffStats = domain.DiffStatsData{
-			Added:   sess.Edges.DiffStats.Added,
-			Removed: sess.Edges.DiffStats.Removed,
-			Content: sess.Edges.DiffStats.Content,
-		}
-	}
-
-	// Convert tags
-	if len(sess.Edges.Tags) > 0 {
-		data.Tags = make([]string, len(sess.Edges.Tags))
-		for i, t := range sess.Edges.Tags {
-			data.Tags[i] = t.Name
-		}
-	}
-
-	// RuleTagProvenance/SuppressedRuleTags (ADR-002). A pre-migration row lacking
-	// these JSON columns decodes both to nil maps via ent's Default(), never an
-	// error — same backward-compat shape as the Category->Tags shim above.
-	data.RuleTagProvenance = sess.RuleTagProvenance
-	data.SuppressedRuleTags = suppressedRuleTagsFromSlice(sess.SuppressedRuleTags)
-
-	// Populate project ID from project edge (stored as name for string compatibility)
-	if sess.Edges.Project != nil {
-		data.ProjectID = sess.Edges.Project.Name
-	}
-
-	// Convert Claude session if present
-	if sess.Edges.ClaudeSession != nil {
-		cs := sess.Edges.ClaudeSession
-		data.ClaudeSession = domain.ClaudeSessionData{
-			ConversationUUID: cs.ClaudeSessionID,
-			SquadSessionID:   cs.ConversationID,
-			ProjectName:      cs.ProjectName,
-			Settings: domain.ClaudeSettings{
-				AutoReattach:          cs.AutoReattach,
-				PreferredSessionName:  cs.PreferredSessionName,
-				CreateNewOnMissing:    cs.CreateNewOnMissing,
-				ShowSessionSelector:   cs.ShowSessionSelector,
-				SessionTimeoutMinutes: cs.SessionTimeoutMinutes,
-			},
-		}
-
-		// Set optional time field
-		if cs.LastAttached != nil {
-			data.ClaudeSession.LastAttached = *cs.LastAttached
-		}
-
-		// Convert metadata
-		if len(cs.Edges.Metadata) > 0 {
-			data.ClaudeSession.Metadata = make(map[string]string)
-			for _, m := range cs.Edges.Metadata {
-				data.ClaudeSession.Metadata[m.Key] = m.Value
-			}
-		}
-	}
-
-	return data
-}
-
-// GetWithOptions retrieves a single session with selective child data loading.
-func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options domain.LoadOptions) (*domain.InstanceData, error) {
-	sess, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.Title(title)),
-		options,
-	).Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("session not found: %s", title)
-		}
-		return nil, fmt.Errorf("failed to query session: %w", err)
-	}
-	return r.sessionToInstanceData(sess), nil
-}
-
-// FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
-// InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
-// selective child data loading. Returns domain.ErrInstanceDataNotFound when no match exists,
-// including for id == "" — uuid has no uniqueness constraint, so an empty id would
-// otherwise match every session that has never had a UUID assigned.
-func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options domain.LoadOptions) (*domain.InstanceData, error) {
-	if id == "" {
-		return nil, domain.ErrInstanceDataNotFound
-	}
-	sess, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
-		options,
-	).First(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, domain.ErrInstanceDataNotFound
-		}
-		return nil, fmt.Errorf("failed to query session by id %s: %w", id, err)
-	}
-	return r.sessionToInstanceData(sess), nil
-}
-
-// ListWithOptions retrieves all sessions with selective child data loading.
-func (r *EntRepository) ListWithOptions(ctx context.Context, options domain.LoadOptions) ([]domain.InstanceData, error) {
-	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via domain.LoadOptions, not row filtering.
-	sessions, err := applyLoadOptions(r.Client.Session.Query(), options).All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions: %w", err)
-	}
-
-	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-	return result, nil
-}
-
-// ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
-func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status domain.Status, options domain.LoadOptions) ([]domain.InstanceData, error) {
-	sessions, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.Status(int(status))),
-		options,
-	).All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions by status: %w", err)
-	}
-
-	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-	return result, nil
-}
-
-// ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
-func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string, options domain.LoadOptions) ([]domain.InstanceData, error) {
-	sessions, err := applyLoadOptions(
-		r.Client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
-		options,
-	).All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions by tag: %w", err)
-	}
-
-	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *r.sessionToInstanceData(s)
-	}
-	return result, nil
 }
