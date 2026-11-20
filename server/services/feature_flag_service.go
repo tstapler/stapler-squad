@@ -218,6 +218,9 @@ func FlagRegistry(extra ...[]featureflags.Spec) *featureflags.Registry {
 // It reads the featureflags registry (featureflags.Current) and owns the per-name FeatureController map.
 // Extracted from SessionService per ADR-001 (UpdateFeatureFlag exceeds the 30-line threshold).
 type FeatureFlagService struct {
+	// registry is the injected flag registry; nil means the process registry (featureflags.Current).
+	registry *featureflags.Registry
+
 	// featureControllers maps feature flag names to their runtime controllers.
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
@@ -253,6 +256,20 @@ type FeatureFlagService struct {
 // for each flag that has an in-process runtime component.
 func NewFeatureFlagService() *FeatureFlagService {
 	return &FeatureFlagService{}
+}
+
+// NewFeatureFlagServiceWithRegistry creates a FeatureFlagService that resolves every flag against reg instead of
+// the process registry, so it works with no featureflags.SetCurrent call.
+func NewFeatureFlagServiceWithRegistry(reg *featureflags.Registry) *FeatureFlagService {
+	return &FeatureFlagService{registry: reg}
+}
+
+// reg returns the injected registry, or the process registry when none was injected.
+func (f *FeatureFlagService) reg() *featureflags.Registry {
+	if f.registry != nil {
+		return f.registry
+	}
+	return featureflags.Current()
 }
 
 // SetFeatureController wires a runtime controller for the named feature flag.
@@ -315,7 +332,7 @@ func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*c
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
-	parts := autonomyFlagStatusDetail(name, cfg)
+	parts := autonomyFlagStatusDetail(name, cfg, f.reg())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(cfg); d != "" {
 			parts = append(parts, d)
@@ -327,7 +344,7 @@ func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) st
 // autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
 // On does nothing ("inactive: requires <flag>", parsed by the Features page) and
 // whether its value is the registry default or was set explicitly.
-func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+func autonomyFlagStatusDetail(name string, cfg *config.Config, reg *featureflags.Registry) []string {
 	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
 		return nil
 	}
@@ -345,7 +362,7 @@ func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
 	if value, explicit := cfg.FeatureFlags[name]; explicit {
 		parts = append(parts, "Set explicitly: "+onOff(value))
 	} else {
-		parts = append(parts, "Default: "+onOff(FeatureFlagDefault(name))+" (not set explicitly)")
+		parts = append(parts, "Default: "+onOff(reg.Default(name))+" (not set explicitly)")
 	}
 	return parts
 }
@@ -385,7 +402,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 ) (*connect.Response[sessionv1.GetFeatureFlagsResponse], error) {
 	cfg := config.LoadConfig()
 
-	specs := featureflags.Current().Specs()
+	specs := f.reg().Specs()
 	flags := make([]*sessionv1.FeatureFlag, 0, len(specs))
 	for _, kf := range specs {
 		enabled := cfg.GetFeatureFlagWithDefault(kf.Name, kf.Default)
@@ -422,20 +439,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	name := req.Msg.GetName()
 
 	// Validate that the flag name is known.
-	spec, known := featureflags.Current().Lookup(name)
+	spec, known := f.reg().Lookup(name)
 	description, scopes := spec.Description, spec.Scopes
 	if !known {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, featureflags.Current().Names()))
+			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, f.reg().Names()))
 	}
-	op, err := parseFlagOp(req.Msg, scopes)
+	op, err := parseFlagOp(req.Msg, scopes, f.reg())
 	if err != nil {
 		return nil, err
 	}
 
 	// Only the way on is guarded: disabling and resetting the global value are
 	// never refused. Clearing a scope is guarded only when it turns the kind on.
-	if op.enabling() || clearTurnsKindOn(op) {
+	if op.enabling() || clearTurnsKindOn(op, f.reg()) {
 		if guard, ok := f.enableGuards[name]; ok {
 			if reason := guard(); reason != "" {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -474,7 +491,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	}
 
 	cfg := config.LoadConfig()
-	enabled := cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
+	enabled := f.reg().Enabled(cfg, name)
 	if op.scope == "" && op.isSet() {
 		enabled = op.enabled // the controller-backed state, as before this change
 	}
@@ -503,7 +520,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
-			previous = FeatureFlagDefault(name)
+			previous = f.reg().Default(name)
 		}
 		// In-memory mutators: UpdateConfig saves once, so the saving setters
 		// here would fsync config.json twice per flip.

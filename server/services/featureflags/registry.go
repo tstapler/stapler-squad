@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"slices"
 	"sync/atomic"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 // Spec is the static description of one feature flag.
@@ -68,6 +70,16 @@ func (r *Registry) Names() []string {
 func (r *Registry) Default(name string) bool {
 	s, _ := r.Lookup(name)
 	return s.Default
+}
+
+// Enabled resolves name against cfg, falling back to the registered default when cfg has no explicit value.
+func (r *Registry) Enabled(cfg *config.Config, name string) bool {
+	return cfg.GetFeatureFlagWithDefault(name, r.Default(name))
+}
+
+// EnabledScoped resolves name for scope against cfg: the scope override, else the global value, else the default.
+func (r *Registry) EnabledScoped(cfg *config.Config, name, scope string) bool {
+	return cfg.GetFeatureFlagScoped(name, scope, r.Default(name))
 }
 
 var current atomic.Pointer[Registry]

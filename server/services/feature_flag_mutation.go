@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 // globalScopeLiteral is the scope a client sends for a global set, so a client
@@ -56,13 +57,13 @@ func (o flagOp) enabling() bool {
 
 // clearTurnsKindOn reports whether a CLEAR_SCOPE removes an explicit false
 // override while the global value is on, so the kind starts following global on.
-func clearTurnsKindOn(o flagOp) bool {
+func clearTurnsKindOn(o flagOp, reg *featureflags.Registry) bool {
 	if o.mutation != sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE {
 		return false
 	}
 	cfg := config.LoadConfig()
 	override, ok := cfg.GetFeatureFlagScopedOverride(o.name, o.scope)
-	return ok && !override && cfg.GetFeatureFlagWithDefault(o.name, FeatureFlagDefault(o.name))
+	return ok && !override && reg.Enabled(cfg, o.name)
 }
 
 func (o flagOp) mutationName() string {
@@ -83,7 +84,7 @@ func invalidFlagRequest(format string, args ...any) error {
 
 // parseFlagOp validates scope and mutation against the flag's registry entry.
 // Nothing is read or written here: a refused request changes no persisted value.
-func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string) (flagOp, error) {
+func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string, reg *featureflags.Registry) (flagOp, error) {
 	op := flagOp{name: req.GetName(), mutation: req.GetMutation(), scope: req.GetScope(), enabled: req.GetEnabled()}
 	validKind := func() error {
 		for _, s := range scopes {
@@ -128,7 +129,7 @@ func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string) (flag
 		if op.scope != "" {
 			return op, invalidFlagRequest("RESET_GLOBAL takes no scope, got %q", op.scope)
 		}
-		op.enabled = FeatureFlagDefault(op.name)
+		op.enabled = reg.Default(op.name)
 	default:
 		return op, invalidFlagRequest("unknown flag mutation %d", int32(op.mutation))
 	}
@@ -159,7 +160,7 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 		cfg = c
 		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
 		if !hadKey {
-			previous = c.GetFeatureFlagWithDefault(op.name, FeatureFlagDefault(op.name))
+			previous = f.reg().Enabled(c, op.name)
 		}
 		if op.isSet() {
 			c.ApplyFeatureFlagScope(op.name, op.scope, op.enabled)
@@ -178,7 +179,7 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	}
 	effective := op.enabled
 	if !op.isSet() {
-		effective = cfg.GetFeatureFlagWithDefault(op.name, FeatureFlagDefault(op.name))
+		effective = f.reg().Enabled(cfg, op.name)
 		if audit.active() {
 			audit.enabled = effective
 		}
