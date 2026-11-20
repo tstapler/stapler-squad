@@ -87,3 +87,19 @@ func TestRegistryEnabledAndScoped(t *testing.T) {
 		t.Fatal("an explicit global value beats the default")
 	}
 }
+
+func TestRegistryEnabledScoped_ScopeOverrideBeatsExplicitGlobal(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry([]Spec{{Name: "f", Scopes: []string{"s", "other"}}})
+	for _, global := range []bool{true, false} {
+		cfg := config.DefaultConfig()
+		cfg.ApplyFeatureFlag("f", global)
+		cfg.ApplyFeatureFlagScope("f", "s", !global)
+		if got := r.EnabledScoped(cfg, "f", "s"); got != !global {
+			t.Fatalf("global=%v: scope override must win, got %v", global, got)
+		}
+		if got := r.EnabledScoped(cfg, "f", "other"); got != global {
+			t.Fatalf("global=%v: an unset scope must fall through to the global value, got %v", global, got)
+		}
+	}
+}

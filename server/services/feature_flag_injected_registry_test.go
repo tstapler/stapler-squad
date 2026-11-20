@@ -168,3 +168,20 @@ func TestFeatureFlagService_ShouldReportInjectedDefaultInNudgeStatusDetail_WhenF
 	require.Len(t, resp.Msg.Flags, 1)
 	assert.Contains(t, resp.Msg.Flags[0].StatusDetail, want)
 }
+
+func TestFlagChangeAudit_ShouldRecordInjectedDefaultAsPrevious_WhenScopedFlipOfUnsetFlagApplies(t *testing.T) {
+	e := newAuditEnv(t)
+	injected := !featureflags.Current().Default(gateFlag)
+	e.svc = NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{
+		{Name: gateFlag, Default: injected, Scopes: []string{injScope}},
+	}))
+	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{gateFlag: {}})
+	_, err := mutateFlag(e.svc, gateFlag, setOn, injScope)
+	require.NoError(t, err)
+	e.sink.Close()
+
+	got := e.lines(t)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].Previous)
+	assert.Equal(t, injected, *got[0].Previous, "no persisted key: previous is the injected default, not the process registry's")
+}
