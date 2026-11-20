@@ -13,5 +13,8 @@ var ErrNotFound = errors.New("not found")
 // the agent, so RestoreWithWorkDir must return this instead; callers treat it as "not started yet".
 var ErrLaunchNotWired = errors.New("launch command not wired")
 
+// ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
+var ErrInstanceDataNotFound = errors.New("instance data not found")
+
 // ErrConflict is returned when an operation would violate a uniqueness constraint.
 var ErrConflict = errors.New("conflict")

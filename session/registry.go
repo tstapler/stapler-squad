@@ -81,7 +81,7 @@ func (r *Registry) Acquire(sessionID string) (*instance.LiveInstance, ReleaseFun
 	r.mu.Unlock() // release before storage I/O — construction must not block unrelated Acquires
 
 	data, err := r.storage.FindInstanceDataByID(sessionID)
-	if errors.Is(err, ErrInstanceDataNotFound) {
+	if errors.Is(err, domain.ErrInstanceDataNotFound) {
 		return nil, nil, ErrSessionNotFound
 	}
 	if err != nil {

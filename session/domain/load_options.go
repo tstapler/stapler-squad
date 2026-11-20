@@ -1,4 +1,4 @@
-package session
+package domain
 
 // LoadOptions controls what child data is loaded for sessions.
 // This allows selective loading to optimize performance by avoiding unnecessary data retrieval.

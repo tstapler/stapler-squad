@@ -624,8 +624,8 @@ func TestStorage_UpdateInstance(t *testing.T) {
 	err := storage.UpdateInstance(inst)
 	require.NoError(t, err)
 
-	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
-	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// ListInstanceData uses domain.LoadMinimal, which intentionally skips the Tags
+	// edge (see domain.LoadOptions.LoadTags doc comment) — read back via LoadInstances
 	// instead, which eager-loads tags, to verify persistence.
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -834,8 +834,8 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	err := storage.SaveInstancesSync([]*instance.Instance{inst})
 	require.NoError(t, err)
 
-	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
-	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// ListInstanceData uses domain.LoadMinimal, which intentionally skips the Tags
+	// edge (see domain.LoadOptions.LoadTags doc comment) — read back via LoadInstances
 	// instead, which eager-loads tags, to verify persistence.
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)

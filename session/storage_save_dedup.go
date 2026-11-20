@@ -37,12 +37,6 @@ type sectionSums struct {
 	diff, tags, worktree, claude [sha256.Size]byte
 }
 
-// updateSkip names the child-table sections Update must leave alone because the
-// row already holds exactly this data.
-type updateSkip struct {
-	DiffStats, Tags, Worktree, Claude bool
-}
-
 func hashJSON(parts ...any) (sum [sha256.Size]byte) {
 	h := sha256.New()
 	for _, p := range parts {
@@ -69,10 +63,10 @@ func sectionsOf(data domain.InstanceData) sectionSums {
 	}
 }
 
-func (s sectionSums) skipAgainst(prev sectionSums) updateSkip {
+func (s sectionSums) skipAgainst(prev sectionSums) domain.UpdateSkip {
 	var zero [sha256.Size]byte
 	same := func(a, b [sha256.Size]byte) bool { return a == b && a != zero }
-	return updateSkip{
+	return domain.UpdateSkip{
 		DiffStats: same(s.diff, prev.diff),
 		Tags:      same(s.tags, prev.tags),
 		Worktree:  same(s.worktree, prev.worktree),
@@ -110,12 +104,12 @@ func fingerprintInstanceData(data domain.InstanceData) (sum [sha256.Size]byte, o
 // last row written; without it, two racing saves could leave a stale
 // fingerprint that makes a later save of newer data look unchanged. Writes
 // already serialize on the single writer connection, so this adds no waiting.
-func (f *savedFingerprints) persist(data domain.InstanceData, write func(skip updateSkip) bool) {
+func (f *savedFingerprints) persist(data domain.InstanceData, write func(skip domain.UpdateSkip) bool) {
 	sum, hashed := fingerprintInstanceData(data)
 	secs := sectionsOf(data)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var skip updateSkip
+	var skip domain.UpdateSkip
 	if prev, seen := f.m[data.Title]; seen {
 		if hashed && prev.whole == sum {
 			return

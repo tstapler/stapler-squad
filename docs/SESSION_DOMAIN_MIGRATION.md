@@ -86,7 +86,7 @@ s := inst.ToSession()  // Or session.InstanceToSession(inst)
 inst2 := session.SessionToInstance(s)
 
 // Convert LoadOptions to ContextOptions
-oldOpts := session.LoadSummary
+oldOpts := domain.LoadSummary
 newOpts := session.FromLoadOptions(oldOpts)
 
 // Convert ContextOptions to LoadOptions

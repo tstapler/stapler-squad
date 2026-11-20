@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -39,7 +38,7 @@ func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceDat
 			return &data, nil
 		}
 	}
-	return nil, session.ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 
 func (f *fakeInstanceStore) SaveInstances([]*instance.Instance) error { return nil }
