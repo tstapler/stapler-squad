@@ -175,7 +175,7 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *instance.Instanc
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
 	s.saved.persist(data, func(skip domain.UpdateSkip) bool {
-		if err := s.Repo.updateSkipping(ctx, data, skip); err != nil {
+		if err := s.Repo.UpdateSkipping(ctx, data, skip); err != nil {
 			// Not found → create it
 			if createErr := s.Repo.Create(ctx, data); createErr != nil {
 				log.Error("SaveInstances: failed to upsert instance",
@@ -381,7 +381,7 @@ func (s *Storage) ListInstanceDataWithWorktree() ([]domain.InstanceData, error) 
 // server restart. This is the storage-only counterpart to Instance.SetArchivedAtIfNilAndStop,
 // used as ArchiveSessionByUUID's fallback so terminal-transition and safety-net archival
 // sweeps don't silently no-op just because a session isn't currently being polled. Read-
-// modify-write on the full InstanceData row (not a partial struct), so EntRepository.Update's
+// modify-write on the full InstanceData row (not a partial struct), so instancestore.Instances.Update's
 // guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
 // Returns false (no error) if the session doesn't exist or is already archived, matching
 // SetArchivedAtIfNilAndStop's CAS semantics.

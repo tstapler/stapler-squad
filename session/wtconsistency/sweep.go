@@ -642,7 +642,7 @@ func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.N
 // repairWorktreeRow creates a Worktree ent row for sessionUUID from wt, inside a single
 // transaction that also re-verifies no row was created between classifyIssues and this
 // call (Task 1.2.3b's CAS-style guard, mirroring pitfalls.md §1) — deliberately scoped to
-// only the Worktree row: EntRepository.Update (ent_repository.go:471-666) is this
+// only the Worktree row: EntRepository.Update (session/instancestore/update.go) is this
 // codebase's only other Worktree-row write path, but it is keyed by session Title and
 // unconditionally rewrites many unrelated Session fields (Note, RuleTagProvenance,
 // PauseReason, ArchivedAt, WorkflowID, and more) to their zero value when not set on the
