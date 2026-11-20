@@ -266,10 +266,19 @@ func NewFeatureFlagServiceWithRegistry(reg *featureflags.Registry) *FeatureFlagS
 
 // reg returns the injected registry, or the process registry when none was injected.
 func (f *FeatureFlagService) reg() *featureflags.Registry {
-	if f.registry != nil {
-		return f.registry
+	if r := f.injected(); r != nil {
+		return r
 	}
 	return featureflags.Current()
+}
+
+// injected returns the registry given at construction, or nil. It never touches the process registry, so
+// callers that wire flagReaders at construction time stay safe where no SetCurrent ran; nil-receiver safe.
+func (f *FeatureFlagService) injected() *featureflags.Registry {
+	if f == nil {
+		return nil
+	}
+	return f.registry
 }
 
 // SetFeatureController wires a runtime controller for the named feature flag.

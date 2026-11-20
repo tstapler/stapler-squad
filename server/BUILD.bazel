@@ -230,6 +230,7 @@ go_test(
         "actuator_terminal_mux_test.go",
         "actuator_test.go",
         "actuator_workflow_engine_w21a_test.go",
+        "attention_options_injected_test.go",
         "attention_options_test.go",
         "backlog_engine_status_chain_test.go",
         "backlog_flow_wiring_test.go",
