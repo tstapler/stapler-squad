@@ -375,6 +375,7 @@ go_test(
         "instance_claude_test.go",
         "instance_cold_restore_test.go",
         "instance_control_mode_ownership_test.go",
+        "instance_data_not_found_test.go",
         "instance_fork_test.go",
         "instance_identity_seam_test.go",
         "instance_last_acknowledged_test.go",
