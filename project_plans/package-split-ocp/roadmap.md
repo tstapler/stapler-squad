@@ -348,7 +348,7 @@ Answered on 2026-11-19 (see the linked plans for the measured follow-through):
 
 - **Q2, answered YES: do the backlogsvc in-place OCP refactors, as small PRs.** Sizing found candidates 1 (admission step slice), 2 (`CacheInvalidator`) and 4 (headless role table in `session/domain/headless_roles.go`) already existed; only candidate 3 (headless caller wiring into its own file) was real work, shipped as #1708. See [backlogsvc-ocp-plan.md](backlogsvc-ocp-plan.md).
 - **Q3, answered: inject the `Registry` everywhere; no once-set global accessor.** Staged removal of `featureflags.Current()`: [flags-stage2-plan.md](flags-stage2-plan.md) (slices 1-7 landed; slice 7 deleted the global).
-- **E11 core (not a numbered question), owner approved starting the instance DTO lowering.** Staged plan I0-I6: [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md) (I0 landed in #1707).
+- **E11 core (not a numbered question), owner approved starting the instance DTO lowering.** Staged plan I0-I6: [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md) (I0 to I5 landed in #1707, #1712, #1714, #1715, #1719, #1721; I6 is the close-out: docs and budget ratchet). `ent_repository.go` is now the constructor, `initStores`, `GetEntClient`, `MaintenanceDriver` and `Close` (305 lines).
 
 Still open (no owner answer recorded):
 
