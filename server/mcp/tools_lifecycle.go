@@ -41,6 +41,9 @@ type lifecycleHandlers struct {
 	// Nudge session — see diagnose_role_gate.go's denyIfDiagnoseCaller. May
 	// be nil (no restriction applied; matches pre-fix behavior).
 	diagnoseCheck diagnoseCallerCheck
+	// publicURL is the instance's externally reachable UI base (STAPLER_SQUAD_PUBLIC_URL);
+	// empty means create_session returns no ui_url.
+	publicURL string
 }
 
 // CreateSessionResult is returned by create_session.
@@ -53,6 +56,8 @@ type CreateSessionResult struct {
 	// successfully created and is genuinely still resolving, not failed or
 	// broken. Use get_session to check on it.
 	StillCreating bool `json:"still_creating,omitempty"`
+	// UIURL links to the session in the web UI; set only when STAPLER_SQUAD_PUBLIC_URL is configured.
+	UIURL string `json:"ui_url,omitempty"`
 	// ProgramWarning is set (non-fatally) when program isn't among the
 	// programs currently registered — see programWarningFor.
 	ProgramWarning string `json:"program_warning,omitempty"`
@@ -279,6 +284,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 		MCPResult:      MCPResult{Success: true},
 		Session:        &detail,
 		ProgramWarning: programWarning,
+		UIURL:          sessionUIURL(lh.publicURL, detail.ID),
 	}), nil
 }
 

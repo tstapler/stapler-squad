@@ -95,7 +95,7 @@ func newDiscoveryModule(store session.InstanceStore) ToolModule {
 
 func newLifecycleModule(store session.InstanceStore, svc *services.SessionService, diagnoseCheck diagnoseCallerCheck) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
-		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck})
+		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck, publicURL: publicURLFromEnv()})
 	})
 }
 
