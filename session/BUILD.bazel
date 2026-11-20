@@ -368,7 +368,6 @@ go_test(
         "history_messages_test.go",
         "history_reload_test.go",
         "history_test.go",
-        "history_watcher_fsevents_darwin_test.go",
         "history_wiring_test.go",
         "hostclaim_testdoubles_test.go",
         "hot_restore_test.go",
