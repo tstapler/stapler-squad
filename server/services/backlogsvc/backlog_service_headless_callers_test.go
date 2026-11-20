@@ -142,3 +142,28 @@ func TestResolveHeadlessCaller_should_SkipSelector_When_ProgramIsNotKnownBackend
 	assert.Equal(t, "no-such-backend", configured)
 	assert.Equal(t, "unsupported_program", reason)
 }
+
+func TestResolveHeadlessCaller_should_ReturnDefaultCallerWithoutFallback_When_PoolNeverSetAndProgramIsClaude(t *testing.T) {
+	t.Parallel()
+	svc := NewBacklogService(svctest.CreateTestStorage(t), nil, nil, nil, nil, nil)
+
+	caller, configured, reason := svc.resolveHeadlessCaller("claude", "item-1", "triage")
+	assert.Nil(t, caller, "no pool wired: the default claude caller is the (nil) headlessPool")
+	assert.Empty(t, configured)
+	assert.Empty(t, reason, "explicit claude is never reported as a fallback")
+}
+
+func TestResolveHeadlessCaller_should_PassPerStageFeatureKeyToSelector(t *testing.T) {
+	t.Parallel()
+	svc, _ := newHeadlessCallersSvc(t)
+	sel := headless.NewSelector(nil)
+	var seen []string
+	sel.SetFallbackRecorder(func(r headless.Resolution) { seen = append(seen, r.Feature) })
+	svc.SetBackendSelector(sel)
+
+	for _, stage := range []string{"triage", "review"} {
+		_, _, reason := svc.resolveHeadlessCaller(headless.BackendGemini, "item-1", stage)
+		require.Equal(t, "unsupported_program", reason)
+	}
+	assert.Equal(t, []string{"triage", "review"}, seen, "selector must see each stage as its feature key")
+}
