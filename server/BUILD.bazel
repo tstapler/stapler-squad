@@ -24,6 +24,7 @@ go_library(
         "dependencies_llm.go",
         "dependencies_workflow_engine.go",
         "escape_events_migration.go",
+        "flag_gates.go",
         "guarded_procedures.go",
         "guidance_mirror_wiring.go",
         "hook_ipc.go",
