@@ -117,7 +117,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.persist(domain.InstanceData{Title: "t"}, func(updateSkip) bool {
+		f.persist(domain.InstanceData{Title: "t"}, func(domain.UpdateSkip) bool {
 			close(inWrite)
 			<-release
 			return true
@@ -139,17 +139,17 @@ func TestWriteRow_Should_ForgetAfterWrite(t *testing.T) {
 	t.Parallel()
 	s := &Storage{}
 	data := domain.InstanceData{Title: "t"}
-	s.saved.persist(data, func(updateSkip) bool { return true })
+	s.saved.persist(data, func(domain.UpdateSkip) bool { return true })
 
 	err := s.writeRow("t", func() error {
 		// simulates a save racing with the write and re-recording the title
-		s.saved.persist(data, func(updateSkip) bool { return true })
+		s.saved.persist(data, func(domain.UpdateSkip) bool { return true })
 		return nil
 	})
 	require.NoError(t, err)
 
 	wrote := false
-	s.saved.persist(data, func(updateSkip) bool { wrote = true; return true })
+	s.saved.persist(data, func(domain.UpdateSkip) bool { wrote = true; return true })
 	assert.True(t, wrote, "fingerprint recorded during the write must not survive it")
 }
 
@@ -261,9 +261,9 @@ func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *tes
 	require.Len(t, got, 1, "an unchanged instance deleted from storage must be re-created by the next save")
 }
 
-func recordSkip(f *savedFingerprints, data domain.InstanceData, ok bool) updateSkip {
-	var got updateSkip
-	f.persist(data, func(skip updateSkip) bool { got = skip; return ok })
+func recordSkip(f *savedFingerprints, data domain.InstanceData, ok bool) domain.UpdateSkip {
+	var got domain.UpdateSkip
+	f.persist(data, func(skip domain.UpdateSkip) bool { got = skip; return ok })
 	return got
 }
 
@@ -276,21 +276,21 @@ func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
 	scalar := base
 	scalar.Tags = []string{"a", "b"} // reorder is not a change
 	scalar.Path = "/other"
-	assert.Equal(t, updateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, recordSkip(&f, scalar, true),
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, recordSkip(&f, scalar, true),
 		"a session-column change must skip every child section")
 
 	diff := scalar
 	diff.DiffStats.Content = "y"
-	assert.Equal(t, updateSkip{Tags: true, Worktree: true, Claude: true}, recordSkip(&f, diff, true))
+	assert.Equal(t, domain.UpdateSkip{Tags: true, Worktree: true, Claude: true}, recordSkip(&f, diff, true))
 
 	tags := diff
 	tags.Tags = []string{"a", "c"}
-	assert.Equal(t, updateSkip{DiffStats: true, Worktree: true, Claude: true}, recordSkip(&f, tags, true))
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Worktree: true, Claude: true}, recordSkip(&f, tags, true))
 
 	wt := tags
 	wt.Worktree.BranchName = "br"
 	wt.ClaudeSession.ConversationUUID = "conv"
-	assert.Equal(t, updateSkip{DiffStats: true, Tags: true}, recordSkip(&f, wt, true))
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true}, recordSkip(&f, wt, true))
 }
 
 // A failed write rolls back, so the row still holds the previous data: the next
@@ -312,7 +312,7 @@ func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
 func TestPersist_Should_WriteEverything_When_TitleUnseen(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	assert.Equal(t, updateSkip{}, recordSkip(&f, domain.InstanceData{Title: "new"}, true))
+	assert.Equal(t, domain.UpdateSkip{}, recordSkip(&f, domain.InstanceData{Title: "new"}, true))
 }
 
 // End to end: skipping unchanged sections must not lose a changed one.
@@ -347,7 +347,7 @@ func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
 
 	bad := base
 	bad.CreatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) // json.Marshal fails: year out of range
-	f.persist(bad, func(updateSkip) bool { return true })
+	f.persist(bad, func(domain.UpdateSkip) bool { return true })
 
-	assert.Equal(t, updateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
+	assert.Equal(t, domain.UpdateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
 }

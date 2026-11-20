@@ -565,12 +565,12 @@ func createClaudeRows(ctx context.Context, tx *ent.Tx, sessionID int, data domai
 
 // Update modifies an existing session in the database
 func (r *EntRepository) Update(ctx context.Context, data domain.InstanceData) error {
-	return r.updateSkipping(ctx, data, updateSkip{})
+	return r.updateSkipping(ctx, data, domain.UpdateSkip{})
 }
 
 // updateSkipping is Update minus the child-table sections the caller knows are
 // already persisted unchanged (see savedFingerprints).
-func (r *EntRepository) updateSkipping(ctx context.Context, data domain.InstanceData, skip updateSkip) error {
+func (r *EntRepository) updateSkipping(ctx context.Context, data domain.InstanceData, skip domain.UpdateSkip) error {
 	// Start transaction
 	tx, err := r.Client.Tx(ctx)
 	if err != nil {
@@ -1102,7 +1102,7 @@ func (r *EntRepository) Get(ctx context.Context, title string) (*domain.Instance
 	// Find session with all relationships eagerly loaded
 	sess, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.Title(title)),
-		LoadFull,
+		domain.LoadFull,
 	).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -1117,16 +1117,16 @@ func (r *EntRepository) Get(ctx context.Context, title string) (*domain.Instance
 
 // listLoadOptions mirrors the eager-loading historically done by List/ListByStatus/ListByTag
 // (worktree, tags, project, claude session+metadata — but NOT diff stats, unlike Get).
-var listLoadOptions = LoadOptions{
+var listLoadOptions = domain.LoadOptions{
 	LoadWorktree:      true,
 	LoadTags:          true,
 	LoadClaudeSession: true,
 }
 
 // applyLoadOptions conditionally chains eager-load edges onto a session query based on
-// options. WithProject() stays unconditional since LoadOptions has no corresponding field
+// options. WithProject() stays unconditional since domain.LoadOptions has no corresponding field
 // and every existing caller expects the project edge to be populated.
-func applyLoadOptions(q *ent.SessionQuery, options LoadOptions) *ent.SessionQuery {
+func applyLoadOptions(q *ent.SessionQuery, options domain.LoadOptions) *ent.SessionQuery {
 	if options.LoadWorktree {
 		q = q.WithWorktree()
 	}
@@ -1688,7 +1688,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *domain.Instanc
 }
 
 // GetWithOptions retrieves a single session with selective child data loading.
-func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*domain.InstanceData, error) {
+func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options domain.LoadOptions) (*domain.InstanceData, error) {
 	sess, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.Title(title)),
 		options,
@@ -1704,12 +1704,12 @@ func (r *EntRepository) GetWithOptions(ctx context.Context, title string, option
 
 // FindByIDWithOptions retrieves a single session by stable UUID or title (mirroring
 // InstanceData.MatchesID's dual-key lookup) via an indexed WHERE clause, with
-// selective child data loading. Returns ErrInstanceDataNotFound when no match exists,
+// selective child data loading. Returns domain.ErrInstanceDataNotFound when no match exists,
 // including for id == "" — uuid has no uniqueness constraint, so an empty id would
 // otherwise match every session that has never had a UUID assigned.
-func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options LoadOptions) (*domain.InstanceData, error) {
+func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, options domain.LoadOptions) (*domain.InstanceData, error) {
 	if id == "" {
-		return nil, ErrInstanceDataNotFound
+		return nil, domain.ErrInstanceDataNotFound
 	}
 	sess, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
@@ -1717,7 +1717,7 @@ func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, opti
 	).First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ErrInstanceDataNotFound
+			return nil, domain.ErrInstanceDataNotFound
 		}
 		return nil, fmt.Errorf("failed to query session by id %s: %w", id, err)
 	}
@@ -1725,8 +1725,8 @@ func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, opti
 }
 
 // ListWithOptions retrieves all sessions with selective child data loading.
-func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]domain.InstanceData, error) {
-	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via LoadOptions, not row filtering.
+func (r *EntRepository) ListWithOptions(ctx context.Context, options domain.LoadOptions) ([]domain.InstanceData, error) {
+	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via domain.LoadOptions, not row filtering.
 	sessions, err := applyLoadOptions(r.Client.Session.Query(), options).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
@@ -1740,7 +1740,7 @@ func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions
 }
 
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
-func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status domain.Status, options LoadOptions) ([]domain.InstanceData, error) {
+func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status domain.Status, options domain.LoadOptions) ([]domain.InstanceData, error) {
 	sessions, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.Status(int(status))),
 		options,
@@ -1757,7 +1757,7 @@ func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status doma
 }
 
 // ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
-func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string, options LoadOptions) ([]domain.InstanceData, error) {
+func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string, options domain.LoadOptions) ([]domain.InstanceData, error) {
 	sessions, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
 		options,

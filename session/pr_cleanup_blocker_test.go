@@ -46,7 +46,7 @@ func (f *fakeGateSource) FindInstanceDataByID(id string) (*domain.InstanceData, 
 	if d, ok := f.data[id]; ok {
 		return d, nil
 	}
-	return nil, ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 
 func workSession(uuid, item string) backlogdto.ItemSessionSummary {

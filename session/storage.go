@@ -42,7 +42,7 @@ type InstanceStore interface {
 	ListInstanceData() ([]domain.InstanceData, error)
 	// FindInstanceDataByID finds the single InstanceData whose stable ID or title
 	// matches id via an indexed WHERE clause, rather than ListInstanceData() plus a
-	// linear scan. Returns ErrInstanceDataNotFound when no match exists.
+	// linear scan. Returns domain.ErrInstanceDataNotFound when no match exists.
 	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 	SaveInstances([]*instance.Instance) error
 	AddInstance(*instance.Instance) error
@@ -174,7 +174,7 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *instance.Instanc
 	log.Debug("SaveInstances: converting instance",
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-	s.saved.persist(data, func(skip updateSkip) bool {
+	s.saved.persist(data, func(skip domain.UpdateSkip) bool {
 		if err := s.Repo.updateSkipping(ctx, data, skip); err != nil {
 			// Not found → create it
 			if createErr := s.Repo.Create(ctx, data); createErr != nil {
@@ -363,20 +363,17 @@ func sortedByAttach(prs []domain.PRView) []domain.PRView {
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]domain.InstanceData, error) {
-	return s.Repo.ListWithOptions(context.Background(), LoadMinimal)
+	return s.Repo.ListWithOptions(context.Background(), domain.LoadMinimal)
 }
 
 // ListInstanceDataWithWorktree returns raw InstanceData with the Worktree edge eager-loaded.
 // Use this instead of ListInstanceData whenever a read-only pass needs Worktree.WorktreePath/
 // RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
-// ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
+// ListInstanceData uses domain.LoadMinimal, which never populates Worktree, so any such field will
 // silently read as its zero value under that call.
 func (s *Storage) ListInstanceDataWithWorktree() ([]domain.InstanceData, error) {
-	return s.Repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
+	return s.Repo.ListWithOptions(context.Background(), domain.LoadOptions{LoadWorktree: true})
 }
-
-// ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
-var ErrInstanceDataNotFound = errors.New("instance data not found")
 
 // ArchiveInstanceDataByID sets ArchivedAt and Status=Stopped directly in storage for a
 // session that is not (or is no longer) resident in the live in-memory instance registry
@@ -397,7 +394,7 @@ var ErrInstanceDataNotFound = errors.New("instance data not found")
 func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error) {
 	data, err := s.FindInstanceDataByID(id)
 	if err != nil {
-		if errors.Is(err, ErrInstanceDataNotFound) {
+		if errors.Is(err, domain.ErrInstanceDataNotFound) {
 			return false, nil
 		}
 		return false, err
@@ -424,9 +421,9 @@ func (s *Storage) ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map
 // FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
 // an indexed WHERE clause (EntRepository.FindByIDWithOptions) rather than loading and
 // linear-scanning every session row — see that method's doc comment for the CPU-profile
-// finding that motivated this. Returns ErrInstanceDataNotFound when no match exists.
+// finding that motivated this. Returns domain.ErrInstanceDataNotFound when no match exists.
 func (s *Storage) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
-	return s.Repo.FindByIDWithOptions(context.Background(), id, LoadMinimal)
+	return s.Repo.FindByIDWithOptions(context.Background(), id, domain.LoadMinimal)
 }
 
 // ListInstanceIDs returns the stable ID (UUID if set, else Title) for every stored
@@ -446,16 +443,16 @@ func (s *Storage) ListInstanceIDs() ([]string, error) {
 // ListSessionRecords returns a snapshot of all sessions as SessionRecords,
 // for use by the tokens.Associator to match JSONL files to stapler-squad sessions.
 //
-// Uses LoadMinimal.WithTags() rather than plain ListInstanceData() (LoadMinimal):
+// Uses domain.LoadMinimal.WithTags() rather than plain ListInstanceData() (domain.LoadMinimal):
 // Tags is an eager-loaded ent edge (session/ent/schema/session.go), not a plain
-// column, so it comes back empty under LoadMinimal — see LoadOptions.LoadTags's
+// column, so it comes back empty under domain.LoadMinimal — see domain.LoadOptions.LoadTags's
 // doc comment and TestStorage_UpdateInstance's identical note.
 func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 	// LoadWorktree so ActiveDir() below can resolve to the worktree path —
 	// Claude's JSONL ProjectPath is derived from the process cwd (the
 	// worktree), so matching against the identity Path orphans every
 	// worktree session's token records.
-	data, err := s.Repo.ListWithOptions(context.Background(), LoadOptions{LoadTags: true, LoadWorktree: true})
+	data, err := s.Repo.ListWithOptions(context.Background(), domain.LoadOptions{LoadTags: true, LoadWorktree: true})
 	if err != nil {
 		return nil
 	}

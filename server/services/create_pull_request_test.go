@@ -477,7 +477,7 @@ type fakePRInstanceStore struct {
 func (f *fakePRInstanceStore) LoadInstances() ([]*instance.Instance, error)     { return nil, nil }
 func (f *fakePRInstanceStore) ListInstanceData() ([]domain.InstanceData, error) { return nil, nil }
 func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*domain.InstanceData, error) {
-	return nil, session.ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 func (f *fakePRInstanceStore) AddInstance(*instance.Instance) error                   { return nil }
 func (f *fakePRInstanceStore) DeleteInstance(string) error                            { return nil }

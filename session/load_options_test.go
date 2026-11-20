@@ -10,10 +10,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// TestGetWithOptions verifies that GetWithOptions respects LoadOptions: core
+// TestGetWithOptions verifies that GetWithOptions respects domain.LoadOptions: core
 // fields (title, path, status, worktree.RepoPath, diff stats) are always
 // populated directly from the session row, but child-relation fields gated by
-// a LoadOptions flag (e.g. Tags, gated by LoadTags) are only populated when
+// a domain.LoadOptions flag (e.g. Tags, gated by LoadTags) are only populated when
 // that flag — or an option preset that implies it — is set. See
 // applyLoadOptions in ent_repository.go.
 func TestSelectiveLoading(t *testing.T) {
@@ -61,28 +61,28 @@ func TestSelectiveLoading(t *testing.T) {
 	err = repo.Create(ctx, testData)
 	require.NoError(t, err)
 
-	// EntRepository always loads full data regardless of LoadOptions
+	// EntRepository always loads full data regardless of domain.LoadOptions
 	for _, tc := range []struct {
 		name string
-		opts LoadOptions
+		opts domain.LoadOptions
 	}{
-		{"LoadMinimal", LoadMinimal},
-		{"LoadSummary", LoadSummary},
-		{"LoadFull", LoadFull},
-		{"LoadDiffOnly", LoadDiffOnly},
+		{"domain.LoadMinimal", domain.LoadMinimal},
+		{"domain.LoadSummary", domain.LoadSummary},
+		{"domain.LoadFull", domain.LoadFull},
+		{"domain.LoadDiffOnly", domain.LoadDiffOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			session, err := repo.GetWithOptions(ctx, "test-session", tc.opts)
 			require.NoError(t, err)
 
-			// Core fields are always populated regardless of LoadOptions.
+			// Core fields are always populated regardless of domain.LoadOptions.
 			assert.Equal(t, "test-session", session.Title)
 			assert.Equal(t, "/tmp/test", session.Path)
 			assert.Equal(t, domain.Active, session.Status)
 
 			// Child-relation fields are only populated when their gating
-			// LoadOptions flag is set — see applyLoadOptions.
+			// domain.LoadOptions flag is set — see applyLoadOptions.
 			if tc.opts.LoadWorktree {
 				assert.Equal(t, "/tmp/repo", session.Worktree.RepoPath)
 			}
@@ -120,8 +120,8 @@ func TestSelectiveLoading(t *testing.T) {
 // TestBuilderMethods verifies the fluent builder methods work correctly
 func TestBuilderMethods(t *testing.T) {
 	t.Parallel()
-	// Start with LoadMinimal and add what we need
-	options := LoadMinimal.WithTags().WithDiffContent()
+	// Start with domain.LoadMinimal and add what we need
+	options := domain.LoadMinimal.WithTags().WithDiffContent()
 
 	assert.True(t, options.LoadTags, "WithTags should enable tag loading")
 	assert.True(t, options.LoadDiffContent, "WithDiffContent should enable diff content loading")
@@ -130,7 +130,7 @@ func TestBuilderMethods(t *testing.T) {
 	assert.False(t, options.LoadClaudeSession, "Should not enable Claude session unless explicitly set")
 
 	// Remove what we don't need
-	options = LoadFull.WithoutDiffContent()
+	options = domain.LoadFull.WithoutDiffContent()
 
 	assert.True(t, options.LoadWorktree, "Should preserve worktree setting")
 	assert.True(t, options.LoadTags, "Should preserve tags setting")
@@ -177,30 +177,30 @@ func BenchmarkSelectiveLoading(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.Run("LoadMinimal", func(b *testing.B) {
+	b.Run("domain.LoadMinimal", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, err := repo.GetWithOptions(ctx, "bench-session", LoadMinimal)
+			_, err := repo.GetWithOptions(ctx, "bench-session", domain.LoadMinimal)
 			if err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	b.Run("LoadSummary", func(b *testing.B) {
+	b.Run("domain.LoadSummary", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, err := repo.GetWithOptions(ctx, "bench-session", LoadSummary)
+			_, err := repo.GetWithOptions(ctx, "bench-session", domain.LoadSummary)
 			if err != nil {
 				b.Fatal(err)
 			}
 		}
 	})
 
-	b.Run("LoadFull", func(b *testing.B) {
+	b.Run("domain.LoadFull", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_, err := repo.GetWithOptions(ctx, "bench-session", LoadFull)
+			_, err := repo.GetWithOptions(ctx, "bench-session", domain.LoadFull)
 			if err != nil {
 				b.Fatal(err)
 			}

@@ -54,7 +54,6 @@ go_library(
         "idle_status_gate.go",
         "interfaces.go",
         "item_link.go",
-        "load_options.go",
         "migrate.go",
         "native_process_manager.go",
         "native_process_manager_windows.go",

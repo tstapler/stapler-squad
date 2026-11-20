@@ -263,7 +263,7 @@ func TestEntRepository_Worktree(t *testing.T) {
 }
 
 // TestEntRepository_ListWithOptions_RespectsLoadWorktree verifies that
-// ListWithOptions honors LoadOptions.LoadWorktree instead of always
+// ListWithOptions honors domain.LoadOptions.LoadWorktree instead of always
 // eager-loading every edge regardless of the requested options.
 func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 	t.Parallel()
@@ -284,14 +284,14 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	// LoadMinimal should skip worktree loading entirely.
-	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	// domain.LoadMinimal should skip worktree loading entirely.
+	minimal, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
 	assert.Equal(t, domain.GitWorktreeData{}, minimal[0].Worktree)
 
-	// LoadOptions{LoadWorktree: true} should load it.
-	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadWorktree: true})
+	// domain.LoadOptions{LoadWorktree: true} should load it.
+	full, err := repo.ListWithOptions(ctx, domain.LoadOptions{LoadWorktree: true})
 	require.NoError(t, err)
 	require.Len(t, full, 1)
 	assert.Equal(t, session.Worktree.RepoPath, full[0].Worktree.RepoPath)
@@ -300,7 +300,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 }
 
 // TestEntRepository_ListWithOptions_RespectsLoadTags verifies that
-// ListWithOptions only loads session tags when LoadOptions.LoadTags is set.
+// ListWithOptions only loads session tags when domain.LoadOptions.LoadTags is set.
 func TestEntRepository_ListWithOptions_RespectsLoadTags(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
@@ -314,19 +314,19 @@ func TestEntRepository_ListWithOptions_RespectsLoadTags(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	minimal, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
 	assert.Empty(t, minimal[0].Tags)
 
-	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadTags: true})
+	full, err := repo.ListWithOptions(ctx, domain.LoadOptions{LoadTags: true})
 	require.NoError(t, err)
 	require.Len(t, full, 1)
 	assert.ElementsMatch(t, session.Tags, full[0].Tags)
 }
 
 // TestEntRepository_ListWithOptions_RespectsLoadDiffStats verifies that
-// ListWithOptions only loads diff stats when LoadOptions.LoadDiffStats (or
+// ListWithOptions only loads diff stats when domain.LoadOptions.LoadDiffStats (or
 // LoadDiffContent) is set.
 func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	t.Parallel()
@@ -345,12 +345,12 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	minimal, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
 	assert.Equal(t, domain.DiffStatsData{}, minimal[0].DiffStats)
 
-	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadDiffStats: true})
+	full, err := repo.ListWithOptions(ctx, domain.LoadOptions{LoadDiffStats: true})
 	require.NoError(t, err)
 	require.Len(t, full, 1)
 	assert.Equal(t, session.DiffStats.Added, full[0].DiffStats.Added)
@@ -375,39 +375,39 @@ func TestEntRepository_FindByIDWithOptions(t *testing.T) {
 
 	t.Run("matches by title", func(t *testing.T) {
 		t.Parallel()
-		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-title", LoadMinimal)
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-title", domain.LoadMinimal)
 		require.NoError(t, err)
 		assert.Equal(t, "find-by-id-title", found.Title)
 	})
 
 	t.Run("matches by UUID", func(t *testing.T) {
 		t.Parallel()
-		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-uuid-123", LoadMinimal)
+		found, err := repo.FindByIDWithOptions(ctx, "find-by-id-uuid-123", domain.LoadMinimal)
 		require.NoError(t, err)
 		assert.Equal(t, "find-by-id-title", found.Title)
 	})
 
-	t.Run("returns ErrInstanceDataNotFound when no match", func(t *testing.T) {
+	t.Run("returns domain.ErrInstanceDataNotFound when no match", func(t *testing.T) {
 		t.Parallel()
-		found, err := repo.FindByIDWithOptions(ctx, "no-such-session", LoadMinimal)
-		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		found, err := repo.FindByIDWithOptions(ctx, "no-such-session", domain.LoadMinimal)
+		require.ErrorIs(t, err, domain.ErrInstanceDataNotFound)
 		assert.Nil(t, found)
 	})
 
 	// uuid has no uniqueness constraint (Optional().Default("")), so an empty id must
 	// be rejected explicitly rather than falling through to session.UUID("") and
 	// matching an arbitrary row that has never been assigned a UUID.
-	t.Run("returns ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
+	t.Run("returns domain.ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
 		t.Parallel()
-		found, err := repo.FindByIDWithOptions(ctx, "", LoadMinimal)
-		require.ErrorIs(t, err, ErrInstanceDataNotFound)
+		found, err := repo.FindByIDWithOptions(ctx, "", domain.LoadMinimal)
+		require.ErrorIs(t, err, domain.ErrInstanceDataNotFound)
 		assert.Nil(t, found)
 	})
 }
 
 // TestEntRepository_ListWithOptions_RespectsLoadClaudeSession verifies that
 // ListWithOptions only loads Claude session data (and its metadata) when
-// LoadOptions.LoadClaudeSession is set.
+// domain.LoadOptions.LoadClaudeSession is set.
 func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
@@ -432,12 +432,12 @@ func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
+	minimal, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
 	assert.Empty(t, minimal[0].ClaudeSession.ConversationUUID)
 
-	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadClaudeSession: true})
+	full, err := repo.ListWithOptions(ctx, domain.LoadOptions{LoadClaudeSession: true})
 	require.NoError(t, err)
 	require.Len(t, full, 1)
 	assert.Equal(t, session.ClaudeSession.ConversationUUID, full[0].ClaudeSession.ConversationUUID)

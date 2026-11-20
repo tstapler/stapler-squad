@@ -242,7 +242,7 @@ func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*domain.Inst
 			return &f.instances[i], nil
 		}
 	}
-	return nil, session.ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 func (f *fakeImportCollisionStore) SaveInstances([]*instance.Instance) error { return nil }
 func (f *fakeImportCollisionStore) AddInstance(inst *instance.Instance) error {

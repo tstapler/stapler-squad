@@ -45,7 +45,7 @@ func (w wakeSessionStates) SessionState(_ context.Context, sessionUUID string) (
 	}
 	data, err := w.storage.FindInstanceDataByID(sessionUUID)
 	switch {
-	case errors.Is(err, session.ErrInstanceDataNotFound):
+	case errors.Is(err, domain.ErrInstanceDataNotFound):
 		return wakes.SessionFacts{}, nil
 	case err != nil:
 		return wakes.SessionFacts{}, err
