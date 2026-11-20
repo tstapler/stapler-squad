@@ -79,7 +79,7 @@ func (s *Storage) GatedArchive(ctx context.Context, req backlogdto.TransitionReq
 
 func (s *Storage) writeGatedArchive(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := backlogdto.GatePrecondition(req, spec, item)
-	return s.Repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
+	return s.Repo.RawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
 }
 
 // GatedUnarchive decides archived->idea. The write is a compare-and-swap on
@@ -100,7 +100,7 @@ func (s *Storage) writeGatedUnarchive(ctx context.Context, req backlogdto.Transi
 	if pre.ExpectedStatus != string(domain.BacklogStatusArchived) {
 		return nil, fmt.Errorf("%w: item is %q, not archived", domain.ErrPreconditionFailed, pre.ExpectedStatus)
 	}
-	return s.Repo.rawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
+	return s.Repo.RawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
 }
 
 // GatedSetPRAndTransition records pr on the item and moves it review->pr_pending
@@ -164,7 +164,7 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 
 func (s *Storage) writeGatedReconcile(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := backlogdto.GatePrecondition(req, spec, item)
-	return s.Repo.rawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
+	return s.Repo.RawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
 }
 
 // gateWriter performs the raw write once the engine allowed req.
@@ -289,7 +289,7 @@ func (s *Storage) DebugForce(ctx context.Context, itemID string, to domain.Backl
 		err     error
 	)
 	if to == domain.BacklogStatusArchived {
-		updated, err = s.Repo.rawArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
+		updated, err = s.Repo.RawArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
 	} else {
 		updated, err = s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
 	}

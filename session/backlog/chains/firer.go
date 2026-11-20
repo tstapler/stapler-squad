@@ -83,7 +83,7 @@ type TriggerFirer interface {
 // ChainFirer fires the next workflow in a pipeline chain once a BacklogItem
 // reaches BacklogStatusDone with NextWorkflowID set (webhook-triggers FR10/
 // AC5). Both the happy-path async dispatch
-// (EntRepository.dispatchChainFire, called immediately after
+// (BacklogHooks.DispatchChainFire, called immediately after
 // TransitionBacklogItemStatus's own DB write returns — AC9) and
 // TriggerChainReconciler's restart-recovery sweep call the same Fire method,
 // so "fire exactly once per item" logic lives in exactly one place.
@@ -139,9 +139,9 @@ func NewChainFirer(repo *session.EntRepository, workflows stagecfg.WorkflowRepos
 // context.WithTimeout(context.Background(), chainFireTimeout) below rather
 // than propagating a caller's ctx: by the time that goroutine's
 // FireTriggerChained (CreateSession) call actually runs, a caller-supplied ctx
-// (e.g. an RPC handler's request-scoped context, or dispatchChainFire's
+// (e.g. an RPC handler's request-scoped context, or DispatchChainFire's
 // deliberately-Background() context) may already be cancelled or long gone —
-// see dispatchChainFire's doc comment (session/ent_repository_backlog.go) for
+// see BacklogHooks.DispatchChainFire's doc comment (session/backlogstore/hooks.go) for
 // the same rationale applied one layer up.
 func (c *ChainFirer) Dispatch(item *backlogdto.BacklogItemData) {
 	if c == nil || item == nil {
@@ -312,7 +312,7 @@ func (c *ChainFirer) recordFireEvent(ctx context.Context, workflowID *uuid.UUID,
 
 // TriggerChainReconciler completes pipeline chain-fires interrupted by a
 // crash between the "done" transition committing
-// (EntRepository.dispatchChainFire) and the chained session actually being
+// (BacklogHooks.DispatchChainFire) and the chained session actually being
 // created — AC5's restart-recovery scenario. ReconcileChains is invoked from
 // BacklogLifecycleListener's existing 60s reconcile tick (ReconcileStuck),
 // mirroring reconcileStaleWorkSessions' idiom exactly: no dedicated

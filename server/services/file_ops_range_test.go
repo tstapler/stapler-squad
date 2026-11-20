@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -240,6 +241,9 @@ func TestReadRange_ShouldRefuseAnchorlessRequest_And_UnindexedFarLine(t *testing
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
 	gate := make(chan struct{})
+	var openOnce sync.Once
+	openGate := func() { openOnce.Do(func() { close(gate) }) }
+	t.Cleanup(openGate) // runs before rangeOpsOver's analysis.Close, so a failed assert cannot hang it
 	mem.SetOnRead(func(n int) {
 		if n == analyzeChunkBytes {
 			<-gate
@@ -247,5 +251,5 @@ func TestReadRange_ShouldRefuseAnchorlessRequest_And_UnindexedFarLine(t *testing
 	})
 	_, err = ops.ReadRange(context.Background(), linesReq("a.txt", 50, sessionv1.RangeDir_RANGE_DIR_FORWARD, 5, 0))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err), "index still pending after the bounded wait")
-	close(gate)
+	openGate()
 }

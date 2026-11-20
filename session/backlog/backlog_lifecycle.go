@@ -562,7 +562,7 @@ func (l *BacklogLifecycleListener) getChainReconciler() *chains.TriggerChainReco
 }
 
 // reconcileTriggerChains delegates to TriggerChainReconciler.ReconcileChains
-// — the periodic counterpart to EntRepository.dispatchChainFire's happy-path
+// — the periodic counterpart to BacklogHooks.DispatchChainFire's happy-path
 // fire, both funneling through the same ChainFirer.Fire so "fire exactly
 // once" logic lives in one place. No-op when no reconciler is wired.
 func (l *BacklogLifecycleListener) reconcileTriggerChains(ctx context.Context, er *session.EntRepository) {

@@ -1108,14 +1108,10 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 
 	const totalEvents = backlogstore.MaxPublishedStatusEvents + 10
 	for i := 0; i < totalEvents; i++ {
-		recordStatusEvent(ctx, statusEventInput{
-			evClient:    repo.Client.BacklogStatusEvent,
-			itemID:      itemID,
-			fromStatus:  string(domain.BacklogStatusIdea),
-			toStatus:    string(domain.BacklogStatusIdea),
-			triggeredBy: instance.TriggeredBySystem,
-			note:        fmt.Sprintf("retry #%d", i),
-		})
+		_, err := repo.Client.BacklogStatusEvent.Create().SetItemID(itemID).
+			SetFromStatus(string(domain.BacklogStatusIdea)).SetToStatus(string(domain.BacklogStatusIdea)).
+			SetTriggeredBy(instance.TriggeredBySystem).SetNote(fmt.Sprintf("retry #%d", i)).Save(ctx)
+		require.NoError(t, err)
 	}
 
 	var data *backlogdto.BacklogItemData

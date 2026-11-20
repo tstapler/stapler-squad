@@ -1085,12 +1085,12 @@ func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update backl
 // RawArchiveBacklogItem sets the archived_at timestamp and status. See
 // EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
 func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondition *backlogdto.BacklogItemPrecondition, triggeredBy, note string) (*backlogdto.BacklogItemData, error) {
-	return s.Repo.rawArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
+	return s.Repo.RawArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
 // RawUnarchiveBacklogItem clears archived_at and restores the item to "idea".
 func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error) {
-	return s.Repo.rawUnarchiveBacklogItem(ctx, id, "")
+	return s.Repo.RawUnarchiveBacklogItem(ctx, id, "")
 }
 
 // DeleteBacklogItem permanently removes an item and all its child records.
@@ -1233,7 +1233,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 	}
 	// The item-direct link is written for every item PR writer, flag on or off, in the
 	// same transaction as the pr_number write.
-	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, domain.BacklogStatusPRPending, prURL, prNumber, precondition, instance.TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
+	if _, err := s.Repo.RawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, domain.BacklogStatusPRPending, prURL, prNumber, precondition, instance.TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 

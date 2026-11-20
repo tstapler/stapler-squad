@@ -177,3 +177,13 @@ var RecognizedPlaceholders = []string{
 // branch — use git.ResolveDefaultBranchName(repoPath). Remaining uses are the
 // allowlist in session/backlog's TestBacklogCode_should_NotHardcodeDefaultBranch.
 const BounceMainBranch = "main"
+
+// TriggeredBy values for BacklogStatusEvent records. Agent-initiated
+// transitions (e.g. request_review, report_duplicate) use TriggeredByAgent.
+// session/instance re-exports them by reference.
+const (
+	TriggeredByUser       = "user"
+	TriggeredBySystem     = "system"
+	TriggeredByAgent      = "agent"
+	TriggeredByGitHubSync = "github_sync"
+)

@@ -286,7 +286,7 @@ func (r *EntRepository) initStores() {
 		item := backlogstore.BacklogItemToData(row)
 		r.PublishItemChanged(ctx, &item, backlogdto.BacklogItemChange{Kind: backlogdto.ChangeItemUpdated, UpdatedFields: []string{"has_pending_guidance_requests"}})
 	})
-	r.Backlog = backlogstore.New(r.Client, backlogstore.Ports{Guidance: r.Repo, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
+	r.Backlog = backlogstore.New(r.Client, backlogstore.Ports{Guidance: r.Repo, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows, AfterLinkHook: r.AfterLinkHook, DbPath: func() string { return r.DbPath }})
 }
 
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
@@ -1501,16 +1501,6 @@ func nilIfEmpty(s string) *string {
 	if s == "" {
 		return nil
 	}
-	return &s
-}
-
-// nilIfEmptyJSON returns nil if j is empty, otherwise a *string containing the JSON.
-// Used at the ent boundary where AcceptanceCriteria is stored as a plain string.
-func nilIfEmptyJSON(j domain.AcCriteriaJSON) *string {
-	if j == "" {
-		return nil
-	}
-	s := string(j)
 	return &s
 }
 

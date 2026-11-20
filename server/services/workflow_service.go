@@ -462,7 +462,7 @@ func (s *WorkflowService) UpdateWorkflow(
 	// Optimistic-concurrency CAS (webhook-triggers verify follow-ups AC9): when the
 	// caller supplies expected_updated_at, the write is rejected unless the row's
 	// current updated_at still matches what the caller read — mirrors
-	// ClaimChainFire's SQL-level CAS (ent_repository_backlog.go). Omitted (nil) means
+	// ClaimChainFire's SQL-level CAS (session/backlogstore/chain_fire.go). Omitted (nil) means
 	// no precondition, preserving prior single-writer callers' behavior.
 	var wf *ent.Workflow
 	if req.Msg.ExpectedUpdatedAt != nil {

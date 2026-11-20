@@ -695,7 +695,7 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 
 // TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitionsToReview
 // is a sweep-discovered fix (Phase 5 spec-compliance sweep, backlog-event-driven-updates):
-// ReconcileStuckItems mutates status via a raw ent transaction (session/ent_repository_backlog_items.go)
+// ReconcileStuckItems mutates status via a raw ent transaction (session/backlogstore)
 // rather than going through TransitionBacklogItemStatus, so it originally bypassed the
 // publish hook entirely — exactly the "missed call site" failure mode requirements.md's
 // Feasibility Risks section warns about for internal reconcilers that touch storage

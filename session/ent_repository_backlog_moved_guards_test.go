@@ -88,11 +88,10 @@ func TestPublishItemChanged_should_CarryExactlyTheNewest200StatusEvents(t *testi
 	require.NoError(t, err)
 	const total = 205
 	for i := 0; i < total; i++ {
-		recordStatusEvent(ctx, statusEventInput{
-			evClient: repo.Client.BacklogStatusEvent, itemID: itemID,
-			fromStatus: string(domain.BacklogStatusIdea), toStatus: string(domain.BacklogStatusIdea),
-			triggeredBy: instance.TriggeredBySystem, note: fmt.Sprintf("n%d", i),
-		})
+		_, err := repo.Client.BacklogStatusEvent.Create().SetItemID(itemID).
+			SetFromStatus(string(domain.BacklogStatusIdea)).SetToStatus(string(domain.BacklogStatusIdea)).
+			SetTriggeredBy(instance.TriggeredBySystem).SetNote(fmt.Sprintf("n%d", i)).Save(ctx)
+		require.NoError(t, err)
 	}
 	published := captureChanges(repo)
 
