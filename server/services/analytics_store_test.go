@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"go.uber.org/goleak"
 )
 
@@ -440,12 +440,12 @@ func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
 
 type recordingAnalyticsBatchSink struct {
 	mu      sync.Mutex
-	batches [][]session.AnalyticsData
+	batches [][]domain.AnalyticsData
 	called  chan struct{}
 	block   <-chan struct{}
 }
 
-func (s *recordingAnalyticsBatchSink) RecordAnalyticsBatch(ctx context.Context, batch []session.AnalyticsData) error {
+func (s *recordingAnalyticsBatchSink) RecordAnalyticsBatch(ctx context.Context, batch []domain.AnalyticsData) error {
 	if s.block != nil {
 		select {
 		case <-s.block:
@@ -453,7 +453,7 @@ func (s *recordingAnalyticsBatchSink) RecordAnalyticsBatch(ctx context.Context, 
 			return ctx.Err()
 		}
 	}
-	copied := append([]session.AnalyticsData(nil), batch...)
+	copied := append([]domain.AnalyticsData(nil), batch...)
 	s.mu.Lock()
 	s.batches = append(s.batches, copied)
 	s.mu.Unlock()

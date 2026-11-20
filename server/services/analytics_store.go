@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // AnalyticsEntry records a single classification decision.
@@ -131,7 +132,7 @@ type AnalyticsSummary struct {
 // Implementations must commit a batch atomically and treat duplicate IDs as
 // idempotent.
 type AnalyticsBatchSink interface {
-	RecordAnalyticsBatch(context.Context, []session.AnalyticsData) error
+	RecordAnalyticsBatch(context.Context, []domain.AnalyticsData) error
 }
 
 // AnalyticsStore writes AnalyticsEntry records asynchronously to SQLite and
@@ -306,8 +307,8 @@ func (s *AnalyticsStore) GetTaggingRuleFireCounts(ctx context.Context, since tim
 	return s.storage.GetTaggingRuleFireCounts(ctx, since)
 }
 
-// analyticsDataToEntry maps a session.AnalyticsData row to an AnalyticsEntry.
-func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
+// analyticsDataToEntry maps a domain.AnalyticsData row to an AnalyticsEntry.
+func analyticsDataToEntry(d domain.AnalyticsData) AnalyticsEntry {
 	return AnalyticsEntry{
 		ID:                 d.ID,
 		Timestamp:          d.CreatedAt,
@@ -360,7 +361,7 @@ func (s *AnalyticsStore) LoadProgramWindow(ctx context.Context, program string, 
 }
 
 // GetSubcommandBreakdown returns per-(subcommand, decision) aggregate counts.
-func (s *AnalyticsStore) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]session.SubcommandDecisionCount, error) {
+func (s *AnalyticsStore) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]domain.SubcommandDecisionCount, error) {
 	return s.storage.GetSubcommandBreakdown(ctx, program, since)
 }
 
@@ -610,7 +611,7 @@ func ComputeDailyBuckets(entries []AnalyticsEntry) []DailyBucket {
 // flush owns the size-or-deadline batch loop. Producers only perform a
 // non-blocking channel send and never wait for SQLite.
 func (s *AnalyticsStore) flush(ctx context.Context) {
-	batch := make([]session.AnalyticsData, 0, analyticsBatchSize)
+	batch := make([]domain.AnalyticsData, 0, analyticsBatchSize)
 	timer := time.NewTimer(s.flushDelay)
 	if !timer.Stop() {
 		<-timer.C
@@ -623,7 +624,7 @@ func (s *AnalyticsStore) flush(ctx context.Context) {
 			return
 		}
 		pending := batch
-		batch = make([]session.AnalyticsData, 0, analyticsBatchSize)
+		batch = make([]domain.AnalyticsData, 0, analyticsBatchSize)
 		if s.sink == nil {
 			atomic.AddInt64(&s.dropped, int64(len(pending)))
 			return
@@ -691,8 +692,8 @@ func (s *AnalyticsStore) flush(ctx context.Context) {
 	}
 }
 
-func analyticsEntryToData(e AnalyticsEntry) session.AnalyticsData {
-	return session.AnalyticsData{
+func analyticsEntryToData(e AnalyticsEntry) domain.AnalyticsData {
+	return domain.AnalyticsData{
 		ID:                 e.ID,
 		SessionID:          e.SessionID,
 		ToolName:           e.ToolName,

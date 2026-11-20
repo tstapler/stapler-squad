@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func validAnalyticsData(id string) AnalyticsData {
-	return AnalyticsData{
+func validAnalyticsData(id string) domain.AnalyticsData {
+	return domain.AnalyticsData{
 		ID:        id,
 		ToolName:  "Bash",
 		Decision:  "auto_allow",
@@ -42,7 +43,7 @@ func TestEntRepositoryRecordAnalyticsBatchIsAtomicAndIdempotent(t *testing.T) {
 	repo, _ := createTestEntRepository(t)
 	ctx := context.Background()
 
-	batch := make([]AnalyticsData, 0, 128)
+	batch := make([]domain.AnalyticsData, 0, 128)
 	for i := range 127 {
 		batch = append(batch, validAnalyticsData(fmt.Sprintf("event-%03d", i)))
 	}
@@ -53,7 +54,7 @@ func TestEntRepositoryRecordAnalyticsBatchIsAtomicAndIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 127)
 
-	invalid := []AnalyticsData{
+	invalid := []domain.AnalyticsData{
 		validAnalyticsData("atomic-good"),
 		{ID: "atomic-invalid", ToolName: "", Decision: "auto_allow", RiskLevel: "low", CreatedAt: time.Now()},
 	}

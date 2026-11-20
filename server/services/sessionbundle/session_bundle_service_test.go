@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -30,7 +29,7 @@ import (
 // ─── fakes ────────────────────────────────────────────────────────────────────
 
 type fakeBundleStorage struct {
-	analytics    []session.AnalyticsData
+	analytics    []domain.AnalyticsData
 	analyticsErr error
 	itemSession  backlogdto.ItemSessionSummary
 	itemErr      error
@@ -38,7 +37,7 @@ type fakeBundleStorage struct {
 	artErr       error
 }
 
-func (f *fakeBundleStorage) ListAnalyticsBySessionID(_ context.Context, _ string) ([]session.AnalyticsData, error) {
+func (f *fakeBundleStorage) ListAnalyticsBySessionID(_ context.Context, _ string) ([]domain.AnalyticsData, error) {
 	return f.analytics, f.analyticsErr
 }
 
@@ -123,7 +122,7 @@ func readZIP(t *testing.T, data []byte) map[string][]byte {
 func TestAssembleBundle_ValidZIPWithManifest(t *testing.T) {
 	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{
-			analytics: []session.AnalyticsData{{ToolName: "bash", SessionID: "uuid-001"}},
+			analytics: []domain.AnalyticsData{{ToolName: "bash", SessionID: "uuid-001"}},
 		},
 		&fakeCtxHistory{},
 		&fakeScrollback{lines: []byte("line1\nline2")},
@@ -159,9 +158,9 @@ func TestAssembleBundle_ValidZIPWithManifest(t *testing.T) {
 
 func TestAssembleBundle_SizeCapDropsAnalytics(t *testing.T) {
 	// Build a storage that returns ~1 KB of analytics data.
-	bigAnalytics := make([]session.AnalyticsData, 100)
+	bigAnalytics := make([]domain.AnalyticsData, 100)
 	for i := range bigAnalytics {
-		bigAnalytics[i] = session.AnalyticsData{ToolName: "resize", SessionID: "abc"}
+		bigAnalytics[i] = domain.AnalyticsData{ToolName: "resize", SessionID: "abc"}
 	}
 
 	svc := sessionbundle.NewSessionBundleService(
@@ -310,7 +309,7 @@ func TestAssembleBundle_FiveSecondDeadline(t *testing.T) {
 
 type blockingStorage struct{}
 
-func (b *blockingStorage) ListAnalyticsBySessionID(ctx context.Context, _ string) ([]session.AnalyticsData, error) {
+func (b *blockingStorage) ListAnalyticsBySessionID(ctx context.Context, _ string) ([]domain.AnalyticsData, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -353,7 +352,7 @@ func TestAssembleBundle_FlushCalledBeforeRead(t *testing.T) {
 func TestSaveSessionBundle_WritesFileAndHash(t *testing.T) {
 	svc := sessionbundle.NewSessionBundleService(
 		&fakeBundleStorage{
-			analytics: []session.AnalyticsData{{ToolName: "click", SessionID: "uuid-022"}},
+			analytics: []domain.AnalyticsData{{ToolName: "click", SessionID: "uuid-022"}},
 		},
 		nil,
 		&fakeScrollback{lines: []byte("scroll")},

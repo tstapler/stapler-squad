@@ -19,6 +19,7 @@ go_library(
         "//pkg/localtoken",
         "//server/services/antigravityexport",
         "//session",
+        "//session/domain",
         "@com_github_google_uuid//:uuid",
     ],
 )
