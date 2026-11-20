@@ -14,6 +14,7 @@ func TestSessionUIURL(t *testing.T) {
 		{"empty id", "http://localhost:8543", "", ""},
 		{"non-http scheme", "javascript:alert(1)", "a", ""},
 		{"no host", "https://", "a", ""},
+		{"port without host", "https://:8543", "a", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

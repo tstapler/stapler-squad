@@ -20,7 +20,7 @@ func sessionUIURL(baseURL, sessionID string) string {
 		return ""
 	}
 	u, err := url.Parse(baseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
 		return ""
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/"
