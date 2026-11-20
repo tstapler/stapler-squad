@@ -8,6 +8,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -175,10 +176,12 @@ type DescriptorBuilder struct {
 }
 
 // NewDescriptorBuilder builds a builder reading the live flags.
-func NewDescriptorBuilder(src DescriptorSources) *DescriptorBuilder {
+// A nil reg falls back to featureflags.Current().
+func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *DescriptorBuilder {
+	fr := flagReader{reg: reg}
 	return &DescriptorBuilder{sources: src, flag: func(dp string) bool {
-		return effectiveFlag(notificationInlineActionsFlagName, dp)
-	}, hookReplyOn: func() bool { return effectiveAnswerQuestion(routeHookReply) }}
+		return fr.effectiveFlag(notificationInlineActionsFlagName, dp)
+	}, hookReplyOn: func() bool { return fr.effectiveAnswerQuestion(routeHookReply) }}
 }
 
 // pageKeys are the entity keys of the unresolved records of one page.

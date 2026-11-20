@@ -527,6 +527,9 @@ type ServiceDeps struct {
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
 	Registry          *session.Registry
+
+	// AttentionOptions is the one cached attention-flag source shared by the review-queue poller and the startup scanner.
+	AttentionOptions session.FlagOptionsSource
 }
 
 // BuildServiceDeps constructs Phase 2 dependencies using Phase 1 outputs.
@@ -544,7 +547,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller := session.NewReviewQueuePoller(
 		core.ReviewQueue, statusManager, core.Storage,
 	)
-	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
+	attentionOptions := newAttentionOptionsSource(core.FlagRegistry)
+	reviewQueuePoller.SetOptionsSource(attentionOptions)
 	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
@@ -575,6 +579,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		ReviewQueuePoller: reviewQueuePoller,
 		PRStatusPoller:    prStatusPoller,
 		Registry:          registry,
+		AttentionOptions:  attentionOptions,
 	}, nil
 }
 

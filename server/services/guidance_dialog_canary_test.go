@@ -95,7 +95,7 @@ func TestBuildDescriptors_ShouldDegradeHookQuestionToReadOnly_WhenCanaryTripped_
 	canary.record(false, false, false, false, false)
 	require.True(t, canary.canary.Tripped())
 	annotate := func(hookReply bool) *sessionv1.NotificationActionDescriptor {
-		b := NewDescriptorBuilder(DescriptorSources{Questions: f.questions, Canary: canary.canary})
+		b := NewDescriptorBuilder(DescriptorSources{Questions: f.questions, Canary: canary.canary}, nil)
 		b.flag = func(string) bool { return true }
 		b.hookReplyOn = func() bool { return hookReply }
 		rec := questionRecord("n1", "s1", "q1")

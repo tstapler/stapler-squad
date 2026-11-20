@@ -121,7 +121,7 @@ func (s *SessionService) wireHookReply(storage *session.Storage, acks *GuidanceA
 	if storage == nil {
 		return
 	}
-	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: compiledFlagEvidence}}
+	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: compiledFlagEvidence, fr: s.flagReader()}}
 	if acks != nil {
 		r.acks = acks
 	}

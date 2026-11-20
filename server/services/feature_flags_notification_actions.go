@@ -79,6 +79,18 @@ const (
 	spikeS6TierBPassed = true
 )
 
+// flagReader resolves flag decisions against an injected registry. The zero
+// value (nil registry) falls back to featureflags.Current() until slice 7 of
+// flags-stage2-plan.md removes the global.
+type flagReader struct{ reg *featureflags.Registry }
+
+func (r flagReader) registry() *featureflags.Registry {
+	if r.reg != nil {
+		return r.reg
+	}
+	return featureflags.Current()
+}
+
 // liveFlag is a flag's live global value. The zero value is OFF (fail closed).
 type liveFlag struct{ on atomic.Bool }
 
@@ -139,9 +151,10 @@ func startupFlagValue(name string, def bool) bool {
 // their status_detail. Decision points read the config at decision time via
 // effectiveFlag, so a scoped flip needs no controller.
 func wireNotificationActionFlags(ff *FeatureFlagService) {
+	reg := ff.reg()
 	wire := func(name string, ctrl func(liveFlagController) featureflags.FeatureController, offDetail string) {
 		f := &liveFlag{}
-		f.on.Store(startupFlagValue(name, FeatureFlagDefault(name)))
+		f.on.Store(startupFlagValue(name, reg.Default(name)))
 		ff.SetFeatureController(name, ctrl(liveFlagController{flag: f}))
 		ff.AddStatusDetailSource(name, func() string {
 			if f.on.Load() {
@@ -190,64 +203,64 @@ var compiledFlagEvidence = flagEvidence{s1HookReplyPass: spikeS1HookReplyPassed,
 
 // effectiveFlag resolves one decision point of name against the live config,
 // applying the dependency order of the plan's flag matrix (ADR-008).
-func effectiveFlag(name, decisionPoint string) bool {
-	return resolveEffectiveFlag(config.LoadConfig(), compiledFlagEvidence, name, decisionPoint)
+func (r flagReader) effectiveFlag(name, decisionPoint string) bool {
+	return r.resolveEffectiveFlag(config.LoadConfig(), compiledFlagEvidence, name, decisionPoint)
 }
 
 // effectiveAnswerQuestion resolves the three-flag ANSWER_QUESTION composition.
-func effectiveAnswerQuestion(route answerRoute) bool {
-	return resolveAnswerQuestion(config.LoadConfig(), compiledFlagEvidence, route)
+func (r flagReader) effectiveAnswerQuestion(route answerRoute) bool {
+	return r.resolveAnswerQuestion(config.LoadConfig(), compiledFlagEvidence, route)
 }
 
-func scoped(cfg *config.Config, name, scope string) bool {
-	return cfg.GetFeatureFlagScoped(name, scope, FeatureFlagDefault(name))
+func (r flagReader) scoped(cfg *config.Config, name, scope string) bool {
+	return r.registry().EnabledScoped(cfg, name, scope)
 }
 
 // resolveEffectiveFlag is effectiveFlag over an injected config and evidence.
 // An unknown decision point of a known flag resolves false (fail closed).
-func resolveEffectiveFlag(cfg *config.Config, ev flagEvidence, name, dp string) bool {
+func (r flagReader) resolveEffectiveFlag(cfg *config.Config, ev flagEvidence, name, dp string) bool {
 	switch name {
 	case backgroundActivityFeedFlagName:
 		return cfg.GetFeatureFlagWithDefault(name, backgroundActivityFeedDefault)
 	case askUserQuestionStructuredFlagName:
-		return resolveStage(cfg, ev, dp)
+		return r.resolveStage(cfg, ev, dp)
 	case notificationInlineActionsFlagName:
 		switch {
 		case dp == scopePrefixAction+"OPEN":
 			return true
 		case dp == scopeChannelTierB:
-			return scoped(cfg, name, dp) && scoped(cfg, name, scopeChannelRemote) && ev.s6TierBPass
+			return r.scoped(cfg, name, dp) && r.scoped(cfg, name, scopeChannelRemote) && ev.s6TierBPass
 		case dp == scopeChannelRemote, strings.HasPrefix(dp, scopePrefixAction):
-			return scoped(cfg, name, dp)
+			return r.scoped(cfg, name, dp)
 		}
 	case agentWakeTriggersFlagName:
 		if dp == "dispatcher" {
-			return dispatcherRunning(cfg)
+			return r.dispatcherRunning(cfg)
 		}
 		if strings.HasPrefix(dp, scopePrefixTrigger) || strings.HasPrefix(dp, scopePrefixTool) {
-			return scoped(cfg, name, dp) && dispatcherRunning(cfg)
+			return r.scoped(cfg, name, dp) && r.dispatcherRunning(cfg)
 		}
 	}
 	return false
 }
 
-func resolveStage(cfg *config.Config, ev flagEvidence, dp string) bool {
+func (r flagReader) resolveStage(cfg *config.Config, ev flagEvidence, dp string) bool {
 	const name = askUserQuestionStructuredFlagName
 	switch dp {
 	case scopeStageRender:
-		return scoped(cfg, name, scopeStageRender)
+		return r.scoped(cfg, name, scopeStageRender)
 	case scopeStageAnswer:
-		return scoped(cfg, name, scopeStageAnswer) && resolveStage(cfg, ev, scopeStageRender)
+		return r.scoped(cfg, name, scopeStageAnswer) && r.resolveStage(cfg, ev, scopeStageRender)
 	case scopeStageHookReply:
-		return scoped(cfg, name, scopeStageHookReply) && resolveStage(cfg, ev, scopeStageAnswer) && ev.s1HookReplyPass
+		return r.scoped(cfg, name, scopeStageHookReply) && r.resolveStage(cfg, ev, scopeStageAnswer) && ev.s1HookReplyPass
 	}
 	return false
 }
 
 // dispatcherRunning: the global value, or any trigger:<type> explicitly true.
-func dispatcherRunning(cfg *config.Config) bool {
+func (r flagReader) dispatcherRunning(cfg *config.Config) bool {
 	const name = agentWakeTriggersFlagName
-	if cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name)) {
+	if r.registry().Enabled(cfg, name) {
 		return true
 	}
 	for scope, v := range cfg.FeatureFlagScopeOverrides(name) {
@@ -258,17 +271,17 @@ func dispatcherRunning(cfg *config.Config) bool {
 	return false
 }
 
-func resolveAnswerQuestion(cfg *config.Config, ev flagEvidence, route answerRoute) bool {
-	if !resolveEffectiveFlag(cfg, ev, notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion) {
+func (r flagReader) resolveAnswerQuestion(cfg *config.Config, ev flagEvidence, route answerRoute) bool {
+	if !r.resolveEffectiveFlag(cfg, ev, notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion) {
 		return false
 	}
 	switch route {
 	case routeLiveKeystrokeHidden:
-		return cfg.GetFeatureFlagWithDefault(hiddenSessionReplyFlagName, FeatureFlagDefault(hiddenSessionReplyFlagName))
+		return r.registry().Enabled(cfg, hiddenSessionReplyFlagName)
 	case routeLiveKeystrokeVisible, routeDurableRecord:
-		return resolveStage(cfg, ev, scopeStageAnswer)
+		return r.resolveStage(cfg, ev, scopeStageAnswer)
 	case routeHookReply:
-		return resolveStage(cfg, ev, scopeStageHookReply)
+		return r.resolveStage(cfg, ev, scopeStageHookReply)
 	}
 	return false
 }

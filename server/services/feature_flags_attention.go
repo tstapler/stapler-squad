@@ -1,6 +1,9 @@
 package services
 
-import "github.com/tstapler/stapler-squad/config"
+import (
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
+)
 
 // The six live-settable rollout flags of attention-inbox-consolidation. All are
 // default OFF and global-only; they are plain registry flags read from config at
@@ -27,10 +30,10 @@ type AttentionFlags struct {
 }
 
 // ResolveAttentionFlags reads the six flags from cfg.
-func ResolveAttentionFlags(cfg *config.Config) AttentionFlags {
-	on := func(name string) bool {
-		return cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
-	}
+// A nil reg falls back to featureflags.Current() until slice 7 of flags-stage2-plan.md.
+func ResolveAttentionFlags(cfg *config.Config, reg *featureflags.Registry) AttentionFlags {
+	reg = flagReader{reg: reg}.registry()
+	on := func(name string) bool { return reg.Enabled(cfg, name) }
 	return AttentionFlags{
 		ProseQuestionDetection:   on(attentionProseQuestionDetectionFlagName),
 		SessionEventLog:          on(sessionEventLogFlagName),
@@ -42,6 +45,6 @@ func ResolveAttentionFlags(cfg *config.Config) AttentionFlags {
 }
 
 // LoadAttentionFlags resolves the flags against the live config.
-func LoadAttentionFlags() AttentionFlags {
-	return ResolveAttentionFlags(config.LoadConfig())
+func LoadAttentionFlags(reg *featureflags.Registry) AttentionFlags {
+	return ResolveAttentionFlags(config.LoadConfig(), reg)
 }

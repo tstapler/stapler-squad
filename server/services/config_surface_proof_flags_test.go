@@ -136,7 +136,7 @@ func TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag(t *testi
 		t.Run(name, func(t *testing.T) {
 			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
-				return effectiveFlag(name, decisionPoint)
+				return flagReader{}.effectiveFlag(name, decisionPoint)
 			}, false, true)
 		})
 	}
@@ -155,7 +155,7 @@ func TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run(t *testi
 		t.Run(name, func(t *testing.T) {
 			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
-				return reader(LoadAttentionFlags())
+				return reader(LoadAttentionFlags(nil))
 			}, false, true)
 		})
 	}

@@ -35,7 +35,7 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 			require.False(t, FeatureFlagDefault(name))
 		})
 	}
-	require.Equal(t, AttentionFlags{}, LoadAttentionFlags())
+	require.Equal(t, AttentionFlags{}, LoadAttentionFlags(nil))
 }
 
 func TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt(t *testing.T) {
@@ -49,12 +49,12 @@ func TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt(t *testing.T) {
 func TestFlagFlip_Should_TakeEffectNextPollCycleWithoutRestart_When_SetLive(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
-	before := LoadAttentionFlags()
+	before := LoadAttentionFlags(nil)
 	require.False(t, before.ProseQuestionDetection)
 
 	require.NoError(t, flagUpdate(svc, attentionProseQuestionDetectionFlagName, true))
 
-	require.True(t, LoadAttentionFlags().ProseQuestionDetection)
+	require.True(t, LoadAttentionFlags(nil).ProseQuestionDetection)
 	require.False(t, before.ProseQuestionDetection, "a snapshot taken for a cycle must not change mid-cycle")
-	require.False(t, LoadAttentionFlags().SessionEventLog)
+	require.False(t, LoadAttentionFlags(nil).SessionEventLog)
 }
