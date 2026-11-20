@@ -80,7 +80,7 @@ func TestNewGatedSessionService_ShouldInjectRegistryIntoFileService(t *testing.T
 	svctest.WithIsolatedStateDir(t)
 	ctx := context.Background()
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), flippedDefaults(filesEditingFlagName))
-	global := newGatedSessionService(svctest.CreateTestStorage(t), featureflags.Current())
+	global := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 
 	assert.NotEqual(t, global.fileSvc.ops.policy.Flags.Editing(ctx), injected.fileSvc.ops.policy.Flags.Editing(ctx))
 }
@@ -95,7 +95,7 @@ func TestGlobalOffStatusDetail_ShouldReadInjectedRegistry(t *testing.T) {
 
 	// The gate defaults on in the process registry, so only the injected (flipped) one reports shadow.
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), reg)
-	global := newGatedSessionService(svctest.CreateTestStorage(t), featureflags.Current())
+	global := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	assert.NotContains(t, global.featureFlagSvc.statusDetailFor(gate, cfg), gateShadowStatusDetail)
 	assert.Contains(t, injected.featureFlagSvc.statusDetailFor(gate, cfg), gateShadowStatusDetail)
 }

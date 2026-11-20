@@ -16,14 +16,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func newGatedFlagService(t *testing.T) *SessionService {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	svc := newGatedSessionService(svctest.CreateTestStorage(t), featureflags.Current())
+	svc := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	t.Cleanup(svc.Shutdown)
 	return svc
 }
@@ -75,7 +74,7 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	svctest.WithIsolatedStateDir(t)
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
-	svc := newGatedSessionService(svctest.CreateTestStorage(t), featureflags.Current())
+	svc := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	svc.DeliveryGate().Stats().SetWriterRunning(true)
 
 	var flipErr error

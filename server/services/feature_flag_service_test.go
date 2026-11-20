@@ -299,7 +299,7 @@ func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *
 func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	got := map[string]bool{}
-	for _, kf := range featureflags.Current().Specs() {
+	for _, kf := range testFlagRegistry().Specs() {
 		got[kf.Name] = kf.Default
 	}
 	require.Equal(t, config.WorkflowEngineShadowDefault, got[config.WorkflowEngineShadowFeatureFlag])
@@ -526,7 +526,7 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 			continue // not registered yet: Task 1.5.8g (system)
 		}
 		registered := false
-		for _, kf := range featureflags.Current().Specs() {
+		for _, kf := range testFlagRegistry().Specs() {
 			registered = registered || kf.Name == name
 		}
 		require.Truef(t, registered, "class %s row names %q, which must be in the flag registry", class, name)
@@ -760,7 +760,7 @@ func dfltResolveFlag(e ast.Expr, consts map[string]string) (string, bool) {
 }
 
 func dfltRegistered(name string) (defaultValue, ok bool) {
-	for _, kf := range featureflags.Current().Specs() {
+	for _, kf := range testFlagRegistry().Specs() {
 		if kf.Name == name {
 			return kf.Default, true
 		}

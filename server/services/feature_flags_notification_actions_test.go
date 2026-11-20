@@ -10,7 +10,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -49,7 +48,7 @@ func TestFeatureFlagRegistry_ShouldListFourFlagsWithDefaultsAndScopes_WhenGetFea
 	for name, w := range want {
 		assert.Equal(t, w.on, listedFlag(t, e.svc, name).Enabled, name)
 		var accepted []string
-		for _, kf := range featureflags.Current().Specs() {
+		for _, kf := range testFlagRegistry().Specs() {
 			if kf.Name == name {
 				accepted = kf.Scopes
 			}

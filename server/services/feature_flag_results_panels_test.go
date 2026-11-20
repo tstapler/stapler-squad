@@ -2,14 +2,12 @@ package services
 
 import (
 	"testing"
-
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 func TestResultsPanelFlagsRegisteredDefaultOff(t *testing.T) {
 	for _, name := range []string{"backlog-triage-results-panel", "backlog-review-results-panel"} {
 		found := false
-		for _, kf := range featureflags.Current().Specs() {
+		for _, kf := range testFlagRegistry().Specs() {
 			if kf.Name == name {
 				found = true
 			}
