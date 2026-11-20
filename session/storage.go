@@ -175,7 +175,7 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *instance.Instanc
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
 	s.saved.persist(data, func(skip domain.UpdateSkip) bool {
-		if err := s.Repo.updateSkipping(ctx, data, skip); err != nil {
+		if err := s.Repo.UpdateSkipping(ctx, data, skip); err != nil {
 			// Not found → create it
 			if createErr := s.Repo.Create(ctx, data); createErr != nil {
 				log.Error("SaveInstances: failed to upsert instance",
