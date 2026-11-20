@@ -10,7 +10,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -48,13 +47,9 @@ func TestFeatureFlagRegistry_ShouldListFourFlagsWithDefaultsAndScopes_WhenGetFea
 	}
 	for name, w := range want {
 		assert.Equal(t, w.on, listedFlag(t, e.svc, name).Enabled, name)
-		var accepted []string
-		for _, kf := range featureflags.Current().Specs() {
-			if kf.Name == name {
-				accepted = kf.Scopes
-			}
-		}
-		assert.Equal(t, w.scoped, len(accepted) > 0, name)
+		spec, found := testFlagRegistry().Lookup(name)
+		require.True(t, found, "%s registered", name)
+		assert.Equal(t, w.scoped, len(spec.Scopes) > 0, name)
 	}
 	assert.Empty(t, listedFlag(t, e.svc, backgroundActivityFeedFlagName).StatusDetail, "ON has nothing to explain")
 	for _, name := range []string{notificationInlineActionsFlagName, askUserQuestionStructuredFlagName, agentWakeTriggersFlagName} {

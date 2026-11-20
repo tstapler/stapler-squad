@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 // flagNameConsts returns the value of every string const named *FlagName (or *FlagName-suffixed alias to a
@@ -59,7 +57,7 @@ func TestEveryFlagNameConstIsRegistered(t *testing.T) {
 	t.Parallel()
 	// Not flags: the const names a gated RPC or a non-feature-flag config key.
 	notFlags := map[string]bool{}
-	reg := featureflags.Current()
+	reg := testFlagRegistry()
 	checked := 0
 	for _, dir := range []string{".", "featureflags"} {
 		for constName, value := range flagNameConsts(t, dir) {

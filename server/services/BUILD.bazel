@@ -535,6 +535,7 @@ go_test(
         "files_io_errors_test.go",
         "files_telemetry_test.go",
         "files_test_hygiene_test.go",
+        "flag_registry_test_helper_test.go",
         "fsops_test.go",
         "gatestats_rpc_test.go",
         "gatestats_store_test.go",

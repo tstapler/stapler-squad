@@ -139,7 +139,7 @@ func hiddenInstance(t *testing.T, hidden bool) *instance.Instance {
 func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	svc := services.NewFeatureFlagService()
+	svc := services.NewFeatureFlagServiceWithRegistry(services.FlagRegistry())
 	return func(name string, on bool) {
 		t.Helper()
 		_, err := svc.UpdateFeatureFlag(context.Background(),

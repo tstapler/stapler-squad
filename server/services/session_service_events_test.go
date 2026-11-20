@@ -14,7 +14,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -38,7 +37,7 @@ func newCrashEnv(t *testing.T, gated bool) *crashEnv {
 	storage := svctest.CreateTestStorage(t)
 	var svc *SessionService
 	if gated {
-		svc = newGatedSessionService(storage, featureflags.Current())
+		svc = newGatedSessionService(storage, testFlagRegistry())
 		require.NoError(t, config.LoadConfig().SetFeatureFlag(config.HiddenSessionGateFeatureFlag, true))
 		svc.DeliveryGate().Flags().Reload()
 	} else {
