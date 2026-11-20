@@ -1,7 +1,12 @@
 package backlogsvc
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -126,23 +132,66 @@ func TestTriggerTriage_EscalatesOnUnderivableAC(t *testing.T) {
 	assert.Empty(t, updated.AcceptanceCriteria)
 }
 
-// TestNoACVerdictReasonAbsentInWindow: an item can only leave triage with criteria, so the
-// reviewer never sees an empty list; the only place reason=no_acceptance_criteria is emitted
-// is the triage escalation above, never a review verdict.
-func TestNoACVerdictReasonAbsentInWindow(t *testing.T) {
-	t.Parallel()
-	storage := svctest.CreateTestStorage(t)
-	pool := &fakeHeadlessPool{responses: []string{noAcTriageJSON, derivedACJSON}}
-	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	svc.SetHeadlessPool(pool)
-	item := newNoAcItem(t, storage)
-	_, err := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		u, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && u.Status == string(domain.BacklogStatusReady)
-	}, 30*time.Second, 50*time.Millisecond)
+// lockedBuffer is a goroutine-safe slog sink.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
 
-	u, _ := storage.GetBacklogItem(t.Context(), item.ID)
-	assert.True(t, itemHasAcceptanceCriteria(u), "a ready item must carry criteria, so no verdict can cite %q", reasonNoAcceptanceCriteria)
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// noACLogLinesFor returns structured log records tagged reason=no_acceptance_criteria for itemID.
+func noACLogLinesFor(out, itemID string) []string {
+	var hits []string
+	for _, line := range strings.Split(out, "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec["reason"] == reasonNoAcceptanceCriteria && rec["item"] == itemID {
+			hits = append(hits, line)
+		}
+	}
+	return hits
+}
+
+// TestNoACVerdictReasonAbsentInWindow asserts on the structured log: reason=no_acceptance_criteria
+// is emitted only when triage cannot derive criteria (item stays at idea, so no reviewer ever
+// grades it), and never when criteria are derived and the item reaches ready.
+// Not parallel: it swaps the process-wide slog default.
+func TestNoACVerdictReasonAbsentInWindow(t *testing.T) {
+	sink := &lockedBuffer{}
+	prev := log.SetSlogDefaultForTest(slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { log.SetSlogDefaultForTest(prev) })
+
+	run := func(responses []string) *backlogdto.BacklogItemData {
+		storage := svctest.CreateTestStorage(t)
+		svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+		svc.SetHeadlessPool(&fakeHeadlessPool{responses: responses})
+		item := newNoAcItem(t, storage)
+		_, err := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: item.ID}))
+		require.NoError(t, err)
+		return item
+	}
+
+	derivable := run([]string{noAcTriageJSON, derivedACJSON})
+	underivable := run([]string{noAcTriageJSON, emptyDerivation})
+
+	require.Eventually(t, func() bool { return len(noACLogLinesFor(sink.String(), underivable.ID)) == 1 },
+		30*time.Second, 50*time.Millisecond, "underivable item must log reason=no_acceptance_criteria exactly once")
+
+	// The derivable item finishes via the same goroutine path; wait for its derivation log, then assert absence.
+	require.Eventually(t, func() bool { return strings.Contains(sink.String(), "derived acceptance criteria from description") },
+		30*time.Second, 50*time.Millisecond)
+	assert.Empty(t, noACLogLinesFor(sink.String(), derivable.ID), "a derivable item must never log reason=no_acceptance_criteria")
 }
