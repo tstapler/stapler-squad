@@ -60,6 +60,6 @@ End state (MEASURED after I6): `ent_repository.go` is 305 lines; `session` is 23
 
 ## Start today
 
-I1 has no prerequisite and can start now; I0 is in this PR. Open owner decisions: none block I1-I4. I5 should wait for a quiet window on `session/storage.go`.
+I0-I6 are done (see the Steps table); this section is kept for the record.
 
-The GO/NO-GO verdicts above are inferred from the measurements; none was tested by attempting the step beyond I0.
+The GO/NO-GO verdicts were inferred from the measurements before each step; I0-I6 were then carried out, as the Steps table records per step.

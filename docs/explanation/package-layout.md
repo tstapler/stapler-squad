@@ -15,21 +15,22 @@ Still a direction (see `project_plans/package-split-ocp/`): `session` (about 23.
 
 ### Leaves that exist today
 
-Checked with `ls -d` on `origin/main` (2026-11-19). "Embedded" means `session.EntRepository` embeds the store and `initStores()` builds it.
+Checked with `ls -d` against this PR's base, `origin/main` (2026-11-20). "Embedded" means `session.EntRepository` embeds the store and `initStores()` builds it.
 
 | Leaf | Holds | Notes |
 |---|---|---|
-| `session/webhookstore`, `guidancestore`, `wakestore`, `markerstore`, `shellstore`, `projectstore`, `rulestore`, `analyticsstore` | one persistence store each | embedded |
+| `session/webhookstore`, `guidancestore`, `wakestore`, `markerstore`, `shellstore`, `projectstore`, `rulestore`, `analyticsstore`, `instancestore` | one persistence store each (`instancestore.Instances`: instance create, read, update, delete) | embedded |
 | `session/sessionpr` | pull-request rows (`PRStore`) | embedded; its depguard row allows `github` and `session/instance` |
 | `session/backlogstore` | backlog item, source, activity and status-event persistence (30 non-test files) | embedded; owns the status writers (ADR-007 D1) |
 | `session/flowstore` | flow reader | not embedded by design |
 | `session/stagecfg`, `session/workflowengine` | stage, gate, workflow and pipeline-mode repositories; the workflow engine | consumed through narrow interfaces |
+| `session/domain` | persistence DTOs and value types such as `InstanceData`, `LoadOptions`, `UpdateSkip` | imported by the stores and `session` |
 | `session/instance` | the `Instance` family | interim budget exception, to be decomposed |
 | `session/historyadapters`, `session/itemsources`, `session/migrations` | history adapters, tracker plugins, ent-only startup migrations | registry-style leaves |
 | `server/services/featureflags` | flag `Spec`, immutable `Registry` | stage 2 injects the registry: `flags-stage2-plan.md` |
 | `server/reviewqueue` | review queue manager | imported by the composition root (`server/dependencies*.go`) and an integration test |
 
-The next step for `EntRepository` is the instance store (I1-I6 in `instance-dto-lowering-plan.md`).
+The instance store is done (I0-I6 in `instance-dto-lowering-plan.md`); `ent_repository.go` keeps only the constructor, `initStores`, `GetEntClient`, `MaintenanceDriver` and `Close`.
 
 ## How to add a leaf
 

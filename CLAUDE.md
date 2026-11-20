@@ -182,7 +182,7 @@ Full mapping, recipes and status: `docs/explanation/package-layout.md`. The rule
 - **Persistence.** Return domain DTOs, wrap `ent.IsNotFound` as `session.ErrNotFound`, and import `session/ent` only where depguard allows it.
 - **No lasting type aliases** to preserve old import paths; moves are `git mv` plus a codemod, one cluster per PR, with `make gazelle` clean and any budget raise carried in a `scoping-budget-raise:` commit line.
 
-Status: the `Instance` family (`session/instance`) and about eleven `EntRepository` stores (`session/instancestore`, `session/backlogstore`, `sessionpr`, `guidancestore`, `webhookstore`, `wakestore`, `markerstore`, `shellstore`, `projectstore`, `rulestore`, `analyticsstore`) are already leaves; `Storage`, `EntRepository` and `SessionService` still bind most of what remains in `session` and `server/services`. Next steps (flags, backlogsvc): `project_plans/package-split-ocp/roadmap.md`.
+Status: the `Instance` family (`session/instance`) and about eleven `EntRepository` stores (`session/instancestore`, `session/backlogstore`, `sessionpr`, `guidancestore`, `webhookstore`, `wakestore`, `markerstore`, `shellstore`, `projectstore`, `rulestore`, `analyticsstore`) are already leaves; `Storage`, `EntRepository` and `SessionService` still bind most of what remains in `session` and `server/services`. Next step (backlogsvc; flags stage 2 slices 1-7 have landed): `project_plans/package-split-ocp/roadmap.md`.
 
 Sessions support tag-based multi-dimensional organization with 8 grouping strategies (Category, Tag, Branch, Path, Program, Status, Session Type, None). Full reference: `docs/reference/tag-organization.md`
 

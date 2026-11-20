@@ -340,7 +340,7 @@ Go/no-go summary (historical, pre-execution; see Program status at the top for c
 | E8 | NO-GO (later done, see section 3) | DTO gate unmet, ports return `*ent.*` |
 | E9 | NO-GO (later done, see section 3) until prerequisites a-c | 32+31 back-edge symbols, 3 guards |
 | E10 | NO-GO (later done, see "E10 sequence") | hot, 56 back-edge symbols, BL series open |
-| E11 | NO-GO | hot, no leaf shape |
+| E11 | NO-GO (core later done via I0-I6, see [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md)) | hot, no leaf shape |
 | E12 | NO-GO now (later done, see section 3) | tests reassign `Client` |
 
 What stays in `session` after A and B: about 9.0k of the 12.0k ent_* production lines (moved: webhook 553, flow reader about 870, wake about 620, guidance 950 = about 3.0k, about 6.8% of `session`'s 44.3k; the session budget row should drop by the measured delta). That is a ceiling for this project until the hub DTOs are lowered; claiming more would be unsupported.
