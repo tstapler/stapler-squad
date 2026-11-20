@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -202,4 +203,43 @@ func TestRegisterLifecycleTools_should_OmitEnum_When_SvcIsNil(t *testing.T) {
 
 	_, hasEnum := programProp["enum"]
 	assert.False(t, hasEnum, "program property must have no enum when svc is nil")
+}
+
+func TestCreateSession_should_ReturnUIURL_When_PublicURLConfigured(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	lh := newWorktreeGuardHandlers(t)
+	lh.publicURL = "https://workspace.example.com"
+
+	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "ui-url-test-set", map[string]interface{}{
+		"program": "bash",
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	id := m["session"].(map[string]interface{})["id"].(string)
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, id) })
+	link, err := url.Parse(m["ui_url"].(string))
+	require.NoError(t, err)
+	assert.Equal(t, "https://workspace.example.com", link.Scheme+"://"+link.Host)
+	stableID := link.Query().Get("session")
+	assert.NotEqual(t, "ui-url-test-set", stableID, "the UI resolves sessions by stable ID first, so link by it, not the title")
+	data, err := lh.store.FindInstanceDataByID(stableID)
+	require.NoError(t, err)
+	assert.Equal(t, "ui-url-test-set", data.Title)
+}
+
+func TestCreateSession_should_OmitUIURL_When_PublicURLUnset(t *testing.T) {
+	resetCreateSessionLimiterForTest(t)
+	lh := newWorktreeGuardHandlers(t)
+
+	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "ui-url-test-unset", map[string]interface{}{
+		"program": "bash",
+	})))
+	require.NoError(t, err)
+
+	m := parseResult(t, res)
+	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	assert.NotContains(t, m, "ui_url")
 }
