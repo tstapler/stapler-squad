@@ -17,18 +17,15 @@ func TestInstanceDataNotFound_should_MatchDomainSentinel_When_IDIsMissing(t *tes
 	defer cleanup()
 
 	t.Run("storage lookup returns the sentinel", func(t *testing.T) {
-		t.Parallel()
 		_, err := storage.FindInstanceDataByID("no-such-session")
 		assert.ErrorIs(t, err, domain.ErrInstanceDataNotFound)
 	})
 	t.Run("archive treats the sentinel as not archived", func(t *testing.T) {
-		t.Parallel()
 		archived, err := storage.ArchiveInstanceDataByID("no-such-session", time.Now())
 		require.NoError(t, err)
 		assert.False(t, archived)
 	})
 	t.Run("registry maps the sentinel to ErrSessionNotFound", func(t *testing.T) {
-		t.Parallel()
 		_, _, err := NewRegistry(storage, nil).Acquire("no-such-session")
 		assert.ErrorIs(t, err, ErrSessionNotFound)
 	})

@@ -66,10 +66,10 @@ func TestSelectiveLoading(t *testing.T) {
 		name string
 		opts domain.LoadOptions
 	}{
-		{"domain.LoadMinimal", domain.LoadMinimal},
-		{"domain.LoadSummary", domain.LoadSummary},
-		{"domain.LoadFull", domain.LoadFull},
-		{"domain.LoadDiffOnly", domain.LoadDiffOnly},
+		{"LoadMinimal", domain.LoadMinimal},
+		{"LoadSummary", domain.LoadSummary},
+		{"LoadFull", domain.LoadFull},
+		{"LoadDiffOnly", domain.LoadDiffOnly}, //nolint:staticcheck // SA1019: still-deprecated preset kept under test
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -177,7 +177,7 @@ func BenchmarkSelectiveLoading(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.Run("domain.LoadMinimal", func(b *testing.B) {
+	b.Run("LoadMinimal", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			_, err := repo.GetWithOptions(ctx, "bench-session", domain.LoadMinimal)
@@ -187,7 +187,7 @@ func BenchmarkSelectiveLoading(b *testing.B) {
 		}
 	})
 
-	b.Run("domain.LoadSummary", func(b *testing.B) {
+	b.Run("LoadSummary", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			_, err := repo.GetWithOptions(ctx, "bench-session", domain.LoadSummary)
@@ -197,7 +197,7 @@ func BenchmarkSelectiveLoading(b *testing.B) {
 		}
 	})
 
-	b.Run("domain.LoadFull", func(b *testing.B) {
+	b.Run("LoadFull", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			_, err := repo.GetWithOptions(ctx, "bench-session", domain.LoadFull)

@@ -387,7 +387,7 @@ func TestEntRepository_FindByIDWithOptions(t *testing.T) {
 		assert.Equal(t, "find-by-id-title", found.Title)
 	})
 
-	t.Run("returns domain.ErrInstanceDataNotFound when no match", func(t *testing.T) {
+	t.Run("returns ErrInstanceDataNotFound when no match", func(t *testing.T) {
 		t.Parallel()
 		found, err := repo.FindByIDWithOptions(ctx, "no-such-session", domain.LoadMinimal)
 		require.ErrorIs(t, err, domain.ErrInstanceDataNotFound)
@@ -397,7 +397,7 @@ func TestEntRepository_FindByIDWithOptions(t *testing.T) {
 	// uuid has no uniqueness constraint (Optional().Default("")), so an empty id must
 	// be rejected explicitly rather than falling through to session.UUID("") and
 	// matching an arbitrary row that has never been assigned a UUID.
-	t.Run("returns domain.ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
+	t.Run("returns ErrInstanceDataNotFound for empty id rather than matching an unassigned-UUID row", func(t *testing.T) {
 		t.Parallel()
 		found, err := repo.FindByIDWithOptions(ctx, "", domain.LoadMinimal)
 		require.ErrorIs(t, err, domain.ErrInstanceDataNotFound)
