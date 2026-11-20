@@ -27,12 +27,16 @@ alias(
 
 go_test(
     name = "instancestore_test",
-    srcs = ["reads_test.go"],
+    srcs = [
+        "mapper_test.go",
+        "reads_test.go",
+    ],
     embed = [":instancestore"],
     deps = [
         "//session/domain",
         "//session/internal/entdbtest",
         "//tools/bzl/ent",
+        "//tools/bzl/ent:session",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

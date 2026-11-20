@@ -96,8 +96,8 @@ func (i *Instances) ListByStatus(ctx context.Context, status domain.Status) ([]d
 
 	// Convert to InstanceData
 	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *sessionToInstanceData(s)
+	for idx, s := range sessions {
+		result[idx] = *sessionToInstanceData(s)
 	}
 
 	return result, nil
@@ -116,8 +116,8 @@ func (i *Instances) ListByTag(ctx context.Context, tagName string) ([]domain.Ins
 
 	// Convert to InstanceData
 	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *sessionToInstanceData(s)
+	for idx, s := range sessions {
+		result[idx] = *sessionToInstanceData(s)
 	}
 
 	return result, nil
@@ -169,8 +169,8 @@ func (i *Instances) ListWithOptions(ctx context.Context, options domain.LoadOpti
 	}
 
 	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *sessionToInstanceData(s)
+	for idx, s := range sessions {
+		result[idx] = *sessionToInstanceData(s)
 	}
 	return result, nil
 }
@@ -186,8 +186,8 @@ func (i *Instances) ListByStatusWithOptions(ctx context.Context, status domain.S
 	}
 
 	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *sessionToInstanceData(s)
+	for idx, s := range sessions {
+		result[idx] = *sessionToInstanceData(s)
 	}
 	return result, nil
 }
@@ -203,8 +203,8 @@ func (i *Instances) ListByTagWithOptions(ctx context.Context, tagName string, op
 	}
 
 	result := make([]domain.InstanceData, len(sessions))
-	for i, s := range sessions {
-		result[i] = *sessionToInstanceData(s)
+	for idx, s := range sessions {
+		result[idx] = *sessionToInstanceData(s)
 	}
 	return result, nil
 }
