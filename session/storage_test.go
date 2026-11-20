@@ -1295,7 +1295,7 @@ func TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, ids)
 
-	require.NoError(t, storage.DismissFinding(ctx, DismissedFindingData{
+	require.NoError(t, storage.DismissFinding(ctx, domain.DismissedFindingData{
 		FindingID:      "finding-abc123",
 		SessionID:      "sess-1",
 		ConversationID: "conv-1",
@@ -1317,7 +1317,7 @@ func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *te
 	defer cleanup()
 	ctx := context.Background()
 
-	data := DismissedFindingData{FindingID: "finding-dup", SessionID: "sess-1", FindingType: 1}
+	data := domain.DismissedFindingData{FindingID: "finding-dup", SessionID: "sess-1", FindingType: 1}
 	require.NoError(t, storage.DismissFinding(ctx, data))
 	require.NoError(t, storage.DismissFinding(ctx, data))
 

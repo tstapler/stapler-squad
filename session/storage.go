@@ -871,7 +871,7 @@ func (s *Storage) GetTaggingRuleFireCounts(ctx context.Context, since time.Time)
 }
 
 // DismissFinding persists a WasteFinding dismissal in the repository.
-func (s *Storage) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+func (s *Storage) DismissFinding(ctx context.Context, data domain.DismissedFindingData) error {
 	return s.Repo.DismissFinding(ctx, data)
 }
 
@@ -881,33 +881,33 @@ func (s *Storage) ListDismissedFindingIDs(ctx context.Context) (map[string]bool,
 }
 
 // RecordAnalytics logs a classification decision to the repository.
-func (s *Storage) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
+func (s *Storage) RecordAnalytics(ctx context.Context, data domain.AnalyticsData) error {
 	return s.Repo.RecordAnalytics(ctx, data)
 }
 
 // RecordAnalyticsBatch writes one atomic, idempotent analytics batch without
 // widening the broad Repository interface used by unrelated adapters.
-func (s *Storage) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+func (s *Storage) RecordAnalyticsBatch(ctx context.Context, batch []domain.AnalyticsData) error {
 	return s.Repo.RecordAnalyticsBatch(ctx, batch)
 }
 
 // ListAnalytics retrieves recent classification decisions from the repository.
-func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {
+func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]domain.AnalyticsData, error) {
 	return s.Repo.ListAnalytics(ctx, limit)
 }
 
 // ListAnalyticsSince retrieves analytics entries with created_at >= since.
-func (s *Storage) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error) {
+func (s *Storage) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]domain.AnalyticsData, error) {
 	return s.Repo.ListAnalyticsSince(ctx, since, limit)
 }
 
 // ListAnalyticsByProgramSince retrieves entries for a specific program since a time.
-func (s *Storage) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error) {
+func (s *Storage) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]domain.AnalyticsData, error) {
 	return s.Repo.ListAnalyticsByProgramSince(ctx, program, since, limit)
 }
 
 // GetSubcommandBreakdown returns per-(subcommand, decision) counts for a program.
-func (s *Storage) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {
+func (s *Storage) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]domain.SubcommandDecisionCount, error) {
 	return s.Repo.GetSubcommandBreakdown(ctx, program, since)
 }
 
@@ -917,7 +917,7 @@ func (s *Storage) ListRecentCommandsByProgram(ctx context.Context, program, subc
 }
 
 // GetSubcommandTrend returns raw analytics rows for (program, subcommand) since a time.
-func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error) {
+func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]domain.AnalyticsData, error) {
 	return s.Repo.GetSubcommandTrend(ctx, program, subcommand, since)
 }
 

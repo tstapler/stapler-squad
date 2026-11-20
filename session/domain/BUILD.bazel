@@ -5,6 +5,7 @@ go_library(
     name = "domain",
     srcs = [
         "ac_actor.go",
+        "analytics_data.go",
         "approval_metadata.go",
         "artifact_records.go",
         "artifacts_blob.go",

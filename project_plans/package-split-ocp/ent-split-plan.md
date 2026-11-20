@@ -9,7 +9,7 @@ Evidence labels: VERIFIED = command run in this worktree (command given); INFERR
 - E1 `webhookstore` (#1661), E2 `flowstore` (#1663, reader only, not embedded by design), E3 wake DTOs in `session/domain` (#1653): leaf/file exists, plan completion criteria not re-verified.
 - E4 `wakestore`, E5 guidance DTOs, E6b `guidancestore`: done, per the step's own Done line in section 3. E6a was folded into E6b (`guidanceHooks` deleted, one `itemPendingChanged` hook remains).
 - E7 NO-GO (no second implementation).
-- E8 `stagecfg`, E11 small slices (`shellstore`, `projectstore`, `rulestore`): done, per their section 3 rows. E11 core instance-CRUD/analytics residue is NO-GO (needs the instance DTO lowering; owner-approved: small slices only).
+- E8 `stagecfg`, E11 small slices (`shellstore`, `projectstore`, `rulestore`): done, per their section 3 rows. E11 core: owner approved starting the instance DTO lowering on 2026-11-19; staged plan in [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md). Step I0 (`analyticsstore`) is done; I1 onward is open.
 - E9 `sessionpr` (#1683): leaf exists and the guard rows in `session/legacy_item_pr_readers_test.go` are keyed to `session/sessionpr/`; the Makefile and `pr_state_writer_guard_test.go` guards were not re-checked.
 - E10 `backlogstore`: done (#1687, #1691, #1693, #1696, #1700, #1701, #1702; see "E10 sequence" in section 6).
 - E12 `markerstore`: done (#1671).
