@@ -32,7 +32,7 @@ func sectionData(title, variant string) domain.InstanceData {
 			ConversationUUID: "conv-" + variant, SquadSessionID: "sq-" + variant, ProjectName: "pn-" + variant,
 			LastAttached: time.Date(2026, 1, len(variant), 3, 4, 5, 0, time.UTC),
 			Settings: domain.ClaudeSettings{
-				AutoReattach: len(variant)%2 == 0, CreateNewOnMissing: len(variant)%2 == 0, ShowSessionSelector: len(variant)%2 == 0,
+				AutoReattach: variant == "bb", CreateNewOnMissing: variant == "a", ShowSessionSelector: variant == "ccc",
 				PreferredSessionName: "pref-" + variant, SessionTimeoutMinutes: len(variant),
 			},
 			Metadata: map[string]string{"k-" + variant: "v-" + variant},
@@ -47,6 +47,18 @@ func loadFull(t *testing.T, in *Instances, title string) domain.InstanceData {
 	return *got
 }
 
+// fullUpdateData is fullCreateData plus the columns only Update writes.
+func fullUpdateData(t *testing.T) domain.InstanceData {
+	t.Helper()
+	data := fullCreateData(t)
+	data.WorkflowID, data.PauseReason, data.ExitReason = "wf-1", "pause-r", "exit-r"
+	data.LastUserResponse = time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	data.ProcessingGraceUntil = time.Date(2026, 3, 4, 13, 0, 0, 0, time.UTC)
+	data.LastPromptDetected = time.Date(2026, 3, 4, 14, 0, 0, 0, time.UTC)
+	data.LastPromptSignature = "psig"
+	return data
+}
+
 func TestInstances_should_PersistEveryColumnAndEdge_When_UpdateCalled(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -56,15 +68,11 @@ func TestInstances_should_PersistEveryColumnAndEdge_When_UpdateCalled(t *testing
 	_, err = c.Tag.Create().SetName("t-old").Save(ctx)
 	require.NoError(t, err)
 	in := newWithPRPorts(c)
-	seed := domain.InstanceData{Title: "full", UUID: "uuid-old", Path: "/seed", Program: "seed", Status: domain.Active, CreatedAt: seedTime, UpdatedAt: seedTime}
+	seed := domain.InstanceData{Title: "full", UUID: "uuid-old", Path: "/seed", Program: "seed", Status: domain.Active, CreatedAt: seedTime, UpdatedAt: seedTime, AutoApprove: true, Hidden: true}
 	require.NoError(t, in.Create(ctx, seed))
 
-	data := fullCreateData(t)
-	data.WorkflowID, data.PauseReason, data.ExitReason = "wf-1", "pause-r", "exit-r"
-	data.LastUserResponse = time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
-	data.ProcessingGraceUntil = time.Date(2026, 3, 4, 13, 0, 0, 0, time.UTC)
-	data.LastPromptDetected = time.Date(2026, 3, 4, 14, 0, 0, 0, time.UTC)
-	data.LastPromptSignature = "psig"
+	data := fullUpdateData(t)
+	data.AutoApprove, data.Hidden = false, false // the seed holds the opposite of AutoYes/OneShot, so a swapped pair shows
 
 	require.NoError(t, in.Update(ctx, data))
 
@@ -129,6 +137,7 @@ func TestInstances_should_ClearOrKeepColumns_When_UpdateCarriesEmptyValues(t *te
 	assert.Empty(t, r.SuppressedRuleTags)
 	assert.False(t, r.OneShot)
 	assert.False(t, r.Hidden)
+	assert.Equal(t, "uuid-full", r.UUID, "an empty uuid keeps the stored one")
 	assert.Equal(t, "br", r.Branch, "branch is set-only")
 	assert.Equal(t, "tymux", r.Backend, "backend is set-only")
 	assert.Equal(t, "cat", r.Category, "category is set-only")
@@ -170,6 +179,7 @@ func TestInstances_should_MirrorLegacyPRColumns_When_PRLinksPresentOrNot(t *test
 	require.NoError(t, in.Update(ctx, d))
 	r := row(t, c, "mr")
 	assert.Equal(t, 5, r.GithubPrNumber, "link-less save is set-only: zero must not erase the number")
+	assert.Equal(t, "https://github.com/o/r/pull/5", r.GithubPrURL, "link-less save is set-only: empty must not erase the url")
 	assert.True(t, r.GithubPrStatusTerminal)
 
 	d.TerminalClearPending = true
@@ -182,7 +192,11 @@ func TestInstances_should_MirrorLegacyPRColumns_When_PRLinksPresentOrNot(t *test
 	assert.Zero(t, r.GithubPrNumber, "a session with links writes the mirror unconditionally")
 	assert.Empty(t, r.GithubPrURL)
 
-	d.HasPRLinks, d.LegacyPRUnrepresented, d.GitHubPRStatusTerminal = false, true, true
+	d.HasPRLinks, d.LegacyPRUnrepresented, d.GitHubPRStatusTerminal = false, true, false
+	require.NoError(t, in.Update(ctx, d))
+	assert.False(t, row(t, c, "mr").GithubPrStatusTerminal, "an unrepresented legacy save without the flag must not set it")
+
+	d.GitHubPRStatusTerminal = true
 	d.GitHubPRNumber, d.GitHubPRURL = 7, "https://github.com/o/r/pull/7"
 	require.NoError(t, in.Update(ctx, d))
 	r = row(t, c, "mr")
@@ -373,13 +387,16 @@ func TestInstances_should_LeaveNeighbourRowsUntouched_When_UpdateCalled(t *testi
 	ctx := context.Background()
 	c := entdbtest.NewClient(t)
 	in := newWithPRPorts(c)
+	require.NoError(t, in.Create(ctx, sectionData("neighbour", "n"))) // older rows sort first, so an unscoped lookup would hit it
 	require.NoError(t, in.Create(ctx, sectionData("target", "a")))
-	require.NoError(t, in.Create(ctx, sectionData("neighbour", "n")))
 	before := loadFull(t, in, "neighbour")
 
 	require.NoError(t, in.Update(ctx, sectionData("target", "bb")))
 
-	assert.Equal(t, "/p/bb", loadFull(t, in, "target").Path)
+	gotTarget := loadFull(t, in, "target")
+	assert.Equal(t, "/p/bb", gotTarget.Path)
+	assert.Equal(t, sectionData("target", "bb").Worktree, gotTarget.Worktree)
+	assert.Equal(t, sectionData("target", "bb").ClaudeSession, gotTarget.ClaudeSession)
 	after := loadFull(t, in, "neighbour")
 	assert.Equal(t, before, after, "a title-keyed update must not touch another session or its child rows")
 	names := []string{}
@@ -388,4 +405,68 @@ func TestInstances_should_LeaveNeighbourRowsUntouched_When_UpdateCalled(t *testi
 	}
 	sort.Strings(names)
 	assert.Equal(t, []string{"tag-a", "tag-bb", "tag-n"}, names)
+}
+
+func TestInstances_should_WriteEachClaudeSettingToItsOwnColumn_When_ClaudeRowUpdated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := entdbtest.NewClient(t)
+	in := newWithPRPorts(c)
+	require.NoError(t, in.Create(ctx, sectionData("cs", "a")))
+
+	for _, variant := range []string{"bb", "ccc", "a"} {
+		require.NoError(t, in.Update(ctx, sectionData("cs", variant)))
+		assert.Equal(t, sectionData("cs", variant).ClaudeSession, loadFull(t, in, "cs").ClaudeSession, variant)
+	}
+}
+
+func TestInstances_should_KeepStoredValue_When_SetOnlyFieldIsZeroInMemory(t *testing.T) {
+	t.Parallel()
+	zeroers := map[string]func(*domain.InstanceData){
+		"WorkingDir":                func(d *domain.InstanceData) { d.WorkingDir = "" },
+		"Height":                    func(d *domain.InstanceData) { d.Height = 0 },
+		"Width":                     func(d *domain.InstanceData) { d.Width = 0 },
+		"Prompt":                    func(d *domain.InstanceData) { d.Prompt = "" },
+		"ExistingWorktree":          func(d *domain.InstanceData) { d.ExistingWorktree = "" },
+		"SessionType":               func(d *domain.InstanceData) { d.SessionType = "" },
+		"TmuxPrefix":                func(d *domain.InstanceData) { d.TmuxPrefix = "" },
+		"LastTerminalUpdate":        func(d *domain.InstanceData) { d.LastTerminalUpdate = time.Time{} },
+		"LastMeaningfulOutput":      func(d *domain.InstanceData) { d.LastMeaningfulOutput = time.Time{} },
+		"LastOutputSignature":       func(d *domain.InstanceData) { d.LastOutputSignature = "" },
+		"LastAddedToQueue":          func(d *domain.InstanceData) { d.LastAddedToQueue = time.Time{} },
+		"LastViewed":                func(d *domain.InstanceData) { d.LastViewed = time.Time{} },
+		"LastAcknowledged":          func(d *domain.InstanceData) { d.LastAcknowledged = time.Time{} },
+		"LastUserResponse":          func(d *domain.InstanceData) { d.LastUserResponse = time.Time{} },
+		"LastPromptDetected":        func(d *domain.InstanceData) { d.LastPromptDetected = time.Time{} },
+		"LastPromptSignature":       func(d *domain.InstanceData) { d.LastPromptSignature = "" },
+		"MCPServerURL":              func(d *domain.InstanceData) { d.MCPServerURL = "" },
+		"InitialPrompt":             func(d *domain.InstanceData) { d.InitialPrompt = "" },
+		"InitialPromptSentAt":       func(d *domain.InstanceData) { d.InitialPromptSentAt = time.Time{} },
+		"CreationProgressUpdatedAt": func(d *domain.InstanceData) { d.CreationProgressUpdatedAt = time.Time{} },
+		"GitHubOwner":               func(d *domain.InstanceData) { d.GitHubOwner = "" },
+		"GitHubRepo":                func(d *domain.InstanceData) { d.GitHubRepo = "" },
+		"GitHubHost":                func(d *domain.InstanceData) { d.GitHubHost = "" },
+	}
+	for name, zero := range zeroers {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			c := entdbtest.NewClient(t)
+			_, err := c.Project.Create().SetName("proj").Save(ctx)
+			require.NoError(t, err)
+			in := newWithPRPorts(c)
+			full := fullUpdateData(t)
+			require.NoError(t, in.Create(ctx, domain.InstanceData{Title: "full", UUID: "uuid-full", Path: "/seed", Program: "seed", Status: domain.Active}))
+			require.NoError(t, in.Update(ctx, full))
+			before := loadFull(t, in, "full")
+
+			zeroed := full
+			zero(&zeroed)
+			require.NoError(t, in.Update(ctx, zeroed))
+
+			after := loadFull(t, in, "full")
+			after.UpdatedAt = before.UpdatedAt // the tag edge write re-stamps it
+			assert.Equal(t, before, after, "a zero %s must leave the stored value alone", name)
+		})
+	}
 }

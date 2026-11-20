@@ -381,7 +381,7 @@ func (s *Storage) ListInstanceDataWithWorktree() ([]domain.InstanceData, error) 
 // server restart. This is the storage-only counterpart to Instance.SetArchivedAtIfNilAndStop,
 // used as ArchiveSessionByUUID's fallback so terminal-transition and safety-net archival
 // sweeps don't silently no-op just because a session isn't currently being polled. Read-
-// modify-write on the full InstanceData row (not a partial struct), so EntRepository.Update's
+// modify-write on the full InstanceData row (not a partial struct), so instancestore.Instances.Update's
 // guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
 // Returns false (no error) if the session doesn't exist or is already archived, matching
 // SetArchivedAtIfNilAndStop's CAS semantics.

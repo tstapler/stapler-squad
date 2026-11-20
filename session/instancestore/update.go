@@ -21,7 +21,7 @@ func (i *Instances) Update(ctx context.Context, data domain.InstanceData) error 
 }
 
 // UpdateSkipping is Update minus the child-table sections the caller knows are
-// already persisted unchanged (see savedFingerprints).
+// already persisted unchanged (see session.savedFingerprints).
 func (i *Instances) UpdateSkipping(ctx context.Context, data domain.InstanceData, skip domain.UpdateSkip) error {
 	// Start transaction
 	tx, err := i.client.Tx(ctx)
