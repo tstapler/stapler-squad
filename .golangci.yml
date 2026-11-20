@@ -251,8 +251,15 @@ linters:
             - $gostd
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/claudemetadata
+            - github.com/tstapler/stapler-squad/session/ent/claudesession
+            - github.com/tstapler/stapler-squad/session/ent/diffstats
+            - github.com/tstapler/stapler-squad/session/ent/itemsession
+            - github.com/tstapler/stapler-squad/session/ent/project
             - github.com/tstapler/stapler-squad/session/ent/session
+            - github.com/tstapler/stapler-squad/session/ent/shell
             - github.com/tstapler/stapler-squad/session/ent/tag
+            - github.com/tstapler/stapler-squad/session/ent/worktree
         # session/markerstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_markerstore:

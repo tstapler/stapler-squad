@@ -16,7 +16,7 @@ import (
 func TestInstances_should_ReturnExactNotFoundText_When_TitleMissing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	in := New(entdbtest.NewClient(t))
+	in := New(entdbtest.NewClient(t), Ports{})
 
 	_, err := in.Get(ctx, "ghost")
 	require.Error(t, err)
@@ -34,7 +34,7 @@ func TestInstances_should_ExcludeEmptyArtifacts_When_GetAllSessionArtifacts(t *t
 	seedSession(t, c, "empty", "uuid-empty", 0)
 	_, err := c.Session.Update().Where(sessionpred.Title("has")).SetSessionArtifacts(`{"a":1}`).Save(ctx)
 	require.NoError(t, err)
-	in := New(c)
+	in := New(c, Ports{})
 
 	all, err := in.GetAllSessionArtifacts(ctx)
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestInstances_should_RoundTripScalarFields_When_Mapped(t *testing.T) {
 		Save(ctx)
 	require.NoError(t, err)
 
-	d, err := New(c).GetWithOptions(ctx, "m", domain.LoadMinimal)
+	d, err := New(c, Ports{}).GetWithOptions(ctx, "m", domain.LoadMinimal)
 	require.NoError(t, err)
 
 	assert.Equal(t, "u", d.UUID)
