@@ -24,9 +24,9 @@ The global is `featureflags.current` (`atomic.Pointer`) behind `SetCurrent` / `C
 | `filesFlagEnabled(name)` via `FilesEditingEnabled`, `FilesViewerV2Enabled`, `FilesMergePhoneEnabled`, `FilesRangeReadEnabled`, `FilesDeltaWriteEnabled`, `FilesEditLargeEnabled` (`feature_flag_service.go:134-154`) | same file | no; the six `Files*Enabled(ctx)` wrappers are the prod entry points |
 | `currentResyncOptions()` | `server/services/wsconn/connectrpc_websocket.go:2857` (`services.FeatureFlagDefault`) | no free-function carrier; wsconn already imports `services` |
 
-Installers of the global: `server/dependencies.go:447` (production); test mains in `server/services`,
+Installers of the global: `BuildCoreDepsWithOptions` in `server/dependencies.go` (production); test mains in `server/services`,
 `server/services/backlogsvc`, `server/services/wsconn`, `session/inttest`. Test readers of `featureflags.Current()`: 8 existing files in `server/services` plus this PR's new
-`feature_flag_injected_registry_test.go` (4 uses; measured with `git grep -c 'featureflags.Current()' -- '*_test.go'`). Non-test uses: `dependencies.go:447` (`SetCurrent`), `FeatureFlagDefault` and `FeatureFlagService.reg()`'s fallback. `go list -deps ./server/services/featureflags` imports `config` only.
+`feature_flag_injected_registry_test.go` (4 uses; measured with `git grep -c 'featureflags.Current()' -- '*_test.go'`). Non-test uses: `BuildCoreDepsWithOptions` (`SetCurrent`), `FeatureFlagDefault` and `FeatureFlagService.reg()`'s fallback. `go list -deps ./server/services/featureflags` imports `config` only.
 
 ## Slices (each one PR, no behaviour change)
 
@@ -38,7 +38,12 @@ Installers of the global: `server/dependencies.go:447` (production); test mains 
 2. **Composition root owns the registry.** `BuildCoreDepsWithOptions` builds one `*Registry`, passes it to `SessionService`
    so `NewFeatureFlagServiceWithRegistry` is used in production, and exposes it on `CoreDeps`. Still also calls `SetCurrent`.
    Files: `server/dependencies.go`, `session_service.go` (constructor field), tests. Risk: low. Proof: `/api` GetFeatureFlags
-   golden equal before/after.
+   golden equal before/after. **Done.** `BuildCoreDepsWithOptions` builds one `services.FlagRegistry()`, passes the same
+   instance to `SetCurrent`, to `NewSessionServiceFromConfig`/`NewSessionServiceWithEntClient` (new `flags` argument,
+   forwarded by `newGatedSessionService` to `NewFeatureFlagServiceWithRegistry`) and to `CoreDeps.FlagRegistry`;
+   `SessionService.FeatureFlagRegistry()` exposes the service's registry. Proof: `server/dependencies_flag_registry_test.go`
+   (deps registry == `Current()` == service registry, and the service keeps the injected registry after the global is replaced).
+   The three test call sites of `newGatedSessionService` (`feature_flag_gate_test.go` twice, `session_service_events_test.go` once) pass `featureflags.Current()` (unchanged behaviour). Fragility: `NewSessionService` builds a default flag service and `newGatedSessionService` swaps it, so a capture added inside `NewSessionServiceWithSearchEngine` would bind to the dropped object; slice 7 should pass the registry into the constructor and delete the swap. Test-side `NewFeatureFlagService()` has 47 occurrences in 12 files (`git grep -c 'NewFeatureFlagService()' -- '*_test.go'`).
 3. **Notification-actions and attention readers.** Convert the free functions to a small struct (`flagReader{reg}`) or
    methods taking `reg`; `wireNotificationActionFlags` passes the service's registry. Files: `feature_flags_notification_actions*.go`,
    `feature_flags_attention*.go`, and `server/attention_options.go` (`liveAttentionFlags` loads via `services.LoadAttentionFlags`,
