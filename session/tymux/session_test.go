@@ -495,7 +495,7 @@ func TestTymuxGRPCSession_RestoreWithWorkDir_NoMatchFallsBackToStart(t *testing.
 			return connect.NewResponse(fakeSession("sess-new", "pane-new", dir, v1.Liveness_LIVENESS_LIVE)), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 
 	err := sess.RestoreWithWorkDir(dir)
 

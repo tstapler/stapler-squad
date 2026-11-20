@@ -25,6 +25,8 @@ type ProcessManager interface {
 
 	// Lifecycle
 	Start(dir string) error
+	// RestoreWithWorkDir re-attaches, or recreates a gone session. It must return an error
+	// matching domain.ErrLaunchNotWired, never create one, if WireLaunch has not run.
 	RestoreWithWorkDir(workDir string) error
 	Close() error
 	IsAlive() bool

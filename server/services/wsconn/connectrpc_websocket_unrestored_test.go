@@ -185,3 +185,38 @@ func (c startedCounter) OnLifecycleEvent(e domain.LifecycleEvent, _ string) {
 		c.n.Add(1)
 	}
 }
+
+// unwiredLaunchPM models a freshly created Instance whose first Start has not wired the launch
+// command yet: RestoreWithWorkDir must refuse (domain.ErrLaunchNotWired) instead of creating a
+// bare-shell session.
+type unwiredLaunchPM struct{ *unrestoredTymuxPM }
+
+func (p *unwiredLaunchPM) RestoreWithWorkDir(string) error {
+	p.restored.Add(1)
+	return domain.ErrLaunchNotWired
+}
+
+// Regression: an attach that races ahead of Start must report "not alive, retry after Start"
+// rather than failing the stream or creating a session that runs the default shell.
+func TestStreamPaths_should_NotFailOrAttach_When_RestoreRacesAheadOfFirstStart(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("ensureHubBackendAlive", func(t *testing.T) {
+		pm := &unwiredLaunchPM{&unrestoredTymuxPM{}}
+		inst := instance.NewStartedInstanceForTest(t, "unwired-hub", pm)
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.False(t, alive)
+		require.False(t, pm.attached.Load(), "no pane may be attached before Start wires the launch command")
+	})
+
+	t.Run("ensureControlModeStarted", func(t *testing.T) {
+		pm := &unwiredLaunchPM{&unrestoredTymuxPM{}}
+		inst := instance.NewStartedInstanceForTest(t, "unwired-control", pm)
+
+		require.NoError(t, h.ensureControlModeStarted(inst, "sess", &pumpTestController{}))
+		require.Equal(t, int32(1), pm.restored.Load())
+	})
+}

@@ -8,5 +8,10 @@ var ErrPreconditionFailed = errors.New("precondition failed: concurrent modifica
 // ErrNotFound is returned when a requested entity does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrLaunchNotWired is the ProcessManager contract for a restore that would have to create a
+// session before WireLaunch ran. Creating one then would start the backend's default shell, not
+// the agent, so RestoreWithWorkDir must return this instead; callers treat it as "not started yet".
+var ErrLaunchNotWired = errors.New("launch command not wired")
+
 // ErrConflict is returned when an operation would violate a uniqueness constraint.
 var ErrConflict = errors.New("conflict")

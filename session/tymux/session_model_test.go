@@ -155,7 +155,7 @@ func (m *identityModel) uniq(label string) string {
 
 func (m *identityModel) fresh(label, dir string) *modelInstance {
 	label = m.uniq(label)
-	mgr := NewTymuxGRPCSession(m.d)
+	mgr := newWiredTestSession(m.d)
 	mgr.SetSessionLabel(label)
 	return &modelInstance{mgr: mgr, label: label, dir: dir}
 }
@@ -195,7 +195,7 @@ func (m *identityModel) restartProcess() {
 	m.shadows = nil // views of the dead process are gone with it
 	live := m.live()
 	for _, in := range live {
-		in.mgr = NewTymuxGRPCSession(m.d)
+		in.mgr = newWiredTestSession(m.d)
 		in.mgr.SetSessionLabel(in.label)
 		in.mgr.SetStoredSessionID(in.stored)
 	}
@@ -304,7 +304,7 @@ func (m *identityModel) step() {
 	case 11: // a shadow view of the same record (registry throwaway, liveness shadow)
 		if in := m.pick(); in != nil && in.stored != "" && m.d.ids()[in.stored] {
 			before := len(m.d.ids())
-			view := NewTymuxGRPCSession(m.d)
+			view := newWiredTestSession(m.d)
 			view.SetSessionLabel(in.label)
 			view.SetStoredSessionID(in.stored)
 			if err := view.RestoreWithWorkDir(in.dir); err != nil {
@@ -343,7 +343,7 @@ func (m *identityModel) step() {
 		}
 	case 15: // an unrestored view of a record is closed (stopped/deleted before restore)
 		if in := m.pick(); in != nil && in.stored != "" {
-			view := NewTymuxGRPCSession(m.d)
+			view := newWiredTestSession(m.d)
 			view.SetSessionLabel(in.label)
 			view.SetStoredSessionID(in.stored)
 			m.shadowClose(view, in.stored, "unrestored shadow")

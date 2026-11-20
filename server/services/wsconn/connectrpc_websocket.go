@@ -1316,7 +1316,9 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *instance
 	if !handled && !instance.IsBackendProcessAlive() {
 		log.Info("[streamViaControlMode] session not alive, restoring before control mode", "session", sessionID)
 		workDir := instance.ActiveDir()
-		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
+		if restoreErr := instance.RestoreProcess(workDir); errors.Is(restoreErr, domain.ErrLaunchNotWired) {
+			log.Info("[streamViaControlMode] restore skipped, instance start not wired yet", "session", sessionID)
+		} else if restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
 		// RestoreProcess returns nil even when the PTY attach failed; only mark a pane that is really attached.
@@ -2157,6 +2159,11 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Contex
 	restoreErr := instance.RestoreProcess(workDir)
 	restoreDur := time.Since(restoreStart)
 	termlat.Default.Record(termlat.StageAttachRestore, labels, restoreDur)
+	if errors.Is(restoreErr, domain.ErrLaunchNotWired) {
+		// A first Start is still in flight: report not-alive so ensureHubInstanceStarted waits for it.
+		log.Info("[streamViaHub] restore skipped, instance start not wired yet", "session", sessionID)
+		return false, nil
+	}
 	if restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
