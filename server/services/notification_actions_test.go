@@ -95,7 +95,7 @@ func newDescriptorFixture() *descriptorFixture {
 func (f *descriptorFixture) builder() *DescriptorBuilder {
 	b := NewDescriptorBuilder(DescriptorSources{
 		Approvals: f.approvals, Questions: f.questions, Backlog: f.backlog, Guidance: f.guidance,
-	}, nil)
+	}, testFlagRegistry())
 	b.flag = func(dp string) bool {
 		if v, ok := f.flags[dp]; ok {
 			return v

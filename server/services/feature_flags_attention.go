@@ -30,7 +30,7 @@ type AttentionFlags struct {
 }
 
 // ResolveAttentionFlags reads the six flags from cfg.
-// A nil reg falls back to featureflags.Current() until slice 7 of flags-stage2-plan.md.
+// reg must be non-nil.
 func ResolveAttentionFlags(cfg *config.Config, reg *featureflags.Registry) AttentionFlags {
 	reg = flagReader{reg: reg}.registry()
 	on := func(name string) bool { return reg.Enabled(cfg, name) }

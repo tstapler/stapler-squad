@@ -175,15 +175,7 @@ func WorkflowEngineShadowStatusDetail(snapshot func() workflowengine.ShadowLedge
 	}
 }
 
-// FeatureFlagDefault looks up name's default in the process registry installed by
-// featureflags.SetCurrent at startup — the single source of truth both GetFeatureFlags
-// and receiver-less call sites resolve against.
-// Returns false for an unregistered name; panics if no registry was installed.
-func FeatureFlagDefault(name string) bool {
-	return featureflags.Current().Default(name)
-}
-
-// FlagRegistry builds the process registry from the services-owned specs plus the
+// FlagRegistry builds the flag registry from the services-owned specs plus the
 // specs contributed by the composition root (leaf packages' own flags).
 func FlagRegistry(extra ...[]featureflags.Spec) *featureflags.Registry {
 	specs := coreFlagSpecs()
@@ -194,10 +186,10 @@ func FlagRegistry(extra ...[]featureflags.Spec) *featureflags.Registry {
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.
-// It reads the featureflags registry (featureflags.Current) and owns the per-name FeatureController map.
+// It reads its injected featureflags registry and owns the per-name FeatureController map.
 // Extracted from SessionService per ADR-001 (UpdateFeatureFlag exceeds the 30-line threshold).
 type FeatureFlagService struct {
-	// registry is the injected flag registry; nil means the process registry (featureflags.Current).
+	// registry is the flag registry every read resolves against; never nil.
 	registry *featureflags.Registry
 
 	// featureControllers maps feature flag names to their runtime controllers.
@@ -231,28 +223,26 @@ type FeatureFlagService struct {
 	updateMu sync.Mutex
 }
 
-// NewFeatureFlagService creates a FeatureFlagService. Call SetFeatureController
-// for each flag that has an in-process runtime component.
+// NewFeatureFlagService creates a FeatureFlagService over the default FlagRegistry (no leaf-contributed
+// specs); production uses NewFeatureFlagServiceWithRegistry with the composition root's registry.
+// Call SetFeatureController for each flag that has an in-process runtime component.
 func NewFeatureFlagService() *FeatureFlagService {
-	return &FeatureFlagService{}
+	return NewFeatureFlagServiceWithRegistry(FlagRegistry())
 }
 
-// NewFeatureFlagServiceWithRegistry creates a FeatureFlagService that resolves every flag against reg instead of
-// the process registry, so it works with no featureflags.SetCurrent call.
+// NewFeatureFlagServiceWithRegistry creates a FeatureFlagService that resolves every flag against reg.
+// A nil reg is a programming error and panics.
 func NewFeatureFlagServiceWithRegistry(reg *featureflags.Registry) *FeatureFlagService {
+	if reg == nil {
+		panic("services: NewFeatureFlagServiceWithRegistry requires a non-nil registry")
+	}
 	return &FeatureFlagService{registry: reg}
 }
 
-// reg returns the injected registry, or the process registry when none was injected.
-func (f *FeatureFlagService) reg() *featureflags.Registry {
-	if r := f.injected(); r != nil {
-		return r
-	}
-	return featureflags.Current()
-}
+// reg returns the registry given at construction.
+func (f *FeatureFlagService) reg() *featureflags.Registry { return f.registry }
 
-// injected returns the registry given at construction, or nil. It never touches the process registry, so
-// callers that wire flagReaders at construction time stay safe where no SetCurrent ran; nil-receiver safe.
+// injected returns the registry given at construction; nil only for a nil receiver.
 func (f *FeatureFlagService) injected() *featureflags.Registry {
 	if f == nil {
 		return nil

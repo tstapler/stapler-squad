@@ -56,11 +56,11 @@ type FileOps struct {
 	analysis *analysisCache
 }
 
-// NewFileOps builds FileOps over a backend; a nil Flags reads the live global flags
+// NewFileOps builds FileOps over a backend; a nil Flags reads the live global flags through the default FlagRegistry
 // and a nil Telemetry records nothing.
 func NewFileOps(policy FilePolicy, backend FileBackend) *FileOps {
 	if policy.Flags == nil {
-		policy.Flags = globalFilesFlags{}
+		policy.Flags = globalFilesFlags{reader: flagReader{FlagRegistry()}}
 	}
 	if policy.Telemetry == nil {
 		policy.Telemetry = noopFilesTelemetry{}

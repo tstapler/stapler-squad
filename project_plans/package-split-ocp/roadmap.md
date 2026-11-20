@@ -186,7 +186,7 @@ Registry and module-slice seams in the stable cores that every new variant curre
   - FlagAuditPolicy
 - Extension points:
   - New flag = the owning leaf declares its Spec beside its flag-name const; composition root adds one entry to the []Spec slice
-  - Stays closed: FeatureFlagService, its RPC handler, FeatureFlagDefault callers (receiver-less callers get the registry through a package-level accessor set once at startup, documented), the audit sink
+  - Stays closed: FeatureFlagService, its RPC handler, FeatureFlagDefault callers (superseded by Q3: readers take the injected registry; the accessor no longer exists), the audit sink
 - Composition-root wiring: server/dependencies.go assembles []Spec from core specs plus each leaf's Flags(); notification-actions and multi-PR audit policies keep injecting through MergeAuditPolicies
 - Tests to move:
   - Pure Spec/Default tests only; config_surface_proof_* tests stay in services and the 8 tests ranging over knownFeatureFlags are rewritten against the registry; add a test that fails if any known flag is unregistered
@@ -347,7 +347,7 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 Answered on 2026-11-19 (see the linked plans for the measured follow-through):
 
 - **Q2, answered YES: do the backlogsvc in-place OCP refactors, as small PRs.** Sizing found candidates 1 (admission step slice), 2 (`CacheInvalidator`) and 4 (headless role table in `session/domain/headless_roles.go`) already existed; only candidate 3 (headless caller wiring into its own file) was real work, shipped as #1708. See [backlogsvc-ocp-plan.md](backlogsvc-ocp-plan.md).
-- **Q3, answered: inject the `Registry` everywhere; no once-set global accessor.** Staged removal of `featureflags.Current()`: [flags-stage2-plan.md](flags-stage2-plan.md) (slice 1 landed in #1709).
+- **Q3, answered: inject the `Registry` everywhere; no once-set global accessor.** Staged removal of `featureflags.Current()`: [flags-stage2-plan.md](flags-stage2-plan.md) (slices 1-7 landed; slice 7 deleted the global).
 - **E11 core (not a numbered question), owner approved starting the instance DTO lowering.** Staged plan I0-I6: [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md) (I0 landed in #1707).
 
 Still open (no owner answer recorded):

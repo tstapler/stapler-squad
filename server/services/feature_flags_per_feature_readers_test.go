@@ -32,7 +32,7 @@ func TestPerFeatureReaders_ShouldUseInjectedRegistryDefault(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			global := c.read(nil)
+			global := c.read(testFlagRegistry())
 			assert.Equal(t, !global, c.read(flip(c.flag)), "injected registry's default, not the process one")
 		})
 	}
@@ -43,7 +43,7 @@ func TestWorkflowEngineMode_ShouldUseInjectedRegistryDefaults(t *testing.T) {
 	cfg := config.LoadConfig()
 	reg := flippedDefaults(config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag)
 
-	assert.NotEqual(t, WorkflowEngineModeFromConfig(cfg, nil), WorkflowEngineModeFromConfig(cfg, reg))
+	assert.NotEqual(t, WorkflowEngineModeFromConfig(cfg, testFlagRegistry()), WorkflowEngineModeFromConfig(cfg, reg))
 	assert.Equal(t, WorkflowEngineModeFromConfig(cfg, reg), NewWorkflowEngineModeSource(config.LoadConfig, nil, reg).Mode(),
 		"the cached source threads its registry into every resolve")
 }
@@ -54,7 +54,7 @@ func TestFilesFlags_ShouldUseInjectedRegistryDefault(t *testing.T) {
 	names := []string{filesEditingFlagName, filesViewerV2FlagName, filesMergePhoneFlagName,
 		filesRangeReadFlagName, filesDeltaWriteFlagName, filesEditLargeFlagName}
 	reg := flippedDefaults(names...)
-	global, injected := globalFilesFlags{}, globalFilesFlags{reader: flagReader{reg}}
+	global, injected := testFilesFlags(), globalFilesFlags{reader: flagReader{reg}}
 
 	for i, pair := range [][2]func(context.Context) bool{
 		{global.Editing, injected.Editing}, {global.ViewerV2, injected.ViewerV2}, {global.MergePhone, injected.MergePhone},
@@ -91,7 +91,7 @@ func TestGlobalOffStatusDetail_ShouldReadInjectedRegistry(t *testing.T) {
 	gate := config.HiddenSessionGateFeatureFlag
 	reg := flippedDefaults(gate)
 
-	assert.NotEqual(t, flagReader{}.globalOffStatusDetail(cfg), flagReader{reg}.globalOffStatusDetail(cfg))
+	assert.NotEqual(t, flagReader{testFlagRegistry()}.globalOffStatusDetail(cfg), flagReader{reg}.globalOffStatusDetail(cfg))
 
 	// The gate defaults on in the process registry, so only the injected (flipped) one reports shadow.
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), reg)

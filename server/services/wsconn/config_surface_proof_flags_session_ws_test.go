@@ -25,7 +25,7 @@ func TestConfigSurfaceProof_TerminalResyncFlags_ChangeResyncOptions(t *testing.T
 		t.Run(name, func(t *testing.T) {
 			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
-				return field(currentResyncOptions(nil))
+				return field(currentResyncOptions(defaultFlags()))
 			}, false, true)
 		})
 	}
@@ -41,7 +41,7 @@ func TestConfigSurfaceProof_TerminalResyncCompression_ChangesEnvelopeFlag(t *tes
 		defer cleanup()
 		target := &fakePanePTY{captureContent: string(largeContent), cols: 80, rows: 24}
 		onCurrentPane := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-			return handleCurrentPaneRequest(ctx, "bkf-session", target, r, currentResyncOptionsFor(nil, testWriter()))
+			return handleCurrentPaneRequest(ctx, "bkf-session", target, r, currentResyncOptionsFor(defaultFlags(), testWriter()))
 		}
 		var settling atomic.Bool
 		handleCurrentPaneRequestFrame(stream, "bkf-session", &sessionv1.CurrentPaneRequest{}, onCurrentPane, &settling)

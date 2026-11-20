@@ -176,7 +176,7 @@ type DescriptorBuilder struct {
 }
 
 // NewDescriptorBuilder builds a builder reading the live flags.
-// A nil reg falls back to featureflags.Current().
+// reg must be non-nil.
 func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *DescriptorBuilder {
 	fr := flagReader{reg: reg}
 	return &DescriptorBuilder{sources: src, flag: func(dp string) bool {

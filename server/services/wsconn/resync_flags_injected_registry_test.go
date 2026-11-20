@@ -16,8 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
-// fastLaneOffRegistry is the process registry with the resync fast-lane default inverted to off, so a
-// site that read the global (default on, installed by TestMain) is distinguishable from one that read this.
+// fastLaneOffRegistry is the default registry with the resync fast-lane default inverted to off, so a
+// site that read the default (fast lane on) is distinguishable from one that read this.
 func fastLaneOffRegistry() *featureflags.Registry {
 	specs := services.FlagRegistry().Specs()
 	for i := range specs {
@@ -30,10 +30,10 @@ func fastLaneOffRegistry() *featureflags.Registry {
 
 func TestCurrentResyncOptions_ShouldResolveFastLaneDefaultThroughInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.True(t, featureflags.Current().Default(featureflags.TerminalResyncExecGateFastLaneFlagName), "precondition: global default is on")
+	require.True(t, defaultFlags().Default(featureflags.TerminalResyncExecGateFastLaneFlagName), "precondition: default is on")
 
 	assert.False(t, currentResyncOptions(fastLaneOffRegistry()).UseFastLane, "injected registry wins")
-	assert.True(t, currentResyncOptions(nil).UseFastLane, "nil falls back to the process registry at read time")
+	assert.True(t, currentResyncOptions(defaultFlags()).UseFastLane, "default registry has the fast lane on")
 }
 
 func TestConnectRPCWebSocketHandler_ShouldTakeRegistryInjectedIntoSessionService(t *testing.T) {
@@ -46,19 +46,19 @@ func TestConnectRPCWebSocketHandler_ShouldTakeRegistryInjectedIntoSessionService
 
 	assert.Same(t, reg, h.flags)
 	assert.False(t, h.resyncOptionsFor(nil).UseFastLane, "mid-stream resync sites resolve through the handler's registry")
-	assert.Nil(t, NewConnectRPCWebSocketHandler(nil, nil, nil).flags, "no injected registry stays nil; the fallback is lazy")
+	assert.NotNil(t, NewConnectRPCWebSocketHandler(nil, nil, nil).flags, "no session service: construction-time default registry")
 }
 
 func TestCapturePaneStreamParams_ShouldResolveResyncOptionsThroughItsRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	assert.False(t, capturePaneStreamParams{flags: fastLaneOffRegistry()}.resyncOptions().UseFastLane)
-	assert.True(t, capturePaneStreamParams{}.resyncOptions().UseFastLane)
+	assert.True(t, capturePaneStreamParams{flags: defaultFlags()}.resyncOptions().UseFastLane)
 }
 
 func TestShellStreamParams_ShouldResolveResyncOptionsThroughItsRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	assert.False(t, shellStreamParams{flags: fastLaneOffRegistry()}.resyncOptions().UseFastLane)
-	assert.True(t, shellStreamParams{}.resyncOptions().UseFastLane)
+	assert.True(t, shellStreamParams{flags: defaultFlags()}.resyncOptions().UseFastLane)
 }
 
 func TestHandleCapturePaneCurrentPaneRequest_ShouldRouteLaneByInjectedRegistry(t *testing.T) {
@@ -68,7 +68,7 @@ func TestHandleCapturePaneCurrentPaneRequest_ShouldRouteLaneByInjectedRegistry(t
 		wantFastLane bool
 	}{
 		{"injected default off", fastLaneOffRegistry(), false},
-		{"nil falls back to global default on", nil, true},
+		{"default registry fast lane on", defaultFlags(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svctest.WithIsolatedStateDir(t)
@@ -105,7 +105,7 @@ func TestCurrentPaneAnswerer_ShouldRouteLaneByHandlerRegistry(t *testing.T) {
 		wantFastLane bool
 	}{
 		{"injected default off", fastLaneOffRegistry(), false},
-		{"nil falls back to global default on", nil, true},
+		{"default registry fast lane on", defaultFlags(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svctest.WithIsolatedStateDir(t)
@@ -137,7 +137,7 @@ func TestHandleShellMidStreamCurrentPaneRequest_ShouldRouteLaneByInjectedRegistr
 		wantFastLane bool
 	}{
 		{"injected default off", fastLaneOffRegistry(), false},
-		{"nil falls back to global default on", nil, true},
+		{"default registry fast lane on", defaultFlags(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svctest.WithIsolatedStateDir(t)

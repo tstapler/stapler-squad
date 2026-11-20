@@ -15,7 +15,7 @@ func TestResultsPanelFlagsRegisteredDefaultOff(t *testing.T) {
 		if !found {
 			t.Errorf("flag %q not registered in the flag registry", name)
 		}
-		if FeatureFlagDefault(name) {
+		if testFlagRegistry().Default(name) {
 			t.Errorf("flag %q must default to off", name)
 		}
 	}

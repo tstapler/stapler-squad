@@ -10,14 +10,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
-// flippedDefaults is a registry shaped like the process one with every named flag's default inverted, so
-// a read that reaches featureflags.Current() disagrees with it on exactly those flags.
+// flippedDefaults is a registry shaped like the default one with every named flag's default inverted, so
+// a read that reaches the default registry disagrees with it on exactly those flags.
 func flippedDefaults(names ...string) *featureflags.Registry {
 	flip := map[string]bool{}
 	for _, n := range names {
 		flip[n] = true
 	}
-	specs := featureflags.Current().Specs()
+	specs := testFlagRegistry().Specs()
 	for i := range specs {
 		if flip[specs[i].Name] {
 			specs[i].Default = !specs[i].Default
@@ -30,7 +30,7 @@ func TestLoadAttentionFlags_ShouldUseInjectedDefaults_WhenRegistryInjected(t *te
 	svctest.WithIsolatedStateDir(t)
 	reg := flippedDefaults(attentionFlagNames...)
 
-	assert.Equal(t, AttentionFlags{}, LoadAttentionFlags(nil), "process registry: all six default off")
+	assert.Equal(t, AttentionFlags{}, LoadAttentionFlags(testFlagRegistry()), "default registry: all six default off")
 	assert.Equal(t, AttentionFlags{
 		ProseQuestionDetection: true, SessionEventLog: true, AckBypassFix: true,
 		IdleClockOutput: true, ProseQuestionLLMTiebreak: true, InboxConsolidation: true,
@@ -41,7 +41,7 @@ func TestFlagReader_ShouldResolveDecisionPointsAgainstInjectedRegistry(t *testin
 	svctest.WithIsolatedStateDir(t)
 	reg := flippedDefaults(notificationInlineActionsFlagName, askUserQuestionStructuredFlagName,
 		agentWakeTriggersFlagName)
-	injected, global := flagReader{reg: reg}, flagReader{}
+	injected, global := flagReader{reg: reg}, flagReader{testFlagRegistry()}
 
 	cases := []struct{ name, dp string }{
 		{notificationInlineActionsFlagName, scopePrefixAction + "APPROVE"},
@@ -58,7 +58,7 @@ func TestFlagReader_ShouldResolveDecisionPointsAgainstInjectedRegistry(t *testin
 
 	// hidden_session_reply defaults ON in the process registry, so the injected one (flipped OFF) must close the route.
 	cfg := matrixCfg(notificationInlineActionsFlagName, tv(true), map[string]tri{scopePrefixAction + actionKindAnswerQuestion: tv(true)})
-	assert.True(t, flagReader{}.resolveAnswerQuestion(cfg, compiledFlagEvidence, routeLiveKeystrokeHidden))
+	assert.True(t, flagReader{testFlagRegistry()}.resolveAnswerQuestion(cfg, compiledFlagEvidence, routeLiveKeystrokeHidden))
 	assert.False(t, flagReader{reg: flippedDefaults(hiddenSessionReplyFlagName)}.resolveAnswerQuestion(cfg, compiledFlagEvidence, routeLiveKeystrokeHidden))
 }
 

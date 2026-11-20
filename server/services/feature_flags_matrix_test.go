@@ -41,9 +41,9 @@ func TestFlagMatrix_ShouldResolveEveryCell_WhenGlobalAndScopesPermuted(t *testin
 
 	t.Run("background_activity_feed follows global only, default ON", func(t *testing.T) {
 		t.Parallel()
-		assert.True(t, flagReader{}.resolveEffectiveFlag(&config.Config{}, noEvidence, backgroundActivityFeedFlagName, ""))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(matrixCfg(backgroundActivityFeedFlagName, tv(false), nil), noEvidence, backgroundActivityFeedFlagName, ""))
-		assert.True(t, flagReader{}.resolveEffectiveFlag(matrixCfg(backgroundActivityFeedFlagName, tv(true), nil), noEvidence, backgroundActivityFeedFlagName, ""))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(&config.Config{}, noEvidence, backgroundActivityFeedFlagName, ""))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg(backgroundActivityFeedFlagName, tv(false), nil), noEvidence, backgroundActivityFeedFlagName, ""))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg(backgroundActivityFeedFlagName, tv(true), nil), noEvidence, backgroundActivityFeedFlagName, ""))
 	})
 
 	t.Run("askuserquestion_structured stage ladder over every permutation", func(t *testing.T) {
@@ -69,9 +69,9 @@ func TestFlagMatrix_ShouldResolveEveryCell_WhenGlobalAndScopesPermuted(t *testin
 							wantAnswer := inherit(g, a) && wantRender
 							wantHook := inherit(g, h) && wantAnswer && s1
 							label := fmt.Sprintf("g=%v r=%v a=%v h=%v s1=%v", deref(g), deref(r), deref(a), deref(h), s1)
-							assert.Equal(t, wantRender, flagReader{}.resolveEffectiveFlag(cfg, ev, askUserQuestionStructuredFlagName, scopeStageRender), "render "+label)
-							assert.Equal(t, wantAnswer, flagReader{}.resolveEffectiveFlag(cfg, ev, askUserQuestionStructuredFlagName, scopeStageAnswer), "answer "+label)
-							assert.Equal(t, wantHook, flagReader{}.resolveEffectiveFlag(cfg, ev, askUserQuestionStructuredFlagName, scopeStageHookReply), "hook "+label)
+							assert.Equal(t, wantRender, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, ev, askUserQuestionStructuredFlagName, scopeStageRender), "render "+label)
+							assert.Equal(t, wantAnswer, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, ev, askUserQuestionStructuredFlagName, scopeStageAnswer), "answer "+label)
+							assert.Equal(t, wantHook, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, ev, askUserQuestionStructuredFlagName, scopeStageHookReply), "hook "+label)
 						}
 					}
 				}
@@ -84,20 +84,20 @@ func TestFlagMatrix_ShouldResolveEveryCell_WhenGlobalAndScopesPermuted(t *testin
 		n := askUserQuestionStructuredFlagName
 		// Scoped true under global false renders only (stage 1 ships this way).
 		cfg := matrixCfg(n, tv(false), map[string]tri{scopeStageRender: tv(true)})
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageRender))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageAnswer))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageRender))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageAnswer))
 		// Answer enabled while render is off is ignored.
 		cfg = matrixCfg(n, tv(false), map[string]tri{scopeStageAnswer: tv(true)})
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageAnswer))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageAnswer))
 		// Scoped false under global true is a kill switch for that stage.
 		cfg = matrixCfg(n, tv(true), map[string]tri{scopeStageAnswer: tv(false)})
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageRender))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageAnswer))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageHookReply))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageRender))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageAnswer))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageHookReply))
 		// Hook reply stays closed without S1 even with every scope on.
 		cfg = matrixCfg(n, tv(true), nil)
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, noEvidence, n, scopeStageHookReply))
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, scopeStageHookReply))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, noEvidence, n, scopeStageHookReply))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, scopeStageHookReply))
 	})
 
 	t.Run("notification_inline_actions action, remote and tierB", func(t *testing.T) {
@@ -105,24 +105,24 @@ func TestFlagMatrix_ShouldResolveEveryCell_WhenGlobalAndScopesPermuted(t *testin
 		n := notificationInlineActionsFlagName
 		deny, approve := scopePrefixAction+"DENY", scopePrefixAction+"APPROVE"
 		cfg := matrixCfg(n, tv(true), map[string]tri{deny: tv(false)})
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, deny))
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, approve))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, deny))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, approve))
 		// OPEN is always on, even with the flag globally off.
-		assert.True(t, flagReader{}.resolveEffectiveFlag(matrixCfg(n, tv(false), nil), allPass, n, scopePrefixAction+"OPEN"))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg(n, tv(false), nil), allPass, n, scopePrefixAction+"OPEN"))
 		// Scoped true under global false enables exactly that action.
 		cfg = matrixCfg(n, tv(false), map[string]tri{approve: tv(true)})
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, approve))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, deny))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, approve))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, deny))
 		// Remote: scoped false blocks; absent inherits global.
-		assert.False(t, flagReader{}.resolveEffectiveFlag(matrixCfg(n, tv(true), map[string]tri{scopeChannelRemote: tv(false)}), allPass, n, scopeChannelRemote))
-		assert.True(t, flagReader{}.resolveEffectiveFlag(matrixCfg(n, tv(true), nil), allPass, n, scopeChannelRemote))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg(n, tv(true), map[string]tri{scopeChannelRemote: tv(false)}), allPass, n, scopeChannelRemote))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg(n, tv(true), nil), allPass, n, scopeChannelRemote))
 		// Tier B: needs remote and S6; tierB without remote is ignored.
 		for _, remote := range []tri{nil, tv(true), tv(false)} {
 			for _, tier := range []tri{nil, tv(true), tv(false)} {
 				for _, s6 := range []bool{false, true} {
 					cfg := matrixCfg(n, tv(false), map[string]tri{scopeChannelRemote: remote, scopeChannelTierB: tier})
 					want := tier != nil && *tier && remote != nil && *remote && s6
-					got := flagReader{}.resolveEffectiveFlag(cfg, flagEvidence{s6TierBPass: s6}, n, scopeChannelTierB)
+					got := flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, flagEvidence{s6TierBPass: s6}, n, scopeChannelTierB)
 					assert.Equal(t, want, got, "remote=%v tierB=%v s6=%v", deref(remote), deref(tier), s6)
 				}
 			}
@@ -135,32 +135,32 @@ func TestFlagMatrix_ShouldResolveEveryCell_WhenGlobalAndScopesPermuted(t *testin
 		at, cron := scopePrefixTrigger+"at", scopePrefixTrigger+"cron"
 		sched, help := scopePrefixTool+"schedule_wake", scopePrefixTool+"request_help"
 		// Defaults: nothing runs.
-		assert.False(t, flagReader{}.resolveEffectiveFlag(&config.Config{}, allPass, n, "dispatcher"))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(&config.Config{}, allPass, n, "dispatcher"))
 		// A scoped true under global false runs the dispatcher for that type only.
 		cfg := matrixCfg(n, tv(false), map[string]tri{at: tv(true), sched: tv(true)})
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, "dispatcher"))
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, at))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, cron), "schedule_wake(cron) is flag_off")
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, sched))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, help))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, "dispatcher"))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, at))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, cron), "schedule_wake(cron) is flag_off")
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, sched))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, help))
 		// A tool scope alone does not start the dispatcher.
 		cfg = matrixCfg(n, tv(false), map[string]tri{sched: tv(true)})
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, "dispatcher"))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, sched), "tool:* without the dispatcher")
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, "dispatcher"))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, sched), "tool:* without the dispatcher")
 		// A trigger scope explicitly false does not start it either.
 		cfg = matrixCfg(n, tv(false), map[string]tri{at: tv(false)})
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, at))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, at))
 		// Global true: everything follows it, a scoped false is a kill switch.
 		cfg = matrixCfg(n, tv(true), map[string]tri{cron: tv(false)})
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, at))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, cron))
-		assert.True(t, flagReader{}.resolveEffectiveFlag(cfg, allPass, n, help))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, at))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, cron))
+		assert.True(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(cfg, allPass, n, help))
 	})
 
 	t.Run("unknown flag or decision point fails closed", func(t *testing.T) {
 		t.Parallel()
-		assert.False(t, flagReader{}.resolveEffectiveFlag(matrixCfg(askUserQuestionStructuredFlagName, tv(true), nil), allPass, askUserQuestionStructuredFlagName, "stage:bogus"))
-		assert.False(t, flagReader{}.resolveEffectiveFlag(matrixCfg("nope", tv(true), nil), allPass, "nope", "x"))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg(askUserQuestionStructuredFlagName, tv(true), nil), allPass, askUserQuestionStructuredFlagName, "stage:bogus"))
+		assert.False(t, flagReader{testFlagRegistry()}.resolveEffectiveFlag(matrixCfg("nope", tv(true), nil), allPass, "nope", "x"))
 	})
 }
 
@@ -208,7 +208,7 @@ func TestFlagMatrix_ShouldResolveAnswerQuestionComposition_ForActionRouteClassHi
 								case routeHookReply:
 									want = action && hook && answer && render && s1
 								}
-								got := flagReader{}.resolveAnswerQuestion(cfg, flagEvidence{s1HookReplyPass: s1}, rt.route)
+								got := flagReader{testFlagRegistry()}.resolveAnswerQuestion(cfg, flagEvidence{s1HookReplyPass: s1}, rt.route)
 								assert.Equal(t, want, got, label)
 							}
 						}

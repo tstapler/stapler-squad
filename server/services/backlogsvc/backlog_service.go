@@ -105,8 +105,7 @@ type BacklogService struct {
 	// (server/dependencies.go, Task 2.4.4a).
 	julesDispatcher services.JulesDispatcher
 	cfg             *config.Config
-	// flags is the injected flag registry; nil reads the process registry lazily (see SetFlagRegistry).
-	flags *featureflags.Registry
+	flags           *featureflags.Registry
 	// repoSettings looks up a repo's merge settings for the stuck report; nil
 	// (the default) skips the lookup so every item reports UNSPECIFIED.
 	repoSettings RepoSettingsLookup
@@ -573,6 +572,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		sourceBackend:        storage,
 		sessionCreator:       creator,
 		cfg:                  cfg,
+		flags:                services.FlagRegistry(),
 		engine:               engine,
 		pipelineEngine:       pipelineEngine,
 		pipelineModeRepo:     pipelineModeRepo,
@@ -723,7 +723,7 @@ func (s *BacklogService) GetSessionStopper() services.SessionStopper {
 // SetFlagRegistry injects the registry flag defaults resolve against; call at startup, before serving.
 func (s *BacklogService) SetFlagRegistry(reg *featureflags.Registry) { s.flags = reg }
 
-// FlagRegistry returns the injected registry, or nil when none was (readers then fall back to the process registry).
+// FlagRegistry returns the registry flag defaults resolve against.
 func (s *BacklogService) FlagRegistry() *featureflags.Registry { return s.flags }
 
 // SetRepoWatchRemover wires the optional unfinished-changes scanner hook used
