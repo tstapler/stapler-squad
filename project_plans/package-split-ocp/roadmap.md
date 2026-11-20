@@ -342,16 +342,20 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 - **2026-11-10, Q1 answered by the owner: "open close shape alone justifies".** A physical move is justified by leaf-ness and an open-closed extension point alone; it does not need to pass ADR-010 SC4/SC6 or show a replayed Bazel gain. Wave 4 items (`ITEMSRC-move`, `BL-shadowledger`) and the `FLAGS-1` stage-1 package are therefore unblocked once their seams exist. SC1 (no new import cycle, at most 10 relocated declarations) and SC3 still apply because they protect feasibility, not payoff. Speculative abstractions are still rejected (consumer-side only, 2+ implementations or a real test seam).
 - **2026-11-10, ADR-010 open-PR cap lifted for file-disjoint split PRs (owner).** Waves 2 and 4 were opened together with wave 1 (PRs #1562-#1566) because they touch disjoint areas; the stacked `ITEMSRC-move` PR (#1566) is based on `ITEMSRC-registry` (#1563) and is retargeted to `main` after #1563 merges.
 
-## Owner questions (open)
+## Owner questions
 
-(Q1 is answered above.)
+Answered on 2026-11-19 (see the linked plans for the measured follow-through):
 
-- Q1: For packages that fail ADR-010 SC6 (ITEMSRC-move, BL-shadowledger, FLAGS-1), is OCP/leaf shape alone sufficient justification to move them, or must scoping replay show a measured gain before each physical move?
-- Q2: Do you want the in-place OCP refactors inside backlogsvc (admission Gate slice with Prepare/Admit/Outcome, one CacheInvalidator interface, headless methods into their own files, session-role table replacing the Headless*UUIDPrefix HasPrefix switches in server/mcp and backlog_service_query.go) scheduled as wave 5, given they were rejected as package splits?
-- Q3: FeatureFlagDefault has receiver-less callers (wsconn, tests). Is a once-set package-level registry accessor acceptable, or should all callers receive the Registry by injection (larger caller rewrite)?
+- **Q2, answered YES: do the backlogsvc in-place OCP refactors, as small PRs.** Sizing found candidates 1 (admission step slice), 2 (`CacheInvalidator`) and 4 (headless role table in `session/domain/headless_roles.go`) already existed; only candidate 3 (headless caller wiring into its own file) was real work, shipped as #1708. See [backlogsvc-ocp-plan.md](backlogsvc-ocp-plan.md).
+- **Q3, answered: inject the `Registry` everywhere; no once-set global accessor.** Staged removal of `featureflags.Current()`: [flags-stage2-plan.md](flags-stage2-plan.md) (slice 1 landed in #1709).
+- **E11 core (not a numbered question), owner approved starting the instance DTO lowering.** Staged plan I0-I6: [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md) (I0 landed in #1707).
+
+Still open (no owner answer recorded):
+
 - Q4: Should SRV-wiring wait for backend-di-refactor Story 1.3 (warren wrapping of Set* calls), or proceed in parallel with a risk of two wiring mechanisms?
 - Q5: Is server/mcp acceptable as a second composition root (it assembles tool modules from deps), which the MCP-modules design assumes, or must every module be registered only from server/dependencies.go?
-- Q6 (executed; `session/historyadapters` exists, see HIST-slice): Is the history-adapter step 2 (physical session/historyadapters with a lowered canonical/records package and a HistorySession port) wanted at all, given it needs Instance setters via the actor path and has near-zero Bazel payoff?
+
+Earlier: Q1 is answered under Owner decisions above; Q6 was executed (`session/historyadapters` exists, see HIST-slice).
 
 ## Rules for executing
 
