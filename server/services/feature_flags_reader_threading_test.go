@@ -58,3 +58,19 @@ func TestSessionService_ShouldNotTouchProcessRegistry_WhenNoneInjected(t *testin
 	assert.NotPanics(t, func() { _ = (&SessionService{}).flagReader() })
 	assert.Nil(t, (&SessionService{}).InjectedFlagRegistry())
 }
+
+func TestWireNotificationActions_ShouldThreadServiceRegistryIntoBuilderAndDispatcher(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	for _, tc := range []struct {
+		name string
+		reg  *featureflags.Registry
+		want bool
+	}{{"injected", inlineOnRegistry(), true}, {"process", featureflags.Current(), false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newGatedSessionService(svctest.CreateTestStorage(t), tc.reg)
+			svc.WireNotificationActions(NotificationActionWiring{})
+			assert.Equal(t, tc.want, svc.notificationSvc.descriptors.flag(inlineApprove), "descriptor builder")
+			assert.Equal(t, tc.want, svc.actionDispatcher.flags.Inline(inlineApprove), "dispatcher")
+		})
+	}
+}
