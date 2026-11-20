@@ -20,11 +20,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 )
 
-// fullCreateData populates every field Create persists, so a dropped write shows as a diff.
 func newWithPRPorts(c *ent.Client) *Instances {
 	return New(c, Ports{UpsertSessionPRSet: sessionpr.UpsertSessionPRSetTx, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
 }
 
+// fullCreateData populates every field Create persists, so a dropped write shows as a diff.
 func fullCreateData(t *testing.T) domain.InstanceData {
 	t.Helper()
 	ref, err := domain.NewPRRef("", "own", "rep", 9)
@@ -92,9 +92,14 @@ func TestInstances_should_CreateWithoutOptionalRows_When_DataIsMinimal(t *testin
 	c := entdbtest.NewClient(t)
 	in := newWithPRPorts(c)
 
-	require.NoError(t, in.Create(ctx, domain.InstanceData{Title: "min", Path: "/p", Program: "claude", Status: domain.Active}))
+	updated := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+	require.NoError(t, in.Create(ctx, domain.InstanceData{Title: "min", Path: "/p", Program: "claude", Status: domain.Active, UpdatedAt: updated}))
 
-	row(t, c, "min")
+	r := row(t, c, "min")
+	assert.True(t, updated.Equal(r.UpdatedAt), "updated_at is written as given (no tags, so nothing re-stamps it): %v", r.UpdatedAt)
+	assert.False(t, r.IsExpanded)
+	assert.False(t, r.Pinned)
+	assert.False(t, r.AutoYes)
 	assert.Zero(t, c.Worktree.Query().CountX(ctx), "no worktree row without a repo path")
 	assert.Equal(t, 1, c.DiffStats.Query().CountX(ctx), "diff stats row is always written")
 	assert.Zero(t, c.ClaudeSession.Query().CountX(ctx), "no claude row without a conversation uuid")
@@ -173,12 +178,18 @@ func TestInstances_should_RemoveSessionAndChildren_When_DeleteCalled(t *testing.
 	c := entdbtest.NewClient(t)
 	in := newWithPRPorts(c)
 	require.NoError(t, in.Create(ctx, fullCreateData(t)))
+	otherRef, err := domain.NewPRRef("", "own", "rep", 77)
+	require.NoError(t, err)
 	require.NoError(t, in.Create(ctx, domain.InstanceData{Title: "other", UUID: "uuid-other", Path: "/p", Program: "claude",
 		Worktree: domain.GitWorktreeData{RepoPath: "/r", WorktreePath: "/r-wt", SessionName: "o", BranchName: "b", BaseCommitSHA: "s"}, Tags: []string{"t-new"},
-		ClaudeSession: domain.ClaudeSessionData{ConversationUUID: "conv-o", Metadata: map[string]string{"a": "b"}}}))
+		ClaudeSession: domain.ClaudeSessionData{ConversationUUID: "conv-o", Metadata: map[string]string{"a": "b"}},
+		PRs:           []domain.PRView{{Ref: otherRef, Role: domain.PRRolePrimary, AttachSource: domain.AttachSourceCreatedFromURL}}}))
 	sess := row(t, c, "full")
-	_, err := c.Shell.Create().SetID("shell-1").SetSessionID(sess.ID).SetName("sh").SetTmuxSessionName("sh-tmux").Save(ctx)
+	_, err = c.Shell.Create().SetID("shell-1").SetSessionID(sess.ID).SetName("sh").SetTmuxSessionName("sh-tmux").Save(ctx)
 	require.NoError(t, err)
+	_, err = c.Shell.Create().SetID("shell-2").SetSessionID(row(t, c, "other").ID).SetName("sh2").SetTmuxSessionName("sh2-tmux").Save(ctx)
+	require.NoError(t, err)
+	seedItemSession(t, c, "uuid-other")
 
 	require.NoError(t, in.Delete(ctx, "full"))
 
@@ -188,7 +199,9 @@ func TestInstances_should_RemoveSessionAndChildren_When_DeleteCalled(t *testing.
 	assert.Equal(t, 1, c.DiffStats.Query().Where(diffstats.HasSessionWith(session.Title("other"))).CountX(ctx))
 	assert.Equal(t, 1, c.ClaudeSession.Query().CountX(ctx))
 	assert.Equal(t, 1, c.ClaudeMetadata.Query().CountX(ctx), "only the other session's metadata remains")
-	assert.Zero(t, c.Shell.Query().CountX(ctx))
+	assert.Equal(t, 1, c.Shell.Query().CountX(ctx), "only the other session's shell remains")
+	assert.Equal(t, 1, c.ItemSession.Query().Where(itemsession.SessionUUID("uuid-other"), itemsession.ConversationUUID("")).CountX(ctx), "other session's item_session is not stamped")
+	assert.Equal(t, 1, c.SessionPR.Query().Where(entsessionpr.SessionUUID("uuid-other")).CountX(ctx), "other session's PR rows remain")
 	assert.Zero(t, c.SessionPR.Query().Where(entsessionpr.SessionUUID("uuid-full")).CountX(ctx))
 	assert.Equal(t, 2, c.Tag.Query().CountX(ctx), "tags themselves survive; only the association is cleared")
 	assert.Zero(t, c.Tag.Query().Where(tag.Name("t-old"), tag.HasSessions()).CountX(ctx), "tag link to the deleted session is cleared")
@@ -272,4 +285,53 @@ func TestInstances_should_RollBackEverything_When_FinalSessionDeleteFails(t *tes
 	assert.Equal(t, 1, c.SessionPR.Query().Where(entsessionpr.SessionUUID("uuid-full")).CountX(ctx), "PR rows delete rolled back")
 	assert.Equal(t, 2, c.Session.Query().Where(session.Title("full")).QueryTags().CountX(ctx), "tag association rolled back")
 	assert.Equal(t, 1, c.ItemSession.Query().Where(itemsession.ConversationUUID("")).CountX(ctx), "stamp rolled back with the tx")
+}
+
+func TestInstances_should_ReturnErrorAndRollBack_When_UpsertSessionPRSetPortFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := entdbtest.NewClient(t)
+	boom := errors.New("pr port failed")
+	in := New(c, Ports{UpsertSessionPRSet: func(context.Context, *ent.Tx, domain.InstanceData) error { return boom }})
+
+	err := in.Create(ctx, fullCreateData(t))
+
+	require.ErrorIs(t, err, boom)
+	assert.Zero(t, c.Session.Query().CountX(ctx))
+	assert.Zero(t, c.Worktree.Query().CountX(ctx))
+	assert.Zero(t, c.ClaudeSession.Query().CountX(ctx))
+}
+
+func TestInstances_should_ReturnErrorAndRollBack_When_DeleteOwnerPRRowsPortFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := entdbtest.NewClient(t)
+	require.NoError(t, newWithPRPorts(c).Create(ctx, fullCreateData(t)))
+	boom := errors.New("owner rows port failed")
+	in := New(c, Ports{DeleteOwnerPRRows: func(context.Context, *ent.Tx, domain.PROwner) error { return boom }})
+
+	err := in.Delete(ctx, "full")
+
+	require.ErrorIs(t, err, boom)
+	assert.Equal(t, 1, c.Session.Query().Where(session.Title("full")).CountX(ctx))
+	assert.Equal(t, 1, c.Worktree.Query().CountX(ctx), "earlier deletes rolled back")
+	assert.Equal(t, 1, c.ClaudeSession.Query().CountX(ctx))
+	assert.Equal(t, 1, c.SessionPR.Query().CountX(ctx))
+}
+
+func TestInstances_should_ReturnErrorAndRollBack_When_ItemSessionStampFails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := entdbtest.NewClient(t)
+	in := newWithPRPorts(c)
+	require.NoError(t, in.Create(ctx, fullCreateData(t)))
+	seedItemSession(t, c, "uuid-full")
+	c.ItemSession.Use(failHook(ent.OpUpdate))
+
+	err := in.Delete(ctx, "full")
+
+	require.ErrorContains(t, err, "failed to stamp conversation uuid")
+	assert.Equal(t, 1, c.Session.Query().Where(session.Title("full")).CountX(ctx))
+	assert.Equal(t, 1, c.Worktree.Query().CountX(ctx), "worktree delete before the stamp rolled back")
+	assert.Equal(t, 1, c.DiffStats.Query().CountX(ctx))
 }
