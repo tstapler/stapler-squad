@@ -414,6 +414,10 @@ type CoreDeps struct {
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
+	// FlagRegistry is the one registry shared by featureflags.SetCurrent and the
+	// flag service; later slices hand it to the other flag readers.
+	FlagRegistry *featureflags.Registry
+
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker and waits for
 	// its goroutine; nil unless BuildOptions.RunPRMaintenance was set.
 	StopPRMaintenance func()
@@ -444,14 +448,15 @@ type BuildOptions struct {
 // Use BuildOptions to inject a pre-built EntClient (for tests).
 func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
-	featureflags.SetCurrent(services.FlagRegistry())
+	flagRegistry := services.FlagRegistry()
+	featureflags.SetCurrent(flagRegistry)
 
 	var sessionService *services.SessionService
 	var err error
 	if opts.EntClient != nil {
-		sessionService, err = services.NewSessionServiceWithEntClient(opts.EntClient)
+		sessionService, err = services.NewSessionServiceWithEntClient(opts.EntClient, flagRegistry)
 	} else {
-		sessionService, err = services.NewSessionServiceFromConfig()
+		sessionService, err = services.NewSessionServiceFromConfig(flagRegistry)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("initialize SessionService: %w", err)
@@ -484,6 +489,7 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 		ReviewQueue:    sessionService.GetReviewQueueInstance(),
 		ApprovalStore:  sessionService.GetApprovalStore(),
 		ErrorRegistry:  errorRegistry,
+		FlagRegistry:   flagRegistry,
 
 		StopPRMaintenance: stopPRMaintenance,
 	}, nil

@@ -38,7 +38,12 @@ Installers of the global: `server/dependencies.go:447` (production); test mains 
 2. **Composition root owns the registry.** `BuildCoreDepsWithOptions` builds one `*Registry`, passes it to `SessionService`
    so `NewFeatureFlagServiceWithRegistry` is used in production, and exposes it on `CoreDeps`. Still also calls `SetCurrent`.
    Files: `server/dependencies.go`, `session_service.go` (constructor field), tests. Risk: low. Proof: `/api` GetFeatureFlags
-   golden equal before/after.
+   golden equal before/after. **Done.** `BuildCoreDepsWithOptions` builds one `services.FlagRegistry()`, passes the same
+   instance to `SetCurrent`, to `NewSessionServiceFromConfig`/`NewSessionServiceWithEntClient` (new `flags` argument,
+   forwarded by `newGatedSessionService` to `NewFeatureFlagServiceWithRegistry`) and to `CoreDeps.FlagRegistry`;
+   `SessionService.FeatureFlagRegistry()` exposes the service's registry. Proof: `server/dependencies_flag_registry_test.go`
+   (deps registry == `Current()` == service registry, and the service keeps the injected registry after the global is replaced).
+   The two test callers of `newGatedSessionService` pass `featureflags.Current()` (unchanged behaviour).
 3. **Notification-actions and attention readers.** Convert the free functions to a small struct (`flagReader{reg}`) or
    methods taking `reg`; `wireNotificationActionFlags` passes the service's registry. Files: `feature_flags_notification_actions*.go`,
    `feature_flags_attention*.go`, and `server/attention_options.go` (`liveAttentionFlags` loads via `services.LoadAttentionFlags`,
