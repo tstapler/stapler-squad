@@ -39,7 +39,7 @@ type shellStreamParams struct {
 	stream               *connectWebSocketStream
 	instance             *instance.Instance
 	shellSess            *tmux.TmuxSession
-	cursorTarget         shellPanePTY
+	cursorTarget         panePTY
 	sessionID            string
 	shellID              string
 	shellTmuxSessionName string
@@ -54,6 +54,12 @@ type shellStreamParams struct {
 // resyncOptions resolves a mid-stream resync's options against the registry the stream was built with.
 func (p shellStreamParams) resyncOptions() ResyncOptions {
 	return currentResyncOptionsFor(p.flags, p.writer)
+}
+
+// withShellStreamDeps fills the handler-owned dependencies of a shell stream's params.
+func (h *ConnectRPCWebSocketHandler) withShellStreamDeps(p shellStreamParams) shellStreamParams {
+	p.flags = h.flags
+	return p
 }
 
 // shellOutputForwarderParams bundles the state forwardShellControlModeOutput
@@ -553,7 +559,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 	forwardingReady.Store(true)
 
 	resizeCh := make(chan shellResizeReq, 1)
-	shellParams := shellStreamParams{
+	shellParams := h.withShellStreamDeps(shellStreamParams{
 		writer:               writer,
 		stream:               stream,
 		instance:             instance,
@@ -567,8 +573,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 		quiescenceCh:         quiescenceCh,
 		resizeCh:             resizeCh,
 		resizeSettling:       &resizeSettling,
-		flags:                h.flags,
-	}
+	})
 	go h.runShellControlModeResizeCoalescer(shellParams)
 	go runShellInputReadLoop(shellParams)
 

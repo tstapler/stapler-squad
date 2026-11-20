@@ -1709,7 +1709,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 			// Handle a mid-stream CurrentPaneRequest (e.g. a client-initiated resync) via the
 			// same shared helper the initial handshake and streamViaTmuxCapturePane use.
-			return answerCurrentPane(ctx, sessionID, instance, req, h.resyncOptionsFor(writer))
+			return h.currentPaneAnswerer(sessionID, instance, func() services.TerminalWriter { return writer })(ctx, req)
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -2577,7 +2577,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			})
 		},
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-			return answerCurrentPane(ctx, sessionID, instance, req, h.resyncOptionsFor(upWriter.Writer()))
+			return h.currentPaneAnswerer(sessionID, instance, upWriter.Writer)(ctx, req)
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -3497,9 +3497,30 @@ func handleCurrentPaneRequestFrame(
 	return nil
 }
 
+// resyncTarget is the pane a mid-stream resync answers against; *instance.Instance in production.
+type resyncTarget interface {
+	panePTY
+	IsBackendProcessAlive() bool
+}
+
+// currentPaneAnswerer builds the mid-stream current-pane handler for one stream; the writer is read per
+// request because an upgradable attach can gain write access mid-connection.
+func (h *ConnectRPCWebSocketHandler) currentPaneAnswerer(sessionID string, target resyncTarget, writer func() services.TerminalWriter) func(context.Context, *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	return func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return answerCurrentPane(ctx, sessionID, target, req, h.resyncOptionsFor(writer()))
+	}
+}
+
+// withStreamDeps fills the handler-owned dependencies of a capture-pane stream's params.
+func (h *ConnectRPCWebSocketHandler) withStreamDeps(p capturePaneStreamParams) capturePaneStreamParams {
+	p.scrollbackManager = h.scrollbackManager
+	p.flags = h.flags
+	return p
+}
+
 // answerCurrentPane answers a mid-stream current-pane request, tagging a NotFound as
 // errSessionGone only once the backend confirms the session is gone (a restarting daemon is not).
-func answerCurrentPane(ctx context.Context, sessionID string, instance *instance.Instance, req *sessionv1.CurrentPaneRequest, opts ResyncOptions) (*sessionv1.TerminalOutput, error) {
+func answerCurrentPane(ctx context.Context, sessionID string, instance resyncTarget, req *sessionv1.CurrentPaneRequest, opts ResyncOptions) (*sessionv1.TerminalOutput, error) {
 	out, err := handleCurrentPaneRequest(ctx, sessionID, instance, req, opts)
 	if definitivelyGone(err, instance.IsBackendProcessAlive) {
 		return nil, wrapSessionGone(err)
@@ -4122,7 +4143,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	outputChan, consumerKey := registerCapturePaneConsumer(instance, streamer, sessionID)
 	defer streamer.RemoveConsumer(consumerKey)
 
-	cps := capturePaneStreamParams{
+	cps := h.withStreamDeps(capturePaneStreamParams{
 		writer:              writer,
 		stream:              stream,
 		instance:            instance,
@@ -4133,9 +4154,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		errChan:             errChan,
 		outputChan:          outputChan,
 		paneCaptureSettling: &paneCaptureSettling,
-		scrollbackManager:   h.scrollbackManager,
-		flags:               h.flags,
-	}
+	})
 	go forwardCapturePaneOutput(cps)
 	go runCapturePaneInputReadLoop(cps)
 
