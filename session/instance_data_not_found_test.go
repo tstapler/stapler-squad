@@ -35,5 +35,7 @@ func TestInstanceDataNotFound_should_MatchDomainSentinel_When_IDIsMissing(t *tes
 		defer repoCleanup()
 		_, err := repo.FindByIDWithOptions(context.Background(), "no-such-session", domain.LoadMinimal)
 		assert.ErrorIs(t, err, domain.ErrInstanceDataNotFound)
+		_, err = repo.FindByIDWithOptions(context.Background(), "", domain.LoadMinimal)
+		assert.ErrorIs(t, err, domain.ErrInstanceDataNotFound, "empty id takes the early-return branch")
 	})
 }

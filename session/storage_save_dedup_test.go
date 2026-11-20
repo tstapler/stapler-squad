@@ -351,3 +351,18 @@ func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
 
 	assert.Equal(t, domain.UpdateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
 }
+
+// A zero sum is hashJSON's marshal-failure marker, so two zero sums must never
+// count as "unchanged": the section would be skipped without ever being written.
+func TestSkipAgainst_Should_NotSkipSection_When_BothSumsAreZero(t *testing.T) {
+	t.Parallel()
+	known := sectionsOf(domain.InstanceData{Title: "t", Tags: []string{"a"}})
+
+	assert.Equal(t, domain.UpdateSkip{}, sectionSums{}.skipAgainst(sectionSums{}), "zero against zero is unknown, not unchanged")
+
+	partial := known
+	partial.tags = sectionSums{}.tags
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Worktree: true, Claude: true}, partial.skipAgainst(partial),
+		"only the unhashable section is rewritten; the others still skip")
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, known.skipAgainst(known))
+}

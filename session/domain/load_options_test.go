@@ -33,8 +33,9 @@ func TestLoadOptions_should_ReturnModifiedCopy_When_WithMethodsCalled(t *testing
 
 	assert.Equal(t, LoadOptions{LoadDiffContent: true, LoadDiffStats: true}, base.WithDiffContent())
 	assert.Equal(t, LoadOptions{LoadTags: true}, base.WithTags())
-	assert.False(t, LoadFull.WithoutTags().LoadTags)
-	assert.False(t, LoadFull.WithoutDiffContent().LoadDiffContent)
-	assert.True(t, LoadFull.WithoutDiffContent().LoadDiffStats, "dropping content keeps stats")
+	assert.Equal(t, LoadOptions{LoadWorktree: true, LoadDiffStats: true, LoadDiffContent: true, LoadClaudeSession: true}, LoadFull.WithoutTags(),
+		"WithoutTags clears only LoadTags")
+	assert.Equal(t, LoadOptions{LoadWorktree: true, LoadDiffStats: true, LoadTags: true, LoadClaudeSession: true}, LoadFull.WithoutDiffContent(),
+		"dropping content keeps stats and every other flag")
 	assert.Equal(t, LoadOptions{}, base, "receiver is a value; the original is untouched")
 }
