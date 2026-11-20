@@ -1187,11 +1187,10 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 }
 
 // flagReader reads flag decisions through this service's registry.
-// A service without an injected registry reads Current() lazily, at read time.
+// NewSessionService starts on the default FlagRegistry; newGatedSessionService swaps in the injected one.
 func (s *SessionService) flagReader() flagReader { return flagReader{reg: s.InjectedFlagRegistry()} }
 
-// InjectedFlagRegistry returns the registry injected into the flag service, or nil when none was (readers
-// then fall back to the process registry lazily). Unlike FeatureFlagRegistry it never reads the global.
+// InjectedFlagRegistry returns the registry the flag service was built with; nil only for a nil receiver.
 func (s *SessionService) InjectedFlagRegistry() *featureflags.Registry {
 	if s == nil {
 		return nil

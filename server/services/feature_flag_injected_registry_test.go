@@ -20,8 +20,8 @@ const (
 	injScope      = "kind:review"
 )
 
-// injectedRegistry shares no flag name with the process registry, so any read that still reaches
-// featureflags.Current() misses these flags.
+// injectedRegistry shares no flag name with the default registry, so any read that still reaches
+// the default registry misses these flags.
 func injectedRegistry() *featureflags.Registry {
 	return featureflags.NewRegistry([]featureflags.Spec{
 		{Name: injDefaultOn, Description: "on", Default: true, Scopes: []string{injScope}},
@@ -35,10 +35,10 @@ func TestFeatureFlagService_ShouldListOnlyInjectedFlagsWithInjectedDefaults_When
 	assert.Equal(t, map[string]bool{injDefaultOn: true, injDefaultOff: false}, got)
 }
 
-func TestFeatureFlagService_ShouldFallBackToProcessRegistry_WhenNoRegistryInjected(t *testing.T) {
+func TestFeatureFlagService_ShouldUseDefaultFlagRegistry_WhenConstructedWithoutRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	got := flagStates(t, NewFeatureFlagService())
-	assert.Len(t, got, len(featureflags.Current().Specs()))
+	assert.Len(t, got, len(testFlagRegistry().Specs()))
 	assert.NotContains(t, got, injDefaultOn)
 }
 
@@ -159,7 +159,7 @@ func TestFlagChangeAudit_ShouldRecordInjectedDefaultAsPrevious_WhenFlipOfUnsetFl
 func TestFeatureFlagService_ShouldReportInjectedDefaultInNudgeStatusDetail_WhenFlagUnset(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	name := config.DiagnoseNudgeFeatureFlag
-	injected := !featureflags.Current().Default(name)
+	injected := !testFlagRegistry().Default(name)
 	want := map[bool]string{true: "Default: On", false: "Default: Off"}[injected]
 	svc := NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{{Name: name, Default: injected}}))
 
@@ -171,7 +171,7 @@ func TestFeatureFlagService_ShouldReportInjectedDefaultInNudgeStatusDetail_WhenF
 
 func TestFlagChangeAudit_ShouldRecordInjectedDefaultAsPrevious_WhenScopedFlipOfUnsetFlagApplies(t *testing.T) {
 	e := newAuditEnv(t)
-	injected := !featureflags.Current().Default(gateFlag)
+	injected := !testFlagRegistry().Default(gateFlag)
 	e.svc = NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{
 		{Name: gateFlag, Default: injected, Scopes: []string{injScope}},
 	}))

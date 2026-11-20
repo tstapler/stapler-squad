@@ -28,7 +28,7 @@ func enableInline(t *testing.T, scopes ...string) {
 
 func tierFixture(ev flagEvidence) *dispatchFixture {
 	f := newDispatchFixture()
-	f.d.flags = configActionFlags{ev: ev}
+	f.d.flags = configActionFlags{ev: ev, fr: flagReader{testFlagRegistry()}}
 	return f
 }
 

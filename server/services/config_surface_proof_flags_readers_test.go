@@ -49,11 +49,11 @@ func TestConfigSurfaceProof_ChangelogFlags_ChangeReaders(t *testing.T) {
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(ChangelogFlagName, setting.(bool))
-		return ChangelogEnabled(config.LoadConfig(), nil)
+		return ChangelogEnabled(config.LoadConfig(), testFlagRegistry())
 	}, false, true)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(UpdateCheckFlagName, setting.(bool))
-		return UpdateCheckFlagEnabled(config.LoadConfig(), nil)
+		return UpdateCheckFlagEnabled(config.LoadConfig(), testFlagRegistry())
 	}, false, true)
 }
 

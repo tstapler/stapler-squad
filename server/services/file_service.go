@@ -107,16 +107,19 @@ func NewFileService(workspace WorkspaceProvider) *FileService {
 		workspace:      workspace,
 		ops:            ops,
 		writer:         NewFileWriter(ops, invalidator),
-		search:         newSearchHandler(ops, globalFilesFlags{}.ViewerV2),
+		search:         newSearchHandler(ops, globalFilesFlags{reader: flagReader{FlagRegistry()}}.ViewerV2),
 		ranges:         newRangeLimiter(),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),
 	}
 }
 
-// SetFlagRegistry points the Files flag reads at reg (nil keeps the lazy process-registry fallback);
+// SetFlagRegistry points the Files flag reads at reg (must be non-nil; NewFileService starts on the default FlagRegistry);
 // call at startup, before serving.
 func (s *FileService) SetFlagRegistry(reg *featureflags.Registry) {
+	if reg == nil {
+		panic("services: FileService.SetFlagRegistry requires a non-nil registry")
+	}
 	flags := globalFilesFlags{reader: flagReader{reg}}
 	s.ops.policy.Flags = flags
 	s.search.viewerV2 = flags.ViewerV2

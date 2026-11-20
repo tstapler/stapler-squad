@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
@@ -24,5 +25,15 @@ func TestDefaultPipelineModeForNewItem_ShouldUseInjectedRegistryDefault(t *testi
 
 	assert.Equal(t, session.DefaultSDDPipelineModeSlug, s.defaultPipelineModeForNewItem(nil), "injected default on")
 	assert.Same(t, s.flags, s.FlagRegistry())
-	assert.Empty(t, (&BacklogService{}).defaultPipelineModeForNewItem(nil), "process registry default off")
+
+	def := &BacklogService{}
+	def.SetFlagRegistry(services.FlagRegistry())
+	assert.Empty(t, def.defaultPipelineModeForNewItem(nil), "default registry: pipeline default off")
+}
+
+func TestNewBacklogService_ShouldStartOnDefaultFlagRegistry(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	s := NewBacklogService(nil, nil, nil, nil, nil, nil)
+	require.NotNil(t, s.FlagRegistry(), "construction-time default; nil would panic on the first flag read")
+	assert.Empty(t, s.defaultPipelineModeForNewItem(nil))
 }

@@ -8,7 +8,6 @@ go_test(
         "ent_repository_backlog_events_test.go",
         "host_advertisement_convergence_test.go",
         "storage_backlog_events_test.go",
-        "testmain_test.go",
     ],
     deps = [
         "//config",
@@ -19,7 +18,6 @@ go_test(
         "//server/auth",
         "//server/services",
         "//server/services/backlogsvc",
-        "//server/services/featureflags",
         "//session",
         "//session/domain",
         "//session/domain/backlogdto",

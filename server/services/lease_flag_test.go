@@ -38,7 +38,7 @@ func leaseFlagEnabledInRegistry(t *testing.T, svc *FeatureFlagService) bool {
 func TestTerminalWriteLeaseFlag_ShouldBeRegisteredDefaultOnGlobalOnlyAndApplyEveryFlipAtOnce(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	svc := newGatedFlagService(t)
-	require.True(t, FeatureFlagDefault(terminalWriteLeaseFlagName), "default on")
+	require.True(t, testFlagRegistry().Default(terminalWriteLeaseFlagName), "default on")
 	assert.True(t, leaseFlagEnabledInRegistry(t, svc.featureFlagSvc))
 	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 

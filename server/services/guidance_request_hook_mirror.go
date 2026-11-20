@@ -67,7 +67,7 @@ func (m *GuidanceHookMirror) SetPaneCapture(fn func(ctx context.Context, session
 
 // NewGuidanceHookMirror builds the mirror. failed and cleared count
 // guidance_mirror_failed_total and guidance_mirror_cleared_total; either may be nil.
-// A nil reg falls back to featureflags.Current().
+// reg must be non-nil.
 func NewGuidanceHookMirror(store guidanceMirrorStore, pending *PendingQuestionStore, failed, cleared func(reason string), reg *featureflags.Registry) *GuidanceHookMirror {
 	fr := flagReader{reg: reg}
 	return &GuidanceHookMirror{store: store, pending: pending, bound: guidanceMirrorBound, failed: failed, cleared: cleared,

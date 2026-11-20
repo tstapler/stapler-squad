@@ -20,19 +20,19 @@ func inlineOnRegistry() *featureflags.Registry {
 func TestNewGuidanceHookMirror_ShouldGateOnInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	assert.True(t, NewGuidanceHookMirror(nil, nil, nil, nil, inlineOnRegistry()).enabled())
-	assert.False(t, NewGuidanceHookMirror(nil, nil, nil, nil, nil).enabled())
+	assert.False(t, NewGuidanceHookMirror(nil, nil, nil, nil, testFlagRegistry()).enabled())
 }
 
 func TestNewDescriptorBuilder_ShouldFlagOnInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	assert.True(t, NewDescriptorBuilder(DescriptorSources{}, inlineOnRegistry()).flag(inlineApprove))
-	assert.False(t, NewDescriptorBuilder(DescriptorSources{}, nil).flag(inlineApprove))
+	assert.False(t, NewDescriptorBuilder(DescriptorSources{}, testFlagRegistry()).flag(inlineApprove))
 }
 
 func TestNewNotificationActionDispatcher_ShouldUseInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	assert.True(t, NewNotificationActionDispatcher(ActionDelegates{}, nil, inlineOnRegistry()).flags.Inline(inlineApprove))
-	assert.False(t, NewNotificationActionDispatcher(ActionDelegates{}, nil, nil).flags.Inline(inlineApprove))
+	assert.False(t, NewNotificationActionDispatcher(ActionDelegates{}, nil, testFlagRegistry()).flags.Inline(inlineApprove))
 }
 
 func TestWireAnswerRouter_ShouldUseServiceRegistry(t *testing.T) {

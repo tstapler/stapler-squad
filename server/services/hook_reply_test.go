@@ -177,7 +177,7 @@ func TestHookReply_ShouldStayClosedUnderProductionFlags_WhileS1IsNotRecorded(t *
 	}
 	require.NoError(t, cfg.SetFeatureFlagScope(notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion, true))
 	e := newHookReplyEnv(t)
-	e.resolver.flags = configActionFlags{ev: compiledFlagEvidence}
+	e.resolver.flags = configActionFlags{ev: compiledFlagEvidence, fr: flagReader{testFlagRegistry()}}
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis")
 	_, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestHookReply_ShouldServeThroughTheRealFlagChain_WhenS1IsRecorded(t *testin
 	}
 	require.NoError(t, cfg.SetFeatureFlagScope(notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion, true))
 	e := newHookReplyEnv(t)
-	e.resolver.flags = configActionFlags{ev: compiledFlagEvidence}
+	e.resolver.flags = configActionFlags{ev: compiledFlagEvidence, fr: flagReader{testFlagRegistry()}}
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis")
 	_, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
 	require.NoError(t, err)

@@ -79,16 +79,15 @@ const (
 	spikeS6TierBPassed = true
 )
 
-// flagReader resolves flag decisions against an injected registry. The zero
-// value (nil registry) falls back to featureflags.Current() until slice 7 of
-// flags-stage2-plan.md removes the global.
+// flagReader resolves flag decisions against an injected registry. A nil
+// registry is a programming error: registry() panics rather than guessing defaults.
 type flagReader struct{ reg *featureflags.Registry }
 
 func (r flagReader) registry() *featureflags.Registry {
-	if r.reg != nil {
-		return r.reg
+	if r.reg == nil {
+		panic("services: flagReader has no registry; inject one from the composition root")
 	}
-	return featureflags.Current()
+	return r.reg
 }
 
 // enabled resolves name against cfg with the injected registry's default.

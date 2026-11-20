@@ -414,8 +414,7 @@ type CoreDeps struct {
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
-	// FlagRegistry is the one registry shared by featureflags.SetCurrent and the
-	// flag service; later slices hand it to the other flag readers.
+	// FlagRegistry is the one registry shared by the flag service and every other flag reader.
 	FlagRegistry *featureflags.Registry
 
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker and waits for
@@ -449,7 +448,6 @@ type BuildOptions struct {
 func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
 	flagRegistry := services.FlagRegistry()
-	featureflags.SetCurrent(flagRegistry)
 
 	var sessionService *services.SessionService
 	var err error

@@ -448,13 +448,17 @@ type controlModeStreamGeneration struct {
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
 // tmuxStreamerManager is required for ALL sessions (managed and external) since they all use tmux capture-pane polling
 func NewConnectRPCWebSocketHandler(sessionService *services.SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *session.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
+	flags := sessionService.InjectedFlagRegistry()
+	if flags == nil {
+		flags = services.FlagRegistry() // no session service (tests); production always injects one
+	}
 	return &ConnectRPCWebSocketHandler{
 		sessionService:           sessionService,
 		scrollbackManager:        scrollbackManager,
 		tmuxStreamerManager:      tmuxStreamerManager,
 		snapshotCache:            xsync.NewMap[string, sessionSnapshot](),
 		activeControlModeStreams: xsync.NewMap[string, controlModeStreamGeneration](),
-		flags:                    sessionService.InjectedFlagRegistry(),
+		flags:                    flags,
 	}
 }
 
@@ -2874,11 +2878,8 @@ func (p capturePaneStreamParams) resyncOptions() ResyncOptions {
 // need to build a ResyncOptions, keeping the config.LoadConfig() lookups in one place
 // instead of duplicated across each of handleCurrentPaneRequest's call sites.
 //
-// flags is the injected registry; nil resolves the process registry at call time.
+// flags is the injected registry and must be non-nil.
 func currentResyncOptions(flags *featureflags.Registry) ResyncOptions {
-	if flags == nil {
-		flags = featureflags.Current()
-	}
 	return ResyncOptions{
 		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName),
 		UseFastLane:                flags.Enabled(config.LoadConfig(), featureflags.TerminalResyncExecGateFastLaneFlagName),

@@ -194,7 +194,7 @@ type ActionDelegates struct {
 
 // NewNotificationActionDispatcher builds a dispatcher reading the live flags.
 // audit may return nil (the audit trail is then unavailable and Tier B refuses).
-// A nil reg falls back to featureflags.Current().
+// reg must be non-nil.
 func NewNotificationActionDispatcher(d ActionDelegates, audit func() actionAudit, reg *featureflags.Registry) *NotificationActionDispatcher {
 	return &NotificationActionDispatcher{
 		approvals: d.Approvals, questions: d.Questions, guidance: d.Guidance, backlog: d.Backlog, cancels: d.Cancels, resolver: d.Resolver,
