@@ -1131,6 +1131,11 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 
 // --- report_progress ---
 
+// acProgressNotMet is report_progress's "attempted, target not met" status. It is stored as
+// AcStatusFail and, unlike an unfinished criterion, does not make request_review reject: the
+// item goes to a human decision instead of looping on a target that was honestly measured and missed.
+const acProgressNotMet = "not_met"
+
 func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
@@ -1164,13 +1169,16 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		return errResult(ErrInvalidArgument, "status is required", ""), nil
 	}
 	switch status {
-	case "pass", "fail", "in_progress":
+	case "pass", "fail", "in_progress", acProgressNotMet:
 		// valid
 	default:
-		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid status %q — must be one of: pass, fail, in_progress", status), ""), nil
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid status %q — must be one of: pass, fail, in_progress, %s", status, acProgressNotMet), ""), nil
 	}
 
 	note, _ := args["note"].(string)
+	if status == acProgressNotMet && strings.TrimSpace(note) == "" {
+		return errResult(ErrInvalidArgument, "status not_met requires a note with the measured result, so the owner can decide whether to relax the criterion", ""), nil
+	}
 
 	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
 	if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
@@ -1184,6 +1192,8 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		acStatus = "done"
 	case "fail":
 		acStatus = "in_progress"
+	case acProgressNotMet:
+		acStatus = string(domain.AcStatusFail)
 	}
 
 	_, verified := verifiedCallerSessionUUID(ctx)
@@ -1510,6 +1520,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// branch too — that flag skips the independent LLM review, not this
 	// deterministic completeness check, otherwise a SkipReviewGate item could
 	// self-declare done with zero verification of any kind.
+	notMet := attemptedNotMetCriteria(item)
 	if err := unmetAcCriteriaError(item); err != nil {
 		log.InfoLog().Printf("[mcp:request_review] rejected: %v session=%s item=%s", err, callerUUID, itemID)
 		h.recordRejectedRequestReview(ctx, item, err)
@@ -1522,7 +1533,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// (a custom stage is never chosen here even if it were otherwise a
 	// plausible "review-like" destination).
 	targetStatus := domain.BacklogStatusReview
-	if item.SkipReviewGate {
+	// An honestly missed criterion is a human decision, never an auto-done, even with SkipReviewGate.
+	if item.SkipReviewGate && len(notMet) == 0 {
 		targetStatus = domain.BacklogStatusDone
 	}
 
@@ -1587,6 +1599,9 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	}
 
 	log.InfoLog().Printf("[mcp:request_review] session=%s item=%s transitioned to %s message=%q verification_notes_len=%d", callerUUID, itemID, targetStatus, message, len(verificationNotes))
+	if len(notMet) > 0 {
+		h.recordAcNotMet(ctx, callerUUID, item, notMet)
+	}
 
 	if targetStatus == domain.BacklogStatusDone {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
@@ -1779,6 +1794,13 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 // was parked in review because it hit blockedCycleThreshold, and nothing else
 // surfaces that. INPUT_REQUIRED/HIGH because a human must pick the way forward.
 func (h *backlogHandlers) notifyBlockedEscalation(sessionUUID string, item *backlogdto.BacklogItemData, rationale string, cycles int) {
+	h.publishInputRequired(sessionUUID, "Backlog item needs a decision",
+		fmt.Sprintf("%q was blocked %d times and escalated to review. Latest blocker: %s", item.Title, cycles, rationale),
+		map[string]string{"item_id": item.ID, "reason": "blocked_cycle_escalation"})
+}
+
+// publishInputRequired publishes one INPUT_REQUIRED/HIGH notification: a human must pick the way forward.
+func (h *backlogHandlers) publishInputRequired(sessionUUID, title, body string, meta map[string]string) {
 	if h.eventBus == nil {
 		return
 	}
@@ -1786,9 +1808,7 @@ func (h *backlogHandlers) notifyBlockedEscalation(sessionUUID string, item *back
 		sessionUUID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
-		"Backlog item needs a decision",
-		fmt.Sprintf("%q was blocked %d times and escalated to review. Latest blocker: %s", item.Title, cycles, rationale),
-		map[string]string{"item_id": item.ID, "reason": "blocked_cycle_escalation"},
+		title, body, meta,
 	))
 }
 
@@ -1834,7 +1854,7 @@ func unmetAcCriteriaError(item *backlogdto.BacklogItemData) error {
 	}
 	var unmet []string
 	for _, c := range criteria {
-		if !c.Status.IsSatisfied() {
+		if !c.Status.IsSatisfied() && !isAttemptedNotMet(c) {
 			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
 		}
 	}
@@ -1846,6 +1866,46 @@ func unmetAcCriteriaError(item *backlogdto.BacklogItemData) error {
 			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck",
 		len(unmet), strings.Join(unmet, "; "),
 	)
+}
+
+// isAttemptedNotMet is the "attempted, target not met" outcome: reported not_met with a note.
+func isAttemptedNotMet(c domain.AcCriterion) bool {
+	return c.Status == domain.AcStatusFail && strings.TrimSpace(c.Note) != ""
+}
+
+// attemptedNotMetCriteria lists the criteria reported as attempted but not met, formatted for notes and notifications.
+func attemptedNotMetCriteria(item *backlogdto.BacklogItemData) []string {
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, c := range criteria {
+		if isAttemptedNotMet(c) {
+			out = append(out, fmt.Sprintf("%d: %s — %s", c.Index, c.Text, strings.TrimSpace(c.Note)))
+		}
+	}
+	return out
+}
+
+// acNotMetNoteMarker prefixes the note request_review appends when it sends an item to a human with criteria not met.
+const acNotMetNoteMarker = "[request_review:ac_not_met]"
+
+// recordAcNotMet leaves a visible note and one INPUT_REQUIRED notification: the owner must relax or
+// waive the criterion, or file a follow-up. Best-effort, like the other audit notes.
+func (h *backlogHandlers) recordAcNotMet(ctx context.Context, sessionUUID string, item *backlogdto.BacklogItemData, notMet []string) {
+	detail := strings.Join(notMet, "; ")
+	noteLine := fmt.Sprintf("%s %d criteria attempted, target not met: %s", acNotMetNoteMarker, len(notMet), detail)
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Notes: &newNotes}, nil); err != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to persist ac_not_met note item=%s: %v", item.ID, err)
+	}
+	h.publishInputRequired(sessionUUID, "Backlog item missed an acceptance criterion",
+		fmt.Sprintf("%q was sent to review with criteria attempted but not met: %s", item.Title, detail),
+		map[string]string{"item_id": item.ID, "reason": "ac_not_met"})
 }
 
 // --- resume_work ---
@@ -3079,9 +3139,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Min(0),
 			),
 			mcpgo.WithString("status",
-				mcpgo.Description("New status: pass (criterion complete), fail (blocked/broken), in_progress (actively working)"),
+				mcpgo.Description("New status: pass (criterion complete), fail (blocked/broken), in_progress (actively working), not_met (honestly attempted, the target was measured and missed; requires a note with the result and lets request_review proceed to a human decision instead of looping)"),
 				mcpgo.Required(),
-				mcpgo.Enum("pass", "fail", "in_progress"),
+				mcpgo.Enum("pass", "fail", "in_progress", acProgressNotMet),
 			),
 			mcpgo.WithString("note",
 				mcpgo.Description("Optional short note about the criterion outcome (e.g. test name, PR link, failure reason)"),

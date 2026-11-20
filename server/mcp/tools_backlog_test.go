@@ -7834,3 +7834,92 @@ func TestSubmitReviewVerdict_should_PersistFailureClassAndWaiver_And_RejectUnkno
 	assert.Equal(t, domain.FailureClassUnattainable, got[0].FailureClass)
 	assert.True(t, got[0].ProposedWaiver)
 }
+
+// AC gate outcome: an honestly missed criterion (report_progress not_met + note) must reach a human
+// via review instead of looping on request_review's rejection, and must never auto-complete.
+func TestRequestReview_AttemptedNotMetCriterion_GoesToReviewNotRejectedNorDone(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		skipReviewGate bool
+		reportNotMet   bool
+		wantStatus     domain.BacklogStatus
+		wantRejected   bool
+	}{
+		"not_met reaches review":                      {false, true, domain.BacklogStatusReview, false},
+		"not_met never auto-done with SkipReviewGate": {true, true, domain.BacklogStatusReview, false},
+		"unfinished criterion is still rejected":      {false, false, domain.BacklogStatusInProgress, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+			item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
+				Title:              "FP rate target",
+				Status:             string(domain.BacklogStatusInProgress),
+				SkipReviewGate:     tc.skipReviewGate,
+				AcceptanceCriteria: `[{"index":0,"text":"FP rate <= 30%","status":"pending"}]`,
+			})
+			require.NoError(t, err)
+			sessionUUID := uuid.New().String()
+			_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
+			require.NoError(t, err)
+			handler := &backlogHandlers{storage: storage}
+			ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+			status, note := "in_progress", "still working"
+			if tc.reportNotMet {
+				status, note = "not_met", "measured 72-81% false positives"
+			}
+			_, err = handler.reportProgress(ctxWithUUID, makeToolReq(map[string]interface{}{
+				"item_id": item.ID, "criteria_index": float64(0), "status": status, "note": note,
+			}))
+			require.NoError(t, err)
+
+			result, err := handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID, "message": "done"}))
+			require.NoError(t, err)
+			if tc.wantRejected {
+				assert.False(t, parseResult(t, result)["success"].(bool), "an unfinished criterion is still rejected")
+			} else {
+				require.False(t, result.IsError, "%v", result.Content)
+			}
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.wantStatus), fetched.Status)
+			if !tc.wantRejected {
+				assert.Contains(t, fetched.Notes, acNotMetNoteMarker)
+				assert.Contains(t, fetched.Notes, "measured 72-81% false positives")
+			}
+		})
+	}
+}
+
+func TestReportProgress_NotMet_RequiresANote_AndIsStoredAsFail(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
+		Title: "x", Status: string(domain.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"c","status":"pending"}]`,
+	})
+	require.NoError(t, err)
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
+	require.NoError(t, err)
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	args := map[string]interface{}{"item_id": item.ID, "criteria_index": float64(0), "status": "not_met"}
+	result, err := handler.reportProgress(ctxWithUUID, makeToolReq(args))
+	require.NoError(t, err)
+	assert.False(t, parseResult(t, result)["success"].(bool), "not_met without a note is refused")
+
+	args["note"] = "measured 75%"
+	_, err = handler.reportProgress(ctxWithUUID, makeToolReq(args))
+	require.NoError(t, err)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	criteria, err := domain.ParseAcCriteria(fetched.AcceptanceCriteria)
+	require.NoError(t, err)
+	assert.Equal(t, domain.AcStatusFail, criteria[0].Status)
+}
