@@ -177,7 +177,7 @@ func WorkflowEngineShadowStatusDetail(snapshot func() workflowengine.ShadowLedge
 
 // FeatureFlagDefault looks up name's default in the process registry installed by
 // featureflags.SetCurrent at startup — the single source of truth both GetFeatureFlags
-// and a flag's own call site (e.g. currentResyncOptions' UseFastLane) resolve against.
+// and receiver-less call sites resolve against.
 // Returns false for an unregistered name; panics if no registry was installed.
 func FeatureFlagDefault(name string) bool {
 	return featureflags.Current().Default(name)

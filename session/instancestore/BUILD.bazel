@@ -8,6 +8,7 @@ go_library(
         "mapper.go",
         "reads.go",
         "store.go",
+        "updaters.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/instancestore",
     visibility = ["//visibility:public"],
@@ -30,6 +31,7 @@ go_test(
     srcs = [
         "mapper_test.go",
         "reads_test.go",
+        "updaters_test.go",
     ],
     embed = [":instancestore"],
     deps = [
