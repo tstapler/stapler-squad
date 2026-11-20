@@ -41,6 +41,7 @@ var legacyPRReaders = map[string]string{
 	"server/services/unfinished_work_service.go": readsInstanceData,
 	"session/ent_repository.go":                  readsInstanceData,
 	"session/instance/instance.go":               readsSnapshot,
+	"session/instancestore/mapper.go":            readsInstanceData,
 	"session/instance/instance_actor_setters.go": readsSnapshot,
 	"session/instance/instance_pr_set.go":        readsSnapshot,
 	"session/instance/instance_serialization.go": readsSnapshot,

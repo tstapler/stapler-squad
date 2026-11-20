@@ -240,6 +240,19 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent/classificationanalytics
             - github.com/tstapler/stapler-squad/session/ent/dismissedfinding
             - github.com/tstapler/stapler-squad/session/ent/predicate
+        # session/instancestore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_instancestore:
+          list-mode: strict
+          files:
+            - "**/session/instancestore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/session
+            - github.com/tstapler/stapler-squad/session/ent/tag
         # session/markerstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_markerstore:

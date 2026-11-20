@@ -849,6 +849,7 @@ go_test(
         "//session/hostclaim:go_sources",
         "//session/importer:go_sources",
         "//session/instance:go_sources",
+        "//session/instancestore:go_sources",
         "//session/internal/entdbtest:go_sources",
         "//session/internal/fixturetest:go_sources",
         "//session/internal/gatefixturetest:go_sources",

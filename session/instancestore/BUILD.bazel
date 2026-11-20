@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "instancestore",
+    srcs = [
+        "artifacts.go",
+        "mapper.go",
+        "reads.go",
+        "store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/instancestore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:session",
+        "//tools/bzl/ent:tag",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":instancestore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "instancestore_test",
+    srcs = ["reads_test.go"],
+    embed = [":instancestore"],
+    deps = [
+        "//session/domain",
+        "//session/internal/entdbtest",
+        "//tools/bzl/ent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session's and server/services' Bazel-sandboxed source scanners.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)
