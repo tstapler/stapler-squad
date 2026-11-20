@@ -80,7 +80,7 @@ func TestUpdateFeatureFlag_ShouldRefuseLooseningFlip_WhenAuditSinkDown(t *testin
 
 func TestUpdateFeatureFlag_ShouldReflectWithoutRestartInDispatcherStub_WhenAgentWakeTriggersFlipped(t *testing.T) {
 	e := newNotificationFlagEnv(t)
-	dispatcherStub := func() bool { return effectiveFlag(agentWakeTriggersFlagName, "dispatcher") }
+	dispatcherStub := func() bool { return flagReader{}.effectiveFlag(agentWakeTriggersFlagName, "dispatcher") }
 	require.False(t, dispatcherStub())
 
 	require.NoError(t, e.flip(agentWakeTriggersFlagName, true))
@@ -102,10 +102,10 @@ func TestUpdateFeatureFlag_ShouldSetAndClearNewScopes_WhenScopeIsRegistered(t *t
 		return err
 	}
 	require.NoError(t, req(sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED, scopeStageRender))
-	assert.True(t, effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
-	assert.False(t, effectiveFlag(askUserQuestionStructuredFlagName, scopeStageAnswer))
+	assert.True(t, flagReader{}.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
+	assert.False(t, flagReader{}.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageAnswer))
 	require.NoError(t, req(sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE, scopeStageRender))
-	assert.False(t, effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
+	assert.False(t, flagReader{}.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(req(sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED, "stage:bogus")))
 }
 
@@ -120,19 +120,19 @@ func TestAskUserQuestionStructured_ShouldGateStagesInOrder_WhenRenderAnswerHookR
 	}
 	n := askUserQuestionStructuredFlagName
 	set(scopeStageAnswer)
-	assert.False(t, effectiveFlag(n, scopeStageAnswer), "answer without render is ignored")
+	assert.False(t, flagReader{}.effectiveFlag(n, scopeStageAnswer), "answer without render is ignored")
 	set(scopeStageRender)
-	assert.True(t, effectiveFlag(n, scopeStageAnswer))
+	assert.True(t, flagReader{}.effectiveFlag(n, scopeStageAnswer))
 	set(scopeStageHookReply)
-	assert.False(t, effectiveFlag(n, scopeStageHookReply), "closed until S1 PASS is recorded")
-	assert.Equal(t, spikeS1HookReplyPassed, effectiveFlag(n, scopeStageHookReply))
+	assert.False(t, flagReader{}.effectiveFlag(n, scopeStageHookReply), "closed until S1 PASS is recorded")
+	assert.Equal(t, spikeS1HookReplyPassed, flagReader{}.effectiveFlag(n, scopeStageHookReply))
 	assert.False(t, config.LoadConfig().GetFeatureFlagWithDefault(n, false), "global stayed off throughout")
 }
 
 func TestEffectiveAnswerQuestion_ShouldBeClosed_WhenNothingConfigured(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	for _, r := range []answerRoute{routeLiveKeystrokeHidden, routeLiveKeystrokeVisible, routeDurableRecord, routeHookReply} {
-		assert.False(t, effectiveAnswerQuestion(r), "route %d", r)
+		assert.False(t, flagReader{}.effectiveAnswerQuestion(r), "route %d", r)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestUpdateFeatureFlag_ShouldNotifyWakeListener_WhenAgentWakeTriggersFlipped
 	var sawOn []bool
 	SetWakeFlagListener(func() {
 		calls++
-		sawOn = append(sawOn, effectiveFlag(agentWakeTriggersFlagName, "dispatcher"))
+		sawOn = append(sawOn, flagReader{}.effectiveFlag(agentWakeTriggersFlagName, "dispatcher"))
 	})
 	t.Cleanup(func() { SetWakeFlagListener(nil) })
 

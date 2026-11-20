@@ -85,7 +85,7 @@ func TestBacklogDecider_ShouldSendBackToReady_WhenReworkFromReview(t *testing.T)
 func TestBacklogDecider_ShouldReturnAlreadyResolvedWithoutMerging_WhenMergeRetriedAfterRestart(t *testing.T) {
 	t.Parallel()
 	w := &itemWorld{status: backlogStatusReview, sessionID: "work-1"}
-	d := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil)
+	d := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil, nil)
 	d.flags, d.metrics = fakeActionFlags{off: map[string]bool{}}, &recordingMetrics{}
 	req := func() *sessionv1.InvokeNotificationActionRequest {
 		return &sessionv1.InvokeNotificationActionRequest{
@@ -99,7 +99,7 @@ func TestBacklogDecider_ShouldReturnAlreadyResolvedWithoutMerging_WhenMergeRetri
 	require.EqualValues(t, 1, w.merges.Load())
 
 	// A restart empties the in-memory cache; the item's own state is the guard.
-	restarted := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil)
+	restarted := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil, nil)
 	restarted.flags, restarted.metrics = fakeActionFlags{off: map[string]bool{}}, &recordingMetrics{}
 	retry, err := restarted.Invoke(context.Background(), ActionCall{Msg: req()})
 	require.NoError(t, err)

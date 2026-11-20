@@ -1183,6 +1183,9 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
 }
 
+// flagReader reads flag decisions through this service's registry.
+func (s *SessionService) flagReader() flagReader { return flagReader{reg: s.FeatureFlagRegistry()} }
+
 // FeatureFlagRegistry returns the registry the flag service resolves flags against.
 func (s *SessionService) FeatureFlagRegistry() *featureflags.Registry {
 	return s.featureFlagSvc.reg()

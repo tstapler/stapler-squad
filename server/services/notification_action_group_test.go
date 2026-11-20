@@ -48,7 +48,7 @@ func newGroupedApprovals(t *testing.T, n int) *groupedApprovals {
 	g.dispatcher = NewNotificationActionDispatcher(ActionDelegates{
 		Approvals: NewApprovalResolver(svc, store),
 		Resolver:  NewNotificationResolver(history),
-	}, func() actionAudit { return &recordingAudit{} })
+	}, func() actionAudit { return &recordingAudit{} }, nil)
 	g.dispatcher.flags, g.dispatcher.metrics = &fakeActionFlags{off: map[string]bool{}}, &recordingMetrics{}
 	return g
 }

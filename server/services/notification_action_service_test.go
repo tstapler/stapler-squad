@@ -177,7 +177,7 @@ func newDispatchFixture() *dispatchFixture {
 	}
 	f.d = NewNotificationActionDispatcher(ActionDelegates{
 		Approvals: f.approvals, Questions: f.questions, Guidance: f.guidance, Backlog: f.backlog, Resolver: f.resolver,
-	}, func() actionAudit { return f.audit })
+	}, func() actionAudit { return f.audit }, nil)
 	f.d.flags, f.d.metrics = f.flags, f.metrics
 	return f
 }

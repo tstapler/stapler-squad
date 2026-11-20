@@ -53,11 +53,11 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 			Merger:      s,
 		})
 	}
-	s.notificationSvc.SetDescriptorBuilder(NewDescriptorBuilder(src))
+	s.notificationSvc.SetDescriptorBuilder(NewDescriptorBuilder(src, s.FeatureFlagRegistry()))
 	s.actionDispatcher = NewNotificationActionDispatcher(delegates, func() actionAudit {
 		if sink := s.auditSink(); sink != nil {
 			return sink
 		}
 		return nil
-	})
+	}, s.FeatureFlagRegistry())
 }

@@ -49,6 +49,7 @@ Installers of the global: `BuildCoreDepsWithOptions` in `server/dependencies.go`
    `feature_flags_attention*.go`, and `server/attention_options.go` (`liveAttentionFlags` loads via `services.LoadAttentionFlags`,
    so the cache takes the loader as a constructor argument). Risk: medium (hot poller paths, config-surface proofs). Proof: `config_surface_proof_*` tests
    unchanged and green.
+   **Done.** `flagReader{reg}` (nil falls back to `Current()`) owns `effectiveFlag`, `effectiveAnswerQuestion`, `resolveEffectiveFlag`, `resolveStage`, `scoped`, `dispatcherRunning`, `resolveAnswerQuestion`; `wireNotificationActionFlags` seeds from `ff.reg()`. `ResolveAttentionFlags`/`LoadAttentionFlags`, `NewDescriptorBuilder`, `NewGuidanceHookMirror` and `NewNotificationActionDispatcher` take a trailing `*featureflags.Registry`; `configActionFlags` carries a `flagReader`. `server.newAttentionOptionsSource(core.FlagRegistry)` replaces the `liveAttentionFlags` global and is shared via `ServiceDeps.AttentionOptions`. Proof: `feature_flags_reader_injected_registry_test.go`.
 4. **Per-feature readers.** `ChangelogEnabled`/`UpdateCheckFlagEnabled` (changelog handler gets the registry),
    `SddDefaultPipelineEnabled` (backlogsvc service field), `GitHubIssueProgressCommentsEnabled`,
    `ProgramCLIFlagProbeEnabled`, `filesFlagEnabled`, `WorkflowEngineModeFromConfig`, `globalOffStatusDetail`.

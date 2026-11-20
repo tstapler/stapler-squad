@@ -26,7 +26,7 @@ func wireGuidanceMirror(h *services.ApprovalHandler, deps *ServerDependencies, s
 	}
 	cleared := count(deliverygate.CounterGuidanceMirrorCleared)
 	mirror := services.NewGuidanceHookMirror(deps.Storage, deps.SessionService.PendingQuestions(),
-		count(deliverygate.CounterGuidanceMirrorFailed), cleared)
+		count(deliverygate.CounterGuidanceMirrorFailed), cleared, deps.SessionService.FeatureFlagRegistry())
 	h.SetGuidanceMirror(mirror)
 	deps.SessionService.SetGuidanceMirror(mirror)
 	reaper := services.NewGuidanceSessionReaper(deps.Storage, storageSessionEnds{storage: deps.Storage}, mirror, cleared)

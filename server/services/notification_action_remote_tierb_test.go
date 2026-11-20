@@ -21,7 +21,7 @@ func remoteTierBEnv(t *testing.T, tierB bool) (*routerEnv, *NotificationActionDi
 		require.NoError(t, config.LoadConfig().SetFeatureFlagScope(notificationInlineActionsFlagName, scopeChannelTierB, true))
 	}
 	audit := &recordingAudit{}
-	d := NewNotificationActionDispatcher(ActionDelegates{Questions: e.router}, func() actionAudit { return audit })
+	d := NewNotificationActionDispatcher(ActionDelegates{Questions: e.router}, func() actionAudit { return audit }, nil)
 	d.flags = configActionFlags{ev: compiledFlagEvidence}
 	return e, d
 }

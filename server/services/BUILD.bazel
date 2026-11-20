@@ -510,6 +510,7 @@ go_test(
         "feature_flags_conditional_test.go",
         "feature_flags_matrix_test.go",
         "feature_flags_notification_actions_test.go",
+        "feature_flags_reader_injected_registry_test.go",
         "feature_flags_session_multi_pr_test.go",
         "feature_flags_test.go",
         "federated_watch_aggregator_test.go",

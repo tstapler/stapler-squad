@@ -157,7 +157,7 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
 		time.Sleep(500 * time.Millisecond)
 		contentProvider := session.NewPollerContentProvider()
 		scanner := session.NewStartupScanner(statusManager, contentProvider)
-		scanner.SetOptionsSource(attentionOptionsSource)
+		scanner.SetOptionsSource(svc.AttentionOptions)
 		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
