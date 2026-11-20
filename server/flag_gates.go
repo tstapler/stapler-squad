@@ -11,3 +11,6 @@ func programCLIFlagProbeGate(sessions *services.SessionService) func() bool {
 func githubProgressCommentsGate(sessions *services.SessionService) func() bool {
 	return func() bool { return services.GitHubIssueProgressCommentsEnabled(sessions.InjectedFlagRegistry()) }
 }
+
+// startProgressSyncSubscriber is a seam so a test can capture the gate wireDepsIntoServer hands the subscriber.
+var startProgressSyncSubscriber = services.StartBacklogGitHubProgressSyncSubscriber

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,10 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -103,7 +106,8 @@ func TestNewServerWithDeps_ShouldWireServiceRegistryIntoFlagGates(t *testing.T) 
 
 	_, base := serveWithRegistry(t, plain, http.MethodGet, "/api/changelog", "")
 	_, flipped := serveWithRegistry(t, flipFlagDefault(services.ChangelogFlagName), http.MethodGet, "/api/changelog", "")
-	assert.NotEqual(t, base.Code, flipped.Code, "changelog route follows the service registry")
+	assert.Equal(t, http.StatusOK, base.Code, "changelog defaults on")
+	assert.Equal(t, http.StatusNotFound, flipped.Code, "flipped default turns the route off")
 
 	updateEnabled := func(reg *featureflags.Registry) bool {
 		_, rec := serveWithRegistry(t, reg, http.MethodGet, "/api/update-check", "")
@@ -113,16 +117,30 @@ func TestNewServerWithDeps_ShouldWireServiceRegistryIntoFlagGates(t *testing.T) 
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &res), rec.Body.String())
 		return res.Enabled
 	}
-	assert.NotEqual(t, updateEnabled(plain), updateEnabled(flipFlagDefault(services.UpdateCheckFlagName)), "update-check enabled follows the service registry")
+	assert.False(t, updateEnabled(plain), "update-check defaults off")
+	assert.True(t, updateEnabled(flipFlagDefault(services.UpdateCheckFlagName)), "flipped default turns it on")
 
 	const probe = "/api/session.v1.SessionService/ProbeProgram"
 	_, baseProbe := serveWithRegistry(t, plain, http.MethodPost, probe, "{}")
 	_, flippedProbe := serveWithRegistry(t, flipFlagDefault("programs:cli-flag-probe"), http.MethodPost, probe, "{}")
-	assert.NotEqual(t, baseProbe.Code, flippedProbe.Code, "ProbeProgram kill switch follows the service registry")
+	assert.Equal(t, http.StatusBadRequest, baseProbe.Code, "enabled: the handler runs and rejects the empty request")
+	assert.Equal(t, http.StatusNotImplemented, flippedProbe.Code, "flipped default: the kill switch refuses the call")
 
-	srvPlain, _ := serveWithRegistry(t, plain, http.MethodGet, "/api/changelog", "")
-	srvFlipped, _ := serveWithRegistry(t, flipFlagDefault("github_issue_progress_comments"), http.MethodGet, "/api/changelog", "")
-	assert.NotEqual(t, srvPlain.progressCommentsGate(), srvFlipped.progressCommentsGate(), "progress-comment gate follows the service registry")
+	progressGate := func(reg *featureflags.Registry) bool {
+		var gate func() bool
+		prev := startProgressSyncSubscriber
+		startProgressSyncSubscriber = func(ctx context.Context, bus *events.EventBus, flagEnabled func() bool, r *session.PluginRegistry, l *session.SyncLoop, s *session.Storage) <-chan struct{} {
+			gate = flagEnabled
+			return prev(ctx, bus, flagEnabled, r, l, s)
+		}
+		t.Cleanup(func() { startProgressSyncSubscriber = prev })
+		serveWithRegistry(t, reg, http.MethodGet, "/api/changelog", "")
+		require.NotNil(t, gate, "wireDepsIntoServer must start the progress-sync subscriber")
+		return gate()
+	}
+	wantProgress := services.GitHubIssueProgressCommentsEnabled(plain)
+	assert.Equal(t, wantProgress, progressGate(plain))
+	assert.Equal(t, !wantProgress, progressGate(flipFlagDefault("github_issue_progress_comments")), "subscriber gate follows the service registry")
 }
 
 func TestRegisterChangelogHandlers_ShouldReportUpdateCheckEnabledFromServiceRegistry(t *testing.T) {

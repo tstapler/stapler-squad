@@ -79,7 +79,6 @@ type Server struct {
 	wsUnaryBridge              atomic.Pointer[wsconn.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
 	terminalMuxBridge          atomic.Pointer[wsconn.TerminalMuxBridge] // serves /actuator/terminal-mux
 	unfinishedScanner          *unfinished.Scanner                      // serves /actuator/unfinished-scanner; nil without deps
-	progressCommentsGate       func() bool                              // GitHub progress-comment flag; set in wireDepsIntoServer
 	prLinkGC                   *sessionpr.SessionPRLinkGC               // orphan session-PR link collector; nil without storage
 	tlsConfig                  *tls.Config                              // non-nil when TLS is enabled
 	authMiddleware             func(http.Handler) http.Handler          // nil when auth is disabled
@@ -1407,12 +1406,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// issue when a backlog item transitions to done — AC3). Shares
 	// BacklogService's plugin registry/key provider so behavior matches
 	// TriggerSync; both are nil-safe when the backlog feature isn't wired.
-	srv.progressCommentsGate = githubProgressCommentsGate(deps.SessionService)
 	if deps.BacklogService != nil {
 		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
 
-		progressSyncDone := services.StartBacklogGitHubProgressSyncSubscriber(serverCtx, deps.EventBus, srv.progressCommentsGate, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+		progressSyncDone := startProgressSyncSubscriber(serverCtx, deps.EventBus, githubProgressCommentsGate(deps.SessionService), deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-progressSyncDone })
 
 		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
