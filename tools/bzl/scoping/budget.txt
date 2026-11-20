@@ -1,6 +1,6 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
-# Values are the measured tree rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered; raising one
-# needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`).
+# A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
+# (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`).
 session files=109 loc=23308 imports=58
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
@@ -15,8 +15,9 @@ session/markerstore files=6 loc=451 imports=6
 session/shellstore files=2 loc=111 imports=5
 session/projectstore files=2 loc=136 imports=5
 session/rulestore files=2 loc=233 imports=6
-session/analyticsstore files=2 loc=280 imports=6
+session/analyticsstore files=1 loc=271 imports=5
 session/instancestore files=8 loc=1596 imports=11
+session/domain files=45 loc=5898 imports=0
 session/sessionpr files=6 loc=1900 imports=14
 session/backlogstore files=31 loc=5956 imports=21
 session/claudectl files=3 loc=1400 imports=9
