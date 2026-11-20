@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -47,6 +48,12 @@ type shellStreamParams struct {
 	quiescenceCh         chan struct{}
 	resizeCh             chan shellResizeReq
 	resizeSettling       *atomic.Bool
+	flags                *featureflags.Registry
+}
+
+// resyncOptions resolves a mid-stream resync's options against the registry the stream was built with.
+func (p shellStreamParams) resyncOptions() ResyncOptions {
+	return currentResyncOptionsFor(p.flags, p.writer)
 }
 
 // shellOutputForwarderParams bundles the state forwardShellControlModeOutput
@@ -411,7 +418,7 @@ func handleShellMidStreamCurrentPaneRequest(p shellStreamParams, paneReq *sessio
 		attribute.String("shell_id", p.shellID),
 		attribute.String("resync_id", paneReq.GetResyncId()),
 	)
-	output, handleErr := handleCurrentPaneRequest(paneCtx, p.sessionID, p.cursorTarget, paneReq, currentResyncOptionsFor(p.writer))
+	output, handleErr := handleCurrentPaneRequest(paneCtx, p.sessionID, p.cursorTarget, paneReq, p.resyncOptions())
 	if handleErr != nil {
 		paneSpan.RecordError(handleErr)
 		log.Error("[streamShellViaControlMode] failed to handle mid-stream current pane request", "session", p.sessionID, "shell", p.shellID, "err", handleErr)
@@ -560,6 +567,7 @@ func (h *ConnectRPCWebSocketHandler) streamShellViaControlMode(stream *connectWe
 		quiescenceCh:         quiescenceCh,
 		resizeCh:             resizeCh,
 		resizeSettling:       &resizeSettling,
+		flags:                h.flags,
 	}
 	go h.runShellControlModeResizeCoalescer(shellParams)
 	go runShellInputReadLoop(shellParams)

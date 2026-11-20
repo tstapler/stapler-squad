@@ -3070,7 +3070,7 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(nil, testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3143,7 +3143,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(nil, testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3190,7 +3190,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	// covers it in this same all-flags-on context, not only in isolation.
 	batchTarget := &fakePanePTY{captureContent: "batch-content", cols: 80, rows: 24}
 	batchOnCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptionsFor(nil, testWriter()))
 	}
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
@@ -3230,7 +3230,7 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 	defer cleanup()
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(nil, testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3310,7 +3310,7 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(nil, testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3359,7 +3359,7 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 		TargetRows: int32Ptr(40),
 	}
 
-	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(nil, testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3398,7 +3398,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(nil, testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3435,7 +3435,7 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(nil, testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
