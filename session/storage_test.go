@@ -742,7 +742,7 @@ func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExists
 // struct: a future refactor that built a bare InstanceData{ID, ArchivedAt, Status} instead
 // of mutating a fresh FindInstanceDataByID read would pass every other test here (they only
 // assert ArchivedAt/Status) while silently clobbering every other field via
-// EntRepository.Update's guarded-optional-field pattern (empty/zero fields get cleared).
+// instancestore.Instances.Update's guarded-optional-field pattern (empty/zero fields get cleared).
 func TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)

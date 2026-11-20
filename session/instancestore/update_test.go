@@ -399,8 +399,9 @@ func TestInstances_should_LeaveNeighbourRowsUntouched_When_UpdateCalled(t *testi
 	assert.Equal(t, sectionData("target", "bb").ClaudeSession, gotTarget.ClaudeSession)
 	after := loadFull(t, in, "neighbour")
 	assert.Equal(t, before, after, "a title-keyed update must not touch another session or its child rows")
-	names := []string{}
-	for _, tg := range c.Tag.Query().AllX(ctx) {
+	all := c.Tag.Query().AllX(ctx)
+	names := make([]string, 0, len(all))
+	for _, tg := range all {
 		names = append(names, tg.Name)
 	}
 	sort.Strings(names)
@@ -469,4 +470,22 @@ func TestInstances_should_KeepStoredValue_When_SetOnlyFieldIsZeroInMemory(t *tes
 			assert.Equal(t, before, after, "a zero %s must leave the stored value alone", name)
 		})
 	}
+}
+
+func TestInstances_should_LinkTheNamedProject_When_OtherProjectsExist(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := entdbtest.NewClient(t)
+	for _, n := range []string{"other-first", "proj", "other-last"} {
+		_, err := c.Project.Create().SetName(n).Save(ctx)
+		require.NoError(t, err)
+	}
+	in := newWithPRPorts(c)
+	require.NoError(t, in.Create(ctx, sectionData("lp", "a")))
+	d := sectionData("lp", "bb")
+	d.ProjectID = "proj"
+
+	require.NoError(t, in.Update(ctx, d))
+
+	assert.Equal(t, "proj", loadFull(t, in, "lp").ProjectID, "the edge must point at the named project, not a neighbour")
 }
