@@ -252,9 +252,9 @@ const (
 // effective global value is off and either never set (shadow mode) or
 // explicitly false. It reads the effective value, so it goes silent once the
 // default flips on.
-func globalOffStatusDetail(cfg *config.Config) string {
+func (r flagReader) globalOffStatusDetail(cfg *config.Config) string {
 	name := config.HiddenSessionGateFeatureFlag
-	if cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name)) {
+	if r.enabled(cfg, name) {
 		return ""
 	}
 	if _, explicit := cfg.GetFeatureFlagOverride(name); explicit {

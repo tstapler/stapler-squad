@@ -196,7 +196,7 @@ func NewServerWithDeps(addr string, deps *ServerDependencies) *Server {
 	srv, connCtx := newServerBase(addr)
 	wireDepsIntoServer(srv, deps, connCtx)
 	registerStaticRoutes(srv)
-	srv.registerChangelogHandlers().Start(connCtx)
+	srv.registerChangelogHandlers(deps.SessionService).Start(connCtx)
 	return srv
 }
 
@@ -591,7 +591,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		ConnectOptions(deps.ErrorRegistry),
 		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
 			"programs:cli-flag-probe",
-			services.ProgramCLIFlagProbeEnabled,
+			programCLIFlagProbeGate(deps.SessionService),
 			services.ProgramCLIFlagProbeGatedMethod,
 		), interceptors.NewFederatedSessionGuard()),
 	)
@@ -1410,7 +1410,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
 
-		progressSyncDone := services.StartBacklogGitHubProgressSyncSubscriber(serverCtx, deps.EventBus, services.GitHubIssueProgressCommentsEnabled, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+		progressSyncDone := services.StartBacklogGitHubProgressSyncSubscriber(serverCtx, deps.EventBus, githubProgressCommentsGate(deps.SessionService), deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-progressSyncDone })
 
 		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
@@ -2410,4 +2410,14 @@ func stopStuckInstance(insts []*instance.Instance, title, workflowID string, sta
 		return nil
 	}
 	return nil
+}
+
+// programCLIFlagProbeGate and githubProgressCommentsGate read their flag through the session service's
+// injected registry on every call, so a Settings toggle still applies with no restart.
+func programCLIFlagProbeGate(sessions *services.SessionService) func() bool {
+	return func() bool { return services.ProgramCLIFlagProbeEnabled(sessions.InjectedFlagRegistry()) }
+}
+
+func githubProgressCommentsGate(sessions *services.SessionService) func() bool {
+	return func() bool { return services.GitHubIssueProgressCommentsEnabled(sessions.InjectedFlagRegistry()) }
 }

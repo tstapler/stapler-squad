@@ -81,7 +81,7 @@ func newRig(t testing.TB, ws dirWorkspaces) *handlerRig {
 	t.Helper()
 	tel := &recordingTelemetry{}
 	ops := NewFileOps(FilePolicy{Workspace: ws, Telemetry: tel}, osRootBackend{})
-	h := newSearchHandler(ops)
+	h := newSearchHandler(ops, globalFilesFlags{}.ViewerV2)
 	h.viewerV2 = func(context.Context) bool { return true }
 	return &handlerRig{h: h, tel: tel}
 }

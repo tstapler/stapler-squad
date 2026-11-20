@@ -271,6 +271,7 @@ func buildBacklogService(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 	stageCRUDRepo, stageConfigEngine, gateSatisfactionRepo := engines.stageCRUDRepo, engines.stageConfigEngine, engines.gateSatisfactionRepo
 	backlogCtrl, quotaGate, syncRegistry, keyFunc := control.ctrl, control.quotaGate, control.registry, control.keyFunc
 	backlogSvc := backlogsvc.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	backlogSvc.SetFlagRegistry(sessionService.InjectedFlagRegistry())
 	// One flow reader, aggregator and service for both the RPC handler and the HTTP MCP core.
 	backlogFlowSvc := backlogflow.NewFlowServiceFromStorage(storage, flow.WithObserver(backlogflow.NewFlowObserver()))
 	backlogFlowSvc.SetEnabledCheck(backlogCtrl.IsEnabled)
