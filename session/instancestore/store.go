@@ -1,6 +1,7 @@
-// Package instancestore is the read side of the sessions table: it loads domain.InstanceData
-// (with selective child loading) and the session-artifacts blob. session.EntRepository embeds
-// *Instances so existing callers keep their method set.
+// Package instancestore is the sessions-table store for single-row access: it loads
+// domain.InstanceData (with selective child loading), reads and writes the session-artifacts
+// blob, and applies the single-column updaters. session.EntRepository embeds *Instances so
+// existing callers keep their method set.
 package instancestore
 
 import "github.com/tstapler/stapler-squad/session/ent"

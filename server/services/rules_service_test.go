@@ -1222,7 +1222,7 @@ func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
 
 	// Hop 2: re-open a fresh RulesStore against the same ent storage to force a
 	// read from the DB row (domain.ApprovalRuleData) rather than the in-memory
-	// cache, proving the ent read/write hop in session/ent_repository.go didn't
+	// cache, proving the ent read/write hop in session/rulestore didn't
 	// drop the field.
 	reloaded, err := NewRulesStore(svc.rulesStore.storage)
 	require.NoError(t, err)

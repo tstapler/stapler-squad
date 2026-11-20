@@ -13,9 +13,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/internal/entdbtest"
 )
 
+var seedTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 func seedBare(t *testing.T, c *ent.Client, title string) {
 	t.Helper()
-	_, err := c.Session.Create().SetTitle(title).SetUUID("u-" + title).SetPath("/p").SetStatus(1).SetProgram("claude").Save(context.Background())
+	_, err := c.Session.Create().SetTitle(title).SetUUID("u-" + title).SetPath("/p").SetUpdatedAt(seedTime).SetStatus(1).SetProgram("claude").Save(context.Background())
 	require.NoError(t, err)
 }
 
@@ -95,6 +97,7 @@ func TestInstances_should_WriteOnlyItsColumn_When_SingleColumnUpdaterCalled(t *t
 			seedBare(t, c, "other")
 			require.NoError(t, tt.call(New(c)))
 			tt.check(t, row(t, c, "a"))
+			assert.True(t, row(t, c, "a").UpdatedAt.After(seedTime.Add(time.Hour)), "updated_at must advance")
 			// A WHERE title=? regression would leak the write onto the neighbour row.
 			other := row(t, c, "other")
 			assert.Zero(t, other.GithubPrNumber)
@@ -103,6 +106,10 @@ func TestInstances_should_WriteOnlyItsColumn_When_SingleColumnUpdaterCalled(t *t
 			assert.Nil(t, other.LastViewed)
 			assert.Nil(t, other.LastUserResponse)
 			assert.Nil(t, other.LastTerminalUpdate)
+			assert.Nil(t, other.LastAddedToQueue)
+			assert.Nil(t, other.InitialPromptSentAt)
+			assert.Nil(t, other.LastAcknowledged)
+			assert.True(t, other.UpdatedAt.Equal(seedTime), "neighbour updated_at must not move")
 		})
 	}
 }
@@ -178,6 +185,19 @@ func TestInstances_should_ApplyGuardedFields_When_UpdateSessionMetadataCalled(t 
 		n, err := c.Session.Query().Where(session.Title("old")).Count(ctx)
 		require.NoError(t, err)
 		assert.Zero(t, n)
+	})
+	t.Run("only the targeted row changes", func(t *testing.T) {
+		t.Parallel()
+		c := entdbtest.NewClient(t)
+		seedBare(t, c, "a")
+		seedBare(t, c, "other")
+		require.NoError(t, New(c).UpdateSessionMetadata(ctx, "a", str("renamed"), str("cat"), str("note"), str("wd")))
+		o := row(t, c, "other")
+		assert.Empty(t, o.Category)
+		assert.Empty(t, o.Note)
+		assert.Empty(t, o.WorkingDir)
+		assert.True(t, o.UpdatedAt.Equal(seedTime))
+		assert.True(t, row(t, c, "renamed").UpdatedAt.After(seedTime.Add(time.Hour)))
 	})
 	t.Run("empty strings keep title/category/workingdir but clear note", func(t *testing.T) {
 		t.Parallel()
