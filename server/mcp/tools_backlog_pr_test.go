@@ -346,3 +346,45 @@ func TestReportPRCreated_ShouldNameUnparseableTrackedURL_WhenAdditive(t *testing
 	require.False(t, m["success"].(bool))
 	assert.Contains(t, m["error"].(map[string]interface{})["message"], "could not determine the repository")
 }
+
+// R4: an override-accepted PR opened from a fallback branch must become the session's tracked
+// branch, or ReconcilePRPending's post-merge ownership check can never agree with attach time.
+func TestReportPRCreated_ShouldRecordHeadBranchAsOwnership_OnlyWhenOverrideAccepted(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		matched    bool
+		headBranch string
+		wantBranch string
+	}{
+		"override from fallback branch": {false, "backlog/ship-it-clean", "backlog/ship-it-clean"},
+		"branch matches tracked":        {true, "backlog/ship-it", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storage := newTestBacklogStorage(t)
+			item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
+			h := additiveHandler(storage, true)
+			h.verifyPRMatchesBranch = func(context.Context, githubpkg.RepoRef, int, string) (PRVerification, error) {
+				return NewPRVerification(true, tc.matched, tc.headBranch, githubpkg.PRStateOpen, "tstapler"), nil
+			}
+			h.resolveCallerGitHubLogin = func(context.Context) (string, error) { return "tstapler", nil }
+			ctx := WithSessionUUID(context.Background(), sessionUUID)
+			extra := map[string]interface{}{}
+			if !tc.matched {
+				extra["override_reason"] = "tracked branch was polluted; opened from a clean branch"
+			}
+
+			result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, extra)))
+			require.NoError(t, err)
+			require.False(t, result.IsError, "%v", result.Content)
+
+			is, gerr := storage.GetItemSessionBySessionUUID(context.Background(), sessionUUID)
+			require.NoError(t, gerr)
+			if tc.wantBranch == "" {
+				assert.NotEqual(t, "backlog/ship-it-clean", is.BranchName, "a matching PR must not rewrite the tracked branch")
+				return
+			}
+			assert.Equal(t, tc.wantBranch, is.BranchName)
+		})
+	}
+}

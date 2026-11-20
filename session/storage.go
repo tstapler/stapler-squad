@@ -1640,6 +1640,11 @@ func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd floa
 	return s.Repo.UpdateItemSessionCost(ctx, id, usd, priced)
 }
 
+// UpdateItemSessionBranch replaces an ItemSession's branch_name. See Backlog.UpdateItemSessionBranch.
+func (s *Storage) UpdateItemSessionBranch(ctx context.Context, id string, branch string) error {
+	return s.Repo.UpdateItemSessionBranch(ctx, id, branch)
+}
+
 // AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession
 // for sessionUUID, if any. See EntRepository.AddHeadlessCostBySessionUUID.
 func (s *Storage) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID string, usd float64) error {

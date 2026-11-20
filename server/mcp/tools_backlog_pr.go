@@ -148,6 +148,21 @@ func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *backlogdt
 	log.Info("report_pr_created.provenance_stamped", "item", item.ID, "pr_number", prNumber)
 }
 
+// recordOverrideBranch makes the PR's real head branch the calling work session's tracked branch
+// once the override path accepted it (the operator authored the PR), so ReconcilePRPending's
+// post-merge ownership check agrees with the attach-time check instead of parking the item as
+// merged_pr_unverified. Best-effort: the PR/item transition already succeeded.
+func (h *backlogHandlers) recordOverrideBranch(ctx context.Context, callerUUID, itemID, headBranch string) {
+	is, err := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID)
+	if err != nil || is.BacklogItemID != itemID {
+		log.Warn("report_pr_created.override_branch_skipped", "item", itemID, "session", callerUUID, "err", err)
+		return
+	}
+	if err := h.storage.UpdateItemSessionBranch(ctx, is.ID, headBranch); err != nil {
+		log.Warn("report_pr_created.override_branch_failed", "item", itemID, "branch", headBranch, "err", err)
+	}
+}
+
 // reportPRCreatedTool is the registered report_pr_created handler: reportPRCreated
 // behind the identity gate, so callerUUID is the verified session credential
 // (ADR-007 rule 0), never the spoofable X-Stapler-Session-UUID claim.
@@ -460,6 +475,10 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	log.InfoLog().Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
 	if inItemRepo {
 		h.stampPRProvenance(ctx, item, repoRef, prNumber)
+	}
+
+	if inItemRepo && !verification.Matched && verification.ActualHeadBranch != "" {
+		h.recordOverrideBranch(ctx, callerUUID, itemID, verification.ActualHeadBranch)
 	}
 
 	if isReassignment || foreignRepo || !verification.Matched {

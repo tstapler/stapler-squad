@@ -191,6 +191,21 @@ func (b *Backlog) UpdateItemSessionCost(ctx context.Context, id string, usd floa
 	return nil
 }
 
+// UpdateItemSessionBranch replaces an ItemSession's branch_name, the ownership evidence
+// ReconcilePRPending checks a merged PR's head branch against. Used when report_pr_created accepts
+// a PR opened from a different (fallback) branch under the override path, so the later merge
+// check agrees with the attach-time check.
+func (b *Backlog) UpdateItemSessionBranch(ctx context.Context, id string, branch string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+	if err := b.client.ItemSession.UpdateOneID(parsedID).SetBranchName(branch).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set branch_name on item session %s: %w", id, err)
+	}
+	return nil
+}
+
 // AddHeadlessCostBySessionUUID looks up the most recent ItemSession for sessionUUID
 // and adds usd to its estimated_cost_usd. A no-op (nil error) when usd <= 0 or when
 // sessionUUID has no ItemSession at all — most interactive sessions aren't
