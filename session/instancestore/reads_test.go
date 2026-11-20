@@ -39,7 +39,7 @@ func TestInstances_should_LoadOnlyRequestedEdges_When_LoadOptionsVary(t *testing
 	ctx := context.Background()
 	c := entdbtest.NewClient(t)
 	seedSession(t, c, "a", "uuid-a", int(domain.Active), "t1", "t2")
-	in := New(c)
+	in := New(c, Ports{})
 
 	tests := []struct {
 		name string
@@ -97,7 +97,7 @@ func TestInstances_should_AlwaysLoadProject_When_AnyLoadOptions(t *testing.T) {
 	_, err = c.Session.Create().SetTitle("a").SetPath("/p").SetStatus(0).SetProgram("claude").SetProjectID(p.ID).Save(ctx)
 	require.NoError(t, err)
 
-	d, err := New(c).GetWithOptions(ctx, "a", domain.LoadMinimal)
+	d, err := New(c, Ports{}).GetWithOptions(ctx, "a", domain.LoadMinimal)
 	require.NoError(t, err)
 	assert.Equal(t, "proj", d.ProjectID)
 }
@@ -108,7 +108,7 @@ func TestInstances_should_FilterAndLoadListEdges_When_ListVariantsCalled(t *test
 	c := entdbtest.NewClient(t)
 	seedSession(t, c, "a", "uuid-a", int(domain.Active), "t1")
 	seedSession(t, c, "b", "uuid-b", int(domain.Paused), "t2")
-	in := New(c)
+	in := New(c, Ports{})
 
 	all, err := in.List(ctx)
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestInstances_should_ResolveByTitleOrUUID_When_FindByIDWithOptions(t *testi
 	// uuid has no uniqueness constraint: an empty id must not match a session that never got one.
 	_, err := c.Session.Create().SetTitle("no-uuid").SetPath("/p").SetStatus(0).SetProgram("claude").Save(ctx)
 	require.NoError(t, err)
-	in := New(c)
+	in := New(c, Ports{})
 
 	byTitle, err := in.FindByIDWithOptions(ctx, "a", domain.LoadMinimal)
 	require.NoError(t, err)
@@ -177,7 +177,7 @@ func TestInstances_should_ReadArtifactsAndConversationUUID_When_Stored(t *testin
 	require.NoError(t, err)
 	_, err = c.Session.Update().Where().SetSessionArtifacts(`{}`).Save(ctx)
 	require.NoError(t, err)
-	in := New(c)
+	in := New(c, Ports{})
 
 	blob, err := in.GetSessionArtifacts(ctx, "a")
 	require.NoError(t, err)

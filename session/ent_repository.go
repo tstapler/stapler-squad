@@ -23,7 +23,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
-	entshell "github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/guidancestore"
@@ -279,7 +278,7 @@ func (r *EntRepository) initStores() {
 	r.Projects = projectstore.New(r.Client)
 	r.Rules = rulestore.New(r.Client)
 	r.Analytics = analyticsstore.New(r.Client)
-	r.Instances = instancestore.New(r.Client)
+	r.Instances = instancestore.New(r.Client, instancestore.Ports{UpsertSessionPRSet: sessionpr.UpsertSessionPRSetTx, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
 	r.SetDriver(r.driver)
 	// Built before Backlog, which takes it as its guidance port; the callback resolves r.Backlog
 	// at call time, so it publishes through the Backlog built on the next line.
@@ -303,265 +302,6 @@ func (r *EntRepository) MaintenanceDriver() dialect.ExecQuerier {
 		return nil
 	}
 	return r.driver
-}
-
-// Create inserts a new session into the database
-func (r *EntRepository) Create(ctx context.Context, data domain.InstanceData) error {
-	// Start transaction
-	tx, err := r.Client.Tx(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Create main session
-	sessionCreate := tx.Session.Create().
-		SetTitle(data.Title).
-		SetNillableUUID(nilIfEmpty(data.UUID)).
-		SetPath(data.Path).
-		SetStatus(int(data.Status)).
-		SetCreatedAt(data.CreatedAt).
-		SetUpdatedAt(data.UpdatedAt).
-		SetAutoYes(data.AutoYes).
-		SetAutoApprove(data.AutoApprove).
-		SetAutonomousMode(data.AutonomousMode).
-		SetProgram(data.Program).
-		SetIsExpanded(data.IsExpanded).
-		SetPinned(data.Pinned)
-
-	// Set optional fields
-	setSessionCreateIdentityFields(sessionCreate, data)
-	setSessionCreateActivityFields(sessionCreate, data)
-	setSessionCreateGitHubFields(sessionCreate, data)
-
-	// Link project if specified (look up by name)
-	if data.ProjectID != "" {
-		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
-		if err == nil {
-			sessionCreate.SetProjectID(proj.ID)
-		}
-		// If project not found, silently continue (session created without project link)
-	}
-
-	sess, err := sessionCreate.Save(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	if err := createWorktreeRow(ctx, tx, sess.ID, data); err != nil {
-		return err
-	}
-	if err := createDiffStatsRow(ctx, tx, sess.ID, data); err != nil {
-		return err
-	}
-	if err := createTagLinks(ctx, tx, sess, data.Tags); err != nil {
-		return err
-	}
-	if err := createClaudeRows(ctx, tx, sess.ID, data); err != nil {
-		return err
-	}
-
-	if err := sessionpr.UpsertSessionPRSetTx(ctx, tx, data); err != nil {
-		return err
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
-}
-
-func setSessionCreateIdentityFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
-	if data.WorkingDir != "" {
-		sessionCreate.SetWorkingDir(data.WorkingDir)
-	}
-	if data.Branch != "" {
-		sessionCreate.SetBranch(data.Branch)
-	}
-	if data.Height > 0 {
-		sessionCreate.SetHeight(data.Height)
-	}
-	if data.Width > 0 {
-		sessionCreate.SetWidth(data.Width)
-	}
-	if data.Prompt != "" {
-		sessionCreate.SetPrompt(data.Prompt)
-	}
-	if data.ExistingWorktree != "" {
-		sessionCreate.SetExistingWorktree(data.ExistingWorktree)
-	}
-	if data.Category != "" {
-		sessionCreate.SetCategory(data.Category)
-	}
-	if data.Note != "" {
-		sessionCreate.SetNote(data.Note)
-	}
-	if len(data.RuleTagProvenance) > 0 {
-		sessionCreate.SetRuleTagProvenance(data.RuleTagProvenance)
-	}
-	if len(data.SuppressedRuleTags) > 0 {
-		sessionCreate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
-	}
-	if data.SessionType != "" {
-		sessionCreate.SetSessionType(string(data.SessionType))
-	}
-}
-
-func setSessionCreateActivityFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
-	if data.TmuxPrefix != "" {
-		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
-	}
-	// Backend is write-once per instance today (set at construction via
-	// session.ResolveSessionBackend, never reset to "" afterward) -- this guard
-	// intentionally only ever sets a non-empty value, mirroring TmuxPrefix above,
-	// not clearing an explicit unset like PauseReason/ExitReason do. If a future
-	// feature ever needs to unpin an instance's backend back to "", this needs an
-	// explicit ClearBackend() branch too, or the clear will silently no-op here.
-	if data.Backend != "" {
-		sessionCreate.SetBackend(string(data.Backend))
-	}
-	if data.TymuxSessionID != "" {
-		sessionCreate.SetTymuxSessionID(data.TymuxSessionID)
-	}
-	if !data.LastTerminalUpdate.IsZero() {
-		sessionCreate.SetLastTerminalUpdate(data.LastTerminalUpdate)
-	}
-	if !data.LastMeaningfulOutput.IsZero() {
-		sessionCreate.SetLastMeaningfulOutput(data.LastMeaningfulOutput)
-	}
-	if data.LastOutputSignature != "" {
-		sessionCreate.SetLastOutputSignature(data.LastOutputSignature)
-	}
-	if !data.LastAddedToQueue.IsZero() {
-		sessionCreate.SetLastAddedToQueue(data.LastAddedToQueue)
-	}
-	if !data.LastViewed.IsZero() {
-		sessionCreate.SetLastViewed(data.LastViewed)
-	}
-	if !data.LastAcknowledged.IsZero() {
-		sessionCreate.SetLastAcknowledged(data.LastAcknowledged)
-	}
-	if data.MCPServerURL != "" {
-		sessionCreate.SetMcpServerURL(data.MCPServerURL)
-	}
-	if data.InitialPrompt != "" {
-		sessionCreate.SetInitialPrompt(data.InitialPrompt)
-	}
-}
-
-func setSessionCreateGitHubFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
-	if !data.InitialPromptSentAt.IsZero() {
-		sessionCreate.SetInitialPromptSentAt(data.InitialPromptSentAt)
-	}
-	if data.OneShot {
-		sessionCreate.SetOneShot(data.OneShot)
-	}
-	if data.Hidden {
-		sessionCreate.SetHidden(data.Hidden)
-	}
-	if data.GitHubPRURL != "" {
-		sessionCreate.SetGithubPrURL(data.GitHubPRURL)
-	}
-	if data.GitHubPRNumber > 0 {
-		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
-	}
-	if data.GitHubPRStatusTerminal {
-		sessionCreate.SetGithubPrStatusTerminal(true)
-	}
-	if data.GitHubOwner != "" {
-		sessionCreate.SetGithubOwner(data.GitHubOwner)
-	}
-	if data.GitHubRepo != "" {
-		sessionCreate.SetGithubRepo(data.GitHubRepo)
-	}
-	if data.GitHubHost != "" {
-		sessionCreate.SetGithubHost(data.GitHubHost)
-	}
-	if data.ArchivedAt != nil {
-		sessionCreate.SetArchivedAt(*data.ArchivedAt)
-	}
-	if !data.CreationProgressUpdatedAt.IsZero() {
-		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
-	}
-}
-
-func createWorktreeRow(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) error {
-	if data.Worktree.RepoPath == "" {
-		return nil
-	}
-	if _, err := tx.Worktree.Create().
-		SetSessionID(sessionID).
-		SetRepoPath(data.Worktree.RepoPath).
-		SetWorktreePath(data.Worktree.WorktreePath).
-		SetSessionName(data.Worktree.SessionName).
-		SetBranchName(data.Worktree.BranchName).
-		SetBaseCommitSha(data.Worktree.BaseCommitSHA).
-		Save(ctx); err != nil {
-		return fmt.Errorf("failed to create worktree: %w", err)
-	}
-	return nil
-}
-
-func createDiffStatsRow(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) error {
-	diffCreate := tx.DiffStats.Create().
-		SetSessionID(sessionID).
-		SetAdded(data.DiffStats.Added).
-		SetRemoved(data.DiffStats.Removed)
-	if data.DiffStats.Content != "" {
-		diffCreate.SetContent(data.DiffStats.Content)
-	}
-	if _, err := diffCreate.Save(ctx); err != nil {
-		return fmt.Errorf("failed to create diff stats: %w", err)
-	}
-	return nil
-}
-
-// createTagLinks collects all tag IDs (creating missing tags) then does one bulk AddTagIDs.
-func createTagLinks(ctx context.Context, tx *ent.Tx, sess *ent.Session, tags []string) error {
-	if len(tags) == 0 {
-		return nil
-	}
-	tagIDs := make([]int, 0, len(tags))
-	for _, tagName := range tags {
-		t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
-		if err != nil {
-			if !ent.IsNotFound(err) {
-				return fmt.Errorf("failed to query tag %s: %w", tagName, err)
-			}
-			t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to create tag %s: %w", tagName, err)
-			}
-		}
-		tagIDs = append(tagIDs, t.ID)
-	}
-	if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to associate tags: %w", err)
-	}
-	return nil
-}
-
-// createClaudeRows creates the Claude session row and its metadata entries, if present.
-func createClaudeRows(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) error {
-	if data.ClaudeSession.ConversationUUID == "" {
-		return nil
-	}
-	claudeSess, err := createClaudeSessionRow(ctx, tx, sessionID, data)
-	if err != nil {
-		return err
-	}
-	for key, value := range data.ClaudeSession.Metadata {
-		if _, err := tx.ClaudeMetadata.Create().
-			SetClaudeSessionID(claudeSess.ID).
-			SetKey(key).
-			SetValue(value).
-			Save(ctx); err != nil {
-			return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
-		}
-	}
-	return nil
 }
 
 // Update modifies an existing session in the database
@@ -689,7 +429,7 @@ func setSessionTextFields(sessionUpdate *ent.SessionUpdateOne, data domain.Insta
 	// rule-owned tag or un-suppressing the last tag are meaningful "cleared to empty" states
 	// (same rationale as Note above), not an "unset" sentinel a guarded update would preserve.
 	sessionUpdate.SetRuleTagProvenance(data.RuleTagProvenance)
-	sessionUpdate.SetSuppressedRuleTags(suppressedRuleTagsToSlice(data.SuppressedRuleTags))
+	sessionUpdate.SetSuppressedRuleTags(instancestore.SuppressedRuleTagsToSlice(data.SuppressedRuleTags))
 	if data.SessionType != "" {
 		sessionUpdate.SetSessionType(string(data.SessionType))
 	}
@@ -924,7 +664,7 @@ func (r *EntRepository) upsertClaudeSessionRow(ctx context.Context, tx *ent.Tx, 
 		}
 		claudeSessionID = existingClaude.ID
 	case ent.IsNotFound(err):
-		created, err := createClaudeSessionRow(ctx, tx, sess.ID, data)
+		created, err := instancestore.CreateClaudeSessionRow(ctx, tx, sess.ID, data)
 		if err != nil {
 			return err
 		}
@@ -945,33 +685,6 @@ func (r *EntRepository) upsertClaudeSessionRow(ctx context.Context, tx *ent.Tx, 
 		}
 	}
 	return nil
-}
-
-func createClaudeSessionRow(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) (*ent.ClaudeSession, error) {
-	claudeCreate := tx.ClaudeSession.Create().
-		SetSessionID(sessionID).
-		SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
-		SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
-		SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
-		SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
-		SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
-	if data.ClaudeSession.SquadSessionID != "" {
-		claudeCreate.SetConversationID(data.ClaudeSession.SquadSessionID)
-	}
-	if data.ClaudeSession.ProjectName != "" {
-		claudeCreate.SetProjectName(data.ClaudeSession.ProjectName)
-	}
-	if !data.ClaudeSession.LastAttached.IsZero() {
-		claudeCreate.SetLastAttached(data.ClaudeSession.LastAttached)
-	}
-	if data.ClaudeSession.Settings.PreferredSessionName != "" {
-		claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
-	}
-	created, err := claudeCreate.Save(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create claude session: %w", err)
-	}
-	return created, nil
 }
 
 // updateClaudeSessionRow updates the existing row and clears its metadata so
@@ -1004,80 +717,6 @@ func updateClaudeSessionRow(ctx context.Context, tx *ent.Tx, existing *ent.Claud
 	return nil
 }
 
-// Delete removes a session from the database by title
-func (r *EntRepository) Delete(ctx context.Context, title string) error {
-	// Start transaction for atomic deletion
-	tx, err := r.Client.Tx(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Find session by title
-	sess, err := tx.Session.Query().Where(session.Title(title)).Only(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to find session: %w", err)
-	}
-
-	// Delete related entities first (manual cascade)
-
-	// Delete worktree if exists
-	if _, err := tx.Worktree.Delete().Where(worktree.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete worktree: %w", err)
-	}
-
-	// Delete diff stats if exists
-	if _, err := tx.DiffStats.Delete().Where(diffstats.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete diff stats: %w", err)
-	}
-
-	// Stamp the conversation UUID onto the session's item_sessions before the claude_sessions
-	// row is deleted, so Insights can still attribute the transcript afterward.
-	if err := stampItemSessionConversationUUID(ctx, tx, sess); err != nil {
-		return err
-	}
-
-	// Delete claude session and its metadata if exists
-	// Delete all claude metadata associated with claude sessions for this session
-	if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.HasSessionWith(session.ID(sess.ID)))).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete claude metadata: %w", err)
-	}
-	// Delete all claude sessions for this session
-	if _, err := tx.ClaudeSession.Delete().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete claude sessions: %w", err)
-	}
-
-	// Clear tag associations (many-to-many)
-	if err := tx.Session.UpdateOne(sess).ClearTags().Exec(ctx); err != nil {
-		return fmt.Errorf("failed to clear tags: %w", err)
-	}
-
-	// Delete shells (sibling tmux sessions) — Shell.session edge is Required(),
-	// so leaving any rows here trips a FOREIGN KEY constraint on session delete.
-	if _, err := tx.Shell.Delete().Where(entshell.HasSessionWith(session.ID(sess.ID))).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete shells: %w", err)
-	}
-
-	// PR links and detach tombstones are keyed by the session uuid, not an FK.
-	if sess.UUID != "" {
-		if err := sessionpr.DeleteOwnerPRRows(ctx, tx, domain.SessionPROwner(sess.UUID)); err != nil {
-			return err
-		}
-	}
-
-	// Finally delete the session
-	if err := tx.Session.DeleteOne(sess).Exec(ctx); err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
-}
-
 // Close performs cleanup and releases resources
 func (r *EntRepository) Close() error {
 	if r.Client != nil {
@@ -1093,21 +732,4 @@ func nilIfEmpty(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-// suppressedRuleTagsToSlice converts Instance.SuppressedRuleTags' in-memory
-// map[string]bool representation to the []string set persisted in the
-// suppressed_rule_tags JSON column (session/ent/schema/session.go) — a simpler
-// on-disk shape than a bool-valued JSON object, per Task 3.1.2a.
-func suppressedRuleTagsToSlice(m map[string]bool) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(m))
-	for tag, suppressed := range m {
-		if suppressed {
-			out = append(out, tag)
-		}
-	}
-	return out
 }
