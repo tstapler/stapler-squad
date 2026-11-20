@@ -51,3 +51,12 @@ func TestWorkDiscipline_should_TellWorkerToSyncMain(t *testing.T) {
 		t.Errorf("work discipline should name git merge main with the code mark stripped: %q", seed)
 	}
 }
+
+func TestFailNoteAndReviewScope_should_MentionNotMetOutcome(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{"SecFailNote": SecFailNote, "SecReviewScope": SecReviewScope} {
+		if !strings.Contains(text, "not_met") && !strings.Contains(text, "TARGET NOT MET") {
+			t.Errorf("%s must describe the attempted, target-not-met outcome", name)
+		}
+	}
+}

@@ -67,7 +67,9 @@ const SecDoneNote = `Call report_progress with item_id={{item_id}}, criteria_ind
 const SecFailNote = `Call report_progress with item_id={{item_id}}, criteria_index={{criteria_index}}, status=fail. ` +
 	`Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking this criterion. ` +
 	`It is appended to this item's permanent audit trail and is what a reviewer or the next session reads to understand why this criterion is not done yet. ` +
-	`If the criterion cannot be met as written, also follow the owner-action guidance in /backlog/help, because /backlog/review is rejected while any criterion is unmet.`
+	`If you honestly attempted the criterion and measured a result that misses its target, call report_progress with status=not_met instead, and put the measured result in the note. ` +
+	`That tells a human the target was tried and missed (not that the work is unfinished), so ¦/backlog/review¦ can go ahead and the owner decides whether to relax the criterion. ` +
+	`If the criterion is blocked or broken for another reason, follow the owner-action guidance in /backlog/help, because /backlog/review is rejected while any criterion is unmet.`
 
 const SecShipIntro = `You are ready to ship your work as a pull request — either because ¦/backlog/review¦ just returned PASS, ` +
 	`or because review has looped without reaching a PASS and it is time to hand the work to a human instead of retrying indefinitely.
@@ -127,4 +129,6 @@ const SecReviewFailureClass = `For each criterion that is not PASS, set failure_
 
 const SecReviewScope = `Judge only what this change is responsible for. When a proof fails because of a test or code the change did not touch, confirm it also fails on a clean main, ` +
 	`then verdict that criterion with failure_class=UNRELATED_FAILURE (or ENVIRONMENTAL for broken tooling) rather than FAIL for the worker to rework. ` +
-	`When the work session cites commit SHAs, check they are on the branch under review before crediting them, and if they are not, use failure_class=WRONG_BRANCH.`
+	`When the work session cites commit SHAs, check they are on the branch under review before crediting them, and if they are not, use failure_class=WRONG_BRANCH. ` +
+	`A criterion marked ATTEMPTED, TARGET NOT MET was tried and the worker reports a measured result below its target: re-run that measurement yourself. ` +
+	`If it reproduces, verdict FAIL with failure_class=UNATTAINABLE, proposed_waiver=true, and the measured number in evidence so the owner can decide to relax it. If it does not reproduce, verdict it on what you measured.`

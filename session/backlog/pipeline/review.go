@@ -208,6 +208,9 @@ func writeAcceptanceCriteria(sb *strings.Builder, acSnapshot []domain.AcCriterio
 		if c.Status == domain.AcStatusWaived {
 			sb.WriteString("   WAIVED by the owner: do not evaluate it and leave it out of verdicts.\n")
 		}
+		if c.Status == domain.AcStatusFail && c.Note != "" {
+			sb.WriteString("   ATTEMPTED, TARGET NOT MET: the work session reports it tried and measured a result below the target.\n")
+		}
 		if c.Note != "" {
 			fmt.Fprintf(sb, "   Note (self-reported by work session via report_progress): %s\n", domain.SanitizeField(c.Note, 500))
 		}

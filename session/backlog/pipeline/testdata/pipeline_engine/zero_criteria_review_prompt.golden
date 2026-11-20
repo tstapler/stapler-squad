@@ -26,7 +26,7 @@ index 1111111..2222222 100644
 Verified locally via go test ./... — all tests pass.
 
 ## Review Scope
-Judge only what this change is responsible for. When a proof fails because of a test or code the change did not touch, confirm it also fails on a clean main, then verdict that criterion with failure_class=UNRELATED_FAILURE (or ENVIRONMENTAL for broken tooling) rather than FAIL for the worker to rework. When the work session cites commit SHAs, check they are on the branch under review before crediting them, and if they are not, use failure_class=WRONG_BRANCH.
+Judge only what this change is responsible for. When a proof fails because of a test or code the change did not touch, confirm it also fails on a clean main, then verdict that criterion with failure_class=UNRELATED_FAILURE (or ENVIRONMENTAL for broken tooling) rather than FAIL for the worker to rework. When the work session cites commit SHAs, check they are on the branch under review before crediting them, and if they are not, use failure_class=WRONG_BRANCH. A criterion marked ATTEMPTED, TARGET NOT MET was tried and the worker reports a measured result below its target: re-run that measurement yourself. If it reproduces, verdict FAIL with failure_class=UNATTAINABLE, proposed_waiver=true, and the measured number in evidence so the owner can decide to relax it. If it does not reproduce, verdict it on what you measured.
 
 ## Instructions
 Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).
