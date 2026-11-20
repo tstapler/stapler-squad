@@ -267,9 +267,9 @@ func (l *BacklogLifecycleListener) itemHasPRReference(ctx context.Context, er *s
 //
 // Deliberately narrow: only items in review status, with no PR reference
 // recorded yet (pr_number == 0 — the cheap in-process filter applied before
-// any GitHub API call), and no live work/review session (hasActiveSession) —
-// an item still being actively worked or reviewed is left alone; its own
-// normal flow will eventually report or create the PR. On a match, reuses
+// any GitHub API call). An item with a live work/review session (hasActiveSession)
+// is left alone unless its PR already merged; its own normal flow will
+// eventually report or create an open PR. On a match, reuses
 // SetBacklogItemPRAndTransition (Epic 3.1's own primary-write path,
 // session/storage.go) — no duplicate PR-field-writing logic. On no match (no
 // open PR yet for the item's branch), this is an expected no-op, retried
@@ -298,9 +298,9 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
-		if hasActiveSession(sessions) {
-			continue // still legitimately in flight — its own normal flow will report/create the PR
-		}
+		// A live (typically idle) work session must not hide a PR that already merged (R2); it only
+		// defers the open-PR case below, where its own flow may still report the PR itself.
+		active := hasActiveSession(sessions)
 
 		// ListItemSessions orders ascending by CreatedAt — keep overwriting so
 		// this ends up holding the most recent work session, mirroring
@@ -327,11 +327,13 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 			}
 			continue // no PR yet (or a transient lookup failure) — retried next tick
 		}
-		if info.State != "open" {
-			continue // a closed/merged PR for this branch is handled by other reconcilers, not this backstop
+		// A merged PR is recorded too: review->pr_pending, after which ReconcilePRPending re-verifies the
+		// branch and moves the item to done. A closed (unmerged) PR is not this backstop's concern.
+		if info.State != github.PRStateMerged && (active || info.State != github.PRStateOpen) {
+			continue
 		}
 
-		summary := fmt.Sprintf("Reconciliation backstop: found an existing open PR #%d for this item's branch %q with no report_pr_created call on record.", info.Number, wt.BranchName)
+		summary := fmt.Sprintf("Reconciliation backstop: found an existing %s PR #%d for this item's branch %q with no report_pr_created call on record.", info.State, info.Number, wt.BranchName)
 		// nil guard: this reconciler only ever lists review-status items
 		// (filter above), so it never hits the reassignment path.
 		if setErr := l.recordOrphanedAgentPR(ctx, item.ID, info, summary); setErr != nil {

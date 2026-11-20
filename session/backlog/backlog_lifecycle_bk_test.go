@@ -4607,6 +4607,13 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 // ever calling report_pr_created (Epic 3.1) to report it back.
 func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchName string) *backlogdto.BacklogItemData {
 	t.Helper()
+	return newOrphanedAgentPRTestItemWithSession(t, storage, branchName, false)
+}
+
+// newOrphanedAgentPRTestItemWithSession is newOrphanedAgentPRTestItem with the work session left live
+// (EndedAt nil) when live is true.
+func newOrphanedAgentPRTestItemWithSession(t *testing.T, storage *session.Storage, branchName string, live bool) *backlogdto.BacklogItemData {
+	t.Helper()
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
@@ -4631,7 +4638,9 @@ func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchNa
 	require.NoError(t, err)
 	// No live session — the whole point of this backstop is that the agent
 	// that shipped the PR has already exited/crashed.
-	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	if !live {
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
 
 	return item
 }
@@ -4670,6 +4679,42 @@ func TestReconcileOrphanedAgentPRs_should_LinkPR_When_ReviewStatusNoLiveSessionP
 	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 77, fetched.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/77", fetched.PrURL)
+}
+
+// TestReconcileOrphanedAgentPRs_should_LinkMergedPR_When_WorkSessionStillLive is the R2 regression: a
+// merged PR with pr_number=0 must reach pr_pending (and so done) even though the work session never ended.
+func TestReconcileOrphanedAgentPRs_should_LinkMergedPR_When_WorkSessionStillLive(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		state      string
+		wantStatus domain.BacklogStatus
+		wantPR     int
+	}{
+		{github.PRStateMerged, domain.BacklogStatusPRPending, 88},
+		{github.PRStateOpen, domain.BacklogStatusReview, 0},
+		{github.PRStateClosed, domain.BacklogStatusReview, 0},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			item := newOrphanedAgentPRTestItemWithSession(t, storage, "backlog/live-merged", true)
+
+			listener := NewBacklogLifecycleListener(storage)
+			listener.SetOrphanedPRFinder(func(_ context.Context, _, branch string) (*github.PRInfo, error) {
+				return &github.PRInfo{Number: 88, HTMLURL: "https://github.com/tstapler/stapler-squad/pull/88", State: tc.state, HeadRef: branch}, nil
+			})
+
+			listener.reconcileOrphanedAgentPRs(ctx, storage.Repo)
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.wantStatus), fetched.Status)
+			assert.Equal(t, tc.wantPR, fetched.PrNumber)
+		})
+	}
 }
 
 // TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR verifies the
