@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -22,12 +23,18 @@ type FilesFlags interface {
 	EditLarge(ctx context.Context) bool
 }
 
-type globalFilesFlags struct{}
+type globalFilesFlags struct{ reader flagReader }
 
-func (globalFilesFlags) Editing(ctx context.Context) bool    { return FilesEditingEnabled(ctx) }
-func (globalFilesFlags) RangeRead(ctx context.Context) bool  { return FilesRangeReadEnabled(ctx) }
-func (globalFilesFlags) DeltaWrite(ctx context.Context) bool { return FilesDeltaWriteEnabled(ctx) }
-func (globalFilesFlags) EditLarge(ctx context.Context) bool  { return FilesEditLargeEnabled(ctx) }
+func (f globalFilesFlags) enabled(name string) bool {
+	return f.reader.enabled(config.LoadConfig(), name)
+}
+
+func (f globalFilesFlags) Editing(context.Context) bool    { return f.enabled(filesEditingFlagName) }
+func (f globalFilesFlags) ViewerV2(context.Context) bool   { return f.enabled(filesViewerV2FlagName) }
+func (f globalFilesFlags) MergePhone(context.Context) bool { return f.enabled(filesMergePhoneFlagName) }
+func (f globalFilesFlags) RangeRead(context.Context) bool  { return f.enabled(filesRangeReadFlagName) }
+func (f globalFilesFlags) DeltaWrite(context.Context) bool { return f.enabled(filesDeltaWriteFlagName) }
+func (f globalFilesFlags) EditLarge(context.Context) bool  { return f.enabled(filesEditLargeFlagName) }
 
 // FilePolicy holds the collaborators every file operation shares. Guard is read by
 // the FileWriter only; Telemetry serves that writer and the search handler.

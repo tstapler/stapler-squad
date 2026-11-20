@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -41,9 +42,8 @@ const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
 
 // ProgramCLIFlagProbeEnabled reports whether ProbeProgram is allowed. It reads
 // config on every call so a Settings toggle applies with no restart.
-func ProgramCLIFlagProbeEnabled() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(
-		programCLIFlagProbeFlagName, FeatureFlagDefault(programCLIFlagProbeFlagName))
+func ProgramCLIFlagProbeEnabled(reg *featureflags.Registry) bool {
+	return flagReader{reg}.enabled(config.LoadConfig(), programCLIFlagProbeFlagName)
 }
 
 // ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
@@ -120,8 +120,8 @@ func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoP
 	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
 }
 
-// Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by the
-// Files*Enabled helpers below, which take no session argument.
+// Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by
+// globalFilesFlags, which takes no session argument.
 const (
 	filesEditingFlagName    = "files:editing"
 	filesViewerV2FlagName   = "files:viewer-v2"
@@ -131,28 +131,6 @@ const (
 	filesEditLargeFlagName  = "files:edit-large"
 )
 
-func filesFlagEnabled(name string) bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
-}
-
-// FilesEditingEnabled reports whether file editing (WriteFile) is allowed. Default: off.
-func FilesEditingEnabled(_ context.Context) bool { return filesFlagEnabled(filesEditingFlagName) }
-
-// FilesViewerV2Enabled reports whether the revamped Files viewer is on. Default: on.
-func FilesViewerV2Enabled(_ context.Context) bool { return filesFlagEnabled(filesViewerV2FlagName) }
-
-// FilesMergePhoneEnabled reports whether the phone merge UI is on. Default: on.
-func FilesMergePhoneEnabled(_ context.Context) bool { return filesFlagEnabled(filesMergePhoneFlagName) }
-
-// FilesRangeReadEnabled reports whether ranged large-file reads are on (ADR-036). Default: off.
-func FilesRangeReadEnabled(_ context.Context) bool { return filesFlagEnabled(filesRangeReadFlagName) }
-
-// FilesDeltaWriteEnabled reports whether delta writes are on (ADR-036). Default: off.
-func FilesDeltaWriteEnabled(_ context.Context) bool { return filesFlagEnabled(filesDeltaWriteFlagName) }
-
-// FilesEditLargeEnabled reports whether large-file editing is on (ADR-036). Default: off.
-func FilesEditLargeEnabled(_ context.Context) bool { return filesFlagEnabled(filesEditLargeFlagName) }
-
 // workflowEngineModeTTL is how long a resolved engine mode is reused, so the
 // transition hot path never reads config per call.
 const workflowEngineModeTTL = time.Second
@@ -160,17 +138,18 @@ const workflowEngineModeTTL = time.Second
 // WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
 // flags with their registered defaults (never the plain GetFeatureFlag, which
 // returns false for an unset flag and would silently turn shadow off).
-func WorkflowEngineModeFromConfig(cfg *config.Config) workflowengine.EngineMode {
+func WorkflowEngineModeFromConfig(cfg *config.Config, reg *featureflags.Registry) workflowengine.EngineMode {
+	r := flagReader{reg}
 	return workflowengine.ModeFromFlags(
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+		r.enabled(cfg, config.WorkflowEngineShadowFeatureFlag),
+		r.enabled(cfg, config.WorkflowEngineEnforceFeatureFlag),
 	)
 }
 
 // NewWorkflowEngineModeSource is the production mode reader: live config,
-// cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock) *workflowengine.CachedModeSource {
-	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+// cached for workflowEngineModeTTL. A nil clock uses real time; a nil reg reads the process registry per resolve.
+func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock, reg *featureflags.Registry) *workflowengine.CachedModeSource {
+	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load(), reg) }, workflowEngineModeTTL, clock)
 }
 
 // NewWorkflowEngineClassModeSource is the production per-class mode reader:

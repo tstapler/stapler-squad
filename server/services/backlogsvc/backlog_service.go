@@ -22,11 +22,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -38,7 +41,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/wtconsistency"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
@@ -103,6 +105,8 @@ type BacklogService struct {
 	// (server/dependencies.go, Task 2.4.4a).
 	julesDispatcher services.JulesDispatcher
 	cfg             *config.Config
+	// flags is the injected flag registry; nil reads the process registry lazily (see SetFlagRegistry).
+	flags *featureflags.Registry
 	// repoSettings looks up a repo's merge settings for the stuck report; nil
 	// (the default) skips the lookup so every item reports UNSPECIFIED.
 	repoSettings RepoSettingsLookup
@@ -715,6 +719,12 @@ func (s *BacklogService) GetSessionSteerer() services.SessionSteerer {
 func (s *BacklogService) GetSessionStopper() services.SessionStopper {
 	return s.sessionStopper
 }
+
+// SetFlagRegistry injects the registry flag defaults resolve against; call at startup, before serving.
+func (s *BacklogService) SetFlagRegistry(reg *featureflags.Registry) { s.flags = reg }
+
+// FlagRegistry returns the injected registry, or nil when none was (readers then fall back to the process registry).
+func (s *BacklogService) FlagRegistry() *featureflags.Registry { return s.flags }
 
 // SetRepoWatchRemover wires the optional unfinished-changes scanner hook used
 // to stop watching a worktree path once it's cleaned up (BUG-034).

@@ -23,6 +23,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 const (
@@ -106,11 +107,19 @@ func NewFileService(workspace WorkspaceProvider) *FileService {
 		workspace:      workspace,
 		ops:            ops,
 		writer:         NewFileWriter(ops, invalidator),
-		search:         newSearchHandler(ops),
+		search:         newSearchHandler(ops, globalFilesFlags{}.ViewerV2),
 		ranges:         newRangeLimiter(),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),
 	}
+}
+
+// SetFlagRegistry points the Files flag reads at reg (nil keeps the lazy process-registry fallback);
+// call at startup, before serving.
+func (s *FileService) SetFlagRegistry(reg *featureflags.Registry) {
+	flags := globalFilesFlags{reader: flagReader{reg}}
+	s.ops.policy.Flags = flags
+	s.search.viewerV2 = flags.ViewerV2
 }
 
 // resolveAndValidatePath resolves a relative path against a base and ensures the

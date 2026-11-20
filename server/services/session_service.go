@@ -1136,6 +1136,7 @@ func newGatedSessionService(storage session.InstanceStore, flags *featureflags.R
 	eventBus.SetPublishFilter(gate.PublishFilter())
 	svc := NewSessionService(storage, eventBus)
 	svc.featureFlagSvc = NewFeatureFlagServiceWithRegistry(flags)
+	svc.fileSvc.SetFlagRegistry(flags)
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
 	svc.wireGateFlag(gate)
@@ -1168,7 +1169,9 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		}
 		return ""
 	})
-	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, func(cfg *config.Config) string {
+		return s.flagReader().globalOffStatusDetail(cfg)
+	})
 	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))

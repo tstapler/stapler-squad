@@ -91,6 +91,11 @@ func (r flagReader) registry() *featureflags.Registry {
 	return featureflags.Current()
 }
 
+// enabled resolves name against cfg with the injected registry's default.
+func (r flagReader) enabled(cfg *config.Config, name string) bool {
+	return r.registry().Enabled(cfg, name)
+}
+
 // liveFlag is a flag's live global value. The zero value is OFF (fail closed).
 type liveFlag struct{ on atomic.Bool }
 

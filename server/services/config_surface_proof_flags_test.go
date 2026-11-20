@@ -41,12 +41,12 @@ func TestConfigSurfaceProof_EscapeEventsDBMigrate_ChangesMigrationEnabled(t *tes
 func TestConfigSurfaceProof_FilesFlags_ChangeServerSideGates(t *testing.T) {
 	set := bkfFlagWriter(t)
 	for name, reader := range map[string]func(context.Context) bool{
-		filesEditingFlagName:    FilesEditingEnabled,
-		filesViewerV2FlagName:   FilesViewerV2Enabled,
-		filesMergePhoneFlagName: FilesMergePhoneEnabled,
-		filesRangeReadFlagName:  FilesRangeReadEnabled,
-		filesDeltaWriteFlagName: FilesDeltaWriteEnabled,
-		filesEditLargeFlagName:  FilesEditLargeEnabled,
+		filesEditingFlagName:    globalFilesFlags{}.Editing,
+		filesViewerV2FlagName:   globalFilesFlags{}.ViewerV2,
+		filesMergePhoneFlagName: globalFilesFlags{}.MergePhone,
+		filesRangeReadFlagName:  globalFilesFlags{}.RangeRead,
+		filesDeltaWriteFlagName: globalFilesFlags{}.DeltaWrite,
+		filesEditLargeFlagName:  globalFilesFlags{}.EditLarge,
 	} {
 		t.Run(name, func(t *testing.T) {
 			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
@@ -61,7 +61,7 @@ func TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate(t *testing.T) {
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(programCLIFlagProbeFlagName, setting.(bool))
-		return ProgramCLIFlagProbeEnabled()
+		return ProgramCLIFlagProbeEnabled(nil)
 	}, false, true)
 }
 
@@ -69,7 +69,7 @@ func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(githubIssueProgressCommentsFlagName, setting.(bool))
-		return GitHubIssueProgressCommentsEnabled()
+		return GitHubIssueProgressCommentsEnabled(nil)
 	}, false, true)
 }
 
@@ -77,7 +77,7 @@ func TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault(t *testing.
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.SddDefaultPipelineFlagName, setting.(bool))
-		return SddDefaultPipelineEnabled()
+		return SddDefaultPipelineEnabled(nil)
 	}, false, true)
 }
 

@@ -46,7 +46,7 @@ func (probeStubHandler) ProbeProgram(context.Context, *connect.Request[sessionv1
 func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	path, handler := sessionv1connect.NewSessionServiceHandler(probeStubHandler{}, connect.WithInterceptors(
-		interceptors.NewScopedFeatureFlagInterceptor(programCLIFlagProbeFlagName, ProgramCLIFlagProbeEnabled, ProgramCLIFlagProbeGatedMethod)))
+		interceptors.NewScopedFeatureFlagInterceptor(programCLIFlagProbeFlagName, func() bool { return ProgramCLIFlagProbeEnabled(nil) }, ProgramCLIFlagProbeGatedMethod)))
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 	ts := httptest.NewServer(mux)
@@ -247,7 +247,7 @@ func TestModeResolver_ReturnsShadow_WhenNoFlagSetAndReaderIsProductionReader(t *
 	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineShadowFeatureFlag, "fixture: nothing is set")
 	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineEnforceFeatureFlag, "fixture: nothing is set")
 
-	src := NewWorkflowEngineModeSource(config.LoadConfig, nil)
+	src := NewWorkflowEngineModeSource(config.LoadConfig, nil, nil)
 
 	require.Equal(t, workflowengine.ModeShadow, src.Mode(), "an unset shadow flag resolves to its registered default (on), not Off")
 }
@@ -275,14 +275,14 @@ func TestModeFlags_DefaultShadowOnEnforceOff_AndComposeToThreeLegalModes(t *test
 		{"both explicit off", set(map[string]bool{shadow: false, enforce: false}), workflowengine.ModeOff},
 	}
 	for _, tc := range cases {
-		require.Equal(t, tc.want, WorkflowEngineModeFromConfig(tc.cfg), tc.name)
+		require.Equal(t, tc.want, WorkflowEngineModeFromConfig(tc.cfg, nil), tc.name)
 	}
 }
 
 func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)}
-	src := NewWorkflowEngineModeSource(config.LoadConfig, clock)
+	src := NewWorkflowEngineModeSource(config.LoadConfig, clock, nil)
 	svc := NewFeatureFlagService()
 	require.Equal(t, workflowengine.ModeShadow, src.Mode())
 
@@ -314,7 +314,7 @@ func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(
 	}
 	require.True(t, reported[config.WorkflowEngineShadowFeatureFlag])
 	require.False(t, reported[config.WorkflowEngineEnforceFeatureFlag])
-	require.Equal(t, workflowengine.ModeShadow, NewWorkflowEngineModeSource(config.LoadConfig, nil).Mode())
+	require.Equal(t, workflowengine.ModeShadow, NewWorkflowEngineModeSource(config.LoadConfig, nil, nil).Mode())
 }
 
 // plainFlagReads returns "file:line" for each plain GetFeatureFlag call (which
@@ -407,7 +407,7 @@ func modeFlagObservable(t *testing.T, flag string, enabled bool, observe func(*w
 	require.NoError(t, flagUpdate(svc, flag, enabled))
 	rec := &countingShadow{}
 	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil,
-		NewWorkflowEngineModeSource(config.LoadConfig, clock), workflowengine.WithShadowRecorder(rec))
+		NewWorkflowEngineModeSource(config.LoadConfig, clock, nil), workflowengine.WithShadowRecorder(rec))
 	return observe(sel, rec)
 }
 
@@ -506,7 +506,7 @@ func TestModeFor_OperatorRowMatchesProductionReader_ForEveryFlagCombination(t *t
 				flags[enforce] = *e
 			}
 			cfg := &config.Config{FeatureFlags: flags}
-			require.Equalf(t, WorkflowEngineModeFromConfig(cfg), workflowengine.ModeForClassFlags(domain.ClassOperator, cfg), "flags=%v", flags)
+			require.Equalf(t, WorkflowEngineModeFromConfig(cfg, nil), workflowengine.ModeForClassFlags(domain.ClassOperator, cfg), "flags=%v", flags)
 		}
 	}
 }
@@ -623,12 +623,12 @@ func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFla
 		read func(context.Context) bool
 		want bool
 	}{
-		{"files:editing", FilesEditingEnabled, false},
-		{"files:viewer-v2", FilesViewerV2Enabled, true},
-		{"files:merge-phone", FilesMergePhoneEnabled, true},
-		{"files:range-read", FilesRangeReadEnabled, false},
-		{"files:delta-write", FilesDeltaWriteEnabled, false},
-		{"files:edit-large", FilesEditLargeEnabled, false},
+		{"files:editing", globalFilesFlags{}.Editing, false},
+		{"files:viewer-v2", globalFilesFlags{}.ViewerV2, true},
+		{"files:merge-phone", globalFilesFlags{}.MergePhone, true},
+		{"files:range-read", globalFilesFlags{}.RangeRead, false},
+		{"files:delta-write", globalFilesFlags{}.DeltaWrite, false},
+		{"files:edit-large", globalFilesFlags{}.EditLarge, false},
 	}
 	for _, h := range helpers {
 		t.Run(h.name, func(t *testing.T) {
@@ -844,11 +844,11 @@ func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
 			require.Equal(t, r.constant, r.reader(cfg), "reader of %s differs from its config constant", r.flag)
 		}
 	}
-	require.False(t, SddDefaultPipelineEnabled(), "sdd-default-pipeline stays off when unset")
+	require.False(t, SddDefaultPipelineEnabled(nil), "sdd-default-pipeline stays off when unset")
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, true))
-	require.True(t, SddDefaultPipelineEnabled())
+	require.True(t, SddDefaultPipelineEnabled(nil))
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.SddDefaultPipelineFlagName, false))
-	require.False(t, SddDefaultPipelineEnabled(), "an explicit false still opts out")
+	require.False(t, SddDefaultPipelineEnabled(nil), "an explicit false still opts out")
 }
 
 func TestFlagDefaults_NoSecondDeclarationOrDisagreeingRead(t *testing.T) {

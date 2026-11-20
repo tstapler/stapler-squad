@@ -99,13 +99,13 @@ type SearchHandler struct {
 	queueWait time.Duration
 }
 
-func newSearchHandler(ops *FileOps) *SearchHandler {
+func newSearchHandler(ops *FileOps, viewerV2 func(context.Context) bool) *SearchHandler {
 	return &SearchHandler{
 		ops:       ops,
 		searcher:  NewWalkSearcher(),
 		gate:      newWalkGate(maxConcurrentWalks),
 		limiter:   newIPLimiter(ipCaps{PerHost: maxSearchStreamsPerOrigin, Total: maxSearchStreamsTotal}),
-		viewerV2:  FilesViewerV2Enabled,
+		viewerV2:  viewerV2,
 		queueWait: maxQueueWait,
 	}
 }

@@ -330,7 +330,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
 		ExternalID:   strconv.Itoa(ref.IssueNumber),
 		ExternalURL:  issue.URL,
-		PipelineMode: defaultPipelineModeForNewItem(nil),
+		PipelineMode: s.defaultPipelineModeForNewItem(nil),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create backlog item: %w", err))
