@@ -3,6 +3,8 @@ package featureflags
 import (
 	"slices"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 func TestRegistryDefaultAndLookup(t *testing.T) {
@@ -62,5 +64,26 @@ func TestFlagAuditPolicyEscapeHatchFor(t *testing.T) {
 	}
 	if !(FlagAuditPolicy{EscapeHatch: true}).EscapeHatchFor("t") {
 		t.Fatal("EscapeHatch not honoured")
+	}
+}
+
+func TestRegistryEnabledAndScoped(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry([]Spec{{Name: "on", Default: true, Scopes: []string{"s"}}, {Name: "off"}})
+	cfg := config.DefaultConfig()
+
+	if !r.Enabled(cfg, "on") || r.Enabled(cfg, "off") || r.Enabled(cfg, "missing") {
+		t.Fatal("unset flags must resolve to the registry default (false for unregistered)")
+	}
+	if !r.EnabledScoped(cfg, "on", "s") {
+		t.Fatal("a scope with no override falls back to the default")
+	}
+	cfg.ApplyFeatureFlagScope("on", "s", false)
+	if r.EnabledScoped(cfg, "on", "s") || !r.Enabled(cfg, "on") {
+		t.Fatal("a scope override wins for its scope and leaves the global value alone")
+	}
+	cfg.ApplyFeatureFlag("on", false)
+	if r.Enabled(cfg, "on") {
+		t.Fatal("an explicit global value beats the default")
 	}
 }

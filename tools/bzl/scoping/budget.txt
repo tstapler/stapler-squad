@@ -52,4 +52,4 @@ server/services/devtools files=4 loc=501 imports=4
 server/services/antigravityexport files=2 loc=400 imports=3
 server/services/backlogflow files=4 loc=748 imports=8
 session/domain/backlogdto files=16 loc=1555 imports=2
-server/services/featureflags files=5 loc=190 imports=2
+server/services/featureflags files=5 loc=196 imports=2

@@ -500,6 +500,7 @@ go_test(
         "error_registry_test.go",
         "event_converter_test.go",
         "feature_flag_gate_test.go",
+        "feature_flag_injected_registry_test.go",
         "feature_flag_latency_test.go",
         "feature_flag_registration_test.go",
         "feature_flag_results_panels_test.go",
