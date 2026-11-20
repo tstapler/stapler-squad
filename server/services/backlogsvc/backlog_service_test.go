@@ -148,7 +148,7 @@ func (f *fakeHeadlessPool) callAt(i int) fakePoolCall {
 
 // validTriageJSON returns a minimal valid triage result for use in success-path tests.
 func validTriageJSON() string {
-	return `{"summary":"test summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}`
+	return `{"summary":"test summary","acceptance_criteria":[{"index":0,"text":"go test ./... passes","status":"pending"}],"suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}`
 }
 
 // fakeGitHubResolver is a test stub for BacklogService.resolveGitHubInput. It
@@ -1562,7 +1562,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	svctest.WithIsolatedStateDir(t)
 
 	storage := svctest.CreateTestStorage(t)
-	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	pool := &fakeHeadlessPool{response: `{"summary":"test summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}` /* item already has criteria; triage must not replace them */}
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4101,7 +4101,7 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 	storage := svctest.CreateTestStorage(t)
 	const slug = "my-test-slug"
 	pool := &fakeHeadlessPool{
-		response: `{"title":"` + slug + `","summary":"test summary"}`,
+		response: `{"title":"` + slug + `","summary":"test summary","acceptance_criteria":[{"index":0,"text":"go test passes","status":"pending"}]}`,
 		onCall: func(workDir string) {
 			// Simulate the SDD skills writing project_plans/<slug>/implementation/plan.md.
 			dir := filepath.Join(workDir, "project_plans", slug, "implementation")
@@ -4227,7 +4227,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	storage := svctest.CreateTestStorage(t)
 	const slug = "widget-integration"
 	pool := &fakeHeadlessPool{
-		response: `{"title":"` + slug + `","summary":"build the widget"}`,
+		response: `{"title":"` + slug + `","summary":"build the widget","acceptance_criteria":[{"index":0,"text":"go test passes","status":"pending"}]}`,
 		onCall: func(workDir string) {
 			dir := filepath.Join(workDir, "project_plans", slug, "implementation")
 			require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -4340,7 +4340,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
-	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
+	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","acceptance_criteria":[{"index":0,"text":"go test passes","status":"pending"}],"priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 

@@ -757,6 +757,15 @@ func (s *BacklogService) TriggerTriage(
 		persistCtx, persistCancel := s.newTriageCleanupContext()
 		defer persistCancel()
 
+		// An item must leave triage with a verifiable criterion; otherwise the owner is told
+		// and the item stays at idea rather than reaching review with nothing to grade.
+		if !s.ensureTriageAcceptanceCriteria(triageCaller, triageResolvedModel, triageWorkDir, item, &result) {
+			_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
+			s.triageInFlight.Delete(itemID)
+			s.notifyMissingAcceptanceCriteria(itemID, item.Title)
+			return
+		}
+
 		payloadJSON, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			log.Error("[TriggerTriage] marshal triage result failed", "item", itemID, "error", marshalErr)

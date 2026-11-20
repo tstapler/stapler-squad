@@ -220,3 +220,26 @@ func ParseHeadlessTriageResult(raw string) (HeadlessTriageResult, error) {
 	}
 	return HeadlessTriageResult{}, fmt.Errorf("ParseHeadlessTriageResult: JSON parse error: %w (raw: %q)", lastErr, preview)
 }
+
+// BuildACDerivationPrompt asks for acceptance criteria only, for an item whose triage
+// produced none. It is a focused second call: no research, no files, JSON output.
+func BuildACDerivationPrompt(item *backlogdto.BacklogItemData, triageSummary string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
+	if item.Description != "" {
+		WriteDescriptionSection(&sb, item.Description, 0)
+	}
+	if triageSummary != "" {
+		fmt.Fprintf(&sb, "## Triage summary\n%s\n\n", triageSummary)
+	}
+	sb.WriteString(`## Task
+
+This item has no acceptance criteria. Derive 1-5 acceptance criteria from the description above. ` +
+		`Each must be a single, concretely verifiable statement that a reviewer can prove by running a command or test ` +
+		`(avoid "works as expected"). If the description is too vague to derive any verifiable criterion, return an empty list.
+
+Output ONLY a JSON object, no other text:
+{"acceptance_criteria":[{"index":0,"text":"Clear, testable criterion","status":"pending"}]}
+`)
+	return sb.String()
+}
