@@ -102,6 +102,15 @@ describe("GuidanceRequestPanel", () => {
     await waitFor(() => expect(mockAnswer).toHaveBeenCalledWith({ id: "gr-sa", answer: "use option B" }));
   });
 
+  it("lets a yes-no question be answered with typed free-form text", async () => {
+    mockRequests = [row({ id: "gr-free" })];
+    render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+
+    fireEvent.change(screen.getByTestId("guidance-answer-input-gr-free"), { target: { value: "yes, but only for kibitzer" } });
+    fireEvent.click(screen.getByTestId("guidance-answer-submit-gr-free"));
+    await waitFor(() => expect(mockAnswer).toHaveBeenCalledWith({ id: "gr-free", answer: "yes, but only for kibitzer" }));
+  });
+
   it("shows an already-answered message when the answer lost the race (applied=false)", async () => {
     mockApplied = false;
     mockRequests = [row({ id: "gr-race" })];

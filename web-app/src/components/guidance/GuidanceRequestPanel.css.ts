@@ -75,12 +75,19 @@ export const badgeAnswered = style({
 
 export const questionText = style({
   margin: 0,
+  flex: 1,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+  minWidth: 0,
   fontSize: vars.fontSize.base,
   color: vars.color.textPrimary,
 });
 
 export const answerText = style({
   margin: 0,
+  whiteSpace: "pre-wrap",
+  overflowWrap: "anywhere",
+  minWidth: 0,
   fontSize: vars.fontSize.sm,
   color: vars.color.textSecondary,
 });
@@ -114,11 +121,16 @@ export const answerButton = style({
 
 export const shortAnswerForm = style({
   display: "flex",
+  alignItems: "flex-end",
   gap: vars.space["2"],
 });
 
 export const shortAnswerInput = style({
   flex: 1,
+  minWidth: 0,
+  minHeight: "4.5em",
+  resize: "vertical",
+  fontFamily: "inherit",
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,
