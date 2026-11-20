@@ -195,7 +195,7 @@ Registry and module-slice seams in the stable cores that every new variant curre
   - depguard: featureflags may import config only
   - Update svc path keys only if sink_guard-style maps reference moved symbols
 - Prerequisites:
-  - Owner decision Q3 (is a global accessor acceptable for receiver-less FeatureFlagDefault callers)
+  - Owner decision Q3 (answered 2026-11-19: inject the Registry everywhere; see Owner questions and flags-stage2-plan.md)
 - Verify:
   - go list -deps ./server/services/featureflags | grep stapler-squad  (config and itself only)
   - go test ./server/services -run 'FeatureFlag|ConfigSurface' ./server/...

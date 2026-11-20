@@ -11,7 +11,7 @@ In force today (enforced by `.golangci.yml` depguard rules and `tools/bzl/scopin
 - External-system adapters are isolated (`git_*` rules, `isolate_*` rules), and `scoping boundaries` (`tools/bzl/scoping/boundaries.txt`) forbids transitive imports for the packages listed there.
 - Per-package size, file and import caps ratchet down (`tools/bzl/scoping/budget.txt`).
 
-Still a direction (see `project_plans/package-split-ocp/`): `session` (about 25.0k top-level non-test lines, `wc -l session/*.go`) and `server/services` (about 70.2k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) and the instance DTO lowering (`instance-dto-lowering-plan.md`, owner-approved 2026-11-19) are the staged unlock for the rest of `EntRepository`. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
+Still a direction (see `project_plans/package-split-ocp/`): `session` (about 25.0k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`; `budget.txt`'s 25662 is a cap, measured + 3%) and `server/services` (about 70.2k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) and the instance DTO lowering (`instance-dto-lowering-plan.md`, owner-approved 2026-11-19) are the staged unlock for the rest of `EntRepository`. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
 
 ### Leaves that exist today
 
@@ -53,7 +53,7 @@ Pick the shape first. A persistence store becomes its own struct built by `New(c
 ## Rules for new code
 
 1. **Smallest cohesive package.** Add a new package under the owning layer (`session/<concept>`, `server/<concept>`) instead of another file in `session/` or `server/services/`. A package should have one reason to change and a name that states its role.
-2. **Leaves are imported only by the composition root and tests.** A package that other domain packages import is part of the core, not a leaf; keep the core small, abstract and stable, and put volatile detail in leaves (stable dependencies, stable abstractions).
+2. **A leaf is imported by its owning hub (for embedded stores, `session.EntRepository`), the composition root and tests; never by a sibling leaf except where its `isolate_` row lists it.** Keep the core small, abstract and stable, and put volatile detail in leaves (stable dependencies, stable abstractions).
 3. **Define an interface where it is consumed**, not where it is implemented (Go's separated interface). Add one only for a real consumer and either two implementations (for example the ent adapter and an in-memory fake) or a genuine test seam. See the `interface-pollution-checklist` skill.
 4. **Open-closed.** A new variant (tracker, migration, stuck detector, process backend, history adapter, delivery channel) is a new file plus one registration at the composition root. If adding a variant means editing a `switch` on a kind enum in several files, add a registry instead of another case.
 5. **Persistence stays behind the mapper.** Return domain DTOs, wrap `ent.IsNotFound` as `session.ErrNotFound`, and import `session/ent` only where the depguard allow-list says.
