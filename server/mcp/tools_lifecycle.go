@@ -228,6 +228,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 		return mapCreateSessionRPCError(createErr, title), nil
 	}
 	sessionID := createResp.Msg.Session.Id
+	uiURL := sessionUIURL(lh.publicURL, sessionID)
 
 	outcome, awaitErr := lh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
 	if errors.Is(awaitErr, services.ErrCreationAwaitTimeout) {
@@ -240,6 +241,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 			}},
 			StillCreating:  true,
 			ProgramWarning: programWarning,
+			UIURL:          uiURL,
 		}), nil
 	}
 	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
@@ -284,7 +286,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 		MCPResult:      MCPResult{Success: true},
 		Session:        &detail,
 		ProgramWarning: programWarning,
-		UIURL:          sessionUIURL(lh.publicURL, detail.ID),
+		UIURL:          uiURL,
 	}), nil
 }
 

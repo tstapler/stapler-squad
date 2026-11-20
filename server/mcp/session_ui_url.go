@@ -12,17 +12,19 @@ const publicURLEnv = "STAPLER_SQUAD_PUBLIC_URL"
 
 func publicURLFromEnv() string { return strings.TrimSpace(os.Getenv(publicURLEnv)) }
 
-// sessionUIURL builds the `/?session=<id>` deep link for baseURL, or "" when
-// baseURL is empty or not an http(s) URL.
+// sessionUIURL builds the `<base path>/?session=<id>` deep link for baseURL, or ""
+// when baseURL is empty, not an http(s) URL, or carries userinfo (credentials
+// must never be echoed into an MCP result).
 func sessionUIURL(baseURL, sessionID string) string {
 	if baseURL == "" || sessionID == "" {
 		return ""
 	}
 	u, err := url.Parse(baseURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		return ""
 	}
-	u.Path = "/"
+	u.Path = strings.TrimRight(u.Path, "/") + "/"
+	u.RawPath = ""
 	u.RawQuery = url.Values{"session": {sessionID}}.Encode()
 	u.Fragment = ""
 	return u.String()
