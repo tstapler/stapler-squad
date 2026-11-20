@@ -28,6 +28,7 @@ go_test(
     deps = [
         "//session/domain",
         "//session/internal/entdbtest",
+        "//tools/bzl/ent:dismissedfinding",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
