@@ -215,7 +215,7 @@ Registry and module-slice seams in the stable cores that every new variant curre
   - New tool family = new file with a module constructor returning a ToolModule, one line at the composition root; nil-svc gating is inside the module constructor (never returns a typed-nil interface)
   - Closed: NewCore, callerIdentityGate map and withCallerIdentityGate (allowed roles passed at registration instead of a central identityGatedTools map for new tools)
   - Registration order is explicit; shared *backlogHandlers across backlog, stuck-report and guidance modules is built once and passed to all three
-- Composition-root wiring: server/mcp NewCore iterates the module slice; server/dependencies.go (and wakes_module.go, backlog_flow_wiring.go) append modules
+- Composition-root wiring: server/mcp NewCore iterates the module slice; server/dependencies.go (and wakes_module.go, backlog_flow_wiring.go) append modules. Owner decision Q5 (2026-11-20): server/mcp is NOT a second composition root; it receives every dependency from server/dependencies.go and may not name concrete session/services/github types or build its own deps. The measured gap and follow-up are in [mcp-single-root-plan.md](mcp-single-root-plan.md)
 - Guard changes:
   - Update caller_identity_gate_test key-set assertion and server_test.go source scans only if a file path changes (none expected; nothing physically moves)
 - Verify:
@@ -225,7 +225,7 @@ Registry and module-slice seams in the stable cores that every new variant curre
 
 ### SRV-wiring: server -> server (in place: same-package functions and tables; no server/startup, server/actuator, server/httpx, wakes/wiring or prwatch/wiring packages)
 
-- Cost: M-L (2-3 PRs; sequenced behind backend-di-refactor Story 1.3)
+- Cost: M-L (2-3 PRs; lands BEFORE backend-di-refactor Story 1.3, per owner decision Q4 of 2026-11-20)
 - Role: composition root
 - Payoff: Reduces the two hub files' OCP violations without creating cycles: registerActuatorRoutes becomes an endpoint table; BuildRuntimeDeps (~1470 LOC, ~86 locals) is split into same-file-set functions with typed inputs/outputs; installWakeTools/buildAndStartWakes list shrink. Root server is already a leaf (only main and inttest import it), so no Bazel payoff is claimed.
 - Ports:
@@ -237,7 +237,7 @@ Registry and module-slice seams in the stable cores that every new variant curre
 - Guard changes:
   - Preserve shutdown-clear semantics of the PR-watch status provider (dependencies_test.go:652-674) while converting to an injected func
 - Prerequisites:
-  - Owner decision Q4 (backend-di-refactor Story 1.3 ordering)
+  - None open. Owner decision Q4 (2026-11-20): SRV-wiring lands first; backend-di-refactor Story 1.3 (warren wrapping of Set* calls) then builds on the tables and typed step functions, so Story 1.3 must not start until SRV-wiring's last PR merges
 - Verify:
   - go build ./... && go test ./server/ -run 'Actuator|Dependencies|Wakes|PRWatch'
   - go vet ./server/...
@@ -350,12 +350,12 @@ Answered on 2026-11-19 (see the linked plans for the measured follow-through):
 - **Q3, answered: inject the `Registry` everywhere; no once-set global accessor.** Staged removal of `featureflags.Current()`: [flags-stage2-plan.md](flags-stage2-plan.md) (slices 1-7 landed; slice 7 deleted the global).
 - **E11 core (not a numbered question), owner approved starting the instance DTO lowering.** Staged plan I0-I6: [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md) (I0 to I5 landed in #1707, #1712, #1714, #1715, #1719, #1721; I6 is the close-out: docs and budget ratchet). `ent_repository.go` is now the constructor, `initStores`, `GetEntClient`, `MaintenanceDriver` and `Close` (305 lines).
 
-Still open (no owner answer recorded):
+Answered on 2026-11-20:
 
-- Q4: Should SRV-wiring wait for backend-di-refactor Story 1.3 (warren wrapping of Set* calls), or proceed in parallel with a risk of two wiring mechanisms?
-- Q5: Is server/mcp acceptable as a second composition root (it assembles tool modules from deps), which the MCP-modules design assumes, or must every module be registered only from server/dependencies.go?
+- **Q4, answered: SRV-wiring lands FIRST, then backend-di-refactor Story 1.3.** No parallel run, so there is never two wiring mechanisms at once. Story 1.3 wraps the `Set*` calls on top of the SRV-wiring tables and step functions.
+- **Q5, answered: single composition root.** `server/mcp` is NOT a second composition root. It must receive everything from `server/dependencies.go` and may not name concrete types or build its own deps. Measured gap and follow-up: [mcp-single-root-plan.md](mcp-single-root-plan.md).
 
-Earlier: Q1 is answered under Owner decisions above; Q6 was executed (`session/historyadapters` exists, see HIST-slice).
+No numbered owner question is open now. Earlier: Q1 is answered under Owner decisions above; Q6 was executed (`session/historyadapters` exists, see HIST-slice).
 
 ## Rules for executing
 
