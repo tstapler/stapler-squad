@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"io"
@@ -113,18 +114,15 @@ func DeclDeps(root, dir string, decls []string) ([]DepsReport, error) {
 }
 
 func runDeps(args []string, stdout io.Writer) int {
-	var dir, decls string
-	root := workspace()
-	for i := 0; i+1 < len(args); i += 2 {
-		switch args[i] {
-		case "--dir":
-			dir = args[i+1]
-		case "--decls":
-			decls = args[i+1]
-		case "--root":
-			root = args[i+1]
-		}
+	flags := flag.NewFlagSet("deps", flag.ContinueOnError)
+	rootF := flags.String("root", workspace(), "repository root")
+	dirF := flags.String("dir", "", "")
+	declsF := flags.String("decls", "", "")
+	if parseFlags(flags, args) != nil {
+		return 2
 	}
+	root := *rootF
+	dir, decls := *dirF, *declsF
 	if dir == "" || decls == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping deps --dir DIR --decls a,b,c")
 		return 2

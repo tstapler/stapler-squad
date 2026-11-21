@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -170,25 +171,24 @@ func checkRaises(root, file, base string, next []Budget, stdout io.Writer) (bool
 }
 
 func runBudget(args []string, stdout io.Writer) int {
-	file := "tools/bzl/scoping/budget.txt"
-	root := workspace()
-	base, initPkgs := "", ""
-	for i := 0; i+1 < len(args); i += 2 {
-		switch args[i] {
-		case "--file":
-			file = args[i+1]
-		case "--root":
-			root = args[i+1]
-		case "--base":
-			base = args[i+1]
-		case "--init":
-			initPkgs = args[i+1]
-		}
+	fs := flag.NewFlagSet("budget", flag.ContinueOnError)
+	file := fs.String("file", "tools/bzl/scoping/budget.txt", "budget file, relative to --root")
+	root := fs.String("root", workspace(), "repository root")
+	base := fs.String("base", "", "git ref to check raised caps against")
+	initPkgs := fs.String("init", "", "comma-separated packages to print initial caps for")
+	if parseFlags(fs, args) != nil {
+		return 2
 	}
-	if initPkgs != "" {
-		return printInitialBudget(root, strings.Split(initPkgs, ","), stdout)
+	baseSet := false
+	fs.Visit(func(f *flag.Flag) { baseSet = baseSet || f.Name == "base" })
+	if baseSet && *base == "" {
+		fmt.Fprintln(os.Stderr, "scoping budget: --base needs a non-empty ref")
+		return 2
 	}
-	f, err := os.Open(filepath.Join(root, file))
+	if *initPkgs != "" {
+		return printInitialBudget(*root, strings.Split(*initPkgs, ","), stdout)
+	}
+	f, err := os.Open(filepath.Join(*root, *file))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -203,7 +203,7 @@ func runBudget(args []string, stdout io.Writer) int {
 	for i, c := range caps {
 		pkgs[i] = c.Pkg
 	}
-	got, err := Measure(root, pkgs)
+	got, err := Measure(*root, pkgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -213,8 +213,8 @@ func runBudget(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, "over budget:", m)
 		ok = false
 	}
-	if base != "" {
-		good, err := checkRaises(root, file, base, caps, stdout)
+	if *base != "" {
+		good, err := checkRaises(*root, *file, *base, caps, stdout)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

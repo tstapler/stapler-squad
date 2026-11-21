@@ -88,7 +88,7 @@ func runCriteria(args []string, stdout io.Writer) int {
 	fs.IntVar(&c.StayingUses, "uses", 0, "distinct cluster declarations staying files still use")
 	importers := fs.String("importers", "", "comma-separated non-test importers outside the original")
 	natural := fs.String("natural", "", "comma-separated importers that already imported the original")
-	if fs.Parse(args) != nil {
+	if parseFlags(fs, args) != nil {
 		fmt.Fprintln(os.Stderr, "usage: scoping criteria [--lower] --relocated N --uses N --importers a,b --natural a")
 		return 2
 	}

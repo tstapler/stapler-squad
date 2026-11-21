@@ -155,7 +155,7 @@ func runReplay(args []string, stdout io.Writer) int {
 	write := fs.Bool("write", false, "write "+baselineRel+" (refuses to overwrite)")
 	root := fs.String("root", workspace(), "repository root")
 	ref := fs.String("ref", "main", "history ref to replay (a stored baseline pins its own)")
-	if fs.Parse(args) != nil {
+	if parseFlags(fs, args) != nil {
 		return 2
 	}
 	var base *Report
@@ -195,7 +195,7 @@ func runT9(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("t9", flag.ContinueOnError)
 	commits := fs.Int("commits", 500, "number of main commits to replay")
 	root := fs.String("root", workspace(), "repository root")
-	if fs.Parse(args) != nil {
+	if parseFlags(fs, args) != nil {
 		return 2
 	}
 	base := readBaseline(*root)
@@ -219,7 +219,7 @@ func runInversions(args []string, stdout io.Writer) int {
 	asJSON := fs.Bool("json", false, "print JSON")
 	allow := fs.String("allow", "", "allowlist file of known inversions (a ratchet: new ones fail, resolved ones must be removed)")
 	root := fs.String("root", workspace(), "repository root")
-	if fs.Parse(args) != nil {
+	if parseFlags(fs, args) != nil {
 		return 2
 	}
 	m, err := LoadModel(*root)
@@ -255,7 +255,7 @@ func runMove(args []string, stdout io.Writer) int {
 	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
 	fs.BoolVar(&spec.AllowCollisions, "allow-collisions", false, "measurement only: skip the capitalisation-collision refusal (the result does not compile)")
 	fs.BoolVar(&spec.Lower, "lower", false, "the staying files depend on the cluster (test-support package): re-point them instead of reporting")
-	if fs.Parse(args) != nil || spec.FromDir == "" || spec.ToDir == "" || *files == "" {
+	if parseFlags(fs, args) != nil || spec.FromDir == "" || spec.ToDir == "" || *files == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping move --from DIR --to DIR --files a.go,b.go [--dry-run]")
 		return 2
 	}
@@ -277,7 +277,7 @@ func runRelocate(args []string, stdout io.Writer) int {
 	fs.BoolVar(&spec.AnyKind, "any-kind", false, "allow moving declarations between _test.go and non-test files")
 	fs.BoolVar(&spec.WithMethods, "with-methods", false, "also move every method of each listed type")
 	fs.BoolVar(&spec.DryRun, "dry-run", false, "report the plan without touching files")
-	if fs.Parse(args) != nil || spec.Dir == "" || spec.ToFile == "" || *decls == "" {
+	if parseFlags(fs, args) != nil || spec.Dir == "" || spec.ToFile == "" || *decls == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping relocate --dir DIR --to file.go --decls A,B,T.M [--with-methods] [--dry-run]")
 		return 2
 	}

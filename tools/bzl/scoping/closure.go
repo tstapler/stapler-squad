@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"io"
@@ -221,20 +222,16 @@ func Closure(root, dir string, moveFiles, also []string) (*ClosureReport, error)
 }
 
 func runClosure(args []string, stdout io.Writer) int {
-	var dir, files, also string
-	root := workspace()
-	for i := 0; i+1 < len(args); i += 2 {
-		switch args[i] {
-		case "--dir":
-			dir = args[i+1]
-		case "--files":
-			files = args[i+1]
-		case "--also":
-			also = args[i+1]
-		case "--root":
-			root = args[i+1]
-		}
+	flags := flag.NewFlagSet("closure", flag.ContinueOnError)
+	rootF := flags.String("root", workspace(), "repository root")
+	dirF := flags.String("dir", "", "")
+	filesF := flags.String("files", "", "")
+	alsoF := flags.String("also", "", "")
+	if parseFlags(flags, args) != nil {
+		return 2
 	}
+	root := *rootF
+	dir, files, also := *dirF, *filesF, *alsoF
 	if dir == "" || files == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping closure --dir DIR --files a.go,b.go [--also decl,decl]")
 		return 2
@@ -355,20 +352,16 @@ func Peel(root, dir string, clusterFiles []string, anchor string) ([]PeelCandida
 }
 
 func runPeel(args []string, stdout io.Writer) int {
-	var dir, files, anchor string
-	root := workspace()
-	for i := 0; i+1 < len(args); i += 2 {
-		switch args[i] {
-		case "--dir":
-			dir = args[i+1]
-		case "--files":
-			files = args[i+1]
-		case "--anchor":
-			anchor = args[i+1]
-		case "--root":
-			root = args[i+1]
-		}
+	flags := flag.NewFlagSet("peel", flag.ContinueOnError)
+	rootF := flags.String("root", workspace(), "repository root")
+	dirF := flags.String("dir", "", "")
+	filesF := flags.String("files", "", "")
+	anchorF := flags.String("anchor", "", "")
+	if parseFlags(flags, args) != nil {
+		return 2
 	}
+	root := *rootF
+	dir, files, anchor := *dirF, *filesF, *anchorF
 	if dir == "" || files == "" || anchor == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping peel --dir DIR --files a.go,b.go --anchor Type")
 		return 2
