@@ -453,6 +453,17 @@ func TestRunStdioMCP_should_HandWakeMetricsToRunServer(t *testing.T) {
 	}
 }
 
+func TestRunStdioMCP_should_HandGitHubToRunServer(t *testing.T) {
+	t.Parallel()
+	var got []mcpserver.CoreOption
+	if err := runStdioMCP(nil, func(opts ...mcpserver.CoreOption) error { got = opts; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if mcpserver.GitHubFromOptions(got...) == nil {
+		t.Fatal("the stdio RunServer call must receive the GitHub port like the HTTP path")
+	}
+}
+
 func TestRunStdioMCP_should_HandWorktreeOpenerToRunServer(t *testing.T) {
 	t.Parallel()
 	var got []mcpserver.CoreOption

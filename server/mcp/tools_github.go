@@ -370,8 +370,8 @@ func NewPRVerification(exists, matched bool, actualHeadBranch, state, author str
 //   - (PRVerification{}, err): the lookup itself failed (rate limit, network,
 //     auth) — transient. Callers should surface a retryable error rather
 //     than treating this as a confirmed mismatch or a confirmed non-existence.
-func VerifyPRMatchesBranch(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
-	info, err := githubpkg.GetPRByNumber(ctx, ref, prNumber)
+func VerifyPRMatchesBranch(ctx context.Context, gh GitHub, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
+	info, err := gh.GetPRByNumber(ctx, ref, prNumber)
 	if err != nil {
 		if errors.Is(err, githubpkg.ErrNoPR) {
 			return NewPRVerification(false, false, "", "", ""), nil

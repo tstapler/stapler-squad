@@ -54,18 +54,18 @@ func (h *backlogHandlers) verifyPR(ctx context.Context, ref githubpkg.RepoRef, p
 	if h.verifyPRMatchesBranch != nil {
 		return h.verifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 	}
-	return VerifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
+	return VerifyPRMatchesBranch(ctx, githubOrUnavailable(h.github), ref, prNumber, expectedBranch)
 }
 
 // callerGitHubLogin resolves the GitHub login this server is authenticated
 // as on host ("" means github.com), via the overridable resolveCallerGitHubLogin
 // seam when set (host is ignored on that seam — tests only ever exercise
-// github.com), otherwise the real githubpkg.GetCurrentUserLogin.
+// github.com), otherwise the injected GitHub port.
 func (h *backlogHandlers) callerGitHubLogin(ctx context.Context, host string) (string, error) {
 	if h.resolveCallerGitHubLogin != nil {
 		return h.resolveCallerGitHubLogin(ctx)
 	}
-	return githubpkg.GetCurrentUserLogin(ctx, host)
+	return githubOrUnavailable(h.github).GetCurrentUserLogin(ctx, host)
 }
 
 // decideOverridePolicy is the pure decision function behind

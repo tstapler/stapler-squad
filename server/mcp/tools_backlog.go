@@ -379,10 +379,14 @@ type backlogHandlers struct {
 	// existing shape.
 	getBacklogItemFn func(ctx context.Context, itemID string) (*backlogdto.BacklogItemData, error)
 
+	// github backs the issue import, duplicate-ref check, PR cross-check and
+	// caller-login lookup; nil fails them with ErrGitHubUnavailable.
+	github GitHub
+
 	// resolveCallerGitHubLogin resolves the GitHub login of the identity this
 	// server is authenticated as, used by report_pr_created's override path
 	// to confirm the self-reported PR was authored by the same identity
-	// making the call. Defaults to githubpkg.GetCurrentUserLogin when nil;
+	// making the call. Defaults to h.github.GetCurrentUserLogin when nil;
 	// overridable in tests to avoid making a real GitHub API call.
 	resolveCallerGitHubLogin func(ctx context.Context) (string, error)
 
@@ -2513,7 +2517,10 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", repoErr), ""), nil
 	}
 
-	issue, fetchErr := githubpkg.GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
+	issue, fetchErr := githubOrUnavailable(h.github).GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
+	if errors.Is(fetchErr, ErrGitHubUnavailable) {
+		return errResult(ErrUnavailable, fetchErr.Error(), ""), nil
+	}
 	if fetchErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
@@ -2585,13 +2592,13 @@ func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *github
 	}
 	switch ref.Type {
 	case githubpkg.RefTypePR:
-		_, err := githubpkg.GetPR(ctx, account, repo, ref.PRNumber)
+		_, err := githubOrUnavailable(h.github).GetPR(ctx, account, repo, ref.PRNumber)
 		return err
 	case githubpkg.RefTypeIssue:
-		_, err := githubpkg.GetIssue(ctx, account, repo, ref.IssueNumber)
+		_, err := githubOrUnavailable(h.github).GetIssue(ctx, account, repo, ref.IssueNumber)
 		return err
 	case githubpkg.RefTypeCommit:
-		_, err := githubpkg.GetCommit(ctx, account, repo, ref.CommitSHA)
+		_, err := githubOrUnavailable(h.github).GetCommit(ctx, account, repo, ref.CommitSHA)
 		return err
 	default:
 		return fmt.Errorf("unsupported ref type %s", ref.Type)

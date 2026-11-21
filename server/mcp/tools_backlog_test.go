@@ -2737,7 +2737,7 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
-	handler := &backlogHandlers{storage: storage}
+	handler := &backlogHandlers{storage: storage, github: httpGitHub{}}
 	ctx := WithSessionUUID(context.Background(), uuid.New().String())
 
 	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
@@ -2783,7 +2783,7 @@ func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
 	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
-	handler := &backlogHandlers{storage: storage}
+	handler := &backlogHandlers{storage: storage, github: httpGitHub{}}
 	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
 
 	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
@@ -2820,7 +2820,7 @@ func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathS
 	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
 	t.Cleanup(backlogSvc.Shutdown)
 
-	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc, github: httpGitHub{}}
 	ctx := WithSessionUUID(context.Background(), uuid.New().String())
 
 	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
@@ -3935,7 +3935,7 @@ func TestReportDuplicate_VerifyGitHubRefExists_DispatchesPRTypeToRealGetPR(t *te
 
 	// verifyGitHubRef deliberately left nil — the real verifyRef/
 	// verifyGitHubRefExists dispatch chain must run.
-	handler := &backlogHandlers{storage: storage}
+	handler := &backlogHandlers{storage: storage, github: httpGitHub{}}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
 	req := makeToolReq(map[string]interface{}{

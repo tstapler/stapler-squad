@@ -104,7 +104,7 @@ func TestVerifyPRMatchesBranch_should_ReturnMatchedTrue_When_HeadBranchEqualsExp
 	defer resetGhBaseURL(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	v, err := VerifyPRMatchesBranch(context.Background(), mustRepoRef(t, "tstapler", "stapler-squad"), 326, "feature/ci-status-diff-viewer")
+	v, err := VerifyPRMatchesBranch(context.Background(), httpGitHub{}, mustRepoRef(t, "tstapler", "stapler-squad"), 326, "feature/ci-status-diff-viewer")
 	require.NoError(t, err)
 	assert.True(t, v.Exists)
 	assert.True(t, v.Matched)
@@ -125,7 +125,7 @@ func TestVerifyPRMatchesBranch_should_ReturnError_When_GetPRByNumberFails(t *tes
 	defer resetGhBaseURL(ts)()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 
-	v, err := VerifyPRMatchesBranch(context.Background(), mustRepoRef(t, "tstapler", "stapler-squad"), 326, "feature/ci-status-diff-viewer")
+	v, err := VerifyPRMatchesBranch(context.Background(), httpGitHub{}, mustRepoRef(t, "tstapler", "stapler-squad"), 326, "feature/ci-status-diff-viewer")
 	require.Error(t, err)
 	assert.Equal(t, PRVerification{}, v)
 }
