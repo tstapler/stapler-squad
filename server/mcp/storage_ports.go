@@ -7,7 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// GoalStore is the slice of *session.Storage the goal tools call.
+// GoalStore is the slice of *session.Storage the goal and workspace-peer tools call.
 // *session.Storage and a recording test fake are its two implementations.
 type GoalStore interface {
 	SetSessionGoal(ctx context.Context, sessionUUID, goal, status string, tasks []instance.TaskNode, setBy, workspaceKey string) (*instance.SessionGoalData, error)

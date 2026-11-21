@@ -23,7 +23,7 @@ func RunStdioMCP(ctx context.Context, backlogEnabled func() bool) error {
 		buildCore: BuildCoreDeps,
 		homeDir:   os.UserHomeDir,
 		serve: func(ctx context.Context, core *CoreDeps, sbMgr *scrollback.ScrollbackManager, backlogEnabled func() bool, opts ...servermcp.CoreOption) error {
-			return servermcp.RunServer(ctx, core.Storage, core.SessionService, sbMgr, core.Storage, nil, nil, backlogEnabled, nil, nil, nil, opts...)
+			return servermcp.RunServer(ctx, core.Storage, core.SessionService, sbMgr, core.Storage, nil, backlogEnabled, nil, nil, nil, opts...)
 		},
 	}.run(ctx, backlogEnabled)
 }

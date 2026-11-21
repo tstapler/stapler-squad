@@ -98,7 +98,7 @@ func TestGitHubFromOptions_should_CarryCallersPort(t *testing.T) {
 func TestNewCore_should_UseInjectedGitHub_ForImportGitHubIssue(t *testing.T) {
 	t.Parallel()
 	fake := &fakeGitHub{issue: &githubpkg.IssueResult{Number: 316, Title: "bug from fake", Body: "body", URL: "https://github.com/o/r/issues/316"}}
-	s := NewCore(&stubStore{}, nil, nil, newTestBacklogStorage(t), nil, nil, nil, nil, nil, nil, WithGitHub(fake))
+	s := NewCore(&stubStore{}, nil, nil, newTestBacklogStorage(t), nil, nil, nil, nil, nil, WithGitHub(fake))
 
 	res, err := s.GetTool("import_github_issue").Handler(context.Background(), makeToolReq(map[string]interface{}{"issue_url": "https://github.com/o/r/issues/316"}))
 

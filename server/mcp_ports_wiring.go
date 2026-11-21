@@ -1,6 +1,7 @@
 package server
 
 import (
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -11,6 +12,7 @@ import (
 var (
 	_ servermcp.TerminalScrollback = (*scrollback.ScrollbackManager)(nil)
 	_ servermcp.AutoReopener       = (*backlogsvc.BacklogService)(nil)
+	_ servermcp.UserPRSource       = (*githubpkg.UserPRCache)(nil)
 )
 
 // mcpAutoReopener returns a nil interface for a nil service: boxing the nil
@@ -20,4 +22,13 @@ func mcpAutoReopener(svc *backlogsvc.BacklogService) servermcp.AutoReopener {
 		return nil
 	}
 	return svc
+}
+
+// mcpUserPRSource returns a nil interface for a nil cache: boxing the nil
+// pointer would defeat the GitHub module's absent-source guard and panic.
+func mcpUserPRSource(cache *githubpkg.UserPRCache) servermcp.UserPRSource {
+	if cache == nil {
+		return nil
+	}
+	return cache
 }

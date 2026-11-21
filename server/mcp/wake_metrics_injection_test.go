@@ -18,7 +18,7 @@ func callUnverified(t *testing.T, opts []CoreOption, name string) {
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
-	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil, opts...)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, opts...)
 	tool := s.GetTool(name)
 	require.NotNil(t, tool, "tool %q must be registered", name)
 	res, err := tool.Handler(WithSessionUUID(context.Background(), "claimed"), makeToolReq(probeArgs))

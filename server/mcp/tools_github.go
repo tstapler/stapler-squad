@@ -22,7 +22,7 @@ import (
 )
 
 type githubHandlers struct {
-	cache *githubpkg.UserPRCache
+	cache UserPRSource
 	store session.InstanceStore
 	// svc is used to route create_session_for_pr through the async
 	// CreateSession + Background Resolution Pipeline (async-session-creation
