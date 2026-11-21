@@ -1,6 +1,10 @@
 package mcp
 
-import "context"
+import (
+	"context"
+
+	githubpkg "github.com/tstapler/stapler-squad/github"
+)
 
 // TerminalScrollback is the slice of the scrollback manager the terminal tools
 // read. *scrollback.ScrollbackManager and a test fake are its two implementations.
@@ -16,4 +20,11 @@ type TerminalScrollback interface {
 // two implementations.
 type AutoReopener interface {
 	AutoReopenAfterFailedReview(ctx context.Context, itemID string) error
+}
+
+// UserPRSource is the slice of the user PR cache the GitHub PR tools read.
+// *githubpkg.UserPRCache and a test fake are its two implementations.
+type UserPRSource interface {
+	GetAll() []githubpkg.UserPR
+	GetCachedLogins() []string
 }

@@ -8,7 +8,6 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -21,6 +20,8 @@ import (
 // coreConfig holds the optional dependencies injected through CoreOption, so
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
+	// userPRs backs the GitHub PR tools; nil leaves them unregistered.
+	userPRs   UserPRSource
 	flowSvc   *backlogflow.BacklogFlowService
 	plugins   *session.PluginRegistry
 	refParser TrackerRefParser
@@ -42,6 +43,13 @@ type CoreOption func(*coreConfig)
 // the RPC handler uses, so one aggregator cache serves both.
 func WithFlowService(svc *backlogflow.BacklogFlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
+}
+
+// WithUserPRCache enables the GitHub PR tools. Without it they are not
+// registered. Pass an untyped nil or a non-nil value: a typed-nil pointer
+// defeats the absent-source guard.
+func WithUserPRCache(src UserPRSource) CoreOption {
+	return func(c *coreConfig) { c.userPRs = src }
 }
 
 // WithPluginRegistry supplies the item-source plugins the tracker import tools
@@ -67,6 +75,12 @@ func WithWakeMetrics(m *wakes.Metrics) CoreOption {
 // It lets wiring tests prove the MCP core and the dispatcher share one instance.
 func WakeMetricsFromOptions(opts ...CoreOption) *wakes.Metrics {
 	return newCoreConfig(opts).wakeMetrics
+}
+
+// UserPRSourceFromOptions returns the PR source the options carry, or nil.
+// It lets wiring tests inspect what the composition root injected.
+func UserPRSourceFromOptions(opts ...CoreOption) UserPRSource {
+	return newCoreConfig(opts).userPRs
 }
 
 // FlowServiceFromOptions returns the flow service the options carry, or nil.
@@ -97,7 +111,6 @@ func newCoreConfig(opts []CoreOption) coreConfig {
 // Shared by the stdio path (RunServer) and the HTTP path (NewHTTPHandler).
 // storage is optional — when nil, backlog tools are not registered.
 // eventBus is optional — when nil, triage-complete notifications are disabled.
-// prCache is optional — when nil, GitHub PR tools are not registered.
 // backlogEnabled is optional — when nil, backlog/goal tools are always enabled
 // (matches pre-flag behavior, used by tests). When set, it gates registration
 // at startup (belt-and-suspenders) and is threaded into each backlog/goal
@@ -115,7 +128,6 @@ func NewCore(
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
-	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
 	backlogSvc *backlogsvc.BacklogService,
@@ -131,7 +143,7 @@ func NewCore(
 
 	registerModules(s, defaultToolModules(coreDeps{
 		store: store, svc: svc, sbMgr: sbMgr, storage: storage, eventBus: eventBus,
-		prCache: prCache, backlogEnabled: backlogEnabled, autoReopener: autoReopener,
+		backlogEnabled: backlogEnabled, autoReopener: autoReopener,
 		backlogSvc: backlogSvc, liveCheck: liveCheck, cfg: cfg,
 	}))
 	return s
@@ -142,7 +154,6 @@ func NewCore(
 // existing HTTP server so Claude sessions can connect without spawning a
 // subprocess.
 // eventBus is optional — pass nil to disable triage-complete notifications.
-// prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore.
 func NewHTTPHandler(
@@ -151,14 +162,13 @@ func NewHTTPHandler(
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
-	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.StreamableHTTPServer {
-	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...)
+	core := NewCore(store, svc, sbMgr, storage, eventBus, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...)
 	log.InfoLog().Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
@@ -172,7 +182,6 @@ func NewHTTPHandler(
 // sbMgr provides read access to terminal scrollback data persisted on disk.
 // storage is used for backlog tools (optional; pass nil to disable).
 // eventBus is optional — pass nil to disable triage-complete notifications on stdio path.
-// prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore. The stdio fallback path
 // (server.RunStdioMCP) only builds Phase 1 (CoreDeps) dependencies, so callers on
@@ -184,7 +193,6 @@ func RunServer(
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
-	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
 	backlogSvc *backlogsvc.BacklogService,
@@ -200,7 +208,7 @@ func RunServer(
 		log.InfoLog().Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

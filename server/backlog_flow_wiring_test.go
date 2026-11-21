@@ -138,11 +138,11 @@ func TestWireDepsIntoServer_should_PassScrollbackAndAutoReopenerToNewHTTPHandler
 			return true
 		}
 		found = true
-		require.GreaterOrEqual(t, len(call.Args), 8)
+		require.GreaterOrEqual(t, len(call.Args), 7)
 		sb, ok := call.Args[2].(*ast.SelectorExpr)
 		require.True(t, ok)
 		assert.Equal(t, "ScrollbackManager", sb.Sel.Name)
-		reopener, ok := call.Args[7].(*ast.Ident)
+		reopener, ok := call.Args[6].(*ast.Ident)
 		require.True(t, ok)
 		assert.Equal(t, "autoReopener", reopener.Name)
 		return true

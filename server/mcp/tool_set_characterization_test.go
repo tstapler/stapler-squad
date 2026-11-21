@@ -22,13 +22,13 @@ func TestNewCore_should_RegisterTheSameToolSetPerWiringShape(t *testing.T) {
 	off := func() bool { return false }
 
 	got := map[string][]string{
-		"bare":                     toolNames(NewCore(store, nil, nil, nil, nil, nil, nil, nil, nil, nil)),
-		"storage":                  toolNames(NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, nil)),
-		"storage_backlog_disabled": toolNames(NewCore(store, nil, nil, storage, nil, nil, off, nil, nil, nil)),
-		"svc_only":                 toolNames(NewCore(store, svc, nil, nil, nil, nil, nil, nil, nil, nil)),
-		"pr_only":                  toolNames(NewCore(store, nil, nil, nil, nil, githubpkg.NewUserPRCache(), nil, nil, nil, nil)),
-		"svc_storage_pr_backlogsvc": toolNames(NewCore(store, svc, nil, storage, nil, githubpkg.NewUserPRCache(),
-			nil, nil, &backlogsvc.BacklogService{}, nil)),
+		"bare":                     toolNames(NewCore(store, nil, nil, nil, nil, nil, nil, nil, nil)),
+		"storage":                  toolNames(NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil)),
+		"storage_backlog_disabled": toolNames(NewCore(store, nil, nil, storage, nil, off, nil, nil, nil)),
+		"svc_only":                 toolNames(NewCore(store, svc, nil, nil, nil, nil, nil, nil, nil)),
+		"pr_only":                  toolNames(NewCore(store, nil, nil, nil, nil, nil, nil, nil, nil, WithUserPRCache(githubpkg.NewUserPRCache()))),
+		"svc_storage_pr_backlogsvc": toolNames(NewCore(store, svc, nil, storage, nil,
+			nil, nil, &backlogsvc.BacklogService{}, nil, WithUserPRCache(githubpkg.NewUserPRCache()))),
 	}
 
 	require.Equal(t, wantToolSets, got)

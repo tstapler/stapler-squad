@@ -3,7 +3,6 @@ package mcp
 import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
@@ -39,7 +38,6 @@ type coreDeps struct {
 	sbMgr          TerminalScrollback
 	storage        *session.Storage
 	eventBus       *events.EventBus
-	prCache        *githubpkg.UserPRCache
 	backlogEnabled func() bool
 	autoReopener   AutoReopener
 	backlogSvc     *backlogsvc.BacklogService
@@ -79,7 +77,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 	}
 	mods = append(mods, newBacklogModules(d, liveFinder)...)
 	mods = append(mods, newIdentityGatedModules(d.gate, d.storage, d.eventBus)...)
-	mods = append(mods, newGitHubModule(d.prCache, d.store, d.svc))
+	mods = append(mods, newGitHubModule(d.cfg.userPRs, d.store, d.svc))
 	return append(mods, d.cfg.extraModules...)
 }
 
@@ -206,7 +204,7 @@ func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage,
 	}
 }
 
-func newGitHubModule(prCache *githubpkg.UserPRCache, store session.InstanceStore, svc *services.SessionService) ToolModule {
+func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc *services.SessionService) ToolModule {
 	if prCache == nil {
 		return nil
 	}
