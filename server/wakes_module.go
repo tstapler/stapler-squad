@@ -212,7 +212,7 @@ func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance 
 		Leader:      leader,
 		Limits:      wakeLimitSettings(cfg.WakeLimits),
 		TypeEnabled: wakeTypeEnabled,
-		Metrics:     deps.WakeMetrics,
+		Metrics:     deps.sharedWakeMetrics(),
 	}, deps.Storage.SetWakeChangeHook)
 	if err := d.Start(ctx); err != nil {
 		deps.Storage.SetWakeChangeHook(nil)

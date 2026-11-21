@@ -8,7 +8,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
-	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -47,11 +46,15 @@ type coreDeps struct {
 	backlogSvc     *backlogsvc.BacklogService
 	liveCheck      func(sessionUUID string) bool
 	cfg            coreConfig
+	gate           *callerIdentityGate // built once in defaultToolModules from cfg.wakeMetrics
 }
 
 // defaultToolModules lists the built-in families in registration order; the
 // order is pinned by tool_set_golden_test.go and TestDefaultToolModules_*.
 func defaultToolModules(d coreDeps) []ToolModule {
+	if d.storage != nil {
+		d.gate = &callerIdentityGate{metrics: d.cfg.wakeMetrics, roleOf: roleLookupFrom(d.storage.GetItemSessionBySessionUUID)}
+	}
 	// A nil *services.SessionService or *session.Storage stored directly in an
 	// interface-typed field would be a non-nil interface around a nil pointer,
 	// so each gate below is an explicit pointer comparison.
@@ -76,7 +79,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 		newHistoryModule(d.svc),
 	}
 	mods = append(mods, newBacklogModules(d, liveFinder)...)
-	mods = append(mods, newIdentityGatedModules(d.storage, d.eventBus)...)
+	mods = append(mods, newIdentityGatedModules(d.gate, d.storage, d.eventBus)...)
 	mods = append(mods, newGitHubModule(d.prCache, d.store, d.svc))
 	return append(mods, d.cfg.extraModules...)
 }
@@ -158,7 +161,7 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	if d.storage == nil || (d.backlogEnabled != nil && !d.backlogEnabled()) {
 		return nil
 	}
-	h := &backlogHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser}
+	h := &backlogHandlers{gate: d.gate, storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser}
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerBacklogTools(s, h) }),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerStuckReportTools(s, h) }),
@@ -192,13 +195,9 @@ func newFlowModule(flowSvc *backlogflow.BacklogFlowService, enabled func() bool)
 
 // newIdentityGatedModules returns the wake, peer-help and owner-action modules,
 // which share one identity gate and (peer-help, owner-action) one handler set.
-func newIdentityGatedModules(storage *session.Storage, bus *events.EventBus) []ToolModule {
-	if storage == nil {
+func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage, bus *events.EventBus) []ToolModule {
+	if storage == nil || gate == nil {
 		return nil
-	}
-	gate := &callerIdentityGate{
-		metrics: wakes.NewMetrics(),
-		roleOf:  roleLookupFrom(storage.GetItemSessionBySessionUUID),
 	}
 	peerHelp := newPeerHelpHandlers(gate, storage, bus)
 	return []ToolModule{

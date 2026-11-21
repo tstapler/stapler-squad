@@ -153,6 +153,7 @@ go_test(
         "tools_workspace_peers_test.go",
         "tools_write_lease_test.go",
         "types_test.go",
+        "wake_metrics_injection_test.go",
         "wake_tools_identity_test.go",
         "wake_tools_rig_test.go",
     ],

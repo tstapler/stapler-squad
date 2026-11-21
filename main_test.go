@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server"
+	mcpserver "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -429,5 +430,25 @@ func Test_startHostnameDetector_should_StartRunAndNetworkChangeSource_When_NotDi
 func TestVerifyHostnameOwnership_RejectsNonMatchingIP(t *testing.T) {
 	if got := verifyHostnameOwnership(context.Background(), "invalid.invalid"); got {
 		t.Errorf("verifyHostnameOwnership(%q) = true, want false (reserved non-resolving hostname)", "invalid.invalid")
+	}
+}
+
+func TestStdioMCPOptions_should_InjectWakeMetrics(t *testing.T) {
+	t.Parallel()
+	opts := stdioMCPOptions(nil)
+	if mcpserver.WakeMetricsFromOptions(opts...) == nil {
+		t.Fatal("the stdio path must inject wake metrics like the HTTP path")
+	}
+}
+
+func TestRunStdioMCP_should_HandWakeMetricsToRunServer(t *testing.T) {
+	t.Parallel()
+	var got []mcpserver.CoreOption
+	err := runStdioMCP(nil, func(opts ...mcpserver.CoreOption) error { got = opts; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mcpserver.WakeMetricsFromOptions(got...) == nil {
+		t.Fatal("the stdio RunServer call must receive wake metrics like the HTTP path")
 	}
 }
