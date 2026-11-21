@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"go/ast"
+	"go/types"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,21 +52,66 @@ func TestBackfillStuckStates_should_CallBackfillOnlyWhen_BacklogEnabled(t *testi
 
 func TestStartPausedTmuxReaper_should_ReapOnEveryTick_When_Started(t *testing.T) {
 	t.Parallel()
-	ticks := make(chan struct{}, 16)
-	startPausedTmuxReaper(20*time.Millisecond, func() {
-		select {
-		case ticks <- struct{}{}:
-		default:
-		}
-	})
+	ticks := make(chan struct{}, 2)
+	// After two ticks reap parks forever, so the process-lifetime goroutine stops
+	// ticking instead of leaking a busy ticker into the rest of the package run.
 	var n atomic.Int32
-	deadline := time.After(5 * time.Second)
-	for n.Load() < 2 {
+	startPausedTmuxReaper(20*time.Millisecond, func() {
+		if n.Add(1) > 2 {
+			select {}
+		}
+		ticks <- struct{}{}
+	})
+	for i := 0; i < 2; i++ {
 		select {
 		case <-ticks:
-			n.Add(1)
-		case <-deadline:
-			t.Fatal("reaper did not tick twice")
+		case <-time.After(5 * time.Second):
+			t.Fatalf("reaper tick %d never happened", i+1)
 		}
 	}
+}
+
+func TestPausedTmuxReapInterval_should_BeThirtyMinutes(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 30*time.Minute, pausedTmuxReapInterval)
+}
+
+// callArgs returns the printed arguments of the single call to name in fn.
+func callArgs(t *testing.T, fn *ast.FuncDecl, name string) []string {
+	t.Helper()
+	var out []string
+	var found int
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || id.Name != name {
+			return true
+		}
+		found++
+		out = nil
+		for _, a := range call.Args {
+			out = append(out, types.ExprString(a))
+		}
+		return true
+	})
+	require.Equal(t, 1, found, "%s must be called exactly once", name)
+	return out
+}
+
+// The call-site arguments carry the behaviour (flag gate, real reaper method,
+// instance count). Observing them through BuildRuntimeDeps would need a production
+// seam (spy func var) or a seeded stuck state plus a 30-minute wait, so they are
+// pinned at the AST level in the style of the step-order test.
+func TestBuildRuntimeDeps_should_PassRealArgumentsToSessionIOSteps(t *testing.T) {
+	t.Parallel()
+	fn := parseFunc(t, "dependencies.go", "BuildRuntimeDeps")
+
+	assert.Equal(t, []string{"cfg.GetFeatureFlag(\"backlog\")", "backlogLifecycleListener.BackfillStuckStates"},
+		callArgs(t, fn, "backfillStuckStates"))
+	assert.Equal(t, []string{"pausedTmuxReapInterval", "sessionService.ReapPausedTmuxSessions"},
+		callArgs(t, fn, "startPausedTmuxReaper"))
+	assert.Equal(t, []string{"len(instances)"}, callArgs(t, fn, "buildSessionIO"))
 }
