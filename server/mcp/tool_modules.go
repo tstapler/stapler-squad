@@ -9,8 +9,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
-	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 // ToolModule registers one family of MCP tools. A new family is a new file with
@@ -37,12 +35,12 @@ func WithToolModules(mods ...ToolModule) CoreOption {
 type coreDeps struct {
 	store          session.InstanceStore
 	svc            *services.SessionService
-	sbMgr          *scrollback.ScrollbackManager
+	sbMgr          TerminalScrollback
 	storage        *session.Storage
 	eventBus       *events.EventBus
 	prCache        *githubpkg.UserPRCache
 	backlogEnabled func() bool
-	autoReopener   reviewgate.AutoReopenSpawner
+	autoReopener   AutoReopener
 	backlogSvc     *backlogsvc.BacklogService
 	liveCheck      func(sessionUUID string) bool
 	cfg            coreConfig
@@ -102,7 +100,7 @@ func newLifecycleModule(store session.InstanceStore, svc *services.SessionServic
 	})
 }
 
-func newTerminalModule(store session.InstanceStore, live liveInstanceFinder, sbMgr *scrollback.ScrollbackManager, diagnoseCheck diagnoseCallerCheck) ToolModule {
+func newTerminalModule(store session.InstanceStore, live liveInstanceFinder, sbMgr TerminalScrollback, diagnoseCheck diagnoseCallerCheck) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
 		registerTerminalTools(s, &terminalHandlers{
 			store:         store,
