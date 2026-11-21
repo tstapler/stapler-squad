@@ -41,6 +41,12 @@ import (
 //     stored in a variable by another package;
 //   - in-package aliases (`type X = session.Storage`) and generic helper functions in this package
 //     (`func make[T any]() T`) that build a concrete type for a caller;
+//   - array, slice and channel constructions that name the type only as an element:
+//     `var x [N]pkg.T`, `make([]pkg.T, n)`, `make(chan pkg.T)`, and `pkg.T(x)` conversions;
+//   - a local generic instantiated with a stateful type argument (`newBox[pkg.T]()`);
+//   - `var x pkg.T` is flagged for every T, including an interface or func type, which holds no
+//     zero-value state. An allowedTypes row for such a type is labelled "value" but is really an
+//     interface: read the label as "may be declared", not as proof the type is plain data;
 //   - reflection, and constructions inside a type switch or var-declared interface value whose
 //     concrete type is chosen elsewhere;
 //   - packages outside the module: mcp-go servers and clients legitimately live here, since the
@@ -48,17 +54,15 @@ import (
 //   - GOOS-specific files: depguard on linux does not see imports in other GOOS files, though
 //     this scan parses every non-test file in the directory regardless of build tags.
 //
-// The import side of the rule is the `isolate_server_mcp` depguard row in .golangci.yml. It
-// rejects new imports but, unlike leaf rows, nothing forces its list to stay free of unused
-// entries; tightness is kept by the plan's `go list` counts.
+// The import side of the rule is the exact set in import_set_guard_test.go (two-sided, so unused
+// rows fail too). The `isolate_server_mcp` depguard row is belt and braces: its matching is
+// order-dependent and not a reliable control.
 
 const modulePrefix = "github.com/tstapler/stapler-squad/"
 
-// allowedConstructors holds every in-module pkg.New* that non-test server/mcp may reference; each
-// is a value-type or event constructor, none a store, service or client. No M4b-deferred type is
-// constructed here: M4b's concrete types (SessionService, Storage, UserPRCache, BacklogService,
-// BacklogFlowService, InstanceStore, EventBus) are only named in signatures and fields and arrive
-// already built.
+// allowedConstructors holds every in-module pkg.New* that non-test server/mcp may reference: value
+// and event constructors only, never a store, service or client. M4b's concrete types arrive already
+// built and are only named in signatures and fields.
 var allowedConstructors = map[string]string{
 	modulePrefix + "github.NewRepoRef":                 "value object parsed from request data",
 	modulePrefix + "github.NewRepoRefWithHost":         "value object parsed from request data",
@@ -340,6 +344,7 @@ func TestSingleRootScanner_should_FlagEachConstructionShape_When_GivenMutants(t 
 		{"allowed value ctor", `"github.com/tstapler/stapler-squad/github"`, "var _ = github.NewRepoRef", ""},
 		{"allowed value literal", `"github.com/tstapler/stapler-squad/github"`, "var _ = github.RepoRef{}", ""},
 		{"value-only package literal", `"github.com/tstapler/stapler-squad/session/domain"`, "var _ = domain.GuidanceRequest{}", ""},
+		{"parenthesised zero-value var", sess, "var x (session.Storage)", "zero-value declaration"},
 		{"pointer var is not a construction", sess, "var x *session.Storage", ""},
 		{"param and field are not constructions", sess, "type h struct{ s session.Storage }\nfunc f(s session.Storage) {}", ""},
 		{"shadowed import name", sess, "func f(session struct{ NewX func() }) { session.NewX() }", ""},

@@ -112,3 +112,12 @@ func TestUserPRSourceFromOptions_should_ReturnInjectedSource(t *testing.T) {
 	assert.Same(t, fake, UserPRSourceFromOptions(WithUserPRCache(fake)))
 	assert.True(t, UserPRSourceFromOptions() == nil)
 }
+
+// Documents the hazard: a typed-nil *UserPRCache passed straight to
+// WithUserPRCache is a non-nil interface, so the absent-source guard misses it.
+// The guard is the composition root's mcpUserPRSource, which returns a nil interface.
+func TestWithUserPRCache_should_TreatTypedNilPointerAsPresent_When_NotGuarded(t *testing.T) {
+	t.Parallel()
+	var cache *githubpkg.UserPRCache
+	assert.False(t, UserPRSourceFromOptions(WithUserPRCache(cache)) == nil, "a boxed nil pointer defeats the nil guard")
+}

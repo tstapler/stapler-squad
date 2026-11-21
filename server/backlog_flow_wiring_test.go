@@ -28,7 +28,9 @@ func TestFlowMCPOptions_should_ShareRpcServiceInstance_When_FlowServiceWired(t *
 	got := servermcp.FlowServiceFromOptions(flowMCPOptions(&ServerDependencies{BacklogFlowService: svc})...)
 
 	assert.Same(t, svc, got, "the HTTP MCP core must hold the RPC handler's service so one cache serves both")
-	assert.Nil(t, servermcp.FlowServiceFromOptions(flowMCPOptions(&ServerDependencies{})...))
+	// A typed-nil pointer boxed into the port would defeat the flow tools' absent-service guard.
+	assert.True(t, servermcp.FlowServiceFromOptions(flowMCPOptions(&ServerDependencies{})...) == nil,
+		"no flow service must leave a nil interface, not a boxed nil pointer")
 }
 
 // Serial: BuildDependencies sets the isolated state dir and wires real subsystems.

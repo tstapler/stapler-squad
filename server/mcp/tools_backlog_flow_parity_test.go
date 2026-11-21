@@ -20,8 +20,8 @@ import (
 
 // The three entry points take the flow service as a trailing variadic option.
 var (
-	_ func(...CoreOption) *backlogflow.BacklogFlowService = FlowServiceFromOptions
-	_                                                     = NewHTTPHandler
+	_ func(...CoreOption) FlowService = FlowServiceFromOptions
+	_                                 = NewHTTPHandler
 )
 
 func TestNewCore_should_ReturnUnavailableOrData_When_WithFlowServiceAbsentOrPresent(t *testing.T) {

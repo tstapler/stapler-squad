@@ -5,7 +5,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -184,7 +183,7 @@ func newClaimModule(backlogSvc *backlogsvc.BacklogService, enabled func() bool) 
 }
 
 // newFlowModule always registers: a nil flowSvc makes the tools answer ErrUnavailable.
-func newFlowModule(flowSvc *backlogflow.BacklogFlowService, enabled func() bool) ToolModule {
+func newFlowModule(flowSvc FlowService, enabled func() bool) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
 		registerFlowTools(s, &flowHandlers{svc: flowSvc, enabledCheck: enabled})
 	})
