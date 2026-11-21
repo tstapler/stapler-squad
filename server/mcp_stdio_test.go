@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -62,7 +63,7 @@ func TestStdioMCPOptions_should_CarryRegistryAndTrackerParser(t *testing.T) {
 func TestStdioMCPOptions_should_CarryTheSameConfigAsHTTP(t *testing.T) {
 	t.Parallel()
 	stdio := stdioMCPOptions(nil)
-	httpOpts := mcpCoreOptions(&ServerDependencies{BacklogFlowService: servermcp.FlowServiceFromOptions(stdio...)})
+	httpOpts := mcpCoreOptions(&ServerDependencies{BacklogFlowService: backlogflow.NewFlowServiceFromStorage(nil)})
 	require.Len(t, stdio, len(httpOpts))
 	assert.Equal(t, servermcp.FlowServiceFromOptions(httpOpts...) != nil, servermcp.FlowServiceFromOptions(stdio...) != nil)
 	assert.Equal(t, servermcp.PluginRegistryFromOptions(httpOpts...) != nil, servermcp.PluginRegistryFromOptions(stdio...) != nil)

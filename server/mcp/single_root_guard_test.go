@@ -41,6 +41,12 @@ import (
 //     stored in a variable by another package;
 //   - in-package aliases (`type X = session.Storage`) and generic helper functions in this package
 //     (`func make[T any]() T`) that build a concrete type for a caller;
+//   - array, slice and channel constructions that name the type only as an element:
+//     `var x [N]pkg.T`, `make([]pkg.T, n)`, `make(chan pkg.T)`, and `pkg.T(x)` conversions;
+//   - a local generic instantiated with a stateful type argument (`newBox[pkg.T]()`);
+//   - `var x pkg.T` is flagged for every T, including an interface or func type, which holds no
+//     zero-value state. An allowedTypes row for such a type is labelled "value" but is really an
+//     interface: read the label as "may be declared", not as proof the type is plain data;
 //   - reflection, and constructions inside a type switch or var-declared interface value whose
 //     concrete type is chosen elsewhere;
 //   - packages outside the module: mcp-go servers and clients legitimately live here, since the
@@ -57,7 +63,7 @@ const modulePrefix = "github.com/tstapler/stapler-squad/"
 // allowedConstructors holds every in-module pkg.New* that non-test server/mcp may reference; each
 // is a value-type or event constructor, none a store, service or client. No M4b-deferred type is
 // constructed here: M4b's concrete types (SessionService, Storage, UserPRCache, BacklogService,
-// BacklogFlowService, InstanceStore, EventBus) are only named in signatures and fields and arrive
+// InstanceStore, EventBus; BacklogFlowService left this list in M4b-1) are only named in signatures and fields and arrive
 // already built.
 var allowedConstructors = map[string]string{
 	modulePrefix + "github.NewRepoRef":                 "value object parsed from request data",
@@ -340,6 +346,7 @@ func TestSingleRootScanner_should_FlagEachConstructionShape_When_GivenMutants(t 
 		{"allowed value ctor", `"github.com/tstapler/stapler-squad/github"`, "var _ = github.NewRepoRef", ""},
 		{"allowed value literal", `"github.com/tstapler/stapler-squad/github"`, "var _ = github.RepoRef{}", ""},
 		{"value-only package literal", `"github.com/tstapler/stapler-squad/session/domain"`, "var _ = domain.GuidanceRequest{}", ""},
+		{"parenthesised zero-value var", sess, "var x (session.Storage)", "zero-value declaration"},
 		{"pointer var is not a construction", sess, "var x *session.Storage", ""},
 		{"param and field are not constructions", sess, "type h struct{ s session.Storage }\nfunc f(s session.Storage) {}", ""},
 		{"shadowed import name", sess, "func f(session struct{ NewX func() }) { session.NewX() }", ""},

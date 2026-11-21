@@ -3,7 +3,6 @@ package backlogflow
 import (
 	"strings"
 	"time"
-	"unicode"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session/flow"
@@ -67,33 +66,6 @@ func estimatedLegend(codes []string) map[string]string {
 	}
 	return out
 }
-
-// sanitizeFlowText flattens control characters and whitespace runs to single
-// spaces and caps the length, so raw titles and notes are safe to emit.
-func sanitizeFlowText(s string, maxRunes int) string {
-	var b strings.Builder
-	space := false
-	for _, r := range s {
-		if unicode.IsControl(r) || unicode.IsSpace(r) {
-			space = true
-			continue
-		}
-		if space && b.Len() > 0 {
-			b.WriteByte(' ')
-		}
-		space = false
-		b.WriteRune(r)
-	}
-	out := []rune(b.String())
-	if len(out) > maxRunes {
-		return string(out[:maxRunes-1]) + "…"
-	}
-	return string(out)
-}
-
-// SanitizeFlowText is sanitizeFlowText for transports outside this package
-// (the MCP adapter), so both flatten text the same way.
-func SanitizeFlowText(s string, maxRunes int) string { return sanitizeFlowText(s, maxRunes) }
 
 func flowTime(t time.Time) *timestamppb.Timestamp {
 	if t.IsZero() {
@@ -219,7 +191,7 @@ func deadlockPage(p flow.ListPage[flow.DeadlockRow]) *sessionv1.FlowDeadlockPage
 	return &sessionv1.FlowDeadlockPage{
 		Items: mapSlice(p.Items, func(r flow.DeadlockRow) *sessionv1.FlowDeadlockRow {
 			return &sessionv1.FlowDeadlockRow{
-				ItemId: string(r.ItemID), Title: sanitizeFlowText(r.Title, flowTitleMaxRunes),
+				ItemId: string(r.ItemID), Title: flow.SanitizeText(r.Title, flowTitleMaxRunes),
 				Resolution: r.Resolution, Sequence: r.Sequence, RunLength: flowI32(r.RunLength),
 				RepeatedCriterion: flowI32(r.RepeatedCriterion), HasRepeatedCriterion: r.HasRepeatedCriterion,
 				DiffUnchangedPairs: flowI32(r.DiffUnchangedPairs), AgentClaimedDone: r.AgentClaimedDone,
@@ -234,7 +206,7 @@ func streakPage(p flow.ListPage[flow.StreakRow]) *sessionv1.FlowStreakPage {
 	return &sessionv1.FlowStreakPage{
 		Items: mapSlice(p.Items, func(r flow.StreakRow) *sessionv1.FlowStreakRow {
 			return &sessionv1.FlowStreakRow{
-				ItemId: string(r.ItemID), Title: sanitizeFlowText(r.Title, flowTitleMaxRunes),
+				ItemId: string(r.ItemID), Title: flow.SanitizeText(r.Title, flowTitleMaxRunes),
 				Length: flowI32(r.Length), LastVerdictAt: flowTime(r.LastVerdictAt),
 			}
 		}),
@@ -294,7 +266,7 @@ func thrashPage(p flow.ListPage[flow.ThrashItemRow]) *sessionv1.FlowThrashItemPa
 	return &sessionv1.FlowThrashItemPage{
 		Items: mapSlice(p.Items, func(r flow.ThrashItemRow) *sessionv1.FlowThrashItemRow {
 			return &sessionv1.FlowThrashItemRow{
-				ItemId: string(r.ItemID), Title: sanitizeFlowText(r.Title, flowTitleMaxRunes),
+				ItemId: string(r.ItemID), Title: flow.SanitizeText(r.Title, flowTitleMaxRunes),
 				Episodes: flowI32(r.Episodes), Events: flowI32(r.Events), FirstAt: flowTime(r.FirstAt),
 				LastAt: flowTime(r.LastAt), Pair: r.Pair, Cause: r.Cause, Archived: r.Archived,
 			}
@@ -376,7 +348,7 @@ func drilldownToProto(p *flow.DrilldownPage) *sessionv1.ListFlowDrilldownRespons
 		Items: &sessionv1.FlowDrillItemPage{
 			Items: mapSlice(p.Items.Items, func(d flow.DrillItem) *sessionv1.FlowDrillItem {
 				return &sessionv1.FlowDrillItem{
-					ItemId: string(d.ItemID), Title: sanitizeFlowText(d.Title, flowTitleMaxRunes),
+					ItemId: string(d.ItemID), Title: flow.SanitizeText(d.Title, flowTitleMaxRunes),
 					Status: d.Status, Reason: d.Reason, DurationMs: d.Duration.Milliseconds(),
 				}
 			}),
@@ -388,12 +360,12 @@ func drilldownToProto(p *flow.DrilldownPage) *sessionv1.ListFlowDrilldownRespons
 
 func timelineToProto(t *flow.ItemTimeline) *sessionv1.GetItemFlowTimelineResponse {
 	return &sessionv1.GetItemFlowTimelineResponse{
-		Meta: flowMetaToProto(t.Meta), ItemId: string(t.ItemID), Title: sanitizeFlowText(t.Title, flowTitleMaxRunes),
+		Meta: flowMetaToProto(t.Meta), ItemId: string(t.ItemID), Title: flow.SanitizeText(t.Title, flowTitleMaxRunes),
 		Status: t.Status,
 		Entries: mapSlice(t.Entries, func(e flow.TimelineEntry) *sessionv1.FlowTimelineEntry {
 			return &sessionv1.FlowTimelineEntry{
 				Kind: e.Kind, From: e.From, To: e.To, At: flowTime(e.At), Last: flowTime(e.Last),
-				Events: flowI32(e.Count), Cause: e.Cause, Note: sanitizeFlowText(e.Note, flowNoteMaxRunes),
+				Events: flowI32(e.Count), Cause: e.Cause, Note: flow.SanitizeText(e.Note, flowNoteMaxRunes),
 			}
 		}),
 		TotalEntries: flowI32(t.TotalEntries), Truncated: t.Truncated, ThrashEpisodes: flowI32(t.ThrashEpisodes),

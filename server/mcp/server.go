@@ -12,7 +12,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
@@ -21,7 +20,7 @@ import (
 // coreConfig holds the optional dependencies injected through CoreOption, so
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
-	flowSvc   *backlogflow.BacklogFlowService
+	flowSvc   FlowService
 	plugins   *session.PluginRegistry
 	refParser TrackerRefParser
 	// wakeMetrics is the process-wide wake counter mirror; nil drops counts (a nil *wakes.Metrics is a no-op).
@@ -39,8 +38,9 @@ type CoreOption func(*coreConfig)
 
 // WithFlowService enables the flow-observability tools. Without it they are
 // registered but return ErrUnavailable. The HTTP path passes the same instance
-// the RPC handler uses, so one aggregator cache serves both.
-func WithFlowService(svc *backlogflow.BacklogFlowService) CoreOption {
+// the RPC handler uses, so one aggregator cache serves both. Pass an untyped
+// nil or a non-nil value: a typed-nil pointer defeats the absent-service guard.
+func WithFlowService(svc FlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
 }
 
@@ -71,7 +71,7 @@ func WakeMetricsFromOptions(opts ...CoreOption) *wakes.Metrics {
 
 // FlowServiceFromOptions returns the flow service the options carry, or nil.
 // It lets wiring tests prove two call sites hold the same instance.
-func FlowServiceFromOptions(opts ...CoreOption) *backlogflow.BacklogFlowService {
+func FlowServiceFromOptions(opts ...CoreOption) FlowService {
 	return newCoreConfig(opts).flowSvc
 }
 
