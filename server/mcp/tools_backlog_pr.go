@@ -167,7 +167,7 @@ func (h *backlogHandlers) recordOverrideBranch(ctx context.Context, callerUUID, 
 // (ADR-007 rule 0), never the spoofable X-Stapler-Session-UUID claim.
 func (h *backlogHandlers) reportPRCreatedTool() mcpserver.ToolHandlerFunc {
 	gate := h.gate
-	if gate == nil {
+	if gate == nil { // only hand-built handlers (tests); NewCore always sets h.gate when storage is present
 		gate = &callerIdentityGate{roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
 	}
 	return withCallerIdentityGate(gate, toolReportPRCreated, h.reportPRCreated)

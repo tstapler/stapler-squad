@@ -1,11 +1,13 @@
 package server
 
 import (
+	"go/ast"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,4 +63,52 @@ func TestWakeMCPOptions_should_ShareDispatcherMetricsInstance(t *testing.T) {
 
 	preset := wakes.NewMetrics()
 	assert.Same(t, preset, servermcp.WakeMetricsFromOptions(wakeMCPOptions(&ServerDependencies{WakeMetrics: preset})))
+}
+
+func TestSharedWakeMetrics_should_ReturnOneInstance_When_CalledConcurrently(t *testing.T) {
+	t.Parallel()
+	deps := &ServerDependencies{}
+	const n = 64
+	got := make([]*wakes.Metrics, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			got[i] = deps.sharedWakeMetrics()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	for i := range got {
+		assert.Same(t, got[0], got[i])
+	}
+}
+
+// Pins the production call sites: a test of mcpCoreOptions alone cannot see a
+// revert of the NewHTTPHandler argument back to flowMCPOptions.
+func TestWireDepsIntoServer_should_PassMCPCoreOptionsToNewHTTPHandler(t *testing.T) {
+	t.Parallel()
+	fn := parseFunc(t, "server.go", "wireDepsIntoServer")
+	var found bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "NewHTTPHandler" {
+			return true
+		}
+		found = true
+		require.True(t, call.Ellipsis.IsValid(), "options must be spread")
+		last, ok := call.Args[len(call.Args)-1].(*ast.CallExpr)
+		require.True(t, ok)
+		id, ok := last.Fun.(*ast.Ident)
+		require.True(t, ok)
+		assert.Equal(t, "mcpCoreOptions", id.Name)
+		return true
+	})
+	assert.True(t, found, "wireDepsIntoServer must build the HTTP MCP handler")
 }

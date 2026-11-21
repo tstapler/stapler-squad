@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -44,6 +45,8 @@ func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidance 
 // sharedWakeMetrics returns the process's one wake counter mirror, creating it
 // on first use. The wake service, the dispatcher and the MCP tools all read it.
 func (d *ServerDependencies) sharedWakeMetrics() *wakes.Metrics {
+	d.wakeMetricsMu.Lock()
+	defer d.wakeMetricsMu.Unlock()
 	if d.WakeMetrics == nil {
 		d.WakeMetrics = wakes.NewMetrics()
 	}
@@ -56,7 +59,7 @@ func NewWakeMetrics() *wakes.Metrics { return wakes.NewMetrics() }
 
 // mcpCoreOptions is the HTTP MCP core's whole CoreOption set.
 func mcpCoreOptions(deps *ServerDependencies) []servermcp.CoreOption {
-	return append(flowMCPOptions(deps), wakeMCPOptions(deps))
+	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps)})
 }
 
 // wakeMCPOptions hands the shared wake metrics to the HTTP MCP core.

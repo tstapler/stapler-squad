@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -58,6 +59,7 @@ type ServerDependencies struct {
 	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
 	// so both feed one wake_trigger_total mirror; created on first use by sharedWakeMetrics.
 	WakeMetrics       *wakes.Metrics
+	wakeMetricsMu     sync.Mutex // guards lazy creation in sharedWakeMetrics
 	SessionService    *services.SessionService
 	Storage           *session.Storage
 	Instances         []*instance.Instance
