@@ -62,9 +62,10 @@ func defaultToolModules(d coreDeps) []ToolModule {
 		liveFinder = d.svc
 	}
 
+	createLimiter := newCreateSessionLimiter()
 	mods := []ToolModule{
 		newDiscoveryModule(d.store),
-		newLifecycleModule(d.store, d.svc, diagnoseCheck),
+		newLifecycleModule(d.store, d.svc, diagnoseCheck, createLimiter),
 		newTerminalModule(d.store, liveFinder, d.sbMgr, diagnoseCheck),
 		newVCSModule(d.store, d.cfg.openWorktree),
 		newWorkflowModule(d.svc),
@@ -75,7 +76,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 	}
 	mods = append(mods, newBacklogModules(d, liveFinder)...)
 	mods = append(mods, newIdentityGatedModules(d.gate, d.storage, d.eventBus)...)
-	mods = append(mods, newGitHubModule(d.cfg.userPRs, d.store, d.svc))
+	mods = append(mods, newGitHubModule(d.cfg.userPRs, d.store, d.svc, createLimiter))
 	return append(mods, d.cfg.extraModules...)
 }
 
@@ -91,9 +92,9 @@ func newDiscoveryModule(store session.InstanceStore) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerDiscoveryTools(s, &discoveryHandlers{store: store}) })
 }
 
-func newLifecycleModule(store session.InstanceStore, svc *services.SessionService, diagnoseCheck diagnoseCallerCheck) ToolModule {
+func newLifecycleModule(store session.InstanceStore, svc *services.SessionService, diagnoseCheck diagnoseCallerCheck, createLimiter *tokenBucket) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
-		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck, publicURL: publicURLFromEnv()})
+		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck, publicURL: publicURLFromEnv(), createLimiter: createLimiter})
 	})
 }
 
@@ -203,11 +204,11 @@ func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage,
 	}
 }
 
-func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc *services.SessionService) ToolModule {
+func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc *services.SessionService, createLimiter *tokenBucket) ToolModule {
 	if prCache == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
-		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
+		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc, createLimiter: createLimiter})
 	})
 }
