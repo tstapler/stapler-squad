@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -22,15 +23,16 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 
 	store := &stubStore{instances: []*instance.Instance{caller, peer, unrelated}}
 	h, _ := makeGoalHandlers(t, store)
+	storage := h.storage.(*session.Storage) // real Ent-backed; the port hides AddInstance
 	// Storage.ListWorkspacePeers queries its own real ent-backed ListInstanceData, so the
 	// same instances need to be persisted there too (mirrors how caller resolution uses
 	// `store` while goal/peer data lives in `storage` throughout this file).
-	require.NoError(t, h.storage.AddInstance(caller))
-	require.NoError(t, h.storage.AddInstance(peer))
-	require.NoError(t, h.storage.AddInstance(unrelated))
-	_, err := h.storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", instance.GoalStatusWorking, nil, "", "")
+	require.NoError(t, storage.AddInstance(caller))
+	require.NoError(t, storage.AddInstance(peer))
+	require.NoError(t, storage.AddInstance(unrelated))
+	_, err := storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
-	require.NoError(t, h.storage.SetSessionGoalWorkspaceKey(context.Background(), "peer-uuid", peer.WorkspaceKey()))
+	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "peer-uuid", peer.WorkspaceKey()))
 
 	ctx := WithSessionUUID(context.Background(), callerUUID)
 	result, err := h.listWorkspacePeers(ctx, makeToolReq(nil))
