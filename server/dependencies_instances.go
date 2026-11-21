@@ -156,8 +156,14 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) (st
 			log.Warn("cdp: orphan cleanup failed (non-fatal)", "err", err)
 		}
 
+		if ctx.Err() != nil {
+			return
+		}
 		bootStartControllers(instances)
 
+		if ctx.Err() != nil {
+			return
+		}
 		bootResumeDrivers(instances)
 
 		// Step 7.6: Startup scan and orphaned approval sync

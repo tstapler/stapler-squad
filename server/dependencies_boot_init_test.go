@@ -18,6 +18,7 @@ import (
 // leave none running.
 func TestBuildRuntimeDeps_ShouldLeaveNoBootInitGoroutine_WhenStopBootInitReturns(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
+	before := goroutineStacks()
 	core, err := BuildCoreDepsWithOptions(BuildOptions{EntClient: session.NewTestEntRepository(t).GetEntClient()})
 	require.NoError(t, err)
 	svc, err := BuildServiceDeps(core)
@@ -29,7 +30,10 @@ func TestBuildRuntimeDeps_ShouldLeaveNoBootInitGoroutine_WhenStopBootInitReturns
 
 	rt.StopBootInit()
 
-	for _, stack := range goroutineStacks() {
+	for id, stack := range goroutineStacks() {
+		if _, existed := before[id]; existed {
+			continue // another test's goroutine
+		}
 		require.NotContains(t, stack, "startInstanceBootInit", "boot-init goroutine outlived StopBootInit:\n%s", strings.TrimSpace(stack))
 	}
 }
