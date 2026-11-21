@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -21,21 +22,35 @@ import (
 // Flagged, per non-test file, in every closure and nested expression:
 //   - any selector pkg.New* where pkg is an in-module import (called or taken as a value), unless
 //     listed in allowedConstructors;
-//   - any composite literal or new(...) of a type from statefulPackages, unless listed in
-//     allowedLiterals;
-//   - a dot import of an in-module package (it would hide both of the above).
+//   - any composite literal or new(...) of an in-module type, including `&T{}`, generic `T[int]{}`
+//     and elided element literals (`[]*T{{}}`, `map[K]T{k: {}}`), unless its package is in
+//     valueOnlyPackages or the type is in allowedTypes;
+//   - a `var x T` declaration of such a type (a zero value is a construction; fields, parameters
+//     and results are not flagged: M4b's signatures legitimately name concrete types);
+//   - a dot import of an in-module package (it would hide all of the above).
 //
-// Import aliases are resolved from each file's import specs, so `gh "…/github"` is seen. Blind
-// spots, so nobody reads this as stronger than it is:
-//   - methods on values (`store.NewThing()`) and in-package type aliases of a concrete type;
-//   - constructors not named New* (`session.Open…`, `Build…`, `Must…`) and function values stored
-//     in a variable by another package;
-//   - construction through reflection, generics (`pkg.Make[T]`) or a helper in this package that
-//     is itself unflagged;
+// A subdirectory holding non-test .go files fails a separate test (the scan is not recursive).
+//
+// Import aliases are resolved from each file's import specs, so `gh "…/github"` is seen. Shadowing
+// is detected through ast.Ident.Obj, which parser.ParseFile fills by default (deprecated API); if
+// that resolution ever stops, the "shadowed import name" mutant row fails first. Remaining
+// blind spots, so nobody reads this as stronger than it is:
+//   - constructors not named New*: `session.OpenStorage`, `config.LoadConfig` (wake_tool_deps.go
+//     already calls it), `localtoken.LoadOrCreate`, `Build…`, `Must…`;
+//   - methods and method values (`store.NewThing()`, `f := store.NewThing`) and function values
+//     stored in a variable by another package;
+//   - in-package aliases (`type X = session.Storage`) and generic helper functions in this package
+//     (`func make[T any]() T`) that build a concrete type for a caller;
+//   - reflection, and constructions inside a type switch or var-declared interface value whose
+//     concrete type is chosen elsewhere;
 //   - packages outside the module: mcp-go servers and clients legitimately live here, since the
-//     proxy and NewCore build the MCP transport itself.
+//     proxy and NewCore build the MCP transport itself;
+//   - GOOS-specific files: depguard on linux does not see imports in other GOOS files, though
+//     this scan parses every non-test file in the directory regardless of build tags.
 //
-// The import side of the rule is the `isolate_server_mcp` depguard row in .golangci.yml.
+// The import side of the rule is the `isolate_server_mcp` depguard row in .golangci.yml. It
+// rejects new imports but, unlike leaf rows, nothing forces its list to stay free of unused
+// entries; tightness is kept by the plan's `go list` counts.
 
 const modulePrefix = "github.com/tstapler/stapler-squad/"
 
@@ -54,31 +69,25 @@ var allowedConstructors = map[string]string{
 	modulePrefix + "pkg/events.NewSessionUpdatedEvent": "event value constructor",
 }
 
-// statefulPackages are the in-module packages whose composite literals are checked. Value-only
-// packages (session/domain, backlogdto, config, gen protos, pkg/*) are not: a literal of one of
-// those cannot smuggle in a store, service or client.
-var statefulPackages = map[string]bool{
-	modulePrefix + "session":                     true,
-	modulePrefix + "session/instance":            true,
-	modulePrefix + "session/git":                 true,
-	modulePrefix + "session/flow":                true,
-	modulePrefix + "session/backlog/pipeline":    true,
-	modulePrefix + "server/services":             true,
-	modulePrefix + "server/services/backlogsvc":  true,
-	modulePrefix + "server/services/backlogflow": true,
-	modulePrefix + "server/wakes":                true,
-	modulePrefix + "github":                      true,
+// valueOnlyPackages hold only data types, so a literal of any of their types cannot smuggle in a
+// store, service or client. Every other in-module type needs an allowedTypes row.
+var valueOnlyPackages = map[string]bool{
+	modulePrefix + "session/domain":            true,
+	modulePrefix + "session/domain/backlogdto": true,
+	modulePrefix + "gen/proto/go/session/v1":   true,
 }
 
-// allowedLiterals lists the literals of statefulPackages types that are plain value or request
-// structs.
-var allowedLiterals = map[string]string{
-	modulePrefix + "session.ExternalItem":         "value: tracker item",
-	modulePrefix + "session.PluginConfig":         "value: plugin config",
-	modulePrefix + "github.RepoRef":               "value",
-	modulePrefix + "github.AccountRef":            "value",
-	modulePrefix + "session/git.CheckRunRef":      "value",
-	modulePrefix + "server/wakes.ScheduleRequest": "request value",
+// allowedTypes lists the literals and zero-value declarations of types from other in-module
+// packages that are plain value or request structs.
+var allowedTypes = map[string]string{
+	modulePrefix + "session.ExternalItem":                      "value: tracker item",
+	modulePrefix + "session.PluginConfig":                      "value: plugin config",
+	modulePrefix + "github.RepoRef":                            "value",
+	modulePrefix + "github.AccountRef":                         "value",
+	modulePrefix + "session/backlog/pipeline.TriageSuggestion": "value: JSON decode target",
+	modulePrefix + "session/backlog/pipeline.TriageTask":       "value: JSON decode target",
+	modulePrefix + "session/git.CheckRunRef":                   "value",
+	modulePrefix + "server/wakes.ScheduleRequest":              "request value",
 }
 
 type guardFinding struct {
@@ -92,7 +101,7 @@ func (f guardFinding) String() string {
 
 // scanSingleRoot parses the non-test .go files in dir and reports every construction of a concrete
 // in-module type that the allow-lists do not cover.
-func scanSingleRoot(t *testing.T, dir string, ctors, lits map[string]string) []guardFinding {
+func scanSingleRoot(t *testing.T, dir string, ctors, types map[string]string) []guardFinding {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	require.NoError(t, err)
@@ -106,7 +115,7 @@ func scanSingleRoot(t *testing.T, dir string, ctors, lits map[string]string) []g
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, 0)
 		require.NoError(t, err, path)
-		out = append(out, scanFile(fset, f, filepath.Base(path), ctors, lits)...)
+		out = append(out, scanFile(fset, f, filepath.Base(path), ctors, types)...)
 	}
 	require.Positive(t, scanned, "guard saw no source files in %s: its data glob is missing", dir)
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
@@ -129,7 +138,7 @@ func inModuleImports(fset *token.FileSet, f *ast.File, name string) (map[string]
 		switch local {
 		case ".":
 			out = append(out, guardFinding{file: name, line: fset.Position(spec.Pos()).Line, key: p + ".",
-				what: "dot import of " + p + " hides constructor calls from this guard"})
+				what: "dot import of " + p + " hides constructions from this guard"})
 		case "_":
 		default:
 			imports[local] = p
@@ -138,56 +147,127 @@ func inModuleImports(fset *token.FileSet, f *ast.File, name string) (map[string]
 	return imports, out
 }
 
-func scanFile(fset *token.FileSet, f *ast.File, name string, ctors, lits map[string]string) []guardFinding {
+// unwrapType strips parens, pointers and generic instantiation: `*pkg.T[int]` -> `pkg.T`.
+func unwrapType(e ast.Expr) ast.Expr {
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.StarExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.IndexListExpr:
+			e = x.X
+		default:
+			return e
+		}
+	}
+}
+
+type scanner struct {
+	fset    *token.FileSet
+	name    string
+	imports map[string]string
+	ctors   map[string]string
+	types   map[string]string
+	out     []guardFinding
+}
+
+func (s *scanner) add(p token.Pos, key, what string) {
+	s.out = append(s.out, guardFinding{file: s.name, line: s.fset.Position(p).Line, key: key, what: what})
+}
+
+// resolve names an in-module package member; id.Obj != nil means a local shadows the import name.
+func (s *scanner) resolve(e ast.Expr) (path, sel string, ok bool) {
+	sx, isSel := e.(*ast.SelectorExpr)
+	if !isSel {
+		return "", "", false
+	}
+	id, isID := sx.X.(*ast.Ident)
+	if !isID || id.Obj != nil {
+		return "", "", false
+	}
+	p, found := s.imports[id.Name]
+	return p, sx.Sel.Name, found
+}
+
+// checkType flags a construction of the named type unless its package is value-only or it is allowed.
+func (s *scanner) checkType(pos token.Pos, typ ast.Expr, what string) {
+	p, name, ok := s.resolve(unwrapType(typ))
+	if !ok || valueOnlyPackages[p] {
+		return
+	}
+	if _, allowed := s.types[p+"."+name]; !allowed {
+		s.add(pos, p+"."+name, what+" of concrete type "+p+"."+name)
+	}
+}
+
+// elided checks the element literals written without a type (`{}`) inside a literal of type typ.
+func (s *scanner) elided(typ ast.Expr, elts []ast.Expr) {
+	var keyT, valT ast.Expr
+	switch t := unwrapType(typ).(type) {
+	case *ast.ArrayType:
+		valT = t.Elt
+	case *ast.MapType:
+		keyT, valT = t.Key, t.Value
+	default:
+		return
+	}
+	check := func(e, et ast.Expr) {
+		if lit, ok := e.(*ast.CompositeLit); ok && lit.Type == nil && et != nil {
+			s.checkType(lit.Pos(), et, "elided literal")
+			s.elided(et, lit.Elts)
+		}
+	}
+	for _, e := range elts {
+		if kv, ok := e.(*ast.KeyValueExpr); ok {
+			check(kv.Key, keyT)
+			check(kv.Value, valT)
+			continue
+		}
+		check(e, valT)
+	}
+}
+
+func (s *scanner) visit(n ast.Node) bool {
+	switch x := n.(type) {
+	case *ast.SelectorExpr:
+		if p, sel, ok := s.resolve(x); ok && strings.HasPrefix(sel, "New") {
+			if _, allowed := s.ctors[p+"."+sel]; !allowed {
+				s.add(x.Pos(), p+"."+sel, "constructor "+p+"."+sel)
+			}
+		}
+	case *ast.CompositeLit:
+		if x.Type != nil {
+			s.checkType(x.Pos(), x.Type, "literal")
+			s.elided(x.Type, x.Elts)
+		}
+	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "new" && id.Obj == nil && len(x.Args) == 1 {
+			s.checkType(x.Pos(), x.Args[0], "new()")
+		}
+	case *ast.ValueSpec:
+		// `var x T` or `var x T = ...` of a non-pointer named type builds a zero value.
+		if x.Type != nil {
+			if _, isPtr := x.Type.(*ast.StarExpr); !isPtr {
+				s.checkType(x.Pos(), x.Type, "zero-value declaration")
+			}
+		}
+	}
+	return true
+}
+
+func scanFile(fset *token.FileSet, f *ast.File, name string, ctors, types map[string]string) []guardFinding {
 	imports, out := inModuleImports(fset, f, name)
-	add := func(p token.Pos, key, what string) {
-		out = append(out, guardFinding{file: name, line: fset.Position(p).Line, key: key, what: what})
-	}
-	// resolve names an in-module package member; id.Obj != nil means a local shadows the import name.
-	resolve := func(e ast.Expr) (path, sel string, ok bool) {
-		s, isSel := e.(*ast.SelectorExpr)
-		if !isSel {
-			return "", "", false
-		}
-		id, isID := s.X.(*ast.Ident)
-		if !isID || id.Obj != nil {
-			return "", "", false
-		}
-		p, found := imports[id.Name]
-		return p, s.Sel.Name, found
-	}
-	checkType := func(pos token.Pos, e ast.Expr) {
-		p, typ, ok := resolve(e)
-		if !ok || !statefulPackages[p] {
-			return
-		}
-		if _, allowed := lits[p+"."+typ]; !allowed {
-			add(pos, p+"."+typ, "literal of concrete type "+p+"."+typ)
-		}
-	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.SelectorExpr:
-			if p, sel, ok := resolve(x); ok && strings.HasPrefix(sel, "New") {
-				if _, allowed := ctors[p+"."+sel]; !allowed {
-					add(x.Pos(), p+"."+sel, "constructor "+p+"."+sel)
-				}
-			}
-		case *ast.CompositeLit:
-			checkType(x.Pos(), x.Type)
-		case *ast.CallExpr:
-			if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "new" && id.Obj == nil && len(x.Args) == 1 {
-				checkType(x.Pos(), x.Args[0])
-			}
-		}
-		return true
-	})
-	return out
+	s := &scanner{fset: fset, name: name, imports: imports, ctors: ctors, types: types, out: out}
+	ast.Inspect(f, s.visit)
+	return s.out
 }
 
 func TestServerMCP_should_NotConstructConcreteDependencies_When_NonTestSourceScanned(t *testing.T) {
 	t.Parallel()
-	got := scanSingleRoot(t, ".", allowedConstructors, allowedLiterals)
+	got := scanSingleRoot(t, ".", allowedConstructors, allowedTypes)
 	require.Empty(t, got, "server/mcp is not a composition root (Q5): build the dependency in "+
 		"server/dependencies.go and inject it through a CoreOption or NewCore parameter")
 }
@@ -202,31 +282,70 @@ func TestServerMCP_should_KeepAllowListsExact_When_SourceScanned(t *testing.T) {
 	for k := range allowedConstructors {
 		require.True(t, seen[k], "allowedConstructors entry %s is unused: delete it", k)
 	}
-	for k := range allowedLiterals {
-		require.True(t, seen[k], "allowedLiterals entry %s is unused: delete it", k)
+	for k := range allowedTypes {
+		require.True(t, seen[k], "allowedTypes entry %s is unused: delete it", k)
 	}
+}
+
+func TestServerMCP_should_HaveNoNonTestSourceInSubdirectories_When_Scanned(t *testing.T) {
+	t.Parallel()
+	var nested []string
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && path != "." {
+			// The scan and the depguard row are flat; a subpackage needs both extended first.
+			ents, _ := filepath.Glob(filepath.Join(path, "*.go"))
+			for _, e := range ents {
+				if !strings.HasSuffix(e, "_test.go") {
+					nested = append(nested, e)
+				}
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Empty(t, nested, "single-root guard and isolate_server_mcp only cover server/mcp/*.go")
 }
 
 // TestSingleRootScanner_should_FlagEachConstructionShape_When_GivenMutants proves the scanner, not
 // just the tree: each case is a mutant of the real source and must be seen.
 func TestSingleRootScanner_should_FlagEachConstructionShape_When_GivenMutants(t *testing.T) {
 	t.Parallel()
+	const sess = `"github.com/tstapler/stapler-squad/session"`
 	const hdr = "package mcp\nimport (\n"
 	cases := []struct {
 		name, imports, body string
 		want                string // substring of the finding; "" means no finding expected
 	}{
-		{"session ctor", `"github.com/tstapler/stapler-squad/session"`, "var _ = session.NewStorage", "session.NewStorage"},
+		{"session ctor", sess, "var _ = session.NewStorage", "session.NewStorage"},
 		{"services ctor", `"github.com/tstapler/stapler-squad/server/services"`, "func f() { _ = services.NewSessionService() }", "services.NewSessionService"},
 		{"github ctor", `"github.com/tstapler/stapler-squad/github"`, "func f() { _ = github.NewUserPRCache() }", "github.NewUserPRCache"},
-		{"nested closure", `"github.com/tstapler/stapler-squad/session"`, "func f() { go func() { func() { _ = session.NewThing() }() }() }", "session.NewThing"},
+		{"nested closure", sess, "func f() { go func() { func() { _ = session.NewThing() }() }() }", "session.NewThing"},
 		{"aliased import", `gh "github.com/tstapler/stapler-squad/github"`, "var _ = gh.NewUserPRCache", "github.NewUserPRCache"},
 		{"dot import", `. "github.com/tstapler/stapler-squad/session"`, "var _ = NewStorage", "dot import"},
-		{"struct literal", `"github.com/tstapler/stapler-squad/session"`, "var _ = &session.Storage{}", "session.Storage"},
+		{"struct literal", sess, "var _ = &session.Storage{}", "session.Storage"},
 		{"new builtin", `"github.com/tstapler/stapler-squad/server/services"`, "var _ = new(services.SessionService)", "services.SessionService"},
+		{"elided slice of pointers", sess, "var _ = []*session.Storage{{}}", "elided literal of concrete type"},
+		{"elided map value", sess, `var _ = map[string]session.Storage{"a": {}}`, "elided literal of concrete type"},
+		{"elided map key", sess, `var _ = map[session.Storage]int{{}: 1}`, "elided literal of concrete type"},
+		{"elided nested", sess, "var _ = [][]session.Storage{{{}}}", "elided literal of concrete type"},
+		{"generic literal", sess, "var _ = session.Foo[int]{}", "session.Foo"},
+		{"generic multi-arg literal", sess, "var _ = &session.Foo[int, string]{}", "session.Foo"},
+		{"zero-value var", sess, "var x session.Storage", "zero-value declaration"},
+		{"zero-value var in func", `"github.com/tstapler/stapler-squad/session/instance"`, "func f() { var y instance.Instance; _ = y }", "instance.Instance"},
+		{"event bus literal", `"github.com/tstapler/stapler-squad/pkg/events"`, "var _ = &events.EventBus{}", "events.EventBus"},
+		{"config literal", `"github.com/tstapler/stapler-squad/config"`, "var _ = config.Config{}", "config.Config"},
 		{"allowed value ctor", `"github.com/tstapler/stapler-squad/github"`, "var _ = github.NewRepoRef", ""},
-		{"shadowed import name", `"github.com/tstapler/stapler-squad/session"`, "func f(session struct{ NewX func() }) { session.NewX() }", ""},
-		{"method on value (known blind spot)", `"github.com/tstapler/stapler-squad/session"`, "func f(s *session.Storage) { _ = s.NewThing() }", ""},
+		{"allowed value literal", `"github.com/tstapler/stapler-squad/github"`, "var _ = github.RepoRef{}", ""},
+		{"value-only package literal", `"github.com/tstapler/stapler-squad/session/domain"`, "var _ = domain.GuidanceRequest{}", ""},
+		{"pointer var is not a construction", sess, "var x *session.Storage", ""},
+		{"param and field are not constructions", sess, "type h struct{ s session.Storage }\nfunc f(s session.Storage) {}", ""},
+		{"shadowed import name", sess, "func f(session struct{ NewX func() }) { session.NewX() }", ""},
+		{"method on value (known blind spot)", sess, "func f(s *session.Storage) { _ = s.NewThing() }", ""},
+		{"non-New ctor (known blind spot)", sess, "var _ = session.OpenStorage", ""},
+		{"alias (known blind spot)", sess, "type X = session.Storage\nvar _ = X{}", ""},
 		{"third-party ctor (out of scope)", `mcpserver "github.com/mark3labs/mcp-go/server"`, "var _ = mcpserver.NewMCPServer", ""},
 	}
 	for _, tc := range cases {
@@ -235,7 +354,7 @@ func TestSingleRootScanner_should_FlagEachConstructionShape_When_GivenMutants(t 
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, "m.go", hdr+tc.imports+"\n)\n"+tc.body+"\n", 0)
 			require.NoError(t, err)
-			got := scanFile(fset, f, "m.go", allowedConstructors, allowedLiterals)
+			got := scanFile(fset, f, "m.go", allowedConstructors, allowedTypes)
 			if tc.want == "" {
 				require.Empty(t, got)
 				return
