@@ -60,7 +60,7 @@ func NewWakeMetrics() *wakes.Metrics { return wakes.NewMetrics() }
 
 // mcpCoreOptions is the HTTP MCP core's whole CoreOption set.
 func mcpCoreOptions(deps *ServerDependencies) []servermcp.CoreOption {
-	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps), servermcp.WithWorktreeOpener(NewMCPWorktreeOpener())})
+	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps), servermcp.WithWorktreeOpener(NewMCPWorktreeOpener()), servermcp.WithGitHub(NewMCPGitHub())})
 }
 
 // The real worktree must keep satisfying the MCP tools' port.

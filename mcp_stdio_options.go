@@ -16,6 +16,7 @@ func stdioMCPOptions(storage *session.Storage) []mcpserver.CoreOption {
 		mcpserver.WithTrackerRefParser(server.NewTrackerRefParser()),
 		mcpserver.WithWakeMetrics(server.NewWakeMetrics()),
 		mcpserver.WithWorktreeOpener(server.NewMCPWorktreeOpener()),
+		mcpserver.WithGitHub(server.NewMCPGitHub()),
 	}
 }
 

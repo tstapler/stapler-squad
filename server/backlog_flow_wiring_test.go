@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"go/ast"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -122,6 +124,27 @@ func TestMCPCoreOptions_should_InjectWorktreeOpener(t *testing.T) {
 	wt := open(dir, dir, "s", "feat", "")
 	require.NotNil(t, wt)
 	assert.Equal(t, "feat", wt.GetBranchName(), "the opener must build the real git worktree")
+}
+
+func TestMCPCoreOptions_should_InjectGitHub(t *testing.T) {
+	t.Parallel()
+	assert.NotNil(t, servermcp.GitHubFromOptions(mcpCoreOptions(&ServerDependencies{})...), "the HTTP MCP core must receive the GitHub port")
+}
+
+// Serial: SetGhBaseURLForTest and GITHUB_TOKEN are process-global.
+func TestNewMCPGitHub_should_ResolveLoginThroughGitHubPackage(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/user", r.URL.Path)
+		_, _ = w.Write([]byte(`{"login":"tstapler"}`))
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(githubpkg.SetGhBaseURLForTest(ts.URL + "/"))
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+
+	got, err := NewMCPGitHub().GetCurrentUserLogin(context.Background(), "")
+
+	require.NoError(t, err)
+	assert.Equal(t, "tstapler", got)
 }
 
 func TestNewMCPWorktreeOpener_should_ReturnNilInterface_When_PathsEmpty(t *testing.T) {

@@ -30,6 +30,8 @@ type coreConfig struct {
 	wakeMetrics *wakes.Metrics
 	// openWorktree builds worktrees for the VCS and stuck-report tools; nil reports them unavailable.
 	openWorktree WorktreeOpener
+	// github is the GitHub client for the issue/PR/commit tools; nil reports GitHub unavailable.
+	github GitHub
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }
