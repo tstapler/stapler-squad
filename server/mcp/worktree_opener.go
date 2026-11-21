@@ -34,10 +34,6 @@ func stuckReportCheckerFactory(o WorktreeOpener) func(repoPath string) stuckRepo
 		return nil
 	}
 	return func(repoPath string) stuckReportPRChecker {
-		wt := o(repoPath, repoPath, "", "", "")
-		if wt == nil {
-			return nil
-		}
-		return wt
+		return o(repoPath, repoPath, "", "", "")
 	}
 }

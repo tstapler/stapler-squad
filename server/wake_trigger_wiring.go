@@ -63,6 +63,9 @@ func mcpCoreOptions(deps *ServerDependencies) []servermcp.CoreOption {
 	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps), servermcp.WithWorktreeOpener(NewMCPWorktreeOpener())})
 }
 
+// The real worktree must keep satisfying the MCP tools' port.
+var _ servermcp.Worktree = (*git.GitWorktree)(nil)
+
 // NewMCPWorktreeOpener is the production WorktreeOpener the HTTP and stdio MCP
 // cores share. It returns a nil interface, not a typed-nil, for unusable paths.
 func NewMCPWorktreeOpener() servermcp.WorktreeOpener {
