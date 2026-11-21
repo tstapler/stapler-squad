@@ -359,7 +359,7 @@ type backlogHandlers struct {
 	// item wedged in "review" forever — see submitReviewVerdict). Optional;
 	// nil means the eager transition is skipped and the item falls back to
 	// the pre-existing session-exit/sweep paths. The same
-	// session.AutoReopenSpawner *services.BacklogService already implements
+	// reviewgate.AutoReopenSpawner *backlogsvc.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
 	autoReopener AutoReopener
 

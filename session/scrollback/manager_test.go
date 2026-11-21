@@ -42,6 +42,26 @@ func TestLastEntrySequence_should_ReturnLastOfFirstLimitEntries(t *testing.T) {
 	}
 }
 
+// After the ring evicts old entries the sequence is not the entry count: limit N
+// reports the Nth retained entry's sequence.
+func TestLastEntrySequence_should_ReportRetainedSequence_When_RingEvictedOldEntries(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultScrollbackConfig()
+	cfg.StoragePath = t.TempDir()
+	cfg.FlushInterval = 999999999
+	cfg.MaxLines = 3
+	m := NewScrollbackManager(cfg)
+	t.Cleanup(func() { _ = m.Close() })
+	appendN(t, m, "sess1", 5) // retained sequences 3, 4, 5
+
+	if got := m.LastEntrySequence("sess1", 10); got != 5 {
+		t.Errorf("limit above retained: got %d, want 5", got)
+	}
+	if got := m.LastEntrySequence("sess1", 2); got != 4 {
+		t.Errorf("limit below retained: got %d, want 4", got)
+	}
+}
+
 func TestLastEntrySequence_should_ReturnZero_When_SessionHasNoEntries(t *testing.T) {
 	t.Parallel()
 	m := newTestManager(t)

@@ -12,3 +12,12 @@ var (
 	_ servermcp.TerminalScrollback = (*scrollback.ScrollbackManager)(nil)
 	_ servermcp.AutoReopener       = (*backlogsvc.BacklogService)(nil)
 )
+
+// mcpAutoReopener returns a nil interface for a nil service: boxing the nil
+// pointer would make the handler's `autoReopener != nil` guard true and panic.
+func mcpAutoReopener(svc *backlogsvc.BacklogService) servermcp.AutoReopener {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}

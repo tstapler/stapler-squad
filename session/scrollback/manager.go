@@ -365,8 +365,9 @@ type ScrollbackStats struct {
 	NewestSequence uint64
 }
 
-// LastEntrySequence returns the sequence of the last entry among the first limit
-// entries from sequence 0, or 0 when there are none or the read fails.
+// LastEntrySequence returns the sequence of the last of the first limit retained
+// entries (the Nth retained entry once the ring has dropped old ones, not N), or 0
+// when there are none or the read fails.
 func (m *ScrollbackManager) LastEntrySequence(sessionID string, limit int) uint64 {
 	entries, err := m.GetScrollback(sessionID, 0, limit)
 	if err != nil || len(entries) == 0 {

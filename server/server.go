@@ -35,7 +35,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
@@ -1242,16 +1241,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	//
 	// deps.BacklogService is nil-guarded here (mirroring the other three
 	// nil-checks on this same field in this function) rather than passed
-	// directly: boxing a nil *services.BacklogService straight into the
-	// session.AutoReopenSpawner interface parameter would produce a non-nil
+	// directly (see mcpAutoReopener): boxing a nil *backlogsvc.BacklogService
+	// straight into the interface parameter would produce a non-nil
 	// interface value around a nil pointer — submitReviewVerdict's own
 	// `h.autoReopener != nil` guard would then read true, and calling
 	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
 	// being skipped.
-	var autoReopener reviewgate.AutoReopenSpawner
-	if deps.BacklogService != nil {
-		autoReopener = deps.BacklogService
-	}
+	autoReopener := mcpAutoReopener(deps.BacklogService)
 	// Reuses the same liveness primitive wired onto BacklogLifecycleListener
 	// (see newSessionLivenessChecker's doc comment in dependencies.go) so
 	// link_session_to_item's exclusivity check doesn't trust a stale
