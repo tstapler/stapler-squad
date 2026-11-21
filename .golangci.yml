@@ -409,6 +409,44 @@ linters:
             - "!**/*_test.go"
           allow:
             - $gostd
+        # server/mcp is not a composition root (owner decision Q5): the set below is the import set measured
+        # after M1-M5, so a new edge fails. The concrete-type edges (session, session/instance, server/services,
+        # server/services/backlogsvc, server/services/backlogflow, github, session/git, session/flow,
+        # session/backlog/pipeline) shrink as M4b lands (project_plans/package-split-ocp/mcp-single-root-plan.md).
+        # "No New* of a concrete type" is TestServerMCP_should_NotConstructConcreteDependencies_* in server/mcp.
+        isolate_server_mcp:
+          list-mode: strict
+          files:
+            - "**/server/mcp/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - connectrpc.com/connect
+            - github.com/google/uuid
+            - github.com/mark3labs/mcp-go/client
+            - github.com/mark3labs/mcp-go/client/transport
+            - github.com/mark3labs/mcp-go/mcp
+            - github.com/mark3labs/mcp-go/server
+            - google.golang.org/protobuf/proto
+            - google.golang.org/protobuf/reflect/protoreflect
+            - google.golang.org/protobuf/types/known/timestamppb
+            - github.com/tstapler/stapler-squad/config
+            - github.com/tstapler/stapler-squad/gen/proto/go/session/v1
+            - github.com/tstapler/stapler-squad/github
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/pkg/events
+            - github.com/tstapler/stapler-squad/pkg/localtoken
+            - github.com/tstapler/stapler-squad/server/services
+            - github.com/tstapler/stapler-squad/server/services/backlogflow
+            - github.com/tstapler/stapler-squad/server/services/backlogsvc
+            - github.com/tstapler/stapler-squad/server/wakes
+            - github.com/tstapler/stapler-squad/session
+            - github.com/tstapler/stapler-squad/session/backlog/pipeline
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/domain/backlogdto
+            - github.com/tstapler/stapler-squad/session/flow
+            - github.com/tstapler/stapler-squad/session/git
+            - github.com/tstapler/stapler-squad/session/instance
         no_ioutil:
           files:
             - "$all"

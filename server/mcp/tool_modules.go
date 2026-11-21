@@ -30,8 +30,9 @@ func WithToolModules(mods ...ToolModule) CoreOption {
 	return func(c *coreConfig) { c.extraModules = append(c.extraModules, mods...) }
 }
 
-// coreDeps carries NewCore's positional arguments to the module constructors,
-// the one place server/mcp acts as a second composition root.
+// coreDeps carries NewCore's injected arguments to the module constructors. It only
+// assembles handlers over deps built in server/dependencies.go; server/mcp is not a
+// composition root (see single_root_guard_test.go).
 type coreDeps struct {
 	store          session.InstanceStore
 	svc            *services.SessionService
