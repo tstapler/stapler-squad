@@ -447,8 +447,8 @@ linters:
             - github.com/tstapler/stapler-squad/session/flow
             - github.com/tstapler/stapler-squad/session/git
             - github.com/tstapler/stapler-squad/session/instance
-          # depguard allow entries match by prefix, so `server/services` above would still admit its
-          # sub-packages: a retired edge needs its own deny line to stay retired.
+          # Belt and braces: this row's allow matching is order-dependent (verified, mechanism not read),
+          # so the exact import set in server/mcp/import_set_guard_test.go is the dependable control.
           deny:
             - pkg: github.com/tstapler/stapler-squad/server/services/backlogflow
               desc: "M4b-1: the flow tools take the FlowService port; the composition root supplies the service"

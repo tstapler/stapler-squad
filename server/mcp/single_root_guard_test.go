@@ -54,17 +54,15 @@ import (
 //   - GOOS-specific files: depguard on linux does not see imports in other GOOS files, though
 //     this scan parses every non-test file in the directory regardless of build tags.
 //
-// The import side of the rule is the `isolate_server_mcp` depguard row in .golangci.yml. It
-// rejects new imports but, unlike leaf rows, nothing forces its list to stay free of unused
-// entries; tightness is kept by the plan's `go list` counts.
+// The import side of the rule is the exact set in import_set_guard_test.go (two-sided, so unused
+// rows fail too). The `isolate_server_mcp` depguard row is belt and braces: its matching is
+// order-dependent and not a reliable control.
 
 const modulePrefix = "github.com/tstapler/stapler-squad/"
 
-// allowedConstructors holds every in-module pkg.New* that non-test server/mcp may reference; each
-// is a value-type or event constructor, none a store, service or client. No M4b-deferred type is
-// constructed here: M4b's concrete types (SessionService, Storage, UserPRCache, BacklogService,
-// InstanceStore, EventBus; BacklogFlowService left this list in M4b-1) are only named in signatures and fields and arrive
-// already built.
+// allowedConstructors holds every in-module pkg.New* that non-test server/mcp may reference: value
+// and event constructors only, never a store, service or client. M4b's concrete types arrive already
+// built and are only named in signatures and fields.
 var allowedConstructors = map[string]string{
 	modulePrefix + "github.NewRepoRef":                 "value object parsed from request data",
 	modulePrefix + "github.NewRepoRefWithHost":         "value object parsed from request data",
