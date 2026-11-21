@@ -68,7 +68,7 @@ Note: The setter calls above both register the call with Warren AND call the set
 
 ### Story 1.3 — Wire `BuildRuntimeDeps` (Phase 3, synchronous setters only)
 
-**Ordering (owner decision Q4, 2026-11-20):** start this story only after the SRV-wiring PRs in `project_plans/package-split-ocp/roadmap.md` have merged. SRV-wiring splits `BuildRuntimeDeps` into typed step functions first, and the Warren wire block is added on top of that shape.
+**Ordering (owner decision Q4, 2026-11-20):** start this story only after the SRV-wiring PRs in `project_plans/package-split-ocp/roadmap.md` have merged (satisfied 2026-11-20: SRV-wiring is complete per the roadmap). SRV-wiring splits `BuildRuntimeDeps` into typed step functions first, and the Warren wire block is added on top of that shape.
 
 Phase 3 has 10 synchronous setter calls at the top level and 2 goroutine-internal setter calls. Only the synchronous setters can be tracked by Warren.
 
