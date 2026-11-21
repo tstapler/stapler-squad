@@ -37,7 +37,7 @@ func TestNewCore_should_ReadTerminalOutputFromInjectedScrollback(t *testing.T) {
 	t.Parallel()
 	fake := &fakeTerminalScrollback{seq: 3, data: []byte("FROM_FAKE_PORT\n")}
 	store := &stubStore{instances: []*instance.Instance{{Title: "s1"}}}
-	s := NewCore(store, nil, fake, nil, nil, nil, nil, nil, nil, nil)
+	s := NewCore(store, nil, fake, nil, nil, nil, nil, nil, nil)
 
 	res, err := s.GetTool("read_session_output").Handler(context.Background(), makeToolReq(map[string]interface{}{"session_id": "s1"}))
 
@@ -64,7 +64,7 @@ func TestNewCore_should_HandInjectedAutoReopenerToReviewVerdicts(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	itemID, sessUUID := setupReviewSession(t, storage)
 	reopener := &fakeAutoReopenSpawner{}
-	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, reopener, nil, nil)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, reopener, nil, nil)
 
 	_, err := s.GetTool("submit_review_verdict").Handler(WithSessionUUID(context.Background(), sessUUID), makeToolReq(map[string]interface{}{
 		"item_id":  itemID,

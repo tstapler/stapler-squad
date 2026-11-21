@@ -97,6 +97,7 @@ go_test(
         "diagnose_role_gate_test.go",
         "feature_flag_test.go",
         "github_port_test.go",
+        "github_userpr_port_test.go",
         "identity_context_test.go",
         "import_set_guard_test.go",
         "logging_test.go",

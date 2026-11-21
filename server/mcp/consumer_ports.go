@@ -5,6 +5,7 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 )
 
 // TerminalScrollback is the slice of the scrollback manager the terminal tools
@@ -33,4 +34,11 @@ type FlowService interface {
 	ListDeadlockCandidates(context.Context, *connect.Request[sessionv1.ListDeadlockCandidatesRequest]) (*connect.Response[sessionv1.ListDeadlockCandidatesResponse], error)
 	ListThrashEpisodes(context.Context, *connect.Request[sessionv1.ListThrashEpisodesRequest]) (*connect.Response[sessionv1.ListThrashEpisodesResponse], error)
 	GetItemFlowTimeline(context.Context, *connect.Request[sessionv1.GetItemFlowTimelineRequest]) (*connect.Response[sessionv1.GetItemFlowTimelineResponse], error)
+}
+
+// UserPRSource is the slice of the user PR cache the GitHub PR tools read.
+// *githubpkg.UserPRCache and a test fake are its two implementations.
+type UserPRSource interface {
+	GetAll() []githubpkg.UserPR
+	GetCachedLogins() []string
 }

@@ -78,7 +78,7 @@ func TestRegisterIdentityGatedTools_should_RegisterAllFiveOnTheCoreServer(t *tes
 	t.Parallel()
 	storage, err := session.NewStorageWithRepository(session.NewTestEntRepository(t))
 	require.NoError(t, err)
-	core := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil)
+	core := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil)
 	for _, name := range newToolNames {
 		assert.True(t, refusesUnverified(t, core, name), name)
 	}

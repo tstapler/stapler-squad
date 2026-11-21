@@ -409,7 +409,7 @@ func TestReportProgress_should_ReturnActionableHint_When_SessionNotLinked(t *tes
 
 func TestRegisterBacklogTools_should_RegisterLinkSessionToItemTool_When_ToolsRegistered(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil)
 	tools := s.ListTools()
 	linkTool, hasLink := tools["link_session_to_item"]
 	_, hasGetLinked := tools["get_linked_item"]

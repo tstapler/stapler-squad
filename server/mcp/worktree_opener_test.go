@@ -44,7 +44,7 @@ func recordingOpener(f *fakeWorktree) WorktreeOpener {
 func newCoreWithStorage(t *testing.T, store session.InstanceStore, opts ...CoreOption) (*session.Storage, func(name string, args map[string]interface{}) map[string]any) {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	s := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, nil, opts...)
+	s := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, opts...)
 	return storage, func(name string, args map[string]interface{}) map[string]any {
 		tool := s.GetTool(name)
 		require.NotNil(t, tool, "tool %q must be registered", name)
@@ -111,7 +111,7 @@ func prPendingItem(t *testing.T, storage *session.Storage) string {
 func stuckReportText(t *testing.T, opts ...CoreOption) string {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil, opts...)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, opts...)
 	id := prPendingItem(t, storage)
 	res, err := s.GetTool("get_backlog_stuck_report").Handler(context.Background(), makeToolReq(map[string]interface{}{"item_id": id}))
 	require.NoError(t, err)
