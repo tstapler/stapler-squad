@@ -13,6 +13,7 @@ var (
 	_ servermcp.TerminalScrollback = (*scrollback.ScrollbackManager)(nil)
 	_ servermcp.AutoReopener       = (*backlogsvc.BacklogService)(nil)
 	_ servermcp.UserPRSource       = (*githubpkg.UserPRCache)(nil)
+	_ servermcp.BacklogRPC         = (*backlogsvc.BacklogService)(nil)
 )
 
 // mcpAutoReopener returns a nil interface for a nil service: boxing the nil
@@ -31,4 +32,13 @@ func mcpUserPRSource(cache *githubpkg.UserPRCache) servermcp.UserPRSource {
 		return nil
 	}
 	return cache
+}
+
+// mcpBacklogRPC returns a nil interface for a nil service: boxing the nil
+// pointer would defeat the handlers' `backlogSvc == nil` guards and panic.
+func mcpBacklogRPC(svc *backlogsvc.BacklogService) servermcp.BacklogRPC {
+	if svc == nil {
+		return nil
+	}
+	return svc
 }

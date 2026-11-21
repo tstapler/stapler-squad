@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -65,7 +66,7 @@ func TestCheckCrossHostClaimTool_should_ReturnCheckedTrue_When_VerdictUnclaimed(
 }
 
 func TestCheckCrossHostClaimTool_should_ReportDisabledNotClear_When_FeatureFlagOff(t *testing.T) {
-	m := callCheckClaim(t, fakeClaimCheckService{err: backlogsvc.ErrCrossHostClaimDedupDisabled},
+	m := callCheckClaim(t, fakeClaimCheckService{err: domain.ErrCrossHostClaimDedupDisabled},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
 
 	assert.Equal(t, false, m["claimed"])

@@ -6,6 +6,8 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // TerminalScrollback is the slice of the scrollback manager the terminal tools
@@ -22,6 +24,23 @@ type TerminalScrollback interface {
 // two implementations.
 type AutoReopener interface {
 	AutoReopenAfterFailedReview(ctx context.Context, itemID string) error
+}
+
+// BacklogRPC is the slice of the backlog service the backlog, claim and stuck-report
+// tools call. *backlogsvc.BacklogService and a test fake are its two implementations.
+// It satisfies claimCheckService, which the claim tool takes as its own narrower port.
+type BacklogRPC interface {
+	LookupCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error)
+	MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool
+	IsTriageLive(itemID string) bool
+	EnterpriseHosts() []string
+	BlockedCleanups() []session.BlockedItem
+	ListBacklogItems(context.Context, *connect.Request[sessionv1.ListBacklogItemsRequest]) (*connect.Response[sessionv1.ListBacklogItemsResponse], error)
+	AttachSessionToItem(context.Context, *connect.Request[sessionv1.AttachSessionToItemRequest]) (*connect.Response[sessionv1.AttachSessionToItemResponse], error)
+	AddBacklogItemDependency(context.Context, *connect.Request[sessionv1.AddBacklogItemDependencyRequest]) (*connect.Response[sessionv1.AddBacklogItemDependencyResponse], error)
+	RemoveBacklogItemDependency(context.Context, *connect.Request[sessionv1.RemoveBacklogItemDependencyRequest]) (*connect.Response[sessionv1.RemoveBacklogItemDependencyResponse], error)
+	TriggerTriage(context.Context, *connect.Request[sessionv1.TriggerTriageRequest]) (*connect.Response[sessionv1.TriggerTriageResponse], error)
+	TransitionBacklogItemStatus(context.Context, *connect.Request[sessionv1.TransitionBacklogItemStatusRequest]) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error)
 }
 
 // FlowService is the slice of the flow-observability service the flow tools

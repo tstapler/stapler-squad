@@ -16,5 +16,9 @@ var ErrLaunchNotWired = errors.New("launch command not wired")
 // ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
 var ErrInstanceDataNotFound = errors.New("instance data not found")
 
+// ErrCrossHostClaimDedupDisabled is returned by the backlog service's LookupCrossHostClaim while
+// the cross_host_claim_dedup feature flag is off.
+var ErrCrossHostClaimDedupDisabled = errors.New("cross_host_claim_dedup is disabled")
+
 // ErrConflict is returned when an operation would violate a uniqueness constraint.
 var ErrConflict = errors.New("conflict")

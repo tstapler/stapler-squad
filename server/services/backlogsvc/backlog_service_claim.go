@@ -121,15 +121,11 @@ func (s *BacklogService) gateOnClaim(ctx context.Context, c preCreateClaimCheck)
 	return claimGateResult{}, nil
 }
 
-// ErrCrossHostClaimDedupDisabled is returned by LookupCrossHostClaim while the
-// cross_host_claim_dedup feature flag is off.
-var ErrCrossHostClaimDedupDisabled = errors.New("cross_host_claim_dedup is disabled")
-
 // LookupCrossHostClaim runs the same live claim check the import and create paths
 // use, for the check_cross_host_claim MCP tool and the CheckCrossHostClaim RPC.
 func (s *BacklogService) LookupCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error) {
 	if !s.crossHostClaimDedupEnabled() {
-		return services.NewUnclaimedVerdict(), ErrCrossHostClaimDedupDisabled
+		return services.NewUnclaimedVerdict(), domain.ErrCrossHostClaimDedupDisabled
 	}
 	return s.checker().CheckClaim(ctx, externalURL)
 }
