@@ -8,7 +8,8 @@ package featureflags
 import (
 	"fmt"
 	"slices"
-	"sync/atomic"
+
+	"github.com/tstapler/stapler-squad/config"
 )
 
 // Spec is the static description of one feature flag.
@@ -70,18 +71,12 @@ func (r *Registry) Default(name string) bool {
 	return s.Default
 }
 
-var current atomic.Pointer[Registry]
+// Enabled resolves name against cfg, falling back to the registered default when cfg has no explicit value.
+func (r *Registry) Enabled(cfg *config.Config, name string) bool {
+	return cfg.GetFeatureFlagWithDefault(name, r.Default(name))
+}
 
-// SetCurrent installs the process-wide registry that receiver-less callers (FeatureFlagDefault) resolve against.
-// Call it once at startup from the composition root; tests install their own through the same function.
-func SetCurrent(r *Registry) { current.Store(r) }
-
-// Current returns the registry installed by SetCurrent. It panics when none was installed so a production path
-// that forgot the startup wiring fails loudly instead of silently resolving every default to false.
-func Current() *Registry {
-	r := current.Load()
-	if r == nil {
-		panic("featureflags: Current() called before SetCurrent; the composition root must install the registry")
-	}
-	return r
+// EnabledScoped resolves name for scope against cfg: the scope override, else the global value, else the default.
+func (r *Registry) EnabledScoped(cfg *config.Config, name, scope string) bool {
+	return cfg.GetFeatureFlagScoped(name, scope, r.Default(name))
 }

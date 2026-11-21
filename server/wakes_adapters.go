@@ -106,7 +106,7 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 	} else {
 		data, err := o.storage.FindInstanceDataByID(sessionUUID)
 		switch {
-		case errors.Is(err, session.ErrInstanceDataNotFound):
+		case errors.Is(err, domain.ErrInstanceDataNotFound):
 			return wakes.OwnerFacts{}, nil
 		case err != nil:
 			return wakes.OwnerFacts{}, err

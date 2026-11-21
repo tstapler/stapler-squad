@@ -22,7 +22,7 @@ import (
 func newGatedFlagService(t *testing.T) *SessionService {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	svc := newGatedSessionService(svctest.CreateTestStorage(t))
+	svc := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	t.Cleanup(svc.Shutdown)
 	return svc
 }
@@ -38,7 +38,7 @@ func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, en
 
 func TestGateFlag_ShouldBeRegisteredDefaultOnWithStatsWriterDetail_WhenNoWriterRuns(t *testing.T) {
 	svc := newGatedFlagService(t)
-	require.True(t, FeatureFlagDefault(config.HiddenSessionGateFeatureFlag))
+	require.True(t, testFlagRegistry().Default(config.HiddenSessionGateFeatureFlag))
 	assert.True(t, svc.DeliveryGate().Flags().Enabled(), "the cache and the registry agree on the default")
 	assert.Equal(t, statsWriterNotRunning,
 		statusDetailOf(t, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag))
@@ -74,7 +74,7 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	svctest.WithIsolatedStateDir(t)
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
-	svc := newGatedSessionService(svctest.CreateTestStorage(t))
+	svc := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	svc.DeliveryGate().Stats().SetWriterRunning(true)
 
 	var flipErr error

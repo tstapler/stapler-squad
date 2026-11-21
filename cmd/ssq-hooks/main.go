@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func main() {
@@ -727,7 +728,7 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 func recordResult(storage *session.Storage, payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, durationMs int64) {
 	cmd, _ := payload.ToolInput["command"].(string)
 
-	entry := session.AnalyticsData{
+	entry := domain.AnalyticsData{
 		ID:             uuid.New().String(),
 		ToolName:       payload.ToolName,
 		CommandPreview: cmd,

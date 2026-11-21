@@ -176,13 +176,13 @@ Full mapping, recipes and status: `docs/explanation/package-layout.md`. The rule
 
 - **Dependency rule.** Dependencies point downward: `server/` -> `session/` -> `config/`/`pkg/`. `session` never imports `server`; `pkg/` never imports `session` (except `pkg/events`). Depguard (`.golangci.yml`) and `tools/bzl/scoping/boundaries.txt` enforce this.
 - **Layers and patterns.** Domain model and value types in `session/domain`; aggregates like `session.Instance` read via `Snapshot()`; persistence is Repository + Data Mapper (`Storage`/`EntRepository`, ent rows converted to DTOs only in `ent_repository_*.go`); use cases are the Service Layer (`server/services`, `session/backlog`); the ConnectRPC API is the Remote Facade with proto messages as DTOs; git, tmux, GitHub and push sit behind Gateway/Adapter ports; `server/dependencies.go` is the one composition root that names concrete types.
-- **Where new code goes.** A new package under the owning layer (`session/<concept>`, `server/<concept>`), not another file in `session/` or `server/services/` (about 81k and 74k lines, being split: `project_plans/package-split-ocp/`). A leaf is imported only by the composition root and tests.
+- **Where new code goes.** A new package under the owning layer (`session/<concept>`, `server/<concept>`), not another file in `session/` or `server/services/` (top-level non-test lines today: about 23.4k and 70.2k, being split: `project_plans/package-split-ocp/`). A leaf is imported by its owning hub (for embedded stores, `session.EntRepository`), the composition root and tests, never by a sibling leaf except where its `isolate_` row lists it; leaf-extraction standards and the pre-push checks are in `.claude/rules/leaf-packages.md` (auto-loads under `session/`, `server/services/`).
 - **Interfaces.** Define them where they are consumed; add one only for a real consumer and either two implementations (adapter + fake) or a genuine test seam (`interface-pollution-checklist`).
 - **Open-closed.** A new tracker, migration, stuck detector, process backend or history adapter is a new file plus one registration at the composition root, never another `case` in a kind switch.
 - **Persistence.** Return domain DTOs, wrap `ent.IsNotFound` as `session.ErrNotFound`, and import `session/ent` only where depguard allows it.
 - **No lasting type aliases** to preserve old import paths; moves are `git mv` plus a codemod, one cluster per PR, with `make gazelle` clean and any budget raise carried in a `scoping-budget-raise:` commit line.
 
-Status: the hub types (`Instance`, `Storage`, `EntRepository`, `SessionService`) still bind most of `session` and `server/services`; persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged plan to change that.
+Status: the `Instance` family (`session/instance`) and the eleven `EntRepository`-embedded stores (`session/instancestore`, `session/backlogstore`, `sessionpr`, `guidancestore`, `webhookstore`, `wakestore`, `markerstore`, `shellstore`, `projectstore`, `rulestore`, `analyticsstore`), plus the non-embedded `session/flowstore` reader, are already leaves; `Storage`, `EntRepository` and `SessionService` still bind most of what remains in `session` and `server/services`. Next step (backlogsvc; flags stage 2 slices 1-7 have landed): `project_plans/package-split-ocp/roadmap.md`.
 
 Sessions support tag-based multi-dimensional organization with 8 grouping strategies (Category, Tag, Branch, Path, Program, Status, Session Type, None). Full reference: `docs/reference/tag-organization.md`
 
@@ -349,7 +349,7 @@ list itself shows just a one-line description the rest of the time. See the
 cover: a guardrail scoped to specific file paths via glob frontmatter
 (`globs: ["session/instance/**"]`), auto-loaded only when Claude touches a
 matching path rather than every session — the context-cost objection above
-doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
+doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md` and `leaf-packages.md`.
 
 ## Reference Documents Index
 

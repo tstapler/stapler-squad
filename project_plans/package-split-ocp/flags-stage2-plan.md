@@ -1,0 +1,80 @@
+# FLAGS-1 stage 2: inject the flag Registry everywhere, delete the global
+
+Owner decision (roadmap Q3, 2026-11-19): inject `*featureflags.Registry`; no once-set package-level accessor. Stage 1 left
+exactly one such accessor, which this plan removes.
+
+## Measured state (origin/main 0b183b1d3)
+
+The global is `featureflags.current` (`atomic.Pointer`) behind `SetCurrent` / `Current()` in
+`server/services/featureflags/registry.go`. Two reads reach it: `featureflags.Current()` directly and
+`services.FeatureFlagDefault(name)` (`feature_flag_service.go`), which is `Current().Default(name)`.
+
+| Reader | Where | Has a carrier? |
+|---|---|---|
+| `FeatureFlagService` methods (list, update, persistScoped, persistAndApply, statusDetailFor) | `feature_flag_service.go`, `feature_flag_mutation.go` | yes, it is the struct (slice 1 done) |
+| `parseFlagOp`, `clearTurnsKindOn`, `autonomyFlagStatusDetail` | same | called only from the service methods (slice 1 threads `reg`) |
+| `globalOffStatusDetail(cfg)` | `feature_flag_mutation.go` | no, passed as a func value to `AddConfigStatusDetailSource` |
+| `wireNotificationActionFlags` | `feature_flags_notification_actions.go` | yes, takes `*FeatureFlagService` |
+| `scoped`, `dispatcherRunning`, `resolveAnswerQuestion` (+ `effectiveFlag`) | `feature_flags_notification_actions.go` | no, free functions over `cfg` |
+| `ResolveAttentionFlags(cfg)` | `feature_flags_attention.go`; one prod caller, `LoadAttentionFlags` (line ~46), used by `server/attention_options.go` | no |
+| `WorkflowEngineModeFromConfig(cfg)` | `feature_flag_service.go` | no (one prod caller in the same file) |
+| `ChangelogEnabled(cfg)`, `UpdateCheckFlagEnabled(cfg)` | `update_check_service.go` | no; prod caller `server/changelog_handler.go` |
+| `SddDefaultPipelineEnabled()` | `backlog_shared.go` | no; prod caller `backlogsvc/backlog_service_lifecycle.go` |
+| `GitHubIssueProgressCommentsEnabled()`, `ProgramCLIFlagProbeEnabled()` | `backlog_github_progress_sync.go`, `feature_flag_service.go` | no |
+| `filesFlagEnabled(name)` via `FilesEditingEnabled`, `FilesViewerV2Enabled`, `FilesMergePhoneEnabled`, `FilesRangeReadEnabled`, `FilesDeltaWriteEnabled`, `FilesEditLargeEnabled` (`feature_flag_service.go:134-154`) | same file | no; the six `Files*Enabled(ctx)` wrappers are the prod entry points |
+| `currentResyncOptions()` | `server/services/wsconn/connectrpc_websocket.go:2857` (`services.FeatureFlagDefault`) | no free-function carrier; wsconn already imports `services` |
+
+Installers of the global: `BuildCoreDepsWithOptions` in `server/dependencies.go` (production); test mains in `server/services`,
+`server/services/backlogsvc`, `server/services/wsconn`, `session/inttest`. Test readers of `featureflags.Current()`: 8 existing files in `server/services` plus this PR's new
+`feature_flag_injected_registry_test.go` (4 uses; measured with `git grep -c 'featureflags.Current()' -- '*_test.go'`). Non-test uses: `BuildCoreDepsWithOptions` (`SetCurrent`), `FeatureFlagDefault` and `FeatureFlagService.reg()`'s fallback. `go list -deps ./server/services/featureflags` imports `config` only.
+
+## Slices (each one PR, no behaviour change)
+
+1. **Seam beside the global (this PR).** `Registry.Enabled(cfg, name)` and `Registry.EnabledScoped(cfg, name, scope)`;
+   `FeatureFlagService` gets an injected registry (`NewFeatureFlagServiceWithRegistry`; nil fell back to `Current()` then, historical: slice 7 made it a panic) and
+   every flag read inside the service and its mutation helpers uses it. Files: `featureflags/registry.go`,
+   `feature_flag_service.go`, `feature_flag_mutation.go`, tests. Risk: low, constructor default unchanged. Proof: services
+   test-name diff empty plus new tests; mutation checks on the seam. Rollback: revert.
+2. **Composition root owns the registry.** `BuildCoreDepsWithOptions` builds one `*Registry`, passes it to `SessionService`
+   so `NewFeatureFlagServiceWithRegistry` is used in production, and exposes it on `CoreDeps`. Still also calls `SetCurrent`.
+   Files: `server/dependencies.go`, `session_service.go` (constructor field), tests. Risk: low. Proof: `/api` GetFeatureFlags
+   golden equal before/after. **Done.** `BuildCoreDepsWithOptions` builds one `services.FlagRegistry()`, passes the same
+   instance to `SetCurrent`, to `NewSessionServiceFromConfig`/`NewSessionServiceWithEntClient` (new `flags` argument,
+   forwarded by `newGatedSessionService` to `NewFeatureFlagServiceWithRegistry`) and to `CoreDeps.FlagRegistry`;
+   `SessionService.FeatureFlagRegistry()` exposes the service's registry. Proof: `server/dependencies_flag_registry_test.go`
+   (deps registry == `Current()` == service registry, and the service keeps the injected registry after the global is replaced).
+   The three test call sites of `newGatedSessionService` (`feature_flag_gate_test.go` twice, `session_service_events_test.go` once) pass `featureflags.Current()` (unchanged behaviour). Fragility: `NewSessionService` builds a default flag service and `newGatedSessionService` swaps it, so a capture added inside `NewSessionServiceWithSearchEngine` would bind to the dropped object; slice 7 should pass the registry into the constructor and delete the swap. Test-side `NewFeatureFlagService()` has 47 occurrences in 12 files (`git grep -c 'NewFeatureFlagService()' -- '*_test.go'`).
+3. **Notification-actions and attention readers.** Convert the free functions to a small struct (`flagReader{reg}`) or
+   methods taking `reg`; `wireNotificationActionFlags` passes the service's registry. Files: `feature_flags_notification_actions*.go`,
+   `feature_flags_attention*.go`, and `server/attention_options.go` (`liveAttentionFlags` loads via `services.LoadAttentionFlags`,
+   so the cache takes the loader as a constructor argument). Risk: medium (hot poller paths, config-surface proofs). Proof: `config_surface_proof_*` tests
+   green (only the helper call syntax in `config_surface_proof_flags_test.go` changed, 4 lines).
+   **Done.** `flagReader{reg}` (nil fell back to `Current()` then, historical: slice 7 made it a panic) owns `effectiveFlag`, `effectiveAnswerQuestion`, `resolveEffectiveFlag`, `resolveStage`, `scoped`, `dispatcherRunning`, `resolveAnswerQuestion`; `wireNotificationActionFlags` seeds from `ff.reg()`. `ResolveAttentionFlags`/`LoadAttentionFlags`, `NewDescriptorBuilder`, `NewGuidanceHookMirror` and `NewNotificationActionDispatcher` take a trailing `*featureflags.Registry`; `configActionFlags` carries a `flagReader`. `server.newAttentionOptionsSource(core.FlagRegistry)` replaces the `liveAttentionFlags` global and is shared via `ServiceDeps.AttentionOptions`. Known gap: `newGatedSessionService` still calls `wireNotificationActionFlags`, which resolves `ff.reg()` eagerly (falls back to `Current()` when no registry was injected); main did the same through `FeatureFlagDefault`, and slice 7 removes the fallback. Proof: `feature_flags_reader_injected_registry_test.go`, `feature_flags_reader_threading_test.go`, `server/flag_registry_wiring_test.go`.
+4. **Per-feature readers.** `ChangelogEnabled`/`UpdateCheckFlagEnabled` (changelog handler gets the registry),
+   `SddDefaultPipelineEnabled` (backlogsvc service field), `GitHubIssueProgressCommentsEnabled`,
+   `ProgramCLIFlagProbeEnabled`, `filesFlagEnabled`, `WorkflowEngineModeFromConfig`, `globalOffStatusDetail`.
+   One package per sub-PR if the diff passes ~400 lines. Risk: medium. Proof: existing reader tests re-pointed at an
+   injected registry; `config_surface_proof_flags*` green.
+   **Done.** Every reader takes the registry and resolves it lazily through `flagReader.enabled` (nil fell back to `Current()` at read time then, historical: superseded by slice 7). `ChangelogEnabled`, `UpdateCheckFlagEnabled`, `SddDefaultPipelineEnabled`, `GitHubIssueProgressCommentsEnabled`, `ProgramCLIFlagProbeEnabled`, `WorkflowEngineModeFromConfig` and `NewWorkflowEngineModeSource` take a `*featureflags.Registry`; the six `Files*Enabled` functions became methods on `globalFilesFlags{reader}` (plus `ViewerV2`/`MergePhone`), installed by `FileService.SetFlagRegistry` from `newGatedSessionService`; `globalOffStatusDetail` is `flagReader.globalOffStatusDetail`, called from a closure so the registry is read per call. `BacklogService` gets `SetFlagRegistry` (wired from the session service in `buildBacklogService`), and `server` gates (`programCLIFlagProbeGate`, `githubProgressCommentsGate` handed to the progress-sync subscriber through the `startProgressSyncSubscriber` test seam, `registerChangelogHandlers(sessions)`) read `SessionService.InjectedFlagRegistry()` per call. Proof: `feature_flags_per_feature_readers_test.go`, `backlog_service_flag_registry_test.go`, `server/flag_registry_per_feature_wiring_test.go`; the server-side wiring (`NewServerWithDeps` changelog and update-check, the `ProbeProgram` gate, the progress-sync subscriber argument) is proven in `server/flag_registry_per_feature_wiring_test.go`, and the `server/services` readers, `SetFlagRegistry`, `newGatedSessionService` and `buildBacklogService` sites are proven in their own tests; each was mutation-checked (revert threading, a test fails). `NewWorkflowEngineModeSource` has no production caller (production builds `NewWorkflowEngineClassModeSource`, which reads config flags directly), so its threading is covered by a unit test only; `globalFilesFlags.MergePhone` has no production caller either and exists to keep the merge-phone flag covered by the config-surface proof. The wsconn and `NewFileService` gaps noted at the time of slice 4 were closed by slice 5 and slice 7 respectively.
+5. **wsconn.** `currentResyncOptions` becomes a method on the type that owns the resync call (or takes a `func(string) bool`
+   from `connectrpc_websocket.go`'s constructor). Drops wsconn's last `services.FeatureFlagDefault` use. Risk: low-medium
+   (terminal hot path; keep the config read per call). Proof: wsconn tests with an injected registry.
+   **Done.** `ConnectRPCWebSocketHandler.flags` takes `sessionService.InjectedFlagRegistry()` (nil stays nil); `currentResyncOptions(flags)` reads `flags.Enabled(config.LoadConfig(), ...)` per call and falls back to `featureflags.Current()` only at read time. `capturePaneStreamParams`/`shellStreamParams` carry `flags` and the handler resolves options through `resyncOptionsFor`/`resyncOptions()`; `answerCurrentPane` now takes the resolved `ResyncOptions`. wsconn no longer calls `services.FeatureFlagDefault`. `SkipStaleDimensionSlowPath` and `EchoResyncID` still read `config.LoadConfig().GetFeatureFlag(...)` directly, intentionally: they have no registry default, so there is nothing to inject. Proof: `resync_flags_injected_registry_test.go`.
+6. **Tests.** Replace `SetCurrent` in the four test mains and the existing `featureflags.Current()` test files (12 converted, plus 3 deliberate `Current()` tests that stay) (the new injected-registry test keeps its deliberate `Current()` comparison until slice 7 rewrites it) with a shared test
+   registry built by `services.FlagRegistry()`; mechanical.
+   **Done.** `services/flag_registry_test_helper_test.go` adds `testFlagRegistry()` (one shared, immutable `FlagRegistry()`); 12 in-package test files read it instead of `featureflags.Current()`, and wsconn's `bkfFlagWriter` injects `NewFeatureFlagServiceWithRegistry(FlagRegistry())`. The three injected-registry tests keep their deliberate `Current()` comparison until slice 7. All four test mains (`services`, `backlogsvc`, `wsconn`, `session/inttest`) must keep `SetCurrent` until slice 7, because each still reaches a production `Current()` fallback: `server/services` via `feature_flag_service.go:251` (`reg()`; e.g. `TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryClass`), `wsconn` via `connectrpc_websocket.go:~2880` (`TestConfigSurfaceProof_TerminalResyncFlags_ChangeResyncOptions`; its resync test also reads `Current()` on purpose), and `backlogsvc`/`session/inttest` via `feature_flags_notification_actions.go:91`. Proof by mutation: pointing `testFlagRegistry` at an empty registry fails 20 tests.
+7. **Delete the global and ratchet.** Remove `current`, `SetCurrent`, `Current`, `services.FeatureFlagDefault`, and the `FeatureFlagService.reg()` fallback to `Current()` (a nil registry then becomes a constructor error or panic). Add a
+   test in `featureflags` that parses the package and fails on any package-level `var` of type `*Registry` /
+   `atomic.Pointer[Registry]`, and a depguard-style grep test in `server/services` that fails on `FeatureFlagDefault(`.
+   Verify: `git grep -nE 'FeatureFlagDefault|featureflags\.Current|SetCurrent' -- '*.go'` is empty apart from the ratchet's own needle strings (split so they do not self-match). Rollback: revert (the
+   injected paths stay valid).
+   **Done.** `current`, `SetCurrent`, `Current` and `services.FeatureFlagDefault` are deleted; `git grep -nE 'FeatureFlagDefault|featureflags\.Current|SetCurrent' -- '*.go'` matches only the ratchet's own needle strings (split so they do not self-match). Nil is a programming error everywhere: `flagReader.registry()`, `NewFeatureFlagServiceWithRegistry`, and `FileService.SetFlagRegistry` panic on nil (`BacklogService.SetFlagRegistry` stays a plain setter: `NewBacklogService` seeds a default and the scoping budget has no room for a guard), and constructors that take no registry build a construction-time default `FlagRegistry()` instead (`NewFeatureFlagService`, so `NewSessionService`; `NewFileService`/`NewFileOps`; `NewBacklogService`; `NewConnectRPCWebSocketHandler` when its session service is nil). Production still injects the one registry `BuildCoreDepsWithOptions` builds. The four test mains drop `SetCurrent` (the `wsconn` and `session/inttest` mains are deleted; they only existed for it) and the three `Current()`-comparison tests compare against `testFlagRegistry()` / wsconn's `defaultFlags()`. Ratchets: `featureflags/no_global_registry_test.go` (package-level `Registry` var), `services/no_flag_default_global_test.go` (the removed symbols). Proof by mutation (each reverted, a test fails): `server/dependencies.go` passing a second `FlagRegistry()` to either session-service constructor, dropping the `NewBacklogService` default, the `NewConnectRPCWebSocketHandler` default, the `NewFileService` default, the `NewSessionService` default and the `NewFeatureFlagService` default; the two ratchets fail on an added `var x *Registry` / `FeatureFlagDefault(` string. The stage-2 series (slices 1-7) is complete.
+
+Order: 1 -> 2 -> {3, 4, 5 in any order} -> 6 -> 7. Slices 3-5 can run in parallel worktrees since they touch disjoint files.
+
+## Mixed-state caveat (slices 1-5, historical)
+
+Until every reader migrates, an injected registry that differs from the global leaves the unmigrated readers
+(`globalOffStatusDetail`, `scoped()`/`dispatcherRunning`, attention, update-check, `backlog_shared`, wsconn) reading the
+global. That is acceptable only because production installs the same registry through `SetCurrent`; slice 2 must therefore
+build the injected registry and the `SetCurrent` registry from ONE `FlagRegistry()` call, never two.

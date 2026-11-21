@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -99,7 +98,7 @@ func (s *stubStore) FindInstanceDataByID(id string) (*domain.InstanceData, error
 			return &data, nil
 		}
 	}
-	return nil, session.ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 
 // makeScrollbackMgr creates a scrollback manager backed by a temp directory.

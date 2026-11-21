@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -24,7 +23,7 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 	for _, name := range attentionFlagNames {
 		t.Run(name, func(t *testing.T) {
 			found := false
-			for _, f := range featureflags.Current().Specs() {
+			for _, f := range testFlagRegistry().Specs() {
 				if f.Name == name {
 					found = true
 					require.False(t, f.Default)
@@ -32,10 +31,10 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 				}
 			}
 			require.True(t, found, "registry entry missing")
-			require.False(t, FeatureFlagDefault(name))
+			require.False(t, testFlagRegistry().Default(name))
 		})
 	}
-	require.Equal(t, AttentionFlags{}, LoadAttentionFlags())
+	require.Equal(t, AttentionFlags{}, LoadAttentionFlags(testFlagRegistry()))
 }
 
 func TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt(t *testing.T) {
@@ -49,12 +48,12 @@ func TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt(t *testing.T) {
 func TestFlagFlip_Should_TakeEffectNextPollCycleWithoutRestart_When_SetLive(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
-	before := LoadAttentionFlags()
+	before := LoadAttentionFlags(testFlagRegistry())
 	require.False(t, before.ProseQuestionDetection)
 
 	require.NoError(t, flagUpdate(svc, attentionProseQuestionDetectionFlagName, true))
 
-	require.True(t, LoadAttentionFlags().ProseQuestionDetection)
+	require.True(t, LoadAttentionFlags(testFlagRegistry()).ProseQuestionDetection)
 	require.False(t, before.ProseQuestionDetection, "a snapshot taken for a cycle must not change mid-cycle")
-	require.False(t, LoadAttentionFlags().SessionEventLog)
+	require.False(t, LoadAttentionFlags(testFlagRegistry()).SessionEventLog)
 }

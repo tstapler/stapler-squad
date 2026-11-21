@@ -51,6 +51,7 @@ go_test(
         "history_linker_event_test.go",
         "history_linker_test.go",
         "history_watcher_fds_unix_test.go",
+        "history_watcher_fsevents_darwin_test.go",
         "history_watcher_test.go",
         "import_cancel_test.go",
         "import_candidate_test.go",

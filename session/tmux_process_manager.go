@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/procinfo"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -76,7 +76,7 @@ func (tm *TmuxProcessManager) inspector() panePIDInspector {
 
 // ErrTmuxSessionNotInitialized is returned by operations that need the underlying tmux
 // session before initTmuxSession has attached one (or after it was cleared).
-var ErrTmuxSessionNotInitialized = errors.New("tmux session not initialized")
+var ErrTmuxSessionNotInitialized = fmt.Errorf("tmux session not initialized: %w", domain.ErrLaunchNotWired)
 
 // HasSession reports whether a tmux session has been initialized.
 func (tm *TmuxProcessManager) HasSession() bool {

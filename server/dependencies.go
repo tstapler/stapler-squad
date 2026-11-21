@@ -414,6 +414,9 @@ type CoreDeps struct {
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
+	// FlagRegistry is the one registry shared by the flag service and every other flag reader.
+	FlagRegistry *featureflags.Registry
+
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker and waits for
 	// its goroutine; nil unless BuildOptions.RunPRMaintenance was set.
 	StopPRMaintenance func()
@@ -444,14 +447,14 @@ type BuildOptions struct {
 // Use BuildOptions to inject a pre-built EntClient (for tests).
 func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
-	featureflags.SetCurrent(services.FlagRegistry())
+	flagRegistry := services.FlagRegistry()
 
 	var sessionService *services.SessionService
 	var err error
 	if opts.EntClient != nil {
-		sessionService, err = services.NewSessionServiceWithEntClient(opts.EntClient)
+		sessionService, err = services.NewSessionServiceWithEntClient(opts.EntClient, flagRegistry)
 	} else {
-		sessionService, err = services.NewSessionServiceFromConfig()
+		sessionService, err = services.NewSessionServiceFromConfig(flagRegistry)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("initialize SessionService: %w", err)
@@ -484,6 +487,7 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 		ReviewQueue:    sessionService.GetReviewQueueInstance(),
 		ApprovalStore:  sessionService.GetApprovalStore(),
 		ErrorRegistry:  errorRegistry,
+		FlagRegistry:   flagRegistry,
 
 		StopPRMaintenance: stopPRMaintenance,
 	}, nil
@@ -521,6 +525,9 @@ type ServiceDeps struct {
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
 	Registry          *session.Registry
+
+	// AttentionOptions is the one cached attention-flag source shared by the review-queue poller and the startup scanner.
+	AttentionOptions session.FlagOptionsSource
 }
 
 // BuildServiceDeps constructs Phase 2 dependencies using Phase 1 outputs.
@@ -538,7 +545,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller := session.NewReviewQueuePoller(
 		core.ReviewQueue, statusManager, core.Storage,
 	)
-	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
+	attentionOptions := newAttentionOptionsSource(core.FlagRegistry)
+	reviewQueuePoller.SetOptionsSource(attentionOptions)
 	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
@@ -569,6 +577,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		ReviewQueuePoller: reviewQueuePoller,
 		PRStatusPoller:    prStatusPoller,
 		Registry:          registry,
+		AttentionOptions:  attentionOptions,
 	}, nil
 }
 

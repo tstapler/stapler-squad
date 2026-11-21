@@ -79,3 +79,6 @@ func (s *SessionService) deliveryProbes(acks *GuidanceAckDetector) DeliveryProbe
 	}
 	return p
 }
+
+// GuidanceMirror returns the installed hook mirror, or nil before SetGuidanceMirror.
+func (s *SessionService) GuidanceMirror() *GuidanceHookMirror { return s.guidanceMirror.Load() }

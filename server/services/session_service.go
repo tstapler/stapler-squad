@@ -1099,7 +1099,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*instance.Instance, error)
 // NewSessionServiceFromConfig creates a SessionService using EntRepository as storage backend.
 // On first startup, if the legacy state.json exists and Ent DB is empty, sessions are
 // auto-migrated from JSON to Ent.
-func NewSessionServiceFromConfig() (*SessionService, error) {
+func NewSessionServiceFromConfig(flags *featureflags.Registry) (*SessionService, error) {
 	// Write workspace metadata on startup so the workspace switcher can discover this workspace.
 	config.EnsureWorkspaceMeta()
 
@@ -1124,17 +1124,19 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 		return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
 	}
 
-	return newGatedSessionService(storage), nil
+	return newGatedSessionService(storage, flags), nil
 }
 
 // newGatedSessionService builds the production SessionService: the delivery
 // gate is created with the bus and installed as its publish filter before any
 // producer can publish, so there is no un-gated window and no later bind step.
-func newGatedSessionService(storage session.InstanceStore) *SessionService {
+func newGatedSessionService(storage session.InstanceStore, flags *featureflags.Registry) *SessionService {
 	gate := deliverygate.NewGate(deliverygate.WithInstanceLister(storage))
 	eventBus := events.NewEventBus(100)
 	eventBus.SetPublishFilter(gate.PublishFilter())
 	svc := NewSessionService(storage, eventBus)
+	svc.featureFlagSvc = NewFeatureFlagServiceWithRegistry(flags)
+	svc.fileSvc.SetFlagRegistry(flags)
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
 	svc.wireGateFlag(gate)
@@ -1167,7 +1169,9 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		}
 		return ""
 	})
-	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, func(cfg *config.Config) string {
+		return s.flagReader().globalOffStatusDetail(cfg)
+	})
 	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
 	sink := NewAuditSink(config.GetConfigDir,
 		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
@@ -1180,6 +1184,23 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 	})
 	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
 	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
+}
+
+// flagReader reads flag decisions through this service's registry.
+// NewSessionService starts on the default FlagRegistry; newGatedSessionService swaps in the injected one.
+func (s *SessionService) flagReader() flagReader { return flagReader{reg: s.InjectedFlagRegistry()} }
+
+// InjectedFlagRegistry returns the registry the flag service was built with; nil only for a nil receiver.
+func (s *SessionService) InjectedFlagRegistry() *featureflags.Registry {
+	if s == nil {
+		return nil
+	}
+	return s.featureFlagSvc.injected()
+}
+
+// FeatureFlagRegistry returns the registry the flag service resolves flags against.
+func (s *SessionService) FeatureFlagRegistry() *featureflags.Registry {
+	return s.featureFlagSvc.reg()
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built
@@ -1196,14 +1217,14 @@ func (s *SessionService) SetGateStatsFileStatus(fn func() deliverygate.StatsFile
 // NewSessionServiceWithEntClient creates a SessionService from a pre-existing *ent.Client.
 // Use this when the caller already opened a database (e.g. in tests or when sharing a
 // connection) and wants to bypass the config-based path discovery in NewSessionServiceFromConfig.
-func NewSessionServiceWithEntClient(entClient *ent.Client) (*SessionService, error) {
+func NewSessionServiceWithEntClient(entClient *ent.Client, flags *featureflags.Registry) (*SessionService, error) {
 	config.EnsureWorkspaceMeta()
 	repo := session.NewEntRepositoryFromClient(entClient)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage with provided ent client: %w", err)
 	}
-	return newGatedSessionService(storage), nil
+	return newGatedSessionService(storage, flags), nil
 }
 
 // GetStorage returns the concrete *session.Storage for components that haven't migrated to InstanceStore yet.

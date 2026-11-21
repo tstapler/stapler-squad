@@ -57,3 +57,7 @@ session/projectstore !server
 session/projectstore !github
 session/rulestore !server
 session/rulestore !github
+session/analyticsstore !server
+session/analyticsstore !github
+session/instancestore !server
+session/instancestore !github

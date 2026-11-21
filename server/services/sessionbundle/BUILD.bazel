@@ -36,7 +36,6 @@ go_test(
     srcs = ["session_bundle_service_test.go"],
     deps = [
         ":sessionbundle",
-        "//session",
         "//session/contexthistory",
         "//session/domain",
         "//session/domain/backlogdto",

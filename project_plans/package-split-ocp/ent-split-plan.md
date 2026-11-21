@@ -9,7 +9,7 @@ Evidence labels: VERIFIED = command run in this worktree (command given); INFERR
 - E1 `webhookstore` (#1661), E2 `flowstore` (#1663, reader only, not embedded by design), E3 wake DTOs in `session/domain` (#1653): leaf/file exists, plan completion criteria not re-verified.
 - E4 `wakestore`, E5 guidance DTOs, E6b `guidancestore`: done, per the step's own Done line in section 3. E6a was folded into E6b (`guidanceHooks` deleted, one `itemPendingChanged` hook remains).
 - E7 NO-GO (no second implementation).
-- E8 `stagecfg`, E11 small slices (`shellstore`, `projectstore`, `rulestore`): done, per their section 3 rows. E11 core instance-CRUD/analytics residue is NO-GO (needs the instance DTO lowering; owner-approved: small slices only).
+- E8 `stagecfg`, E11 small slices (`shellstore`, `projectstore`, `rulestore`): done, per their section 3 rows. E11 core: owner approved starting the instance DTO lowering on 2026-11-19; staged plan in [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md). Steps I0 to I6 are done (`analyticsstore`, domain lowering, `instancestore` read, update and create/delete sides, close-out).
 - E9 `sessionpr` (#1683): leaf exists and the guard rows in `session/legacy_item_pr_readers_test.go` are keyed to `session/sessionpr/`; the Makefile and `pr_state_writer_guard_test.go` guards were not re-checked.
 - E10 `backlogstore`: done (#1687, #1691, #1693, #1696, #1700, #1701, #1702; see "E10 sequence" in section 6).
 - E12 `markerstore`: done (#1671).
@@ -340,7 +340,7 @@ Go/no-go summary (historical, pre-execution; see Program status at the top for c
 | E8 | NO-GO (later done, see section 3) | DTO gate unmet, ports return `*ent.*` |
 | E9 | NO-GO (later done, see section 3) until prerequisites a-c | 32+31 back-edge symbols, 3 guards |
 | E10 | NO-GO (later done, see "E10 sequence") | hot, 56 back-edge symbols, BL series open |
-| E11 | NO-GO | hot, no leaf shape |
+| E11 | NO-GO (core later done via I0-I6, see [instance-dto-lowering-plan.md](instance-dto-lowering-plan.md)) | hot, no leaf shape |
 | E12 | NO-GO now (later done, see section 3) | tests reassign `Client` |
 
 What stays in `session` after A and B: about 9.0k of the 12.0k ent_* production lines (moved: webhook 553, flow reader about 870, wake about 620, guidance 950 = about 3.0k, about 6.8% of `session`'s 44.3k; the session budget row should drop by the measured delta). That is a ceiling for this project until the hub DTOs are lowered; claiming more would be unsupported.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 )
@@ -17,7 +18,7 @@ const sessionEventLimit = 2000
 // ListBySessionID returns up to 2000 analytics events recorded for sessionID,
 // most recent first. client must be the analytics.db client (OpenAnalyticsDB):
 // sessions.db has an empty analytics_events table (ADR-036).
-func ListBySessionID(ctx context.Context, client *ent.Client, sessionID string) ([]session.AnalyticsData, error) {
+func ListBySessionID(ctx context.Context, client *ent.Client, sessionID string) ([]domain.AnalyticsData, error) {
 	if client == nil {
 		return nil, errors.New("analytics db unavailable")
 	}
@@ -29,7 +30,7 @@ func ListBySessionID(ctx context.Context, client *ent.Client, sessionID string) 
 	if err != nil {
 		return nil, fmt.Errorf("list analytics by session %q: %w", sessionID, err)
 	}
-	out := make([]session.AnalyticsData, len(rows))
+	out := make([]domain.AnalyticsData, len(rows))
 	for i, e := range rows {
 		out[i] = toSessionAnalyticsData(e)
 	}
@@ -37,12 +38,12 @@ func ListBySessionID(ctx context.Context, client *ent.Client, sessionID string) 
 }
 
 // toSessionAnalyticsData leaves fields AnalyticsEvent has no column for at zero.
-func toSessionAnalyticsData(e *ent.AnalyticsEvent) session.AnalyticsData {
+func toSessionAnalyticsData(e *ent.AnalyticsEvent) domain.AnalyticsData {
 	var durationMs int64
 	if e.DurationMs != nil {
 		durationMs = *e.DurationMs
 	}
-	return session.AnalyticsData{
+	return domain.AnalyticsData{
 		ID:              e.ID,
 		SessionID:       e.SessionID,
 		ToolName:        e.EventName,
@@ -66,6 +67,6 @@ func NewBundleStorage(storage *session.Storage, analyticsClient *ent.Client) *Bu
 }
 
 // ListAnalyticsBySessionID reads the session's events from analytics.db.
-func (b *BundleStorage) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]session.AnalyticsData, error) {
+func (b *BundleStorage) ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]domain.AnalyticsData, error) {
 	return ListBySessionID(ctx, b.analyticsClient, sessionID)
 }

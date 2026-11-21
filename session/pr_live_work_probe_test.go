@@ -33,7 +33,7 @@ func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*domain.Instan
 	}
 	d, ok := f.data[id]
 	if !ok {
-		return nil, ErrInstanceDataNotFound
+		return nil, domain.ErrInstanceDataNotFound
 	}
 	return d, nil
 }

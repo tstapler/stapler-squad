@@ -10,7 +10,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -48,13 +47,9 @@ func TestFeatureFlagRegistry_ShouldListFourFlagsWithDefaultsAndScopes_WhenGetFea
 	}
 	for name, w := range want {
 		assert.Equal(t, w.on, listedFlag(t, e.svc, name).Enabled, name)
-		var accepted []string
-		for _, kf := range featureflags.Current().Specs() {
-			if kf.Name == name {
-				accepted = kf.Scopes
-			}
-		}
-		assert.Equal(t, w.scoped, len(accepted) > 0, name)
+		spec, found := testFlagRegistry().Lookup(name)
+		require.True(t, found, "%s registered", name)
+		assert.Equal(t, w.scoped, len(spec.Scopes) > 0, name)
 	}
 	assert.Empty(t, listedFlag(t, e.svc, backgroundActivityFeedFlagName).StatusDetail, "ON has nothing to explain")
 	for _, name := range []string{notificationInlineActionsFlagName, askUserQuestionStructuredFlagName, agentWakeTriggersFlagName} {
@@ -80,7 +75,9 @@ func TestUpdateFeatureFlag_ShouldRefuseLooseningFlip_WhenAuditSinkDown(t *testin
 
 func TestUpdateFeatureFlag_ShouldReflectWithoutRestartInDispatcherStub_WhenAgentWakeTriggersFlipped(t *testing.T) {
 	e := newNotificationFlagEnv(t)
-	dispatcherStub := func() bool { return effectiveFlag(agentWakeTriggersFlagName, "dispatcher") }
+	dispatcherStub := func() bool {
+		return flagReader{testFlagRegistry()}.effectiveFlag(agentWakeTriggersFlagName, "dispatcher")
+	}
 	require.False(t, dispatcherStub())
 
 	require.NoError(t, e.flip(agentWakeTriggersFlagName, true))
@@ -102,10 +99,10 @@ func TestUpdateFeatureFlag_ShouldSetAndClearNewScopes_WhenScopeIsRegistered(t *t
 		return err
 	}
 	require.NoError(t, req(sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED, scopeStageRender))
-	assert.True(t, effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
-	assert.False(t, effectiveFlag(askUserQuestionStructuredFlagName, scopeStageAnswer))
+	assert.True(t, flagReader{testFlagRegistry()}.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
+	assert.False(t, flagReader{testFlagRegistry()}.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageAnswer))
 	require.NoError(t, req(sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE, scopeStageRender))
-	assert.False(t, effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
+	assert.False(t, flagReader{testFlagRegistry()}.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(req(sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED, "stage:bogus")))
 }
 
@@ -120,19 +117,19 @@ func TestAskUserQuestionStructured_ShouldGateStagesInOrder_WhenRenderAnswerHookR
 	}
 	n := askUserQuestionStructuredFlagName
 	set(scopeStageAnswer)
-	assert.False(t, effectiveFlag(n, scopeStageAnswer), "answer without render is ignored")
+	assert.False(t, flagReader{testFlagRegistry()}.effectiveFlag(n, scopeStageAnswer), "answer without render is ignored")
 	set(scopeStageRender)
-	assert.True(t, effectiveFlag(n, scopeStageAnswer))
+	assert.True(t, flagReader{testFlagRegistry()}.effectiveFlag(n, scopeStageAnswer))
 	set(scopeStageHookReply)
-	assert.False(t, effectiveFlag(n, scopeStageHookReply), "closed until S1 PASS is recorded")
-	assert.Equal(t, spikeS1HookReplyPassed, effectiveFlag(n, scopeStageHookReply))
+	assert.False(t, flagReader{testFlagRegistry()}.effectiveFlag(n, scopeStageHookReply), "closed until S1 PASS is recorded")
+	assert.Equal(t, spikeS1HookReplyPassed, flagReader{testFlagRegistry()}.effectiveFlag(n, scopeStageHookReply))
 	assert.False(t, config.LoadConfig().GetFeatureFlagWithDefault(n, false), "global stayed off throughout")
 }
 
 func TestEffectiveAnswerQuestion_ShouldBeClosed_WhenNothingConfigured(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	for _, r := range []answerRoute{routeLiveKeystrokeHidden, routeLiveKeystrokeVisible, routeDurableRecord, routeHookReply} {
-		assert.False(t, effectiveAnswerQuestion(r), "route %d", r)
+		assert.False(t, flagReader{testFlagRegistry()}.effectiveAnswerQuestion(r), "route %d", r)
 	}
 }
 
@@ -142,7 +139,7 @@ func TestUpdateFeatureFlag_ShouldNotifyWakeListener_WhenAgentWakeTriggersFlipped
 	var sawOn []bool
 	SetWakeFlagListener(func() {
 		calls++
-		sawOn = append(sawOn, effectiveFlag(agentWakeTriggersFlagName, "dispatcher"))
+		sawOn = append(sawOn, flagReader{testFlagRegistry()}.effectiveFlag(agentWakeTriggersFlagName, "dispatcher"))
 	})
 	t.Cleanup(func() { SetWakeFlagListener(nil) })
 

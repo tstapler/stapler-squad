@@ -2275,7 +2275,7 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, error) {
 	data, err := store.FindInstanceDataByID(uuid)
 	if err != nil {
-		if errors.Is(err, session.ErrInstanceDataNotFound) {
+		if errors.Is(err, domain.ErrInstanceDataNotFound) {
 			return "", fmt.Errorf("no session found with UUID %s", uuid)
 		}
 		return "", err

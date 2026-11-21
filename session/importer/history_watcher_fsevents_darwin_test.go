@@ -1,6 +1,6 @@
 //go:build darwin
 
-package session
+package importer
 
 import (
 	"context"

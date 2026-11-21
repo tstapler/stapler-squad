@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -41,9 +42,8 @@ const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
 
 // ProgramCLIFlagProbeEnabled reports whether ProbeProgram is allowed. It reads
 // config on every call so a Settings toggle applies with no restart.
-func ProgramCLIFlagProbeEnabled() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(
-		programCLIFlagProbeFlagName, FeatureFlagDefault(programCLIFlagProbeFlagName))
+func ProgramCLIFlagProbeEnabled(reg *featureflags.Registry) bool {
+	return flagReader{reg}.enabled(config.LoadConfig(), programCLIFlagProbeFlagName)
 }
 
 // ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
@@ -120,8 +120,8 @@ func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoP
 	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
 }
 
-// Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by the
-// Files*Enabled helpers below, which take no session argument.
+// Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by
+// globalFilesFlags, which takes no session argument.
 const (
 	filesEditingFlagName    = "files:editing"
 	filesViewerV2FlagName   = "files:viewer-v2"
@@ -131,28 +131,6 @@ const (
 	filesEditLargeFlagName  = "files:edit-large"
 )
 
-func filesFlagEnabled(name string) bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
-}
-
-// FilesEditingEnabled reports whether file editing (WriteFile) is allowed. Default: off.
-func FilesEditingEnabled(_ context.Context) bool { return filesFlagEnabled(filesEditingFlagName) }
-
-// FilesViewerV2Enabled reports whether the revamped Files viewer is on. Default: on.
-func FilesViewerV2Enabled(_ context.Context) bool { return filesFlagEnabled(filesViewerV2FlagName) }
-
-// FilesMergePhoneEnabled reports whether the phone merge UI is on. Default: on.
-func FilesMergePhoneEnabled(_ context.Context) bool { return filesFlagEnabled(filesMergePhoneFlagName) }
-
-// FilesRangeReadEnabled reports whether ranged large-file reads are on (ADR-036). Default: off.
-func FilesRangeReadEnabled(_ context.Context) bool { return filesFlagEnabled(filesRangeReadFlagName) }
-
-// FilesDeltaWriteEnabled reports whether delta writes are on (ADR-036). Default: off.
-func FilesDeltaWriteEnabled(_ context.Context) bool { return filesFlagEnabled(filesDeltaWriteFlagName) }
-
-// FilesEditLargeEnabled reports whether large-file editing is on (ADR-036). Default: off.
-func FilesEditLargeEnabled(_ context.Context) bool { return filesFlagEnabled(filesEditLargeFlagName) }
-
 // workflowEngineModeTTL is how long a resolved engine mode is reused, so the
 // transition hot path never reads config per call.
 const workflowEngineModeTTL = time.Second
@@ -160,17 +138,18 @@ const workflowEngineModeTTL = time.Second
 // WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
 // flags with their registered defaults (never the plain GetFeatureFlag, which
 // returns false for an unset flag and would silently turn shadow off).
-func WorkflowEngineModeFromConfig(cfg *config.Config) workflowengine.EngineMode {
+func WorkflowEngineModeFromConfig(cfg *config.Config, reg *featureflags.Registry) workflowengine.EngineMode {
+	r := flagReader{reg}
 	return workflowengine.ModeFromFlags(
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+		r.enabled(cfg, config.WorkflowEngineShadowFeatureFlag),
+		r.enabled(cfg, config.WorkflowEngineEnforceFeatureFlag),
 	)
 }
 
 // NewWorkflowEngineModeSource is the production mode reader: live config,
-// cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock) *workflowengine.CachedModeSource {
-	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
+// cached for workflowEngineModeTTL. A nil clock uses real time; a nil reg reads the process registry per resolve.
+func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock, reg *featureflags.Registry) *workflowengine.CachedModeSource {
+	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load(), reg) }, workflowEngineModeTTL, clock)
 }
 
 // NewWorkflowEngineClassModeSource is the production per-class mode reader:
@@ -196,15 +175,7 @@ func WorkflowEngineShadowStatusDetail(snapshot func() workflowengine.ShadowLedge
 	}
 }
 
-// FeatureFlagDefault looks up name's default in the process registry installed by
-// featureflags.SetCurrent at startup — the single source of truth both GetFeatureFlags
-// and a flag's own call site (e.g. currentResyncOptions' UseFastLane) resolve against.
-// Returns false for an unregistered name; panics if no registry was installed.
-func FeatureFlagDefault(name string) bool {
-	return featureflags.Current().Default(name)
-}
-
-// FlagRegistry builds the process registry from the services-owned specs plus the
+// FlagRegistry builds the flag registry from the services-owned specs plus the
 // specs contributed by the composition root (leaf packages' own flags).
 func FlagRegistry(extra ...[]featureflags.Spec) *featureflags.Registry {
 	specs := coreFlagSpecs()
@@ -215,9 +186,12 @@ func FlagRegistry(extra ...[]featureflags.Spec) *featureflags.Registry {
 }
 
 // FeatureFlagService handles GetFeatureFlags and UpdateFeatureFlag RPCs.
-// It reads the featureflags registry (featureflags.Current) and owns the per-name FeatureController map.
+// It reads its injected featureflags registry and owns the per-name FeatureController map.
 // Extracted from SessionService per ADR-001 (UpdateFeatureFlag exceeds the 30-line threshold).
 type FeatureFlagService struct {
+	// registry is the flag registry every read resolves against; never nil.
+	registry *featureflags.Registry
+
 	// featureControllers maps feature flag names to their runtime controllers.
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
@@ -249,10 +223,31 @@ type FeatureFlagService struct {
 	updateMu sync.Mutex
 }
 
-// NewFeatureFlagService creates a FeatureFlagService. Call SetFeatureController
-// for each flag that has an in-process runtime component.
+// NewFeatureFlagService creates a FeatureFlagService over the default FlagRegistry (no leaf-contributed
+// specs); production uses NewFeatureFlagServiceWithRegistry with the composition root's registry.
+// Call SetFeatureController for each flag that has an in-process runtime component.
 func NewFeatureFlagService() *FeatureFlagService {
-	return &FeatureFlagService{}
+	return NewFeatureFlagServiceWithRegistry(FlagRegistry())
+}
+
+// NewFeatureFlagServiceWithRegistry creates a FeatureFlagService that resolves every flag against reg.
+// A nil reg is a programming error and panics.
+func NewFeatureFlagServiceWithRegistry(reg *featureflags.Registry) *FeatureFlagService {
+	if reg == nil {
+		panic("services: NewFeatureFlagServiceWithRegistry requires a non-nil registry")
+	}
+	return &FeatureFlagService{registry: reg}
+}
+
+// reg returns the registry given at construction.
+func (f *FeatureFlagService) reg() *featureflags.Registry { return f.registry }
+
+// injected returns the registry given at construction; nil only for a nil receiver.
+func (f *FeatureFlagService) injected() *featureflags.Registry {
+	if f == nil {
+		return nil
+	}
+	return f.registry
 }
 
 // SetFeatureController wires a runtime controller for the named feature flag.
@@ -315,7 +310,7 @@ func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*c
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
-	parts := autonomyFlagStatusDetail(name, cfg)
+	parts := autonomyFlagStatusDetail(name, cfg, f.reg())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(cfg); d != "" {
 			parts = append(parts, d)
@@ -327,7 +322,7 @@ func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) st
 // autonomyFlagStatusDetail reports, for the two nudge flags, why a flag that is
 // On does nothing ("inactive: requires <flag>", parsed by the Features page) and
 // whether its value is the registry default or was set explicitly.
-func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
+func autonomyFlagStatusDetail(name string, cfg *config.Config, reg *featureflags.Registry) []string {
 	if name != config.DiagnoseNudgeFeatureFlag && name != config.AutonomousStallNudgeFeatureFlag {
 		return nil
 	}
@@ -345,7 +340,7 @@ func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
 	if value, explicit := cfg.FeatureFlags[name]; explicit {
 		parts = append(parts, "Set explicitly: "+onOff(value))
 	} else {
-		parts = append(parts, "Default: "+onOff(FeatureFlagDefault(name))+" (not set explicitly)")
+		parts = append(parts, "Default: "+onOff(reg.Default(name))+" (not set explicitly)")
 	}
 	return parts
 }
@@ -385,7 +380,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 ) (*connect.Response[sessionv1.GetFeatureFlagsResponse], error) {
 	cfg := config.LoadConfig()
 
-	specs := featureflags.Current().Specs()
+	specs := f.reg().Specs()
 	flags := make([]*sessionv1.FeatureFlag, 0, len(specs))
 	for _, kf := range specs {
 		enabled := cfg.GetFeatureFlagWithDefault(kf.Name, kf.Default)
@@ -422,20 +417,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	name := req.Msg.GetName()
 
 	// Validate that the flag name is known.
-	spec, known := featureflags.Current().Lookup(name)
+	spec, known := f.reg().Lookup(name)
 	description, scopes := spec.Description, spec.Scopes
 	if !known {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, featureflags.Current().Names()))
+			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, f.reg().Names()))
 	}
-	op, err := parseFlagOp(req.Msg, scopes)
+	op, err := parseFlagOp(req.Msg, scopes, f.reg())
 	if err != nil {
 		return nil, err
 	}
 
 	// Only the way on is guarded: disabling and resetting the global value are
 	// never refused. Clearing a scope is guarded only when it turns the kind on.
-	if op.enabling() || clearTurnsKindOn(op) {
+	if op.enabling() || clearTurnsKindOn(op, f.reg()) {
 		if guard, ok := f.enableGuards[name]; ok {
 			if reason := guard(); reason != "" {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -474,7 +469,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	}
 
 	cfg := config.LoadConfig()
-	enabled := cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
+	enabled := f.reg().Enabled(cfg, name)
 	if op.scope == "" && op.isSet() {
 		enabled = op.enabled // the controller-backed state, as before this change
 	}
@@ -503,7 +498,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
-			previous = FeatureFlagDefault(name)
+			previous = f.reg().Default(name)
 		}
 		// In-memory mutators: UpdateConfig saves once, so the saving setters
 		// here would fsync config.json twice per flip.

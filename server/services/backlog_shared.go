@@ -28,7 +28,6 @@ func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (hostclaim
 
 // sddDefaultPipelineEnabled reads the flag with its registered default, so an
 // unset flag resolves the same way the Features page reports it.
-func SddDefaultPipelineEnabled() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(
-		featureflags.SddDefaultPipelineFlagName, FeatureFlagDefault(featureflags.SddDefaultPipelineFlagName))
+func SddDefaultPipelineEnabled(reg *featureflags.Registry) bool {
+	return flagReader{reg}.enabled(config.LoadConfig(), featureflags.SddDefaultPipelineFlagName)
 }

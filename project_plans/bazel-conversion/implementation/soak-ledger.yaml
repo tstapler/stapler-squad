@@ -26,3 +26,5 @@ runs:
     result: fail
   - run_id: nightly-44450912660-1
     result: pass
+  - run_id: nightly-44667242763-1
+    result: fail

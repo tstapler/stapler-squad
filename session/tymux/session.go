@@ -18,6 +18,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -30,6 +31,10 @@ var ErrNotSupportedOnTymuxBackend = errors.New("not supported by the tymux backe
 // errSessionNotStarted is returned by methods that need a live pane_id
 // (capture/cursor/dimensions) when Start/RestoreWithWorkDir hasn't run yet.
 var errSessionNotStarted = errors.New("tymux: session not started")
+
+// errLaunchCommandNotWired is returned by RestoreWithWorkDir when it would have to create a
+// session but the instance has not wired its launch command yet (Start has not run).
+var errLaunchCommandNotWired = fmt.Errorf("%w: %w", errSessionNotStarted, domain.ErrLaunchNotWired)
 
 // Structured-log field keys shared across this file's log.Info/Warn calls.
 const (
@@ -599,6 +604,12 @@ func (s *tymuxGRPCSession) SetCommand(command launchcmd.LaunchCommand) {
 	s.mu.Unlock()
 }
 
+func (s *tymuxGRPCSession) hasLaunchCommand() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.command != nil
+}
+
 // killStaleGeneration kills this owner's previous daemon session, if it still
 // holds one, so a recovery Start (e.g. health-check respawn after IsAlive went
 // false) replaces it instead of leaking a second live session. NotFound is fine.
@@ -834,6 +845,11 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 	}
 	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
+		// A nil command makes the daemon spawn its default shell, not the agent, so a restore that
+		// races ahead of the instance's first Start must not create one (the "opens to zsh" bug).
+		if !s.hasLaunchCommand() {
+			return errLaunchCommandNotWired
+		}
 		startAt := time.Now()
 		err := s.Start(workDir)
 		termlat.Default.Record(termlat.StageRestoreStart, tymuxLabels, time.Since(startAt))

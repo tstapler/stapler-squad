@@ -163,11 +163,11 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (domain.AcCriteriaJSON, 
 // round-trip, not through BacklogService's constructor-injected cfg pointer.
 // Only ever runs at item creation, so it can never retroactively change an
 // already-created item's stored pipeline_mode.
-func defaultPipelineModeForNewItem(requested *string) string {
+func (s *BacklogService) defaultPipelineModeForNewItem(requested *string) string {
 	if requested != nil {
 		return *requested
 	}
-	if !services.SddDefaultPipelineEnabled() {
+	if !services.SddDefaultPipelineEnabled(s.flags) {
 		return ""
 	}
 	return session.DefaultSDDPipelineModeSlug
@@ -249,7 +249,7 @@ func (s *BacklogService) CreateBacklogItem(
 		AutoSpawnSession:       req.Msg.AutoSpawnSession,
 		AutoCreatePR:           req.Msg.AutoCreatePr,
 		AutoApprovePlan:        req.Msg.AutoApprovePlan,
-		PipelineMode:           defaultPipelineModeForNewItem(req.Msg.PipelineMode),
+		PipelineMode:           s.defaultPipelineModeForNewItem(req.Msg.PipelineMode),
 		Category:               category,
 		Notes:                  req.Msg.Notes,
 		CostBudgetThresholdUsd: req.Msg.CostBudgetThresholdUsd,

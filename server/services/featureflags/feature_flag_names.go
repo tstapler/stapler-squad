@@ -29,7 +29,7 @@ const TerminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
 const TerminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
 
 // terminalResyncExecGateFastLaneFlagName is shared between the flag registry (feature_flag_specs.go) below and
-// currentResyncOptions' UseFastLane field (connectrpc_websocket.go) so the flag name can't
+// currentResyncOptions' UseFastLane field (wsconn/connectrpc_websocket.go) so the flag name can't
 // drift between where it's declared and where it's read. session/instance_tmux.go duplicates
 // this literal (as terminalResyncExecGateFastLaneFlagName there too) rather than importing it,
 // since session cannot import server/services without creating an import cycle — keep both

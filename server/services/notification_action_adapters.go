@@ -169,7 +169,7 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 	r := &AnswerRouter{
 		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
 		visible: s.paneReplyCore, guard: NewHumanActiveGuard(defaultHumanActivity, tmux.ListClientActivity),
-		flags: configActionFlags{ev: compiledFlagEvidence}, rows: d.Rows, acks: d.Acks,
+		flags: configActionFlags{ev: compiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
 	}
 	r.ensure = s.ensureRegistered(d.Mirror)
 	store := s.replyState().store

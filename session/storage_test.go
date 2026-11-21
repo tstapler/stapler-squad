@@ -624,8 +624,8 @@ func TestStorage_UpdateInstance(t *testing.T) {
 	err := storage.UpdateInstance(inst)
 	require.NoError(t, err)
 
-	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
-	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// ListInstanceData uses domain.LoadMinimal, which intentionally skips the Tags
+	// edge (see domain.LoadOptions.LoadTags doc comment) — read back via LoadInstances
 	// instead, which eager-loads tags, to verify persistence.
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -742,7 +742,7 @@ func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExists
 // struct: a future refactor that built a bare InstanceData{ID, ArchivedAt, Status} instead
 // of mutating a fresh FindInstanceDataByID read would pass every other test here (they only
 // assert ArchivedAt/Status) while silently clobbering every other field via
-// EntRepository.Update's guarded-optional-field pattern (empty/zero fields get cleared).
+// instancestore.Instances.Update's guarded-optional-field pattern (empty/zero fields get cleared).
 func TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -834,8 +834,8 @@ func TestStorage_SaveInstancesSync(t *testing.T) {
 	err := storage.SaveInstancesSync([]*instance.Instance{inst})
 	require.NoError(t, err)
 
-	// ListInstanceData uses LoadMinimal, which intentionally skips the Tags
-	// edge (see LoadOptions.LoadTags doc comment) — read back via LoadInstances
+	// ListInstanceData uses domain.LoadMinimal, which intentionally skips the Tags
+	// edge (see domain.LoadOptions.LoadTags doc comment) — read back via LoadInstances
 	// instead, which eager-loads tags, to verify persistence.
 	instances, err := storage.LoadInstances()
 	require.NoError(t, err)
@@ -1295,7 +1295,7 @@ func TestStorage_DismissFinding_RoundTripsThroughRealEntBackedSQLite(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, ids)
 
-	require.NoError(t, storage.DismissFinding(ctx, DismissedFindingData{
+	require.NoError(t, storage.DismissFinding(ctx, domain.DismissedFindingData{
 		FindingID:      "finding-abc123",
 		SessionID:      "sess-1",
 		ConversationID: "conv-1",
@@ -1317,7 +1317,7 @@ func TestStorage_DismissFinding_WhenCalledTwiceWithSameID_ExpectIdempotent(t *te
 	defer cleanup()
 	ctx := context.Background()
 
-	data := DismissedFindingData{FindingID: "finding-dup", SessionID: "sess-1", FindingType: 1}
+	data := domain.DismissedFindingData{FindingID: "finding-dup", SessionID: "sess-1", FindingType: 1}
 	require.NoError(t, storage.DismissFinding(ctx, data))
 	require.NoError(t, storage.DismissFinding(ctx, data))
 

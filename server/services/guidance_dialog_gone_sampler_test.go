@@ -287,7 +287,7 @@ func TestObservePostToolUse_should_ClearTheMirroredRowsOfAnAnsweredQuestion(t *t
 	e := newRouterEnv(t)
 	inst, _ := e.addVisible("terminal-answered")
 	qid := e.hookRow(inst, colorDialog)
-	e.fix.svc.SetGuidanceMirror(NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil))
+	e.fix.svc.SetGuidanceMirror(NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, testFlagRegistry()))
 
 	e.fix.svc.ObservePostToolUse(context.Background(), inst.UUID, askUserQuestion)
 
@@ -304,7 +304,7 @@ func TestAnswerRouter_should_ReVerifyDialogMatchAndWriteOneByte_When_AnsweredPas
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("answer-45m")
 	qid := e.hookRow(inst, colorDialog)
-	e.fix.svc.SetGuidanceMirror(NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil))
+	e.fix.svc.SetGuidanceMirror(NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, testFlagRegistry()))
 	e.clock.Advance(45 * time.Minute)
 	_, cached := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: inst.UUID, QuestionID: qid})
 	require.False(t, cached, "the 30-minute cache entry expired")
@@ -319,7 +319,7 @@ func TestAnswerRouter_should_ReturnStaleWithZeroWrites_When_TheDialogWasAnswered
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("answer-45m-gone")
 	qid := e.hookRow(inst, colorDialog)
-	mirror := NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil)
+	mirror := NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, testFlagRegistry())
 	e.fix.svc.SetGuidanceMirror(mirror)
 	e.clock.Advance(45 * time.Minute)
 	require.NoError(t, mirror.Clear(context.Background(), qid, domain.CancelReasonAnsweredInTerminal))

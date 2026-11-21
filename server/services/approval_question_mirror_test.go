@@ -73,7 +73,7 @@ func TestAskUserQuestionHook_should_ReplyDeferWithinBound_WhenMirrorRepositoryBl
 	store := &blockingMirrorStore{release: make(chan struct{})}
 	t.Cleanup(func() { close(store.release) })
 	counts := &mirrorCounts{}
-	blocked := NewGuidanceHookMirror(store, q.store, counts.onFailed, counts.onCleared)
+	blocked := NewGuidanceHookMirror(store, q.store, counts.onFailed, counts.onCleared, testFlagRegistry())
 	blocked.enabled = mirrorFlagOn
 	q.h.SetGuidanceMirror(blocked)
 

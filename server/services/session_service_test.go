@@ -1431,7 +1431,7 @@ func TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload(t *testing.T) {
 
 // TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote guards the interaction
 // between the RPC handler's conditional field application (Note only mutated when
-// req.Msg.Note != nil) and ent_repository.go's *unconditional* SetNote(data.Note) on
+// req.Msg.Note != nil) and session/instancestore/update.go's *unconditional* SetNote(data.Note) on
 // every Update call: an UpdateSession call that doesn't touch Note at all must not
 // let the unconditional set clobber an existing note, since data.Note always reflects
 // the instance's already-current in-memory value when Note wasn't part of this request.

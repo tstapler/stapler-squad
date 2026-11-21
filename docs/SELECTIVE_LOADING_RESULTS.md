@@ -71,7 +71,7 @@ For existence checks (SaveInstances with 40 sessions):
 ## Implementation Details
 
 ### Files Created
-1. `session/load_options.go` - LoadOptions struct with presets and builder methods
+1. `session/domain/load_options.go` - LoadOptions struct with presets and builder methods
 2. `session/load_options_test.go` - Comprehensive test suite
 3. `docs/SELECTIVE_LOADING.md` - Developer documentation
 4. `docs/SELECTIVE_LOADING_RESULTS.md` - This performance report
@@ -131,10 +131,10 @@ sessions, err := repo.List(ctx)
 ### Custom Optimization
 ```go
 // Even faster for existence checks
-sessions, err := repo.ListWithOptions(ctx, session.LoadMinimal)
+sessions, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 
 // Or customize precisely
-options := session.LoadMinimal.WithTags()
+options := domain.LoadMinimal.WithTags()
 sessions, err := repo.ListWithOptions(ctx, options)
 ```
 

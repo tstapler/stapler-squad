@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
 	"github.com/tstapler/stapler-squad/pkg/changelog"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 // releasesRepo is the repo whose GitHub Releases the update check polls.
@@ -38,7 +39,7 @@ var changelogFlagCache struct {
 	vals changelogFlags
 }
 
-func loadChangelogFlags() changelogFlags {
+func loadChangelogFlags(reg *featureflags.Registry) changelogFlags {
 	c := &changelogFlagCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -47,17 +48,17 @@ func loadChangelogFlags() changelogFlags {
 	}
 	cfg := config.LoadConfig()
 	c.vals = changelogFlags{
-		changelog:   services.ChangelogEnabled(cfg),
-		updateCheck: services.UpdateCheckFlagEnabled(cfg),
+		changelog:   services.ChangelogEnabled(cfg, reg),
+		updateCheck: services.UpdateCheckFlagEnabled(cfg, reg),
 	}
 	c.at = time.Now()
 	return c.vals
 }
 
-func changelogEnabled() bool { return loadChangelogFlags().changelog }
+func changelogEnabled(reg *featureflags.Registry) bool { return loadChangelogFlags(reg).changelog }
 
-func updateCheckEnabled() bool {
-	f := loadChangelogFlags()
+func updateCheckEnabled(reg *featureflags.Registry) bool {
+	f := loadChangelogFlags(reg)
 	return f.changelog && f.updateCheck
 }
 
@@ -70,7 +71,8 @@ func isSourceBuild() bool {
 // registerChangelogHandlers serves /api/changelog (embedded CHANGELOG.md,
 // parsed once) and /api/update-check (opt-in GitHub Releases poll). Both
 // return 404 while the "changelog" flag is off.
-func (s *Server) registerChangelogHandlers() *services.UpdateCheckService {
+func (s *Server) registerChangelogHandlers(sessions *services.SessionService) *services.UpdateCheckService {
+	reg := sessions.InjectedFlagRegistry()
 	releases := changelog.Parse(changelog.Embedded())
 	if releases == nil {
 		releases = []changelog.Release{}
@@ -80,7 +82,7 @@ func (s *Server) registerChangelogHandlers() *services.UpdateCheckService {
 	updates := services.NewUpdateCheckService(services.UpdateCheckDeps{
 		CurrentVersion: buildinfo.Version,
 		IsSourceBuild:  isSourceBuild(),
-		Enabled:        updateCheckEnabled,
+		Enabled:        func() bool { return updateCheckEnabled(reg) },
 		Fetch: func(ctx context.Context) (*services.ReleaseInfo, error) {
 			rel, _, err := fetcher.Latest(ctx)
 			if err != nil {
@@ -91,7 +93,7 @@ func (s *Server) registerChangelogHandlers() *services.UpdateCheckService {
 	})
 
 	s.mux.HandleFunc("GET /api/changelog", func(w http.ResponseWriter, r *http.Request) {
-		if !changelogEnabled() {
+		if !changelogEnabled(reg) {
 			http.NotFound(w, r)
 			return
 		}
@@ -104,7 +106,7 @@ func (s *Server) registerChangelogHandlers() *services.UpdateCheckService {
 		})
 	})
 	s.mux.HandleFunc("GET /api/update-check", func(w http.ResponseWriter, r *http.Request) {
-		if !changelogEnabled() {
+		if !changelogEnabled(reg) {
 			http.NotFound(w, r)
 			return
 		}

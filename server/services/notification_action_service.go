@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
 // notification_action_service.go is the single InvokeNotificationAction
@@ -137,14 +138,17 @@ type actionFlags interface {
 
 // configActionFlags resolves against the live config and the compiled spike
 // evidence. Tests inject evidence to stand in for a recorded spike result.
-type configActionFlags struct{ ev flagEvidence }
+type configActionFlags struct {
+	ev flagEvidence
+	fr flagReader
+}
 
 func (f configActionFlags) Inline(dp string) bool {
-	return resolveEffectiveFlag(config.LoadConfig(), f.ev, notificationInlineActionsFlagName, dp)
+	return f.fr.resolveEffectiveFlag(config.LoadConfig(), f.ev, notificationInlineActionsFlagName, dp)
 }
 
 func (f configActionFlags) Answer(route answerRoute) bool {
-	return resolveAnswerQuestion(config.LoadConfig(), f.ev, route)
+	return f.fr.resolveAnswerQuestion(config.LoadConfig(), f.ev, route)
 }
 
 // actionAudit appends audit lines; *AuditSink satisfies it.
@@ -190,10 +194,11 @@ type ActionDelegates struct {
 
 // NewNotificationActionDispatcher builds a dispatcher reading the live flags.
 // audit may return nil (the audit trail is then unavailable and Tier B refuses).
-func NewNotificationActionDispatcher(d ActionDelegates, audit func() actionAudit) *NotificationActionDispatcher {
+// reg must be non-nil.
+func NewNotificationActionDispatcher(d ActionDelegates, audit func() actionAudit, reg *featureflags.Registry) *NotificationActionDispatcher {
 	return &NotificationActionDispatcher{
 		approvals: d.Approvals, questions: d.Questions, guidance: d.Guidance, backlog: d.Backlog, cancels: d.Cancels, resolver: d.Resolver,
-		flags: configActionFlags{ev: compiledFlagEvidence}, audit: audit, metrics: defaultActionMetrics(), reopen: defaultReopenTracker,
+		flags: configActionFlags{ev: compiledFlagEvidence, fr: flagReader{reg: reg}}, audit: audit, metrics: defaultActionMetrics(), reopen: defaultReopenTracker,
 		cache: newActionIdempotency(actionCacheMax), now: time.Now,
 	}
 }

@@ -22,8 +22,12 @@ alias(
 
 go_test(
     name = "featureflags_test",
-    srcs = ["registry_test.go"],
+    srcs = [
+        "no_global_registry_test.go",
+        "registry_test.go",
+    ],
     embed = [":featureflags"],
+    deps = ["//config"],
 )
 
 # Read by server/services' flag-registration guard, which scans flag-name consts from source.

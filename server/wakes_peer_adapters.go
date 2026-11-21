@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // wakePeerRequests backs the PeerHelpEscalator with the guidance table. The
@@ -60,7 +61,7 @@ func (t sessionTitles) Title(sessionUUID string) string {
 		}
 	}
 	data, err := t.storage.FindInstanceDataByID(sessionUUID)
-	if err != nil && !errors.Is(err, session.ErrInstanceDataNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrInstanceDataNotFound) {
 		return sessionUUID
 	}
 	if err == nil && data.Title != "" {

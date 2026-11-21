@@ -92,7 +92,7 @@ func TestSessionMultiPRFlag_ShouldRejectUnknownScope(t *testing.T) {
 func TestArtifactScanV2Flag_ShouldRegisterGlobalOnlyDefaultOff(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
-	assert.False(t, FeatureFlagDefault(config.ArtifactScanV2Flag))
+	assert.False(t, testFlagRegistry().Default(config.ArtifactScanV2Flag))
 	assert.False(t, config.LoadConfig().ArtifactScanV2Enabled())
 	require.NoError(t, flagUpdate(svc, config.ArtifactScanV2Flag, true))
 	assert.True(t, config.LoadConfig().ArtifactScanV2Enabled())

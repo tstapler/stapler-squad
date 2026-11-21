@@ -34,7 +34,7 @@ import (
 type BundleStorage interface {
 	// ListAnalyticsBySessionID returns up to 2000 analytics events for the
 	// given session UUID, ordered by created_at DESC.
-	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]session.AnalyticsData, error)
+	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]domain.AnalyticsData, error)
 	// GetItemSessionBySessionUUID returns the most-recent backlog item session
 	// linked to this session, or domain.ErrNotFound when none exists.
 	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)

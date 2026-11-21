@@ -39,7 +39,6 @@ var legacyPRReaders = map[string]string{
 	"server/services/debug_snapshot.go":          readsInstanceData,
 	"server/services/session_service_create.go":  readsSnapshot, // writes InstanceOptions only; the instance attaches it
 	"server/services/unfinished_work_service.go": readsInstanceData,
-	"session/ent_repository.go":                  readsInstanceData,
 	"session/instance/instance.go":               readsSnapshot,
 	"session/instance/instance_actor_setters.go": readsSnapshot,
 	"session/instance/instance_pr_set.go":        readsSnapshot,
@@ -48,6 +47,9 @@ var legacyPRReaders = map[string]string{
 	"session/domain/instance_snapshot.go":        readsSnapshot,     // the struct definition: declares the scalars next to the PRs set
 	"session/domain/instance_data.go":            readsInstanceData, // the struct definition
 	"session/instance/instance_terminal.go":      readsSnapshot,
+	"session/instancestore/create.go":            readsInstanceData,
+	"session/instancestore/mapper.go":            readsInstanceData,
+	"session/instancestore/update.go":            readsInstanceData,
 	"session/prpoller/pr_status_poller.go":       readsSnapshot,
 	"session/storage.go":                         readsInstanceData,
 }

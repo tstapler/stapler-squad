@@ -16,6 +16,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -26,8 +27,8 @@ const githubIssueProgressCommentsFlagName = "github_issue_progress_comments"
 
 // GitHubIssueProgressCommentsEnabled reads the flag live, so a Settings toggle
 // applies without a restart.
-func GitHubIssueProgressCommentsEnabled() bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(githubIssueProgressCommentsFlagName, FeatureFlagDefault(githubIssueProgressCommentsFlagName))
+func GitHubIssueProgressCommentsEnabled(reg *featureflags.Registry) bool {
+	return flagReader{reg}.enabled(config.LoadConfig(), githubIssueProgressCommentsFlagName)
 }
 
 // issueProgressCommenter posts a comment and returns the issue's post-comment

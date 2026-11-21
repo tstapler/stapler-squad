@@ -11,7 +11,30 @@ In force today (enforced by `.golangci.yml` depguard rules and `tools/bzl/scopin
 - External-system adapters are isolated (`git_*` rules, `isolate_*` rules), and `scoping boundaries` (`tools/bzl/scoping/boundaries.txt`) forbids transitive imports for the packages listed there.
 - Per-package size, file and import caps ratchet down (`tools/bzl/scoping/budget.txt`).
 
-Still a direction (see `project_plans/package-split-ocp/`): `session` (about 81k non-test lines) and `server/services` (about 74k) remain hubs because `Instance`, `Storage`, `EntRepository` and `SessionService` bind most of their files, and some storage methods still return `*ent.*` types. Lowering the persistence DTOs (ADR-011, `dto-lowering-roadmap.md`) is the unlock for extracting more leaves. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
+Still a direction (see `project_plans/package-split-ocp/`): `session` (about 23.4k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`; `budget.txt`'s 23308 is a tight cap from `scoping budget`) and `server/services` (about 70.2k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
+
+### Leaves that exist today
+
+Checked with `ls -d` against this PR's base, `origin/main` (2026-11-20). "Embedded" means `session.EntRepository` embeds the store and `initStores()` builds it.
+
+| Leaf | Holds | Notes |
+|---|---|---|
+| `session/webhookstore`, `guidancestore`, `wakestore`, `markerstore`, `shellstore`, `projectstore`, `rulestore`, `analyticsstore`, `instancestore` | one persistence store each (`instancestore.Instances`: instance create, read, update, delete) | embedded |
+| `session/sessionpr` | pull-request rows (`PRStore`) | embedded; its depguard row allows `github` and `session/instance` |
+| `session/backlogstore` | backlog item, source, activity and status-event persistence (30 non-test files) | embedded; owns the status writers (ADR-007 D1) |
+| `session/flowstore` | flow reader | not embedded by design |
+| `session/stagecfg`, `session/workflowengine` | stage, gate, workflow and pipeline-mode repositories; the workflow engine | consumed through narrow interfaces |
+| `session/domain` | persistence DTOs and value types such as `InstanceData`, `LoadOptions`, `UpdateSkip` | imported by the stores and `session` |
+| `session/instance` | the `Instance` family | interim budget exception, to be decomposed |
+| `session/historyadapters`, `session/itemsources`, `session/migrations` | history adapters, tracker plugins, ent-only startup migrations | registry-style leaves |
+| `server/services/featureflags` | flag `Spec`, immutable `Registry` | stage 2 injects the registry: `flags-stage2-plan.md` |
+| `server/reviewqueue` | review queue manager | imported by the composition root (`server/dependencies*.go`) and an integration test |
+
+The instance store is done (I0-I6 in `instance-dto-lowering-plan.md`); `ent_repository.go` keeps only the constructor, `initStores`, `GetEntClient`, `MaintenanceDriver` and `Close`.
+
+## How to add a leaf
+
+Pick the shape first. A persistence store becomes its own struct built by `New(client, ...)` and embedded by `EntRepository`; a variant (tracker, migration, history adapter) becomes a file plus one registration at the composition root. Then follow the checklist in `.claude/rules/leaf-packages.md`: constructor paths, consumer-side `Ports{...}`, the `isolate_<leaf>` depguard row and `boundaries.txt` row, the budget row, the `go_sources` filegroup, and the pre-push verification list. Move with `git mv` plus `go run ./tools/bzl/scoping move --from D --to D --files ...`, then fix receivers and build-tagged files by hand.
 
 ## The mapping
 
@@ -31,7 +54,7 @@ Still a direction (see `project_plans/package-split-ocp/`): `session` (about 81k
 ## Rules for new code
 
 1. **Smallest cohesive package.** Add a new package under the owning layer (`session/<concept>`, `server/<concept>`) instead of another file in `session/` or `server/services/`. A package should have one reason to change and a name that states its role.
-2. **Leaves are imported only by the composition root and tests.** A package that other domain packages import is part of the core, not a leaf; keep the core small, abstract and stable, and put volatile detail in leaves (stable dependencies, stable abstractions).
+2. **A leaf is imported by its owning hub (for embedded stores, `session.EntRepository`), the composition root and tests; never by a sibling leaf except where its `isolate_` row lists it.** Keep the core small, abstract and stable, and put volatile detail in leaves (stable dependencies, stable abstractions).
 3. **Define an interface where it is consumed**, not where it is implemented (Go's separated interface). Add one only for a real consumer and either two implementations (for example the ent adapter and an in-memory fake) or a genuine test seam. See the `interface-pollution-checklist` skill.
 4. **Open-closed.** A new variant (tracker, migration, stuck detector, process backend, history adapter, delivery channel) is a new file plus one registration at the composition root. If adding a variant means editing a `switch` on a kind enum in several files, add a registry instead of another case.
 5. **Persistence stays behind the mapper.** Return domain DTOs, wrap `ent.IsNotFound` as `session.ErrNotFound`, and import `session/ent` only where the depguard allow-list says.

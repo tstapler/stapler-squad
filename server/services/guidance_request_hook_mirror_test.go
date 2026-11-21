@@ -57,7 +57,7 @@ func newTestMirror(t *testing.T) (*GuidanceHookMirror, *session.Storage, *Pendin
 // newRealStoreMirror lifts the 250 ms production bound: a race-instrumented
 // SQLite write under a parallel test run can exceed it, which is not what these tests probe.
 func newRealStoreMirror(storage *session.Storage, pending *PendingQuestionStore, counts *mirrorCounts) *GuidanceHookMirror {
-	m := NewGuidanceHookMirror(storage, pending, counts.onFailed, counts.onCleared)
+	m := NewGuidanceHookMirror(storage, pending, counts.onFailed, counts.onCleared, testFlagRegistry())
 	m.bound = 10 * time.Second
 	m.enabled = mirrorFlagOn
 	return m
@@ -171,7 +171,7 @@ func TestMirror_should_FailOpenWithinBound_WhenRepositoryBlocksOrErrors(t *testi
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			counts := &mirrorCounts{}
-			m := NewGuidanceHookMirror(tc.store, NewPendingQuestionStore(nil), counts.onFailed, counts.onCleared)
+			m := NewGuidanceHookMirror(tc.store, NewPendingQuestionStore(nil), counts.onFailed, counts.onCleared, testFlagRegistry())
 			m.enabled = mirrorFlagOn
 			if tc.store.release != nil {
 				t.Cleanup(func() { close(tc.store.release) })
@@ -207,7 +207,7 @@ func TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog(t
 	require.True(t, viewOnly)
 
 	restarted := NewPendingQuestionStore(nil) // the service restart: the in-memory cache is empty
-	m2 := NewGuidanceHookMirror(m.store, restarted, nil, nil)
+	m2 := NewGuidanceHookMirror(m.store, restarted, nil, nil, testFlagRegistry())
 	m2.enabled = mirrorFlagOn
 	n, err := m2.Rehydrate(context.Background())
 	require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -41,14 +42,15 @@ func (c *attentionFlagsCache) options() (session.DeterminerOptions, session.Rule
 		session.RuleOptions{AckBypassFix: f.AckBypassFix}
 }
 
-var liveAttentionFlags = &attentionFlagsCache{
-	ttl:  attentionFlagsTTL,
-	load: services.LoadAttentionFlags,
-	now:  time.Now,
+// newAttentionFlagsCache caches load for attentionFlagsTTL.
+func newAttentionFlagsCache(load func() services.AttentionFlags) *attentionFlagsCache {
+	return &attentionFlagsCache{ttl: attentionFlagsTTL, load: load, now: time.Now}
 }
 
-// attentionOptionsSource adapts the live-settable attention flags to the session
-// package, which cannot import server/services.
-func attentionOptionsSource() (session.DeterminerOptions, session.RuleOptions) {
-	return liveAttentionFlags.options()
+// newAttentionOptionsSource adapts the live-settable attention flags, resolved
+// through reg, to the session package, which cannot import server/services.
+func newAttentionOptionsSource(reg *featureflags.Registry) session.FlagOptionsSource {
+	return newAttentionFlagsCache(func() services.AttentionFlags {
+		return services.LoadAttentionFlags(reg)
+	}).options
 }

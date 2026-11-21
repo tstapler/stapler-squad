@@ -81,7 +81,7 @@ func TestBatchedCurrentPane_AnswersLiveSiblings_WhenOneIsGone(t *testing.T) {
 func answerCurrentPaneFor(t *testing.T, pane *paneFake) error {
 	t.Helper()
 	inst := firstPaintInstance(t, pane)
-	_, err := answerCurrentPane(context.Background(), "s", inst, &sessionv1.CurrentPaneRequest{ResyncId: "r"}, nil)
+	_, err := answerCurrentPane(context.Background(), "s", inst, &sessionv1.CurrentPaneRequest{ResyncId: "r"}, currentResyncOptionsFor(defaultFlags(), nil))
 	return err
 }
 
@@ -128,7 +128,7 @@ func TestRunInputReadLoop_should_PropagateSessionGone_ToErrChan(t *testing.T) {
 		sessionID:      "s",
 		resizeSettling: &settling,
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-			return answerCurrentPane(ctx, "s", inst, req, nil)
+			return answerCurrentPane(ctx, "s", inst, req, currentResyncOptionsFor(defaultFlags(), nil))
 		},
 	})
 
