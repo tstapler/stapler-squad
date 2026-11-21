@@ -396,6 +396,7 @@ go_test(
         "instance_write_lease_test.go",
         "instance_write_lease_wiring_test.go",
         "integration_test.go",
+        "item_link_fake_test.go",
         "item_link_test.go",
         "legacy_item_pr_readers_test.go",
         "legacy_pr_readers_test.go",
