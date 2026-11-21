@@ -95,6 +95,11 @@ func open(uri string) (*sql.DB, error) {
 // the full ent schema and no rows, closed via t.Cleanup.
 func NewClient(t testing.TB) *ent.Client {
 	t.Helper()
+	return ent.NewClient(ent.Driver(newDriver(t)))
+}
+
+func newDriver(t testing.TB) dialect.Driver {
+	t.Helper()
 	seed, err := template()
 	if err != nil {
 		t.Fatalf("entdbtest: build template database: %v", err)
@@ -108,11 +113,11 @@ func NewClient(t testing.TB) *ent.Client {
 		_ = db.Close()
 		t.Fatalf("entdbtest: restore template: %v", err)
 	}
-	client := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.SQLite, db)))
+	drv := entsql.OpenDB(dialect.SQLite, db)
 	t.Cleanup(func() {
-		if err := client.Close(); err != nil {
-			t.Logf("entdbtest: close client: %v", err)
+		if err := drv.Close(); err != nil {
+			t.Logf("entdbtest: close database: %v", err)
 		}
 	})
-	return client
+	return drv
 }
