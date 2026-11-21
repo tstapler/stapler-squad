@@ -3,7 +3,10 @@ load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "entdbtest",
-    srcs = ["entdbtest.go"],
+    srcs = [
+        "entdbtest.go",
+        "failcommit.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/session/internal/entdbtest",
     visibility = ["//session:__subpackages__"],
     deps = [

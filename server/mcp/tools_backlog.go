@@ -25,7 +25,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -295,6 +294,7 @@ type ReviewTrigger interface {
 type backlogHandlers struct {
 	storage       *session.Storage
 	store         session.InstanceStore
+	gate          *callerIdentityGate      // shared identity gate (one wake-metrics instance); nil builds a metrics-less one
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
@@ -359,9 +359,9 @@ type backlogHandlers struct {
 	// item wedged in "review" forever — see submitReviewVerdict). Optional;
 	// nil means the eager transition is skipped and the item falls back to
 	// the pre-existing session-exit/sweep paths. The same
-	// session.AutoReopenSpawner *services.BacklogService already implements
+	// reviewgate.AutoReopenSpawner *backlogsvc.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
-	autoReopener reviewgate.AutoReopenSpawner
+	autoReopener AutoReopener
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
@@ -378,10 +378,14 @@ type backlogHandlers struct {
 	// existing shape.
 	getBacklogItemFn func(ctx context.Context, itemID string) (*backlogdto.BacklogItemData, error)
 
+	// github backs the issue import, duplicate-ref check, PR cross-check and
+	// caller-login lookup; nil fails them with ErrGitHubUnavailable.
+	github GitHub
+
 	// resolveCallerGitHubLogin resolves the GitHub login of the identity this
 	// server is authenticated as, used by report_pr_created's override path
 	// to confirm the self-reported PR was authored by the same identity
-	// making the call. Defaults to githubpkg.GetCurrentUserLogin when nil;
+	// making the call. Defaults to h.github.GetCurrentUserLogin when nil;
 	// overridable in tests to avoid making a real GitHub API call.
 	resolveCallerGitHubLogin func(ctx context.Context) (string, error)
 
@@ -393,9 +397,8 @@ type backlogHandlers struct {
 	stageEngine stageLister
 
 	// prCheckerFactory backs get_backlog_stuck_report's live CI cross-check.
-	// Defaults to a real *git.GitWorktree bound to the item's repo_path when
-	// nil; overridable in tests to avoid shelling out to the real `gh` CLI —
-	// mirrors verifyPRMatchesBranch's existing shape.
+	// Built from the injected WorktreeOpener; nil (or a nil result) reports the
+	// cross-check unavailable. Tests set it directly to avoid the real `gh` CLI.
 	prCheckerFactory func(repoPath string) stuckReportPRChecker
 }
 
@@ -2513,7 +2516,10 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", repoErr), ""), nil
 	}
 
-	issue, fetchErr := githubpkg.GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
+	issue, fetchErr := githubOrUnavailable(h.github).GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
+	if errors.Is(fetchErr, ErrGitHubUnavailable) {
+		return errResult(ErrUnavailable, fetchErr.Error(), ""), nil
+	}
 	if fetchErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
@@ -2585,13 +2591,13 @@ func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *github
 	}
 	switch ref.Type {
 	case githubpkg.RefTypePR:
-		_, err := githubpkg.GetPR(ctx, account, repo, ref.PRNumber)
+		_, err := githubOrUnavailable(h.github).GetPR(ctx, account, repo, ref.PRNumber)
 		return err
 	case githubpkg.RefTypeIssue:
-		_, err := githubpkg.GetIssue(ctx, account, repo, ref.IssueNumber)
+		_, err := githubOrUnavailable(h.github).GetIssue(ctx, account, repo, ref.IssueNumber)
 		return err
 	case githubpkg.RefTypeCommit:
-		_, err := githubpkg.GetCommit(ctx, account, repo, ref.CommitSHA)
+		_, err := githubOrUnavailable(h.github).GetCommit(ctx, account, repo, ref.CommitSHA)
 		return err
 	default:
 		return fmt.Errorf("unsupported ref type %s", ref.Type)
@@ -2843,6 +2849,9 @@ func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef 
 	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
 		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
 			return nil, errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), "")
+		}
+		if errors.Is(verifyErr, ErrGitHubUnavailable) {
+			return nil, errResult(ErrUnavailable, fmt.Sprintf("report_duplicate cannot verify %s: %v. This is not transient; do not retry.", duplicateRef, verifyErr), "")
 		}
 		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
 			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), "")

@@ -39,6 +39,7 @@ alias(
 go_test(
     name = "instancestore_test",
     srcs = [
+        "commit_failure_test.go",
         "create_delete_test.go",
         "mapper_test.go",
         "reads_test.go",

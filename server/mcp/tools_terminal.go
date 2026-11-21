@@ -12,7 +12,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 const (
@@ -47,7 +46,7 @@ type liveInstanceFinder interface {
 type terminalHandlers struct {
 	store      session.InstanceStore
 	live       liveInstanceFinder // may be nil; see findInstance
-	scrollback *scrollback.ScrollbackManager
+	scrollback TerminalScrollback
 	writeLim   *tokenBucket // per-session rate limiter for write_to_session
 	// capturePane reads the live tmux pane; nil means inst.CapturePaneContent.
 	// A seam so tests can supply pane content without a real tmux session.
@@ -676,10 +675,7 @@ func (th *terminalHandlers) collectCommandOutput(sessionID string, inst *instanc
 	}
 
 	// Get last sequence from a single recent entry.
-	var lastSeq uint64
-	if entries, err := th.scrollback.GetScrollback(sessionID, 0, 10000); err == nil && len(entries) > 0 {
-		lastSeq = entries[len(entries)-1].Sequence
-	}
+	lastSeq := th.scrollback.LastEntrySequence(sessionID, 10000)
 
 	output := strings.Join(toStringSlice(allLines), "\n")
 	if truncated {

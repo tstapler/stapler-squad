@@ -4,8 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -58,8 +57,9 @@ const (
 // See the initialization order comment on NewServer for dependency constraints.
 type ServerDependencies struct {
 	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
-	// so both feed one wake_trigger_total mirror; set at registration.
+	// so both feed one wake_trigger_total mirror; created on first use by sharedWakeMetrics.
 	WakeMetrics       *wakes.Metrics
+	wakeMetricsMu     sync.Mutex // guards lazy creation in sharedWakeMetrics
 	SessionService    *services.SessionService
 	Storage           *session.Storage
 	Instances         []*instance.Instance
@@ -431,7 +431,7 @@ type BuildOptions struct {
 
 	// RunPRMaintenance runs session.Storage.RunPRStartupMaintenance right after
 	// Storage exists and before any poller, sweeper or ticker is built. Only the
-	// service bootstrap sets it: the stdio MCP fallback (buildMCPDeps) and hook/CLI
+	// service bootstrap sets it: the stdio MCP fallback (RunStdioMCP) and hook/CLI
 	// processes must not import links or reset verification counters.
 	RunPRMaintenance bool
 
@@ -834,21 +834,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	reactiveQueueMgr, slackNotifier := buildReactiveQueue(svc, cfg)
 
-	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
-	// UUIDs to sessions so cold restore can use --resume on restart.
-	historyLinker := importer.NewHistoryLinkerFromRealInspector()
-	log.Info("HistoryLinker initialized", "instances", len(instances))
-
-	// Step 9: ScrollbackManager (independent of above)
-	homeDir, _ := os.UserHomeDir()
-	scrollbackPath := filepath.Join(homeDir, ".stapler-squad", "sessions")
-	scrollbackConfig := scrollback.DefaultScrollbackConfig()
-	scrollbackConfig.StoragePath = scrollbackPath
-	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
-	log.Info("initialized ScrollbackManager", "path", scrollbackPath, "compression", scrollbackConfig.StoragePath, "maxLines", scrollbackConfig.MaxLines)
-
-	// Step 10: TmuxStreamerManager (independent)
-	tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
+	sessionIO := buildSessionIO(len(instances))
+	historyLinker, scrollbackManager, tmuxStreamerManager := sessionIO.historyLinker, sessionIO.scrollbackManager, sessionIO.tmuxStreamerManager
 
 	externalDiscovery, externalApprovalMonitor := wireExternalSessions(svc, historyLinker, sessionTagPoller, backlogLifecycleListener, sessionSummaryGenerator)
 
@@ -864,17 +851,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	startDiagnosticsRetention()
 
-	// One-time startup backfill: seed durable BacklogStuckState rows (with
-	// notified_at pre-set) for items that are already stuck, so the first
-	// genuine reconcile tick does not re-notify for conditions already known
-	// before this restart. Must run before the ticker starts (constructed
-	// further below, after BacklogController/QuotaGate). Gated on the backlog
-	// feature flag directly (backlogCtrl isn't constructed yet at this point)
-	// — seeding rows a disabled ticker will never maintain would leave stale,
-	// un-reconciled rows behind.
-	if cfg.GetFeatureFlag("backlog") {
-		backlogLifecycleListener.BackfillStuckStates(context.Background())
-	}
+	backfillStuckStates(cfg.GetFeatureFlag("backlog"), backlogLifecycleListener.BackfillStuckStates)
 
 	tokenStack := startTokenStores(svc, cfg, historyLinker)
 
@@ -899,16 +876,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	julesPoller := buildJules(svc, cfg, backlogSvc)
 
-	// 30 min reaper: kill any tmux sessions still running for paused instances.
-	// Safety net for sessions paused before the kill-on-pause change, or where the
-	// initial kill attempt fell back to detach.
-	go func() {
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			sessionService.ReapPausedTmuxSessions()
-		}
-	}()
+	startPausedTmuxReaper(pausedTmuxReapInterval, sessionService.ReapPausedTmuxSessions)
 
 	// Unwired, GatedTransition answers in Off mode, so every transition would pass unchecked.
 	if !storage.TransitionGateWired() {

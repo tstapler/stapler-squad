@@ -3,15 +3,10 @@ package mcp
 import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
-	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
-	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 // ToolModule registers one family of MCP tools. A new family is a new file with
@@ -33,25 +28,29 @@ func WithToolModules(mods ...ToolModule) CoreOption {
 	return func(c *coreConfig) { c.extraModules = append(c.extraModules, mods...) }
 }
 
-// coreDeps carries NewCore's positional arguments to the module constructors,
-// the one place server/mcp acts as a second composition root.
+// coreDeps carries NewCore's injected arguments to the module constructors. It only
+// assembles handlers over deps built in server/dependencies.go; server/mcp is not a
+// composition root (see single_root_guard_test.go).
 type coreDeps struct {
 	store          session.InstanceStore
 	svc            *services.SessionService
-	sbMgr          *scrollback.ScrollbackManager
+	sbMgr          TerminalScrollback
 	storage        *session.Storage
 	eventBus       *events.EventBus
-	prCache        *githubpkg.UserPRCache
 	backlogEnabled func() bool
-	autoReopener   reviewgate.AutoReopenSpawner
+	autoReopener   AutoReopener
 	backlogSvc     *backlogsvc.BacklogService
 	liveCheck      func(sessionUUID string) bool
 	cfg            coreConfig
+	gate           *callerIdentityGate // built once in defaultToolModules from cfg.wakeMetrics
 }
 
 // defaultToolModules lists the built-in families in registration order; the
 // order is pinned by tool_set_golden_test.go and TestDefaultToolModules_*.
 func defaultToolModules(d coreDeps) []ToolModule {
+	if d.storage != nil {
+		d.gate = &callerIdentityGate{metrics: d.cfg.wakeMetrics, roleOf: roleLookupFrom(d.storage.GetItemSessionBySessionUUID)}
+	}
 	// A nil *services.SessionService or *session.Storage stored directly in an
 	// interface-typed field would be a non-nil interface around a nil pointer,
 	// so each gate below is an explicit pointer comparison.
@@ -68,7 +67,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 		newDiscoveryModule(d.store),
 		newLifecycleModule(d.store, d.svc, diagnoseCheck),
 		newTerminalModule(d.store, liveFinder, d.sbMgr, diagnoseCheck),
-		newVCSModule(d.store),
+		newVCSModule(d.store, d.cfg.openWorktree),
 		newWorkflowModule(d.svc),
 		newRulesModule(d.svc),
 		newTaggingRulesModule(d.svc),
@@ -76,8 +75,8 @@ func defaultToolModules(d coreDeps) []ToolModule {
 		newHistoryModule(d.svc),
 	}
 	mods = append(mods, newBacklogModules(d, liveFinder)...)
-	mods = append(mods, newIdentityGatedModules(d.storage, d.eventBus)...)
-	mods = append(mods, newGitHubModule(d.prCache, d.store, d.svc))
+	mods = append(mods, newIdentityGatedModules(d.gate, d.storage, d.eventBus)...)
+	mods = append(mods, newGitHubModule(d.cfg.userPRs, d.store, d.svc))
 	return append(mods, d.cfg.extraModules...)
 }
 
@@ -99,7 +98,7 @@ func newLifecycleModule(store session.InstanceStore, svc *services.SessionServic
 	})
 }
 
-func newTerminalModule(store session.InstanceStore, live liveInstanceFinder, sbMgr *scrollback.ScrollbackManager, diagnoseCheck diagnoseCallerCheck) ToolModule {
+func newTerminalModule(store session.InstanceStore, live liveInstanceFinder, sbMgr TerminalScrollback, diagnoseCheck diagnoseCallerCheck) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
 		registerTerminalTools(s, &terminalHandlers{
 			store:         store,
@@ -111,8 +110,8 @@ func newTerminalModule(store session.InstanceStore, live liveInstanceFinder, sbM
 	})
 }
 
-func newVCSModule(store session.InstanceStore) ToolModule {
-	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerVCSTools(s, &vcsHandlers{store: store}) })
+func newVCSModule(store session.InstanceStore, open WorktreeOpener) ToolModule {
+	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerVCSTools(s, &vcsHandlers{store: store, open: open}) })
 }
 
 func newWorkflowModule(svc *services.SessionService) ToolModule {
@@ -158,12 +157,13 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	if d.storage == nil || (d.backlogEnabled != nil && !d.backlogEnabled()) {
 		return nil
 	}
-	h := &backlogHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser}
+	h := &backlogHandlers{gate: d.gate, storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser, prCheckerFactory: stuckReportCheckerFactory(d.cfg.openWorktree), github: d.cfg.github}
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerBacklogTools(s, h) }),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerStuckReportTools(s, h) }),
 		newClaimModule(d.backlogSvc, d.backlogEnabled),
 		toolModuleFunc(func(s *mcpserver.MCPServer) {
+			// d.storage is non-nil here (early return above), so the interface is never a boxed nil.
 			registerGoalTools(s, &goalHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, enabledCheck: d.backlogEnabled})
 		}),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerGuidanceTools(s, h) }),
@@ -184,7 +184,7 @@ func newClaimModule(backlogSvc *backlogsvc.BacklogService, enabled func() bool) 
 }
 
 // newFlowModule always registers: a nil flowSvc makes the tools answer ErrUnavailable.
-func newFlowModule(flowSvc *backlogflow.BacklogFlowService, enabled func() bool) ToolModule {
+func newFlowModule(flowSvc FlowService, enabled func() bool) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
 		registerFlowTools(s, &flowHandlers{svc: flowSvc, enabledCheck: enabled})
 	})
@@ -192,13 +192,9 @@ func newFlowModule(flowSvc *backlogflow.BacklogFlowService, enabled func() bool)
 
 // newIdentityGatedModules returns the wake, peer-help and owner-action modules,
 // which share one identity gate and (peer-help, owner-action) one handler set.
-func newIdentityGatedModules(storage *session.Storage, bus *events.EventBus) []ToolModule {
-	if storage == nil {
+func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage, bus *events.EventBus) []ToolModule {
+	if storage == nil || gate == nil {
 		return nil
-	}
-	gate := &callerIdentityGate{
-		metrics: wakes.NewMetrics(),
-		roleOf:  roleLookupFrom(storage.GetItemSessionBySessionUUID),
 	}
 	peerHelp := newPeerHelpHandlers(gate, storage, bus)
 	return []ToolModule{
@@ -208,7 +204,7 @@ func newIdentityGatedModules(storage *session.Storage, bus *events.EventBus) []T
 	}
 }
 
-func newGitHubModule(prCache *githubpkg.UserPRCache, store session.InstanceStore, svc *services.SessionService) ToolModule {
+func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc *services.SessionService) ToolModule {
 	if prCache == nil {
 		return nil
 	}

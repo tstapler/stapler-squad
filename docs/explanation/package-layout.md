@@ -59,7 +59,8 @@ Pick the shape first. A persistence store becomes its own struct built by `New(c
 4. **Open-closed.** A new variant (tracker, migration, stuck detector, process backend, history adapter, delivery channel) is a new file plus one registration at the composition root. If adding a variant means editing a `switch` on a kind enum in several files, add a registry instead of another case.
 5. **Persistence stays behind the mapper.** Return domain DTOs, wrap `ent.IsNotFound` as `session.ErrNotFound`, and import `session/ent` only where the depguard allow-list says.
 6. **No lasting type aliases** to keep an old import path alive; an alias keeps `session` as the hub. A temporary alias is allowed only when the same series removes it.
-7. **Behaviour-preserving moves.** `git mv` plus a codemod, one cluster per PR, `go build`, `go vet` and the moved and importing packages' tests green, `make gazelle` leaving no diff, and a `scoping-budget-raise:` line in the commit message if a cap must rise.
+7. **One composition root.** `server/dependencies.go` is the only place that builds dependencies and names concrete types (owner decision Q5, 2026-11-20). `server/mcp` receives its deps from there and is not a second root, enforced by `server/mcp/single_root_guard_test.go` (no `New*` of a concrete type) and the `isolate_server_mcp` depguard row; its measured gap is in `project_plans/package-split-ocp/mcp-single-root-plan.md`.
+8. **Behaviour-preserving moves.** `git mv` plus a codemod, one cluster per PR, `go build`, `go vet` and the moved and importing packages' tests green, `make gazelle` leaving no diff, and a `scoping-budget-raise:` line in the commit message if a cap must rise.
 
 ## Recipes
 

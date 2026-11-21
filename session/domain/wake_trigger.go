@@ -34,6 +34,16 @@ func AllWakeTriggerTypes() []WakeTriggerType {
 	return append([]WakeTriggerType(nil), allWakeTriggerTypes...)
 }
 
+// AllWakeTriggerTypeNames returns the string form of every valid trigger type,
+// in AllWakeTriggerTypes order, as a fresh slice.
+func AllWakeTriggerTypeNames() []string {
+	names := make([]string, len(allWakeTriggerTypes))
+	for i, t := range allWakeTriggerTypes {
+		names[i] = string(t)
+	}
+	return names
+}
+
 // IsValid reports whether t is a known trigger type.
 func (t WakeTriggerType) IsValid() bool {
 	for _, v := range allWakeTriggerTypes {

@@ -13,7 +13,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -55,18 +54,18 @@ func (h *backlogHandlers) verifyPR(ctx context.Context, ref githubpkg.RepoRef, p
 	if h.verifyPRMatchesBranch != nil {
 		return h.verifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 	}
-	return VerifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
+	return VerifyPRMatchesBranch(ctx, githubOrUnavailable(h.github), ref, prNumber, expectedBranch)
 }
 
 // callerGitHubLogin resolves the GitHub login this server is authenticated
 // as on host ("" means github.com), via the overridable resolveCallerGitHubLogin
 // seam when set (host is ignored on that seam — tests only ever exercise
-// github.com), otherwise the real githubpkg.GetCurrentUserLogin.
+// github.com), otherwise the injected GitHub port.
 func (h *backlogHandlers) callerGitHubLogin(ctx context.Context, host string) (string, error) {
 	if h.resolveCallerGitHubLogin != nil {
 		return h.resolveCallerGitHubLogin(ctx)
 	}
-	return githubpkg.GetCurrentUserLogin(ctx, host)
+	return githubOrUnavailable(h.github).GetCurrentUserLogin(ctx, host)
 }
 
 // decideOverridePolicy is the pure decision function behind
@@ -167,7 +166,10 @@ func (h *backlogHandlers) recordOverrideBranch(ctx context.Context, callerUUID, 
 // behind the identity gate, so callerUUID is the verified session credential
 // (ADR-007 rule 0), never the spoofable X-Stapler-Session-UUID claim.
 func (h *backlogHandlers) reportPRCreatedTool() mcpserver.ToolHandlerFunc {
-	gate := &callerIdentityGate{metrics: wakes.NewMetrics(), roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	gate := h.gate
+	if gate == nil { // only hand-built handlers (tests); NewCore always sets h.gate when storage is present
+		gate = &callerIdentityGate{roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	}
 	return withCallerIdentityGate(gate, toolReportPRCreated, h.reportPRCreated)
 }
 
