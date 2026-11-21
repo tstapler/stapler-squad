@@ -225,9 +225,10 @@ Registry and module-slice seams in the stable cores that every new variant curre
 
 ### SRV-wiring: server -> server (in place: same-package functions and tables; no server/startup, server/actuator, server/httpx, wakes/wiring or prwatch/wiring packages)
 
-- Cost: M-L (2-3 PRs; lands BEFORE backend-di-refactor Story 1.3, per owner decision Q4 of 2026-11-20)
+- Cost: M (2 PRs left: BuildRuntimeDeps step functions, then the installWakeTools/buildAndStartWakes lists; lands BEFORE backend-di-refactor Story 1.3, per owner decision Q4 of 2026-11-20)
+- Status: DONE: the actuator endpoint table (2c422c45c landed the table; #1728 finishes the `http.Handler` row type and the behavioural tests). Remaining: BuildRuntimeDeps step functions; installWakeTools/buildAndStartWakes list.
 - Role: composition root
-- Payoff: Reduces the two hub files' OCP violations without creating cycles: registerActuatorRoutes becomes an endpoint table; BuildRuntimeDeps (~1470 LOC, ~86 locals) is split into same-file-set functions with typed inputs/outputs; installWakeTools/buildAndStartWakes list shrink. Root server is already a leaf (only main and inttest import it), so no Bazel payoff is claimed.
+- Payoff: Reduces the two hub files' OCP violations without creating cycles: registerActuatorRoutes becomes an endpoint table (done); BuildRuntimeDeps (~1470 LOC, ~86 locals) is split into same-file-set functions with typed inputs/outputs; installWakeTools/buildAndStartWakes list shrink. Root server is already a leaf (only main and inttest import it), so no Bazel payoff is claimed.
 - Ports:
   - No new interfaces. Plain struct {Path string; Handler http.Handler} for actuator endpoints; plain func parameters (Go func(func()), OnShutdown func(func())) instead of a Router/BackgroundRunner/Mux interface
 - Extension points:

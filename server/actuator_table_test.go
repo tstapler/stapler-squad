@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 )
 
+// Limit: wrapping a handler at registration with a behaviour-neutral wrapper is not detectable here.
 // Each row names a marker only that endpoint's handler produces, so swapping two
 // handlers in the table fails here, not just a missing path.
 var actuatorRouteProbes = []struct {
