@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -12,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var _ FlowService = (*backlogflow.BacklogFlowService)(nil)
@@ -149,6 +151,26 @@ func TestFlowHandlers_should_PassToolArgumentsToThePort(t *testing.T) {
 		{"thrash all time", "ListThrashEpisodes", map[string]any{"all_time": true, "limit": 8.0},
 			(*flowHandlers).listFlowThrashEpisodes,
 			&sessionv1.ListThrashEpisodesRequest{AllTime: true, Limit: 8}},
+		{"summary all time", "GetFlowSummary", map[string]any{"all_time": true, "list_limit": 2.0},
+			(*flowHandlers).getFlowSummary,
+			&sessionv1.GetFlowSummaryRequest{AllTime: true, ListLimit: 2}},
+		{"drilldown all time", "ListFlowDrilldown", map[string]any{"key": "k", "all_time": true, "limit": 3.0, "offset": 4.0},
+			(*flowHandlers).listFlowDrilldown,
+			&sessionv1.ListFlowDrilldownRequest{Key: "k", AllTime: true, Limit: 3, Offset: 4}},
+		{"deadlock all time", "ListDeadlockCandidates", map[string]any{"all_time": true, "limit": 6.0},
+			(*flowHandlers).listFlowDeadlockCandidates,
+			&sessionv1.ListDeadlockCandidatesRequest{AllTime: true, Limit: 6}},
+		{"thrash window", "ListThrashEpisodes", map[string]any{"window_days": 13.0, "limit": 8.0},
+			(*flowHandlers).listFlowThrashEpisodes,
+			&sessionv1.ListThrashEpisodesRequest{WindowDays: 13, Limit: 8}},
+		{"timeline all time", "GetItemFlowTimeline", map[string]any{"item_id": "it-1", "all_time": true},
+			(*flowHandlers).getItemFlowTimeline,
+			&sessionv1.GetItemFlowTimelineRequest{ItemId: "it-1", AllTime: true}},
+		{"compare dates", "CompareFlowWindows", map[string]any{"a_start": "2026-01-01", "a_end": "2026-01-08", "b_start": "2026-01-08", "b_end": "2026-01-15"},
+			(*flowHandlers).compareFlowWindows,
+			&sessionv1.CompareFlowWindowsRequest{
+				AStart: timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)), AEnd: timestamppb.New(time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)),
+				BStart: timestamppb.New(time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)), BEnd: timestamppb.New(time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC))}},
 		{"timeline", "GetItemFlowTimeline", map[string]any{"item_id": "it-1", "window_days": 11.0},
 			(*flowHandlers).getItemFlowTimeline,
 			&sessionv1.GetItemFlowTimelineRequest{ItemId: "it-1", WindowDays: 11}},
@@ -186,9 +208,10 @@ func TestSanitizeFlowKeyEcho_should_FlattenNewlines(t *testing.T) {
 	assert.Equal(t, "a b", sanitizeFlowKeyEcho("a\nb"))
 }
 
-// A typed-nil pointer boxed into the port defeats the absent-service guard: the flow tools would
-// reach a nil service instead of answering ErrUnavailable. This pins that hazard so the wiring
-// (flowMCPOptions, which never produces it) stays the only supplier.
+// Documents the hazard: a typed-nil pointer boxed into the port is a non-nil interface, so the flow
+// tools would reach a nil service. The guard is
+// TestFlowMCPOptions_should_ShareRpcServiceInstance_When_FlowServiceWired, which asserts flowMCPOptions
+// never produces it.
 func TestWithFlowService_should_BoxATypedNil_When_GivenANilPointer(t *testing.T) {
 	t.Parallel()
 	got := FlowServiceFromOptions(WithFlowService((*backlogflow.BacklogFlowService)(nil)))
