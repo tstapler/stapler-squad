@@ -18,7 +18,7 @@ import (
 
 // goalHandlers implements session goal MCP tools.
 type goalHandlers struct {
-	storage      *session.Storage
+	storage      GoalStore
 	store        session.InstanceStore
 	eventBus     *events.EventBus
 	enabledCheck func() bool // optional; nil means always-enabled (tests)
