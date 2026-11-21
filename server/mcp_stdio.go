@@ -19,20 +19,37 @@ import (
 // auto-triage and link_session_to_item answers UNAVAILABLE (ADR-001). The
 // scrollback manager is read-only: it reads what the HTTP process wrote.
 func RunStdioMCP(ctx context.Context, backlogEnabled func() bool) error {
-	core, err := BuildCoreDeps()
+	return stdioAssembly{
+		buildCore: BuildCoreDeps,
+		homeDir:   os.UserHomeDir,
+		serve: func(ctx context.Context, core *CoreDeps, sbMgr *scrollback.ScrollbackManager, backlogEnabled func() bool, opts ...servermcp.CoreOption) error {
+			return servermcp.RunServer(ctx, core.Storage, core.SessionService, sbMgr, core.Storage, nil, nil, backlogEnabled, nil, nil, nil, opts...)
+		},
+	}.run(ctx, backlogEnabled)
+}
+
+// stdioAssembly holds RunStdioMCP's three side effects so tests can fake them.
+type stdioAssembly struct {
+	buildCore func() (*CoreDeps, error)
+	homeDir   func() (string, error)
+	serve     func(ctx context.Context, core *CoreDeps, sbMgr *scrollback.ScrollbackManager, backlogEnabled func() bool, opts ...servermcp.CoreOption) error
+}
+
+func (a stdioAssembly) run(ctx context.Context, backlogEnabled func() bool) error {
+	core, err := a.buildCore()
 	if err != nil {
 		return fmt.Errorf("mcp: init deps: %w", err)
 	}
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := a.homeDir()
 	if err != nil {
-		return fmt.Errorf("mcp: cannot determine home directory for scrollback storage: %w", err)
+		return fmt.Errorf("mcp: init deps: cannot determine home directory for scrollback storage: %w", err)
 	}
 	sbConfig := scrollback.DefaultScrollbackConfig()
 	sbConfig.StoragePath = filepath.Join(homeDir, ".stapler-squad", "sessions")
 	sbMgr := scrollback.NewScrollbackManager(sbConfig)
 
 	return runStdioMCP(core.Storage, func(opts ...servermcp.CoreOption) error {
-		return servermcp.RunServer(ctx, core.Storage, core.SessionService, sbMgr, core.Storage, nil, nil, backlogEnabled, nil, nil, nil, opts...)
+		return a.serve(ctx, core, sbMgr, backlogEnabled, opts...)
 	})
 }
 

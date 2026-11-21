@@ -75,6 +75,16 @@ func FlowServiceFromOptions(opts ...CoreOption) *backlogflow.BacklogFlowService 
 	return newCoreConfig(opts).flowSvc
 }
 
+// PluginRegistryFromOptions returns the plugin registry the options carry, or nil.
+func PluginRegistryFromOptions(opts ...CoreOption) *session.PluginRegistry {
+	return newCoreConfig(opts).plugins
+}
+
+// TrackerRefParserFromOptions returns the tracker ref parser the options carry, or nil.
+func TrackerRefParserFromOptions(opts ...CoreOption) TrackerRefParser {
+	return newCoreConfig(opts).refParser
+}
+
 func newCoreConfig(opts []CoreOption) coreConfig {
 	var c coreConfig
 	for _, o := range opts {

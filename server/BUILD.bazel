@@ -353,6 +353,7 @@ go_test(
         "//session/itemsources",
         "//session/prpoller",
         "//session/queue",
+        "//session/scrollback",
         "//session/search",
         "//session/stagecfg",
         "//session/tmux",
