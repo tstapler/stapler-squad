@@ -30,7 +30,7 @@ func newWakeHandlers(gate *callerIdentityGate) *wakeHandlers {
 func registerWakeTools(s *mcpserver.MCPServer, h *wakeHandlers) {
 	s.AddTool(mcpgo.NewTool(toolScheduleWake,
 		mcpgo.WithDescription("Ask to be woken later instead of polling: at a time, on a cron schedule, when a backlog item reaches a state, when a PR merges or its checks finish, when a peer session reaches a state, or when a help/guidance request is answered. The wake is a new prompt delivered into THIS session; it survives restarts. The session is always the verified caller; any session_id argument is ignored. Limits apply (pending per session, cron interval, fires per hour) and a refusal names the limit."),
-		mcpgo.WithString("trigger_type", mcpgo.Required(), mcpgo.Enum(triggerTypeNames()...)),
+		mcpgo.WithString("trigger_type", mcpgo.Required(), mcpgo.Enum(domain.AllWakeTriggerTypeNames()...)),
 		mcpgo.WithString("message", mcpgo.Required(), mcpgo.Description("The prompt delivered to you when the wake fires.")),
 		mcpgo.WithString("at", mcpgo.Description("RFC 3339 time, for trigger_type=at.")),
 		mcpgo.WithNumber("delay_minutes", mcpgo.Description("Minutes from now, for trigger_type=at (alternative to at).")),
@@ -123,7 +123,7 @@ func (h *wakeHandlers) scheduleWake(ctx context.Context, caller string, req mcpg
 	args := req.GetArguments()
 	typ := domain.WakeTriggerType(stringArg(args, "trigger_type"))
 	if !typ.IsValid() {
-		return errResult(ErrInvalidArgument, fmt.Sprintf("trigger_type %q is not one of %v", typ, triggerTypeNames()), ""), nil
+		return errResult(ErrInvalidArgument, fmt.Sprintf("trigger_type %q is not one of %v", typ, domain.AllWakeTriggerTypeNames()), ""), nil
 	}
 	if scope := h.flags.triggerOff(typ); scope != "" {
 		return flagOff(scope), nil

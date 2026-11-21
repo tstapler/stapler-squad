@@ -155,3 +155,15 @@ func TestWakeTriggerType_should_ClassifyTimeAndRecurring(t *testing.T) {
 	}
 	assert.False(t, WakeTriggerType("x").IsValid())
 }
+
+func TestAllWakeTriggerTypeNames(t *testing.T) {
+	t.Parallel()
+	types := AllWakeTriggerTypes()
+	names := AllWakeTriggerTypeNames()
+	require.Len(t, names, len(types))
+	for i, tt := range types {
+		assert.Equal(t, string(tt), names[i], "order must match AllWakeTriggerTypes")
+	}
+	names[0] = "mutated"
+	assert.NotEqual(t, "mutated", AllWakeTriggerTypeNames()[0], "each call returns a fresh slice")
+}

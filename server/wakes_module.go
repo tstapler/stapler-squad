@@ -147,16 +147,7 @@ func wakeTypeEnabled(t domain.WakeTriggerType) bool {
 // wakeDispatcherEnabled applies the flag matrix row "dispatcher running":
 // the global flag, or an explicit scoped true for any trigger type.
 func wakeDispatcherEnabled(cfg *config.Config) bool {
-	return cfg.WakeDispatcherRunning(wakeTriggerTypeNames())
-}
-
-func wakeTriggerTypeNames() []string {
-	types := domain.AllWakeTriggerTypes()
-	names := make([]string, len(types))
-	for i, t := range types {
-		names[i] = string(t)
-	}
-	return names
+	return cfg.WakeDispatcherRunning(domain.AllWakeTriggerTypeNames())
 }
 
 // startWakes wires the wake dispatcher's lifecycle to the flag matrix and

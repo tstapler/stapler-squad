@@ -65,19 +65,10 @@ func askUserQuestionStructuredScopes() []string {
 	return []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply}
 }
 
-// wakeTriggerTypeScopes derives the trigger scope names from the domain's closed
-// set, so a new wake trigger type gets its `trigger:<name>` scope automatically.
-func wakeTriggerTypeScopes() []string {
-	types := domain.AllWakeTriggerTypes()
-	names := make([]string, len(types))
-	for i, t := range types {
-		names[i] = string(t)
-	}
-	return names
-}
-
+// agentWakeTriggerScopes derives the trigger scopes from the domain's closed set,
+// so a new wake trigger type gets its `trigger:<name>` scope automatically.
 func agentWakeTriggerScopes() []string {
-	return append(prefixed(scopePrefixTrigger, wakeTriggerTypeScopes()), prefixed(scopePrefixTool, wakeToolScopes)...)
+	return append(prefixed(scopePrefixTrigger, domain.AllWakeTriggerTypeNames()), prefixed(scopePrefixTool, wakeToolScopes)...)
 }
 
 // Spike evidence compiled in until it is recorded (ADR-008): a gate that needs a
