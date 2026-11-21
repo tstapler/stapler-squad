@@ -2851,6 +2851,9 @@ func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef 
 		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
 			return nil, errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), "")
 		}
+		if errors.Is(verifyErr, ErrGitHubUnavailable) {
+			return nil, errResult(ErrUnavailable, fmt.Sprintf("report_duplicate cannot verify %s: %v. This is not transient; do not retry.", duplicateRef, verifyErr), "")
+		}
 		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
 			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), "")
 		}

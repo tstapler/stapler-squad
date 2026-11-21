@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // httpGitHub is the real github-package client, for tests that point
@@ -192,6 +193,26 @@ func TestVerifyPR_should_ReportNoPR_When_PortReturnsErrNoPR(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, v.Exists)
+}
+
+func TestReportDuplicate_should_ReportPermanentUnavailable_When_GitHubAbsent(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	item, sessionUUID := setupReportDuplicateFixture(t, storage, domain.BacklogStatusInProgress)
+	h := &backlogHandlers{storage: storage}
+
+	res, err := h.reportDuplicate(WithSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
+		"item_id":       item.ID,
+		"duplicate_ref": "https://github.com/o/r/pull/272",
+		"reason":        "same fix already merged in that PR",
+	}))
+
+	require.NoError(t, err)
+	got := parseResult(t, res)
+	assert.Equal(t, ErrUnavailable, resultErrField(got, "code"))
+	msg := resultErrField(got, "message")
+	assert.Contains(t, msg, "not transient")
+	assert.NotContains(t, msg, "retry:")
 }
 
 func TestVerifyPR_should_ReturnTransientError_When_GitHubAbsent(t *testing.T) {

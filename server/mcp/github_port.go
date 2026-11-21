@@ -25,7 +25,8 @@ type GitHub interface {
 
 // WithGitHub supplies the GitHub client behind import_github_issue,
 // report_duplicate, report_pr_created and its PR cross-check. Without it those
-// calls fail with ErrGitHubUnavailable.
+// calls fail with ErrGitHubUnavailable. Pass an untyped nil or a non-nil value:
+// a typed-nil pointer defeats the absent-port guard.
 func WithGitHub(g GitHub) CoreOption {
 	return func(c *coreConfig) { c.github = g }
 }

@@ -262,6 +262,7 @@ go_test(
         "listener_metrics_test.go",
         "live_session_stopper_test.go",
         "main_test.go",
+        "mcp_github_test.go",
         "mcp_proofs_wiring_test.go",
         "notification_decision_lister_adapter_test.go",
         "notification_priority_test.go",
