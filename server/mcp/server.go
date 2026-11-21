@@ -11,7 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -130,7 +129,7 @@ func NewCore(
 	eventBus *events.EventBus,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
-	backlogSvc *backlogsvc.BacklogService,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.MCPServer {
@@ -164,7 +163,7 @@ func NewHTTPHandler(
 	eventBus *events.EventBus,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
-	backlogSvc *backlogsvc.BacklogService,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.StreamableHTTPServer {
@@ -195,7 +194,7 @@ func RunServer(
 	eventBus *events.EventBus,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
-	backlogSvc *backlogsvc.BacklogService,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) error {

@@ -9,7 +9,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // claimCheckService is the slice of *services.BacklogService the
@@ -60,7 +60,7 @@ func (h *claimHandlers) checkCrossHostClaim(ctx context.Context, req mcpgo.CallT
 	}
 
 	verdict, err := h.svc.LookupCrossHostClaim(ctx, externalURL)
-	if errors.Is(err, backlogsvc.ErrCrossHostClaimDedupDisabled) {
+	if errors.Is(err, domain.ErrCrossHostClaimDedupDisabled) {
 		return okResult(CheckCrossHostClaimResult{MCPResult: MCPResult{Success: true}, Note: "cross_host_claim_dedup is disabled on this host"}), nil
 	}
 	if err != nil {

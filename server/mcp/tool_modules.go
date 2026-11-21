@@ -5,7 +5,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -39,7 +38,7 @@ type coreDeps struct {
 	eventBus       *events.EventBus
 	backlogEnabled func() bool
 	autoReopener   AutoReopener
-	backlogSvc     *backlogsvc.BacklogService
+	backlogSvc     BacklogRPC
 	liveCheck      func(sessionUUID string) bool
 	cfg            coreConfig
 	gate           *callerIdentityGate // built once in defaultToolModules from cfg.wakeMetrics
@@ -173,7 +172,7 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	}
 }
 
-func newClaimModule(backlogSvc *backlogsvc.BacklogService, enabled func() bool) ToolModule {
+func newClaimModule(backlogSvc BacklogRPC, enabled func() bool) ToolModule {
 	if backlogSvc == nil {
 		return nil
 	}

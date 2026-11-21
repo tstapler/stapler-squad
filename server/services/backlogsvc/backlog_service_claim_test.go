@@ -604,3 +604,15 @@ func TestDequeueNextQueuedItems_should_KeepBlockedByClaimRow_When_ClaimStillHeld
 
 	assert.Equal(t, 1, openClaimStuckRows(t, svc, itemID))
 }
+
+func TestLookupCrossHostClaim_should_ReturnDomainSentinelWithoutCheck_When_FeatureFlagOff(t *testing.T) {
+	checker := &fakeClaimChecker{verdict: heldByHostA(t)}
+	svc := claimEnabledService(t, checker)
+	svc.claimDedupFlag = func() bool { return false }
+
+	verdict, err := svc.LookupCrossHostClaim(context.Background(), claimIssueURL)
+
+	require.ErrorIs(t, err, domain.ErrCrossHostClaimDedupDisabled)
+	assert.Equal(t, services.NewUnclaimedVerdict(), verdict)
+	assert.Zero(t, checker.liveCalls.Load())
+}

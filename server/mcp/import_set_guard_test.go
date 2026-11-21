@@ -39,7 +39,6 @@ var allowedImports = map[string]string{
 	modulePrefix + "pkg/events":                          "event bus (outside the measured set)",
 	modulePrefix + "pkg/localtoken":                      "local token",
 	modulePrefix + "server/services":                     "M4b-5: SessionService and creation helpers",
-	modulePrefix + "server/services/backlogsvc":          "M4b-3: BacklogService",
 	modulePrefix + "server/wakes":                        "wake metrics",
 	modulePrefix + "session":                             "M4b-4: Storage, InstanceStore",
 	modulePrefix + "session/backlog/pipeline":            "pipeline helpers",

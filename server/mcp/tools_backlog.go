@@ -22,7 +22,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -311,7 +310,7 @@ type backlogHandlers struct {
 	// AttachSessionToItem call. Concrete type per this package's existing convention
 	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
-	backlogSvc *backlogsvc.BacklogService
+	backlogSvc BacklogRPC
 
 	// plugins resolves the tracker plugins behind import_linear_issue / import_jira_issue.
 	plugins *session.PluginRegistry
@@ -653,7 +652,7 @@ func isStaleVerdict(item *backlogdto.BacklogItemData, verdict *backlogdto.Review
 // re-requested: no reviewer is live and the latest verdict is missing, stale, or
 // not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
 func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary, verdict *backlogdto.ReviewVerdictSummary) bool {
-	if backlogsvc.HasActiveReviewSession(sessions) {
+	if backlogdto.HasActiveReviewSession(sessions) {
 		return false
 	}
 	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(domain.ReviewVerdictPass)
@@ -1490,7 +1489,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if backlogsvc.HasActiveReviewSession(itemSessions) {
+		if backlogdto.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
@@ -1513,7 +1512,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if backlogsvc.HasActiveReviewSession(itemSessions) {
+		if backlogdto.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 	}
