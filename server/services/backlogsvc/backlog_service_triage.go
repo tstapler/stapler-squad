@@ -1759,30 +1759,6 @@ func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, it
 	}
 }
 
-// findActiveReviewSession returns the open (not yet ended) review-role
-// ItemSession, if any — the review-role counterpart of findActiveWorkSession.
-// Used by AutoRespawnReview to avoid double-spawning a review pass that is
-// already running, and to give its skip branch the session UUID it needs to
-// enrich notifyRespawnBlockedByActiveSession with a progress signal instead
-// of a bare "already active."
-func findActiveReviewSession(priorSessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
-	for i := range priorSessions {
-		if priorSessions[i].Role == instance.SessionRoleReview && priorSessions[i].EndedAt == nil {
-			return &priorSessions[i]
-		}
-	}
-	return nil
-}
-
-// HasActiveReviewSession reports whether any of the provided ItemSessions is an
-// open (not yet ended) review-role session. Mirrors hasActiveWorkSession; used by
-// AutoRespawnReview to avoid double-spawning a review pass that is already running,
-// and by server/mcp's request_review handler to refuse re-routing a pr_pending item
-// out from under a running reviewer (FR2).
-func HasActiveReviewSession(priorSessions []backlogdto.ItemSessionSummary) bool {
-	return findActiveReviewSession(priorSessions) != nil
-}
-
 // buildRevisionTitle returns the session title for a backlog work session. On reopen
 // (isReopen=true) it appends "-rN" where N is one past the existing work-session count.
 func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []backlogdto.ItemSessionSummary) string {
@@ -2579,7 +2555,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
 	active := findActiveWorkSession(sessions)
 	if active == nil {
-		active = findActiveReviewSession(sessions)
+		active = backlogdto.FindActiveReviewSession(sessions)
 	}
 	if active == nil {
 		active = findActiveJulesSession(sessions)

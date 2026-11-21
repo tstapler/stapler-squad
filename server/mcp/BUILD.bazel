@@ -61,7 +61,6 @@ go_library(
         "//pkg/localtoken",
         "//proto/session/v1:sessionv1_go",
         "//server/services",
-        "//server/services/backlogsvc",
         "//server/wakes",
         "//session",
         "//session/backlog/pipeline",
@@ -93,6 +92,7 @@ go_test(
     name = "mcp_test",
     srcs = [
         "ansi_test.go",
+        "backlog_rpc_port_test.go",
         "caller_identity_gate_test.go",
         "consumer_ports_test.go",
         "diagnose_role_gate_test.go",
@@ -148,6 +148,7 @@ go_test(
         "tools_lifecycle_worktree_guard_test.go",
         "tools_notifications_test.go",
         "tools_owner_action_test.go",
+        "tools_owner_action_wiring_test.go",
         "tools_peer_help_test.go",
         "tools_pr_rpc_unreachable_test.go",
         "tools_program_common_test.go",

@@ -21,6 +21,17 @@ func TestMCPAutoReopener_should_ReturnTheService_When_Present(t *testing.T) {
 	assert.Same(t, svc, mcpAutoReopener(svc))
 }
 
+func TestMCPBacklogRPC_should_ReturnNilInterface_When_NoBacklogService(t *testing.T) {
+	t.Parallel()
+	assert.True(t, mcpBacklogRPC(nil) == nil, "a nil service must not become a typed-nil interface")
+}
+
+func TestMCPBacklogRPC_should_ReturnTheService_When_Present(t *testing.T) {
+	t.Parallel()
+	svc := &backlogsvc.BacklogService{}
+	assert.Same(t, svc, mcpBacklogRPC(svc))
+}
+
 func TestMCPUserPRSource_should_ReturnNilInterface_When_NoCache(t *testing.T) {
 	t.Parallel()
 	assert.True(t, mcpUserPRSource(nil) == nil, "a nil cache must not become a typed-nil interface")
