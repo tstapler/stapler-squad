@@ -28,6 +28,8 @@ type coreConfig struct {
 	refParser TrackerRefParser
 	// wakeMetrics is the process-wide wake counter mirror; nil drops counts (a nil *wakes.Metrics is a no-op).
 	wakeMetrics *wakes.Metrics
+	// openWorktree builds worktrees for the VCS and stuck-report tools; nil reports them unavailable.
+	openWorktree WorktreeOpener
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }

@@ -394,9 +394,8 @@ type backlogHandlers struct {
 	stageEngine stageLister
 
 	// prCheckerFactory backs get_backlog_stuck_report's live CI cross-check.
-	// Defaults to a real *git.GitWorktree bound to the item's repo_path when
-	// nil; overridable in tests to avoid shelling out to the real `gh` CLI —
-	// mirrors verifyPRMatchesBranch's existing shape.
+	// Built from the injected WorktreeOpener; nil (or a nil result) reports the
+	// cross-check unavailable. Tests set it directly to avoid the real `gh` CLI.
 	prCheckerFactory func(repoPath string) stuckReportPRChecker
 }
 
