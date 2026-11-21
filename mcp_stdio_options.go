@@ -17,3 +17,9 @@ func stdioMCPOptions(storage *session.Storage) []mcpserver.CoreOption {
 		mcpserver.WithWakeMetrics(server.NewWakeMetrics()),
 	}
 }
+
+// runStdioMCP runs the stdio fallback with its CoreOption set; run is
+// mcpserver.RunServer with the transport deps already bound.
+func runStdioMCP(storage *session.Storage, run func(opts ...mcpserver.CoreOption) error) error {
+	return run(stdioMCPOptions(storage)...)
+}

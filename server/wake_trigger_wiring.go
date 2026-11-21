@@ -27,7 +27,7 @@ func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidance 
 	if deps.Storage != nil {
 		notifier := wakeNotifier{bus: deps.EventBus}
 		svcDeps.ExpireOverdue = func(ctx context.Context) error {
-			_, err := wakes.ExpireOverdue(ctx, deps.Storage, notifier, deps.WakeMetrics, time.Now())
+			_, err := wakes.ExpireOverdue(ctx, deps.Storage, notifier, deps.sharedWakeMetrics(), time.Now())
 			return err
 		}
 	}

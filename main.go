@@ -177,7 +177,9 @@ var (
 				// comment and ADR-001.
 				// The flow service is built from storage alone and keeps its own
 				// aggregator cache; its as_of makes that visible to the agent.
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil, stdioMCPOptions(storage)...)
+				return runStdioMCP(storage, func(opts ...mcpserver.CoreOption) error {
+					return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil, opts...)
+				})
 			}
 
 			// Enable test mode if flag is set

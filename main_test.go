@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -444,31 +441,14 @@ func TestStdioMCPOptions_should_InjectWakeMetrics(t *testing.T) {
 	}
 }
 
-// Pins main.go's stdio RunServer call to stdioMCPOptions; a unit test of the
-// helper cannot see the call site dropping it.
-func TestMain_should_PassStdioMCPOptionsToRunServer(t *testing.T) {
+func TestRunStdioMCP_should_HandWakeMetricsToRunServer(t *testing.T) {
 	t.Parallel()
-	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	var got []mcpserver.CoreOption
+	err := runStdioMCP(nil, func(opts ...mcpserver.CoreOption) error { got = opts; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "RunServer" {
-			return true
-		}
-		found = true
-		last, ok := call.Args[len(call.Args)-1].(*ast.CallExpr)
-		if id, isID := last.Fun.(*ast.Ident); !ok || !isID || id.Name != "stdioMCPOptions" || !call.Ellipsis.IsValid() {
-			t.Fatal("the stdio RunServer call must spread stdioMCPOptions(...)")
-		}
-		return true
-	})
-	if !found {
-		t.Fatal("RunServer call not found in main.go")
+	if mcpserver.WakeMetricsFromOptions(got...) == nil {
+		t.Fatal("the stdio RunServer call must receive wake metrics like the HTTP path")
 	}
 }
