@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 )
 
@@ -88,9 +87,8 @@ func runCriteria(args []string, stdout io.Writer) int {
 	fs.IntVar(&c.StayingUses, "uses", 0, "distinct cluster declarations staying files still use")
 	importers := fs.String("importers", "", "comma-separated non-test importers outside the original")
 	natural := fs.String("natural", "", "comma-separated importers that already imported the original")
-	if parseFlags(fs, args) != nil {
-		fmt.Fprintln(os.Stderr, "usage: scoping criteria [--lower] --relocated N --uses N --importers a,b --natural a")
-		return 2
+	if err := parseFlags(fs, args); err != nil {
+		return flagExit(err)
 	}
 	c.Importers, c.NaturalCallers = splitList(*importers), splitList(*natural)
 	if PrintCriteria(stdout, c) {

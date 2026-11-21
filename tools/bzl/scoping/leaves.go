@@ -136,7 +136,10 @@ func runLeaves(args []string, stdout io.Writer) int {
 	dir := fs.String("dir", "", "package directory, relative to the root")
 	minLOC := fs.Int("min-loc", 400, "smallest cluster to print (SC2)")
 	root := fs.String("root", workspace(), "repository root")
-	if parseFlags(fs, args) != nil || *dir == "" {
+	if err := parseFlags(fs, args); err != nil {
+		return flagExit(err)
+	}
+	if *dir == "" {
 		fmt.Fprintln(os.Stderr, "usage: scoping leaves --dir DIR [--min-loc N]")
 		return 2
 	}

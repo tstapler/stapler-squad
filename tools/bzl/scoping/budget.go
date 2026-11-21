@@ -176,8 +176,8 @@ func runBudget(args []string, stdout io.Writer) int {
 	root := fs.String("root", workspace(), "repository root")
 	base := fs.String("base", "", "git ref to check raised caps against")
 	initPkgs := fs.String("init", "", "comma-separated packages to print initial caps for")
-	if parseFlags(fs, args) != nil {
-		return 2
+	if err := parseFlags(fs, args); err != nil {
+		return flagExit(err)
 	}
 	baseSet := false
 	fs.Visit(func(f *flag.Flag) { baseSet = baseSet || f.Name == "base" })

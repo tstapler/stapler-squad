@@ -111,8 +111,8 @@ func runTouch(args []string, stdout io.Writer) int {
 	perFile := fs.Bool("per-file", false, "rank single files instead of name families")
 	top := fs.Int("top", 25, "rows to print")
 	root := fs.String("root", workspace(), "repository root")
-	if parseFlags(fs, args) != nil {
-		return 2
+	if err := parseFlags(fs, args); err != nil {
+		return flagExit(err)
 	}
 	m, err := LoadModel(*root)
 	if err != nil {

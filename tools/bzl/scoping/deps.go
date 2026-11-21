@@ -118,8 +118,8 @@ func runDeps(args []string, stdout io.Writer) int {
 	rootF := flags.String("root", workspace(), "repository root")
 	dirF := flags.String("dir", "", "")
 	declsF := flags.String("decls", "", "")
-	if parseFlags(flags, args) != nil {
-		return 2
+	if err := parseFlags(flags, args); err != nil {
+		return flagExit(err)
 	}
 	root := *rootF
 	dir, decls := *dirF, *declsF

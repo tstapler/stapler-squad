@@ -227,8 +227,8 @@ func runClosure(args []string, stdout io.Writer) int {
 	dirF := flags.String("dir", "", "")
 	filesF := flags.String("files", "", "")
 	alsoF := flags.String("also", "", "")
-	if parseFlags(flags, args) != nil {
-		return 2
+	if err := parseFlags(flags, args); err != nil {
+		return flagExit(err)
 	}
 	root := *rootF
 	dir, files, also := *dirF, *filesF, *alsoF
@@ -357,8 +357,8 @@ func runPeel(args []string, stdout io.Writer) int {
 	dirF := flags.String("dir", "", "")
 	filesF := flags.String("files", "", "")
 	anchorF := flags.String("anchor", "", "")
-	if parseFlags(flags, args) != nil {
-		return 2
+	if err := parseFlags(flags, args); err != nil {
+		return flagExit(err)
 	}
 	root := *rootF
 	dir, files, anchor := *dirF, *filesF, *anchorF

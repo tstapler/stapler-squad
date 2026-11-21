@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -19,4 +20,12 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 		return err
 	}
 	return nil
+}
+
+// flagExit maps a parseFlags error to an exit code: -h/--help prints usage and exits 0, anything else is a usage error (2).
+func flagExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
 }

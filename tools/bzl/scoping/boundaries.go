@@ -77,8 +77,8 @@ func runBoundaries(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("boundaries", flag.ContinueOnError)
 	file := fs.String("file", "tools/bzl/scoping/boundaries.txt", "boundaries file, relative to --root")
 	root := fs.String("root", workspace(), "repository root")
-	if parseFlags(fs, args) != nil {
-		return 2
+	if err := parseFlags(fs, args); err != nil {
+		return flagExit(err)
 	}
 	f, err := os.Open(filepath.Join(*root, *file))
 	if err != nil {
