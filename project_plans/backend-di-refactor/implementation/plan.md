@@ -68,6 +68,8 @@ Note: The setter calls above both register the call with Warren AND call the set
 
 ### Story 1.3 — Wire `BuildRuntimeDeps` (Phase 3, synchronous setters only)
 
+**Ordering (owner decision Q4, 2026-11-20):** start this story only after the SRV-wiring PRs in `project_plans/package-split-ocp/roadmap.md` have merged. SRV-wiring splits `BuildRuntimeDeps` into typed step functions first, and the Warren wire block is added on top of that shape.
+
 Phase 3 has 10 synchronous setter calls at the top level and 2 goroutine-internal setter calls. Only the synchronous setters can be tracked by Warren.
 
 **Important pitfall:** Lines 562–563 (inside the `go func()` goroutine) call `instance.SetReviewQueue(reviewQueue)` and `instance.SetStatusManager(statusManager)` for newly discovered external sessions. These are intentionally per-instance wires that happen asynchronously after `BuildRuntimeDeps` returns. Warren cannot track these — they must remain unwrapped. Adding them to a Wire object whose `Validate()` is called before the goroutine runs would incorrectly flag them as missing.
