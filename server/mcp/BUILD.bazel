@@ -105,6 +105,7 @@ go_test(
         "server_integration_test.go",
         "server_test.go",
         "session_ui_url_test.go",
+        "single_root_guard_test.go",
         "spawn_path_matrix_test.go",
         "testhelpers_test.go",
         "tool_set_characterization_test.go",
