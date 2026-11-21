@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -73,17 +74,13 @@ func listDeps(root, pkg string) ([]string, error) {
 }
 
 func runBoundaries(args []string, stdout io.Writer) int {
-	file := "tools/bzl/scoping/boundaries.txt"
-	root := workspace()
-	for i := 0; i+1 < len(args); i += 2 {
-		switch args[i] {
-		case "--file":
-			file = args[i+1]
-		case "--root":
-			root = args[i+1]
-		}
+	fs := flag.NewFlagSet("boundaries", flag.ContinueOnError)
+	file := fs.String("file", "tools/bzl/scoping/boundaries.txt", "boundaries file, relative to --root")
+	root := fs.String("root", workspace(), "repository root")
+	if err := parseFlags(fs, args); err != nil {
+		return flagExit(err)
 	}
-	f, err := os.Open(filepath.Join(root, file))
+	f, err := os.Open(filepath.Join(*root, *file))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -99,7 +96,7 @@ func runBoundaries(args []string, stdout io.Writer) int {
 		if _, done := deps[b.Pkg]; done {
 			continue
 		}
-		d, err := listDeps(root, b.Pkg)
+		d, err := listDeps(*root, b.Pkg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
