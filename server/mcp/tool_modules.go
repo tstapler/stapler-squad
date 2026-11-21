@@ -156,7 +156,8 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	if d.storage == nil || (d.backlogEnabled != nil && !d.backlogEnabled()) {
 		return nil
 	}
-	h := &backlogHandlers{gate: d.gate, storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser, prCheckerFactory: stuckReportCheckerFactory(d.cfg.openWorktree), github: d.cfg.github}
+	// d.storage is non-nil here (early return above), so guidance is never a boxed nil.
+	h := &backlogHandlers{gate: d.gate, storage: d.storage, guidance: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser, prCheckerFactory: stuckReportCheckerFactory(d.cfg.openWorktree), github: d.cfg.github}
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerBacklogTools(s, h) }),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerStuckReportTools(s, h) }),
@@ -195,6 +196,7 @@ func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage,
 	if storage == nil || gate == nil {
 		return nil
 	}
+	// storage is non-nil here (early return above), so the interface is never a boxed nil.
 	peerHelp := newPeerHelpHandlers(gate, storage, bus)
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerWakeTools(s, newWakeHandlers(gate)) }),
