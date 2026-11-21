@@ -452,3 +452,19 @@ func TestRunStdioMCP_should_HandWakeMetricsToRunServer(t *testing.T) {
 		t.Fatal("the stdio RunServer call must receive wake metrics like the HTTP path")
 	}
 }
+
+func TestRunStdioMCP_should_HandWorktreeOpenerToRunServer(t *testing.T) {
+	t.Parallel()
+	var got []mcpserver.CoreOption
+	if err := runStdioMCP(nil, func(opts ...mcpserver.CoreOption) error { got = opts; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	open := mcpserver.WorktreeOpenerFromOptions(got...)
+	if open == nil {
+		t.Fatal("the stdio RunServer call must receive the worktree constructor like the HTTP path")
+	}
+	dir := t.TempDir()
+	if wt := open(dir, dir, "s", "feat", ""); wt == nil || wt.GetBranchName() != "feat" {
+		t.Fatalf("stdio opener must build a real git worktree, got %v", wt)
+	}
+}

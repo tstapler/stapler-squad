@@ -28,10 +28,6 @@ type stuckReportPRChecker interface {
 	GetCheckRunLog(ctx context.Context, ref git.CheckRunRef) (string, error)
 }
 
-func defaultStuckReportPRChecker(repoPath string) stuckReportPRChecker {
-	return git.NewGitWorktreeFromStorage(repoPath, repoPath, "", "", "")
-}
-
 var (
 	failingTestClassPattern = regexp.MustCompile(`(\w+)\[\w*\]\s*>.*FAILED`)
 	checkRunJobURLPattern   = regexp.MustCompile(`/runs/(\d+)/job/(\d+)`)
@@ -187,13 +183,15 @@ func orDash(s string) string {
 // diagnostic any session can call directly, instead of shelling out to a
 // standalone script.
 func (h *backlogHandlers) writeCICrossCheck(ctx context.Context, sb *strings.Builder, item *backlogdto.BacklogItemData) {
-	factory := h.prCheckerFactory
-	if factory == nil {
-		factory = defaultStuckReportPRChecker
-	}
-	checker := factory(item.RepoPath)
-
 	sb.WriteString("## Live CI cross-check against this PR's own diff\n")
+	var checker stuckReportPRChecker
+	if h.prCheckerFactory != nil {
+		checker = h.prCheckerFactory(item.RepoPath)
+	}
+	if checker == nil {
+		sb.WriteString("  (unavailable: no worktree for this repo path)\n\n")
+		return
+	}
 	status, err := checker.GetPRStatus(ctx, item.PrNumber)
 	if err != nil {
 		fmt.Fprintf(sb, "  (gh pr view failed: %v)\n\n", err)

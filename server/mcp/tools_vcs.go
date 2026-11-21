@@ -7,12 +7,12 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type vcsHandlers struct {
 	store session.InstanceStore
+	open  WorktreeOpener // nil: openWorktree reports the worktree unavailable
 }
 
 // DiffStats mirrors git.DiffStats for JSON output.
@@ -170,7 +170,10 @@ func (vh *vcsHandlers) findInstance(sessionID string) (*instance.Instance, *mcpg
 
 // openWorktree reconstructs a GitWorktree from the instance's stored paths.
 // This does not require the session to be running.
-func (vh *vcsHandlers) openWorktree(inst *instance.Instance) (*git.GitWorktree, error) {
+func (vh *vcsHandlers) openWorktree(inst *instance.Instance) (Worktree, error) {
+	if vh.open == nil {
+		return nil, fmt.Errorf("no worktree opener configured")
+	}
 	ws := inst.Workspace()
 	if ws.ActiveDir == "" {
 		return nil, fmt.Errorf("session has no working directory")
@@ -190,7 +193,11 @@ func (vh *vcsHandlers) openWorktree(inst *instance.Instance) (*git.GitWorktree, 
 		// merge-base through git itself, so it does not need the real repo root.
 		repoPath = worktreePath
 	}
-	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, inst.Title, inst.Branch, ""), nil
+	wt := vh.open(repoPath, worktreePath, inst.Title, inst.Branch, "")
+	if wt == nil {
+		return nil, fmt.Errorf("cannot open worktree at %q", worktreePath)
+	}
+	return wt, nil
 }
 
 // countDiffFiles counts the number of changed files in a diff (lines starting with "diff --git").

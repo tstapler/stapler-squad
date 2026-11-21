@@ -129,6 +129,7 @@ go_library(
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/flow",
+        "//session/git",
         "//session/gitwiring",
         "//session/headless",
         "//session/hostclaim",

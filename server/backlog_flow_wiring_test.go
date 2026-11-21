@@ -112,3 +112,19 @@ func TestWireDepsIntoServer_should_PassMCPCoreOptionsToNewHTTPHandler(t *testing
 	})
 	assert.True(t, found, "wireDepsIntoServer must build the HTTP MCP handler")
 }
+
+func TestMCPCoreOptions_should_InjectWorktreeOpener(t *testing.T) {
+	t.Parallel()
+	open := servermcp.WorktreeOpenerFromOptions(mcpCoreOptions(&ServerDependencies{})...)
+
+	require.NotNil(t, open, "the HTTP MCP core must receive the worktree constructor")
+	dir := t.TempDir()
+	wt := open(dir, dir, "s", "feat", "")
+	require.NotNil(t, wt)
+	assert.Equal(t, "feat", wt.GetBranchName(), "the opener must build the real git worktree")
+}
+
+func TestNewMCPWorktreeOpener_should_ReturnNilInterface_When_PathsEmpty(t *testing.T) {
+	t.Parallel()
+	assert.True(t, NewMCPWorktreeOpener()("", "", "", "", "") == nil, "a typed-nil worktree would defeat callers' nil checks")
+}

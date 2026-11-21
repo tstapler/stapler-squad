@@ -71,7 +71,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 		newDiscoveryModule(d.store),
 		newLifecycleModule(d.store, d.svc, diagnoseCheck),
 		newTerminalModule(d.store, liveFinder, d.sbMgr, diagnoseCheck),
-		newVCSModule(d.store),
+		newVCSModule(d.store, d.cfg.openWorktree),
 		newWorkflowModule(d.svc),
 		newRulesModule(d.svc),
 		newTaggingRulesModule(d.svc),
@@ -114,8 +114,8 @@ func newTerminalModule(store session.InstanceStore, live liveInstanceFinder, sbM
 	})
 }
 
-func newVCSModule(store session.InstanceStore) ToolModule {
-	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerVCSTools(s, &vcsHandlers{store: store}) })
+func newVCSModule(store session.InstanceStore, open WorktreeOpener) ToolModule {
+	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerVCSTools(s, &vcsHandlers{store: store, open: open}) })
 }
 
 func newWorkflowModule(svc *services.SessionService) ToolModule {
@@ -161,7 +161,7 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	if d.storage == nil || (d.backlogEnabled != nil && !d.backlogEnabled()) {
 		return nil
 	}
-	h := &backlogHandlers{gate: d.gate, storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser}
+	h := &backlogHandlers{gate: d.gate, storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser, prCheckerFactory: stuckReportCheckerFactory(d.cfg.openWorktree)}
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerBacklogTools(s, h) }),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerStuckReportTools(s, h) }),
