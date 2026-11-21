@@ -226,6 +226,7 @@ go_test(
     srcs = [
         "actuator_nudge_outcomes_test.go",
         "actuator_routes_test.go",
+        "actuator_table_test.go",
         "actuator_terminal_input_test.go",
         "actuator_terminal_latency_test.go",
         "actuator_terminal_mux_test.go",

@@ -33,28 +33,30 @@ import (
 // just gives it a second, always-on export shape for curl/uptime checks.
 func (s *Server) registerActuatorRoutes() {
 	for _, e := range s.actuatorEndpoints() {
-		s.mux.HandleFunc(e.Path, e.Handler)
+		s.mux.Handle(e.Path, e.Handler)
 	}
 }
 
 // actuatorEndpoint is one row of the actuator route table.
 type actuatorEndpoint struct {
 	Path    string
-	Handler http.HandlerFunc
+	Handler http.Handler
 }
 
 // actuatorEndpoints is the single list of actuator routes: a new endpoint is a
-// handler file plus one row here. Row order is registration order.
+// handler file plus one row here. Row order is registration order. Every row is
+// unconditional: a missing dependency is answered by the handler (503, "not
+// running"), never by leaving the route unregistered.
 func (s *Server) actuatorEndpoints() []actuatorEndpoint {
 	return []actuatorEndpoint{
-		{"/actuator/health", handleActuatorHealth},
-		{"/actuator/metrics", handleActuatorMetrics},
-		{"/actuator/db", handleActuatorDB},
-		{"/actuator/git-backend", handleActuatorGitBackend},
-		{"/actuator/workflow-engine", s.handleActuatorWorkflowEngine},
-		{"/actuator/nudge-outcomes", handleActuatorNudgeOutcomes},
+		{"/actuator/health", http.HandlerFunc(handleActuatorHealth)},
+		{"/actuator/metrics", http.HandlerFunc(handleActuatorMetrics)},
+		{"/actuator/db", http.HandlerFunc(handleActuatorDB)},
+		{"/actuator/git-backend", http.HandlerFunc(handleActuatorGitBackend)},
+		{"/actuator/workflow-engine", http.HandlerFunc(s.handleActuatorWorkflowEngine)},
+		{"/actuator/nudge-outcomes", http.HandlerFunc(handleActuatorNudgeOutcomes)},
 		{"/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner)},
-		{"/actuator/inbox-pr-watch", handleActuatorInboxPRWatch},
+		{"/actuator/inbox-pr-watch", http.HandlerFunc(handleActuatorInboxPRWatch)},
 		{"/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load)},
 		{"/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load)},
 		{"/actuator/terminal-input", handleActuatorTerminalInput(services.TerminalInputReport)},
