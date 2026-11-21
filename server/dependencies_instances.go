@@ -80,11 +80,16 @@ func wireLoadedInstances(svc *ServiceDeps, instances []*instance.Instance, backl
 // startInstanceBootInit starts the heavy startup work (tmux starts, hot-restore
 // reconciliation, controllers, startup scan) on a background goroutine so the HTTP server
 // can bind immediately. Step order inside is load-bearing; see the step comments.
-func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
+// The returned stop cancels the remaining steps and waits for the goroutine to exit, so
+// an owner that tears down its state dir cannot be written into afterwards.
+func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) (stop func()) {
 	storage, reviewQueue, statusManager, eventBus := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.EventBus
 	// Perform heavy initialization (tmux starting, controllers, scanning) in the background
 	// so the HTTP server can bind and start immediately.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
 				log.ErrorLog().Printf("[startup] panic in background init goroutine: %v", r)
@@ -93,6 +98,9 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
 		bootStartInstances(instances, eventBus)
 
 		bootHotRestoreLive(instances, eventBus)
+		if ctx.Err() != nil {
+			return
+		}
 
 		// Step 6c: Reconcile custom shells — rebuild in-memory state from ent for
 		// shells that were running when the server last shut down. Must run after
@@ -154,13 +162,21 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
 
 		// Step 7.6: Startup scan and orphaned approval sync
 		// Brief settling delay to allow controllers to initialize their terminal readers.
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
 		contentProvider := session.NewPollerContentProvider()
 		scanner := session.NewStartupScanner(statusManager, contentProvider)
 		scanner.SetOptionsSource(svc.AttentionOptions)
 		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // bootStartInstances is boot Step 6.

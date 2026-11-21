@@ -71,7 +71,9 @@ type ServerDependencies struct {
 
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker (see
 	// BuildOptions.RunPRMaintenance); nil when maintenance did not run.
-	StopPRMaintenance       func()
+	StopPRMaintenance func()
+	// StopBootInit cancels the background boot-init goroutine and waits for it to exit.
+	StopBootInit            func()
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
@@ -229,6 +231,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ReviewQueuePoller:              rt.ReviewQueuePoller,
 		PRStatusPoller:                 rt.PRStatusPoller,
 		StopPRMaintenance:              rt.StopPRMaintenance,
+		StopBootInit:                   rt.StopBootInit,
 		ReactiveQueueMgr:               rt.ReactiveQueueMgr,
 		ScrollbackManager:              rt.ScrollbackManager,
 		TmuxStreamerManager:            rt.TmuxStreamerManager,
@@ -585,6 +588,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 // process creation, filesystem I/O, and callback wiring.
 type RuntimeDeps struct {
 	*ServiceDeps
+	// StopBootInit cancels the background boot-init goroutine and waits for it to exit.
+	StopBootInit            func()
 	Instances               []*instance.Instance
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
@@ -830,7 +835,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, err
 	}
 
-	startInstanceBootInit(svc, instances)
+	stopBootInit := startInstanceBootInit(svc, instances)
 
 	reactiveQueueMgr, slackNotifier := buildReactiveQueue(svc, cfg)
 
@@ -889,6 +894,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		LLMClient:                      llm.client,
 		GeminiCaller:                   geminiCaller,
 		ServiceDeps:                    svc,
+		StopBootInit:                   stopBootInit,
 		Instances:                      instances,
 		ReactiveQueueMgr:               reactiveQueueMgr,
 		ScrollbackManager:              scrollbackManager,
