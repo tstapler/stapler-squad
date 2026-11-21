@@ -75,6 +75,16 @@ func FlowServiceFromOptions(opts ...CoreOption) *backlogflow.BacklogFlowService 
 	return newCoreConfig(opts).flowSvc
 }
 
+// PluginRegistryFromOptions returns the plugin registry the options carry, or nil.
+func PluginRegistryFromOptions(opts ...CoreOption) *session.PluginRegistry {
+	return newCoreConfig(opts).plugins
+}
+
+// TrackerRefParserFromOptions returns the tracker ref parser the options carry, or nil.
+func TrackerRefParserFromOptions(opts ...CoreOption) TrackerRefParser {
+	return newCoreConfig(opts).refParser
+}
+
 func newCoreConfig(opts []CoreOption) coreConfig {
 	var c coreConfig
 	for _, o := range opts {
@@ -165,7 +175,7 @@ func NewHTTPHandler(
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore. The stdio fallback path
-// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies, so callers on
+// (server.RunStdioMCP) only builds Phase 1 (CoreDeps) dependencies, so callers on
 // that path pass nil for all three and get NewCore's documented nil-behavior for each.
 func RunServer(
 	ctx context.Context,

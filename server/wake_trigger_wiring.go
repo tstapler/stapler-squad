@@ -54,10 +54,6 @@ func (d *ServerDependencies) sharedWakeMetrics() *wakes.Metrics {
 	return d.WakeMetrics
 }
 
-// NewWakeMetrics builds the wake counter mirror for a process that has no
-// ServerDependencies (the stdio MCP fallback).
-func NewWakeMetrics() *wakes.Metrics { return wakes.NewMetrics() }
-
 // mcpCoreOptions is the HTTP MCP core's whole CoreOption set.
 func mcpCoreOptions(deps *ServerDependencies) []servermcp.CoreOption {
 	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps), servermcp.WithWorktreeOpener(NewMCPWorktreeOpener()), servermcp.WithGitHub(NewMCPGitHub())})

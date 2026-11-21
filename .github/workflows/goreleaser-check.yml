@@ -121,7 +121,7 @@ jobs:
             exit 1
           }
 
-      - name: "Smoke test: --mcp (initialize + tools/list JSON-RPC round trip, opens the session DB via buildMCPDeps fallback)"
+      - name: "Smoke test: --mcp (initialize + tools/list JSON-RPC round trip, opens the session DB via the RunStdioMCP fallback)"
         env:
           STAPLER_SQUAD_TEST_DIR: /tmp/ssq-smoke-test-mcp
         run: |

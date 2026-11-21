@@ -62,7 +62,7 @@ func TestBuildCoreDepsWithOptions_ShouldPassContextToMaintenance(t *testing.T) {
 	assert.Error(t, got.Err(), "cancelling the boot context cancels the maintenance run")
 }
 
-// buildMCPDeps uses the plain BuildCoreDeps(): no maintenance, no ticker.
+// RunStdioMCP uses the plain BuildCoreDeps(): no maintenance, no ticker.
 func TestBuildCoreDepsWithOptions_ShouldNotRunPRMaintenance_WhenNotRequested(t *testing.T) {
 	rec := &prMaintenanceRecorder{}
 
