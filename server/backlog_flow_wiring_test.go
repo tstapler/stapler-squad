@@ -115,6 +115,33 @@ func TestWireDepsIntoServer_should_PassMCPCoreOptionsToNewHTTPHandler(t *testing
 	assert.True(t, found, "wireDepsIntoServer must build the HTTP MCP handler")
 }
 
+// Pins the positional ports: the scrollback manager and the nil-guarded auto
+// reopener must reach NewHTTPHandler's sbMgr and autoReopener parameters.
+func TestWireDepsIntoServer_should_PassScrollbackAndAutoReopenerToNewHTTPHandler(t *testing.T) {
+	t.Parallel()
+	fn := parseFunc(t, "server.go", "wireDepsIntoServer")
+	var found bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "NewHTTPHandler" {
+			return true
+		}
+		found = true
+		require.GreaterOrEqual(t, len(call.Args), 8)
+		sb, ok := call.Args[2].(*ast.SelectorExpr)
+		require.True(t, ok)
+		assert.Equal(t, "ScrollbackManager", sb.Sel.Name)
+		reopener, ok := call.Args[7].(*ast.Ident)
+		require.True(t, ok)
+		assert.Equal(t, "autoReopener", reopener.Name)
+		return true
+	})
+	assert.True(t, found, "wireDepsIntoServer must build the HTTP MCP handler")
+}
+
 func TestMCPCoreOptions_should_InjectWorktreeOpener(t *testing.T) {
 	t.Parallel()
 	open := servermcp.WorktreeOpenerFromOptions(mcpCoreOptions(&ServerDependencies{})...)

@@ -29,6 +29,28 @@ func appendN(t *testing.T, m *ScrollbackManager, sessionID string, n int) {
 	}
 }
 
+func TestLastEntrySequence_should_ReturnLastOfFirstLimitEntries(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t)
+	appendN(t, m, "sess1", 5)
+
+	if got := m.LastEntrySequence("sess1", 10); got != 5 {
+		t.Errorf("limit above entry count: got %d, want 5", got)
+	}
+	if got := m.LastEntrySequence("sess1", 3); got != 3 {
+		t.Errorf("limit below entry count: got %d, want 3", got)
+	}
+}
+
+func TestLastEntrySequence_should_ReturnZero_When_SessionHasNoEntries(t *testing.T) {
+	t.Parallel()
+	m := newTestManager(t)
+
+	if got := m.LastEntrySequence("missing", 10); got != 0 {
+		t.Errorf("got %d, want 0", got)
+	}
+}
+
 // ---- TestGetScrollbackBefore ----
 
 func TestGetScrollbackBefore_BeforeSeqZero_ReturnsEmpty(t *testing.T) {

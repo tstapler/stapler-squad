@@ -16,8 +16,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
-	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 // coreConfig holds the optional dependencies injected through CoreOption, so
@@ -104,12 +102,12 @@ func newCoreConfig(opts []CoreOption) coreConfig {
 func NewCore(
 	store session.InstanceStore,
 	svc *services.SessionService,
-	sbMgr *scrollback.ScrollbackManager,
+	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener reviewgate.AutoReopenSpawner,
+	autoReopener AutoReopener,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
@@ -140,12 +138,12 @@ func NewCore(
 func NewHTTPHandler(
 	store session.InstanceStore,
 	svc *services.SessionService,
-	sbMgr *scrollback.ScrollbackManager,
+	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener reviewgate.AutoReopenSpawner,
+	autoReopener AutoReopener,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
@@ -173,12 +171,12 @@ func RunServer(
 	ctx context.Context,
 	store session.InstanceStore,
 	svc *services.SessionService,
-	sbMgr *scrollback.ScrollbackManager,
+	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener reviewgate.AutoReopenSpawner,
+	autoReopener AutoReopener,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
