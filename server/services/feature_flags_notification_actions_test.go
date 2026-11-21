@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -11,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func listedFlag(t *testing.T, svc *FeatureFlagService, name string) *sessionv1.FeatureFlag {
@@ -152,4 +154,32 @@ func TestUpdateFeatureFlag_ShouldNotifyWakeListener_WhenAgentWakeTriggersFlipped
 
 	assert.Equal(t, 3, calls)
 	assert.Equal(t, []bool{true, false, true}, sawOn, "the listener sees the already-persisted value")
+}
+
+// TestAgentWakeTriggersFlagHasScopePerWakeTriggerType ties the registered
+// agent_wake_triggers scopes to domain.AllWakeTriggerTypes in both directions.
+// The "trigger:" literal is deliberate: it pins the wire format independently of
+// scopePrefixTrigger.
+func TestAgentWakeTriggersFlagHasScopePerWakeTriggerType(t *testing.T) {
+	t.Parallel()
+	var scopes []string
+	for _, spec := range coreFlagSpecs() {
+		if spec.Name == agentWakeTriggersFlagName {
+			scopes = spec.Scopes
+		}
+	}
+	require.NotEmpty(t, scopes, "%s spec not registered", agentWakeTriggersFlagName)
+
+	types := domain.AllWakeTriggerTypes()
+	want := make([]string, 0, len(types))
+	for _, tt := range types {
+		want = append(want, "trigger:"+string(tt))
+	}
+	var got []string
+	for _, s := range scopes {
+		if strings.HasPrefix(s, "trigger:") {
+			got = append(got, s)
+		}
+	}
+	assert.Equal(t, want, got, "every wake trigger type needs exactly one trigger:<name> scope, in domain order")
 }

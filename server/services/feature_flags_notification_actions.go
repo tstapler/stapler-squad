@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // feature_flags_notification_actions.go registers the four rollout flags of the
@@ -42,9 +43,8 @@ const (
 // The nominal flag defaults, also the registry defaultValue entries.
 const backgroundActivityFeedDefault = true
 
-// Wake trigger types and MCP tools accepted as scopes (plan Data Model).
+// MCP tools and inline action kinds accepted as scopes (plan Data Model).
 var (
-	wakeTriggerTypeScopes = []string{"at", "cron", "backlog_event", "pr_event", "ci_event", "session_state", "guidance_answered"}
 	wakeToolScopes        = []string{"schedule_wake", "list_wakes", "cancel_wake", "request_help", "request_owner_action"}
 	inlineActionKindNames = []string{"APPROVE", "DENY", actionKindAnswerQuestion, "BACKLOG_DECISION", "ANSWER_GUIDANCE", "CANCEL_WAKE", "CANCEL_PEER_HELP"}
 )
@@ -65,8 +65,10 @@ func askUserQuestionStructuredScopes() []string {
 	return []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply}
 }
 
+// agentWakeTriggerScopes derives the trigger scopes from the domain's closed set,
+// so a new wake trigger type gets its `trigger:<name>` scope automatically.
 func agentWakeTriggerScopes() []string {
-	return append(prefixed(scopePrefixTrigger, wakeTriggerTypeScopes), prefixed(scopePrefixTool, wakeToolScopes)...)
+	return append(prefixed(scopePrefixTrigger, domain.AllWakeTriggerTypeNames()), prefixed(scopePrefixTool, wakeToolScopes)...)
 }
 
 // Spike evidence compiled in until it is recorded (ADR-008): a gate that needs a
