@@ -68,15 +68,15 @@ Note: The setter calls above both register the call with Warren AND call the set
 
 ### Story 1.3 — Wire `BuildRuntimeDeps` (Phase 3, synchronous setters only)
 
-**Ordering (owner decision Q4, 2026-11-20):** start this story only after the SRV-wiring PRs in `project_plans/package-split-ocp/roadmap.md` have merged. SRV-wiring splits `BuildRuntimeDeps` into typed step functions first, and the Warren wire block is added on top of that shape.
+**Status (verified 2026-11-20): already shipped; remaining work is verification only.** The wire blocks `warren.NewWire("RuntimeDeps.Pollers")` (SetAlways + Validate) and `warren.NewWire("RuntimeDeps.SessionService")` exist in `server/dependencies_instances.go` (about lines 65-74 and 413-423). They were added in a1da938e1 (2026-05-09) and only moved into same-package step functions by 52dec871d (2026-11-14). Stories 1.1 and 1.2 are likewise in code (`warren.NewWire("CoreDeps")` at `server/dependencies.go:475`, `"ServiceDeps"` at `:553`). The owner's Q4 ordering (SRV-wiring first) is satisfied, so nothing here is pending; the tasks below describe the original design.
 
 Phase 3 has 10 synchronous setter calls at the top level and 2 goroutine-internal setter calls. Only the synchronous setters can be tracked by Warren.
 
-**Important pitfall:** Lines 562–563 (inside the `go func()` goroutine) call `instance.SetReviewQueue(reviewQueue)` and `instance.SetStatusManager(statusManager)` for newly discovered external sessions. These are intentionally per-instance wires that happen asynchronously after `BuildRuntimeDeps` returns. Warren cannot track these — they must remain unwrapped. Adding them to a Wire object whose `Validate()` is called before the goroutine runs would incorrectly flag them as missing.
+**Important pitfall:** The two setter calls inside the `go func()` goroutine (now in `server/dependencies_instances.go`, formerly lines 562–563 of `BuildRuntimeDeps`) call `instance.SetReviewQueue(reviewQueue)` and `instance.SetStatusManager(statusManager)` for newly discovered external sessions. These are intentionally per-instance wires that happen asynchronously after `BuildRuntimeDeps` returns. Warren cannot track these — they must remain unwrapped. Adding them to a Wire object whose `Validate()` is called before the goroutine runs would incorrectly flag them as missing.
 
 **Tasks:**
 
-1.3.1 In `BuildRuntimeDeps`, add a Warren wire block after all synchronous setters are complete and before the `return &RuntimeDeps{...}` statement:
+1.3.1 (done; now in `wireExternalSessions`/the step functions of `server/dependencies_instances.go`) Add a Warren wire block after all synchronous setters are complete and before the `return &RuntimeDeps{...}` statement:
 
 ```go
 w := warren.NewWire("RuntimeDeps.SessionService")
@@ -855,7 +855,7 @@ Final validation after all epics: `make ci` (lint + build + test).
 
 **Flagged technology choices:**
 - `warren.SetAlways` required for `PRStatusPoller.SetOnUpdated` (func literal — not comparable)
-- Goroutine-internal setters (lines 562–563 in `BuildRuntimeDeps`) are explicitly excluded from Warren tracking; they must stay unwrapped
+- Goroutine-internal setters (the goroutine in `server/dependencies_instances.go`, formerly lines 562–563 of `BuildRuntimeDeps`) are explicitly excluded from Warren tracking; they must stay unwrapped
 - `UnfinishedWorkService` is legitimately nil in some configs — excluded from mandatory Warren validation, documented on `RuntimeDeps` struct
 - `session_service.go`'s type assertion `storage.(*session.Storage)` is a known architectural issue (Architecture Story 1, P1) — out of scope, not addressed in this PR
 - `instance_workspace.go` already exceeds the 400-line target; flagged for a follow-on split but not blocking

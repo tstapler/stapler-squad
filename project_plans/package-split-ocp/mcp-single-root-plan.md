@@ -58,7 +58,7 @@ Non-constructor package-level calls into `session`, `services`, `instance`, `pip
 | M5 | S | Move the stdio assembly into a `server` function so `main.go` only calls it: `buildMCPDeps()` and the two inline builds at `main.go:181` (`backlogflow.NewFlowServiceFromStorage(storage)`, `server.NewItemSourceRegistry()`); otherwise Q5 stays violated on the stdio path. `roadmap.md:223`'s "importer set (main.go, server, inttest)" stays true only if `main.go` keeps importing `server/mcp` for `RunServer`. |
 | M6 | S | Guard (below), then fix the `tool_modules.go:37` comment |
 
-Cost classes are agent-executed PRs, one per row, each behind `go test ./server/mcp/... ./server/...` and `make ready`. Sequencing: after SRV-wiring (Q4), because M1-M5 add `CoreOption` wiring to `dependencies.go`.
+Cost classes are agent-executed PRs, one per row, each behind `go test ./server/mcp/... ./server/...` and `make ready`. Sequencing: after SRV-wiring (Q4, complete 2026-11-20), because M1-M5 add `CoreOption` wiring to `dependencies.go`.
 
 ## Proposed guard (not changed here)
 
