@@ -292,6 +292,7 @@ type ReviewTrigger interface {
 
 type backlogHandlers struct {
 	storage       *session.Storage
+	guidance      GuidanceStore // same storage; the guidance tools read only this slice
 	store         session.InstanceStore
 	gate          *callerIdentityGate      // shared identity gate (one wake-metrics instance); nil builds a metrics-less one
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled

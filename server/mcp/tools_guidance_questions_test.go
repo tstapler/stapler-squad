@@ -16,7 +16,7 @@ import (
 func newGuidanceCaller(t *testing.T) (*backlogHandlers, *session.Storage, context.Context) {
 	t.Helper()
 	storage := newTestGuidanceStorage(t)
-	return &backlogHandlers{storage: storage}, storage, WithSessionUUID(context.Background(), uuid.New().String())
+	return &backlogHandlers{storage: storage, guidance: storage}, storage, WithSessionUUID(context.Background(), uuid.New().String())
 }
 
 func errCode(t *testing.T, m map[string]interface{}) string {

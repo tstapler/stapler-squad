@@ -56,6 +56,13 @@ const ItemNotFoundRemediation = "This item id does not exist — do not retry an
 	"If you were given this item id at session start, report it in your final summary; it may have been " +
 	"deleted or archived out from under this session."
 
+// ItemLinkStore is the slice of *Storage ResolveItemLink reads; *Storage and a test fake implement it.
+type ItemLinkStore interface {
+	GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID, itemID string) (backlogdto.ItemSessionSummary, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
+	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
+}
+
 // ResolveItemLink verifies that callerUUID is linked to itemID, returning the
 // ItemSession on success. On failure it disambiguates ItemLinkNotFound (the
 // item itself doesn't exist) from ItemLinkPermissionDenied (the item exists
@@ -70,7 +77,7 @@ const ItemNotFoundRemediation = "This item id does not exist — do not retry an
 // maintaining two copies that could drift — see
 // project_plans/durable-guidance-request/implementation/plan.md's Pattern
 // Decisions "Ownership check" row.
-func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *ItemLinkError) {
+func ResolveItemLink(ctx context.Context, storage ItemLinkStore, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *ItemLinkError) {
 	itemSession, linkErr := storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
