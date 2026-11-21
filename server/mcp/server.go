@@ -165,7 +165,7 @@ func NewHTTPHandler(
 // prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore. The stdio fallback path
-// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies, so callers on
+// (server.RunStdioMCP) only builds Phase 1 (CoreDeps) dependencies, so callers on
 // that path pass nil for all three and get NewCore's documented nil-behavior for each.
 func RunServer(
 	ctx context.Context,

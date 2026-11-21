@@ -2,7 +2,7 @@
 //
 // Every Claude Code subagent process spawns its own copy of the project's
 // .mcp.json-configured MCP servers, including "stapler-squad --mcp". Prior to
-// this file, that meant each subprocess called buildMCPDeps() -> BuildCoreDeps()
+// this file, that meant each subprocess called RunStdioMCP() -> BuildCoreDeps()
 // -> NewSessionServiceFromConfig(), which opens its own ent/SQLite client,
 // EventBus, ReviewQueue, and ApprovalStore — a full duplicate of state the
 // already-running stapler-squad HTTP server (localhost:8543) already holds.

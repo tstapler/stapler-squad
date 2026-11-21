@@ -41,7 +41,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -145,7 +144,7 @@ var (
 			// subagent via .mcp.json, once per subagent process), proxy stdio tool
 			// calls to its existing /mcp endpoint instead of opening a second
 			// ent/SQLite connection + EventBus + ReviewQueue in this subprocess. Only
-			// falls back to the fully-local path (buildMCPDeps) when the HTTP server
+			// falls back to the fully-local path (server.RunStdioMCP) when the HTTP server
 			// isn't reachable, e.g. before the daemon has started.
 			if mcpFlag {
 				mcpserver.InitMCPLogging()
@@ -161,25 +160,8 @@ var (
 						return proxyErr
 					}
 				}
-				store, svc, sbMgr, storage, mcpErr := buildMCPDeps()
-				if mcpErr != nil {
-					return fmt.Errorf("mcp: init deps: %w", mcpErr)
-				}
-				// The stdio MCP server is a short-lived subprocess per session, so a
-				// load-time read of the flag (rather than a live BacklogController,
-				// which BuildCoreDeps doesn't construct) is sufficient.
-				backlogEnabled := func() bool { return cfg.GetFeatureFlag("backlog") }
-				// No BacklogService/liveness checker on this stdio fallback path
-				// (buildMCPDeps only builds Phase 1 CoreDeps) — submit_review_verdict's
-				// eager review->in_progress transition is skipped here,
-				// create_backlog_item/import_github_issue skip auto-triage, and
-				// link_session_to_item degrades to UNAVAILABLE; see RunServer's doc
-				// comment and ADR-001.
-				// The flow service is built from storage alone and keeps its own
-				// aggregator cache; its as_of makes that visible to the agent.
-				return runStdioMCP(storage, func(opts ...mcpserver.CoreOption) error {
-					return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil, opts...)
-				})
+				// Short-lived per-session subprocess: a load-time flag read suffices.
+				return server.RunStdioMCP(ctx, func() bool { return cfg.GetFeatureFlag("backlog") })
 			}
 
 			// Enable test mode if flag is set
@@ -1929,27 +1911,6 @@ func mcpProxyURL(listenAddr string) string {
 		host = "localhost"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/mcp"
-}
-
-// buildMCPDeps creates the minimal server dependencies needed by the MCP server.
-// Uses Phase 1+2 only (no tmux startup, no HTTP listener, no background pollers).
-// The ScrollbackManager is read-only in MCP mode — it reads from the same storage
-// path written by the HTTP server process.
-func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollback.ScrollbackManager, *session.Storage, error) {
-	core, err := server.BuildCoreDeps()
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("cannot determine home directory for scrollback storage: %w", err)
-	}
-	sbConfig := scrollback.DefaultScrollbackConfig()
-	sbConfig.StoragePath = filepath.Join(homeDir, ".stapler-squad", "sessions")
-	sbMgr := scrollback.NewScrollbackManager(sbConfig)
-
-	return core.Storage, core.SessionService, sbMgr, core.Storage, nil
 }
 
 // runListKnownHosts implements --list-known-hosts: open this instance's

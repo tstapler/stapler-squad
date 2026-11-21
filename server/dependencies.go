@@ -431,7 +431,7 @@ type BuildOptions struct {
 
 	// RunPRMaintenance runs session.Storage.RunPRStartupMaintenance right after
 	// Storage exists and before any poller, sweeper or ticker is built. Only the
-	// service bootstrap sets it: the stdio MCP fallback (buildMCPDeps) and hook/CLI
+	// service bootstrap sets it: the stdio MCP fallback (RunStdioMCP) and hook/CLI
 	// processes must not import links or reset verification counters.
 	RunPRMaintenance bool
 
