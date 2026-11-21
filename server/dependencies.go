@@ -56,7 +56,7 @@ const (
 // See the initialization order comment on NewServer for dependency constraints.
 type ServerDependencies struct {
 	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
-	// so both feed one wake_trigger_total mirror; set at registration.
+	// so both feed one wake_trigger_total mirror; created on first use by sharedWakeMetrics.
 	WakeMetrics       *wakes.Metrics
 	SessionService    *services.SessionService
 	Storage           *session.Storage

@@ -295,6 +295,7 @@ type ReviewTrigger interface {
 type backlogHandlers struct {
 	storage       *session.Storage
 	store         session.InstanceStore
+	gate          *callerIdentityGate      // shared identity gate (one wake-metrics instance); nil builds a metrics-less one
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)

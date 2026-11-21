@@ -13,7 +13,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -167,7 +166,10 @@ func (h *backlogHandlers) recordOverrideBranch(ctx context.Context, callerUUID, 
 // behind the identity gate, so callerUUID is the verified session credential
 // (ADR-007 rule 0), never the spoofable X-Stapler-Session-UUID claim.
 func (h *backlogHandlers) reportPRCreatedTool() mcpserver.ToolHandlerFunc {
-	gate := &callerIdentityGate{metrics: wakes.NewMetrics(), roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	gate := h.gate
+	if gate == nil {
+		gate = &callerIdentityGate{roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	}
 	return withCallerIdentityGate(gate, toolReportPRCreated, h.reportPRCreated)
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -25,6 +26,8 @@ type coreConfig struct {
 	flowSvc   *backlogflow.BacklogFlowService
 	plugins   *session.PluginRegistry
 	refParser TrackerRefParser
+	// wakeMetrics is the process-wide wake counter mirror; nil drops counts (a nil *wakes.Metrics is a no-op).
+	wakeMetrics *wakes.Metrics
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }
@@ -49,6 +52,19 @@ func WithPluginRegistry(r *session.PluginRegistry) CoreOption {
 // import_linear_issue / import_jira_issue. Without it those tools return a fetch error.
 func WithTrackerRefParser(p TrackerRefParser) CoreOption {
 	return func(c *coreConfig) { c.refParser = p }
+}
+
+// WithWakeMetrics supplies the shared wake counter mirror the identity gate and
+// peer-help tools count into, so the composition root's dispatcher reads the
+// same instance. Without it those counts are dropped.
+func WithWakeMetrics(m *wakes.Metrics) CoreOption {
+	return func(c *coreConfig) { c.wakeMetrics = m }
+}
+
+// WakeMetricsFromOptions returns the wake metrics the options carry, or nil.
+// It lets wiring tests prove the MCP core and the dispatcher share one instance.
+func WakeMetricsFromOptions(opts ...CoreOption) *wakes.Metrics {
+	return newCoreConfig(opts).wakeMetrics
 }
 
 // FlowServiceFromOptions returns the flow service the options carry, or nil.

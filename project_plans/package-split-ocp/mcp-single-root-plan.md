@@ -51,7 +51,7 @@ Non-constructor package-level calls into `session`, `services`, `instance`, `pip
 
 | Step | Cost | Change |
 |---|---|---|
-| M1 | S | Inject one `*wakes.Metrics` (and the identity gate) from `server/dependencies.go` through a `CoreOption`; delete both `wakes.NewMetrics()` calls |
+| M1 | S | **DONE.** One `*wakes.Metrics` now comes from the composition root via `servermcp.WithWakeMetrics` (`server/mcp/server.go`); `defaultToolModules` builds one `callerIdentityGate` from it (`server/mcp/tool_modules.go`) and shares it with `backlogHandlers.gate`, so both `wakes.NewMetrics()` calls (`tool_modules.go:200`, `tools_backlog_pr.go:170`) are gone. HTTP: `mcpCoreOptions(deps)` (`server/wake_trigger_wiring.go`) at `server/server.go:1263`, backed by `ServerDependencies.sharedWakeMetrics()`, the same instance `registerWakeTriggerService` and `startWakes` read. stdio: `stdioMCPOptions` in `main.go` (the instance is built there until M5 moves it). Absent metrics is a no-op (nil `*wakes.Metrics`). Tests: `server/mcp/wake_metrics_injection_test.go`, `server/backlog_flow_wiring_test.go`, `main_test.go`. |
 | M2 | S | Consumer-defined `WorktreeOpener` func type in `server/mcp`; `dependencies.go` supplies `git.NewGitWorktreeFromStorage`; fixes the 2 call sites |
 | M3 | M | Consumer-defined GitHub port (`GetIssue`, `GetPR`, `GetPRByNumber`, `GetCommit`, `GetCurrentUserLogin`) injected via `CoreOption`; fixes the 6 call sites |
 | M4 | M | Replace concrete `NewCore` parameters with consumer-defined narrow interfaces (one per handler family, 2 impls or a real test seam per `interface-pollution-checklist`); `server/dependencies.go` passes the concrete types |
