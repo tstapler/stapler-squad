@@ -1,6 +1,11 @@
 package mcp
 
-import "context"
+import (
+	"context"
+
+	"connectrpc.com/connect"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+)
 
 // TerminalScrollback is the slice of the scrollback manager the terminal tools
 // read. *scrollback.ScrollbackManager and a test fake are its two implementations.
@@ -16,4 +21,16 @@ type TerminalScrollback interface {
 // two implementations.
 type AutoReopener interface {
 	AutoReopenAfterFailedReview(ctx context.Context, itemID string) error
+}
+
+// FlowService is the slice of the flow-observability service the flow tools
+// call. *backlogflow.BacklogFlowService and a test fake are its two
+// implementations.
+type FlowService interface {
+	GetFlowSummary(context.Context, *connect.Request[sessionv1.GetFlowSummaryRequest]) (*connect.Response[sessionv1.GetFlowSummaryResponse], error)
+	ListFlowDrilldown(context.Context, *connect.Request[sessionv1.ListFlowDrilldownRequest]) (*connect.Response[sessionv1.ListFlowDrilldownResponse], error)
+	CompareFlowWindows(context.Context, *connect.Request[sessionv1.CompareFlowWindowsRequest]) (*connect.Response[sessionv1.CompareFlowWindowsResponse], error)
+	ListDeadlockCandidates(context.Context, *connect.Request[sessionv1.ListDeadlockCandidatesRequest]) (*connect.Response[sessionv1.ListDeadlockCandidatesResponse], error)
+	ListThrashEpisodes(context.Context, *connect.Request[sessionv1.ListThrashEpisodesRequest]) (*connect.Response[sessionv1.ListThrashEpisodesResponse], error)
+	GetItemFlowTimeline(context.Context, *connect.Request[sessionv1.GetItemFlowTimelineRequest]) (*connect.Response[sessionv1.GetItemFlowTimelineResponse], error)
 }
