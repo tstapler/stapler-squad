@@ -8,7 +8,7 @@ set -u
 root="${BZL_TAGS_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$root" || exit 2
 tags='no-sandbox|local|requires-network|external|no-cache|no-remote-cache'
-nontag='^[[:space:]]*(name|actual|importpath|visibility|srcs|deps|data)[[:space:]]*='
+nontag='^[[:space:]]*(name|actual|importpath)[[:space:]]*=[[:space:]]*"[^"]*",?[[:space:]]*$'
 reason='#[[:space:]]*tag-reason:[[:space:]]*.+\(#[0-9]+\)'
 baseline=tools/bzl/test-tags-baseline.txt
 
