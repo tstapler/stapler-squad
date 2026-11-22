@@ -16,6 +16,28 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
+// realSession is the real *services.SessionService behind the SessionRPC ports: the
+// service plus the two package-level hook helpers the composition root's adapter adds.
+type realSession struct{ *services.SessionService }
+
+func (realSession) InjectHooksConfig(rootDir, sessionTitle string, hooks []string) error {
+	names := make([]services.HookName, len(hooks))
+	for i, h := range hooks {
+		names[i] = services.HookName(h)
+	}
+	return services.InjectHooksConfig(rootDir, sessionTitle, names)
+}
+
+func (realSession) RefreshInstanceHookProof(inst *instance.Instance) {
+	services.RefreshInstanceHookProof(inst)
+}
+
+var _ SessionRPC = realSession{}
+
+type programUpserter interface {
+	UpsertProgramConfig(context.Context, *connect.Request[sessionv1.UpsertProgramConfigRequest]) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error)
+}
+
 // testCustomProgramID is the custom program ID registered by
 // upsertTestCustomProgram, shared by every test that needs a
 // UpsertProgramConfig-registered program (as opposed to a built-in).
@@ -24,9 +46,9 @@ const testCustomProgramID = "claude-250k-proxy"
 // upsertTestCustomProgram registers a custom program on svc, for tests
 // asserting that create_session/create_session_for_pr accept a program
 // beyond the built-in set.
-func upsertTestCustomProgram(t *testing.T, svc *services.SessionService) {
+func upsertTestCustomProgram(t *testing.T, svc any) {
 	t.Helper()
-	_, err := svc.UpsertProgramConfig(context.Background(), connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+	_, err := svc.(programUpserter).UpsertProgramConfig(context.Background(), connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
 		Program: &sessionv1.ProgramConfigProto{
 			Id:      testCustomProgramID,
 			Label:   "Claude 250k proxy",

@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -118,7 +117,7 @@ func TestClassProof_Agent_GenericDelegateIsDeniedWhenAnOperatorDisablesTheEdge(t
 	done, refining := domain.BacklogStatusDone, domain.BacklogStatusRefining
 	edge := enfEdgeID(t, repo, done, refining)
 	item := enfItemAt(t, storage, done)
-	agentCtx := services.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
+	agentCtx := domain.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
 	require.NoError(t, enfSetEdge(t, svc, edge, false))
 
 	err := enfTransition(agentCtx, svc, item.ID, refining, "")

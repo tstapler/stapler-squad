@@ -437,7 +437,6 @@ linters:
             - github.com/tstapler/stapler-squad/log
             - github.com/tstapler/stapler-squad/pkg/events
             - github.com/tstapler/stapler-squad/pkg/localtoken
-            - github.com/tstapler/stapler-squad/server/services
             - github.com/tstapler/stapler-squad/server/wakes
             - github.com/tstapler/stapler-squad/session
             - github.com/tstapler/stapler-squad/session/backlog/pipeline
@@ -445,10 +444,13 @@ linters:
             - github.com/tstapler/stapler-squad/session/domain/backlogdto
             - github.com/tstapler/stapler-squad/session/flow
             - github.com/tstapler/stapler-squad/session/git
+            - github.com/tstapler/stapler-squad/session/hostclaim
             - github.com/tstapler/stapler-squad/session/instance
           # Belt and braces: this row's allow matching is order-dependent (verified, mechanism not read),
           # so the exact import set in server/mcp/import_set_guard_test.go is the dependable control.
           deny:
+            - pkg: github.com/tstapler/stapler-squad/server/services
+              desc: "M4b-5: the session tools take the SessionRPC ports; the composition root supplies the service (covers backlogflow and backlogsvc too)"
             - pkg: github.com/tstapler/stapler-squad/server/services/backlogflow
               desc: "M4b-1: the flow tools take the FlowService port; the composition root supplies the service"
             - pkg: github.com/tstapler/stapler-squad/server/services/backlogsvc

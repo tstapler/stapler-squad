@@ -95,14 +95,6 @@ type SessionSteerer interface {
 // always on.
 const CrossHostClaimDedupFlagName = "cross_host_claim_dedup"
 
-type transitionActorKey struct{}
-
-// WithTransitionActor marks ctx so TransitionBacklogItemStatus records the given
-// audit actor (default TriggeredByUser), e.g. TriggeredByAgent for MCP callers.
-func WithTransitionActor(ctx context.Context, actor string) context.Context {
-	return context.WithValue(ctx, transitionActorKey{}, actor)
-}
-
 type transitionCallerKey struct{}
 
 // WithTransitionCaller names the registered operator caller of an RPC that
@@ -128,7 +120,7 @@ func ResolveTransitionCaller(ctx context.Context) domain.TransitionCaller {
 }
 
 func TransitionActorFromContext(ctx context.Context) string {
-	if a, ok := ctx.Value(transitionActorKey{}).(string); ok && a != "" {
+	if a := domain.TransitionActorFrom(ctx); a != "" {
 		return a
 	}
 	return instance.TriggeredByUser

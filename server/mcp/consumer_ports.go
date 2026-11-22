@@ -6,8 +6,8 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // TerminalScrollback is the slice of the scrollback manager the terminal tools
@@ -30,7 +30,7 @@ type AutoReopener interface {
 // tools call. *backlogsvc.BacklogService and a test fake are its two implementations.
 // It satisfies claimCheckService, which the claim tool takes as its own narrower port.
 type BacklogRPC interface {
-	LookupCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error)
+	LookupCrossHostClaim(ctx context.Context, externalURL string) (hostclaim.ClaimVerdict, error)
 	MaybeTriggerTriage(ctx context.Context, itemID string, skipTriage bool, repoPath string) bool
 	IsTriageLive(itemID string) bool
 	EnterpriseHosts() []string

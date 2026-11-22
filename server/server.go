@@ -1260,7 +1260,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Registry != nil {
 		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.BacklogEnabledCheck, autoReopener, backlogRPC, mcpLiveCheck, mcpCoreOptions(deps)...)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, mcpSessionRPC(deps.SessionService), deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.BacklogEnabledCheck, autoReopener, backlogRPC, mcpLiveCheck, mcpCoreOptions(deps)...)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)

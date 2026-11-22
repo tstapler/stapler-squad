@@ -10,12 +10,11 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 )
 
 type historyHandlers struct {
-	svc *services.SessionService
+	svc ClaudeHistoryRPC
 }
 
 // maxSnippetsPerResult and maxSnippetLen bound how much of a single
