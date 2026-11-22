@@ -69,3 +69,4 @@ session/driver !server
 session/external !server
 session/sweeper !server
 session/autonomous !server
+session/tagpoller !server

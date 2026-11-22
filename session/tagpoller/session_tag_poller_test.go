@@ -1,4 +1,4 @@
-package session
+package tagpoller
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -157,6 +158,20 @@ func TestSessionTagPoller_should_SkipLLMCall_When_AlreadyClassified(t *testing.T
 	fx.poller.pollOnce()
 	if got := fake.callCount(); got != 1 {
 		t.Fatalf("second tick with unchanged hash: CallBlocking called %d times, want still 1 (skipped)", got)
+	}
+}
+
+func TestSessionTagPoller_should_SkipLLMCall_When_SessionSuspended(t *testing.T) {
+	t.Parallel()
+	fake := &fakeTagPoolClient{response: `{"results":[{"name":"sess-1","tags":["Feature"]}]}`}
+	fx := newTagPollerFixture(fake, "Feature")
+	inst := primedInstance("sess-1", "feature/x")
+	inst.MutateForTest(func(i *instance.Instance) { i.Status = domain.Paused })
+	fx.poller.SetInstances([]*instance.Instance{inst})
+
+	fx.poller.pollOnce()
+	if got := fake.callCount(); got != 0 {
+		t.Fatalf("CallBlocking called %d times for a paused session, want 0", got)
 	}
 }
 

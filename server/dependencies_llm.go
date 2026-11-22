@@ -4,9 +4,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
 // llmWiring is the headless LLM stack: pool, backend selector and client. client is an
@@ -58,20 +58,20 @@ func buildHeadlessLLM(sessionService *services.SessionService) llmWiring {
 }
 
 // buildTagPoller builds the LLM-fallback tag classifier; nil without a headless pool.
-func buildTagPoller(cfg *config.Config, llm llmWiring, sessionService *services.SessionService) *session.SessionTagClassificationPoller {
+func buildTagPoller(cfg *config.Config, llm llmWiring, sessionService *services.SessionService) *tagpoller.SessionTagClassificationPoller {
 	headlessPool, llmClient := llm.pool, llm.client
 	// SessionTagClassificationPoller (session-classifier-pipeline Epic 4.4) — LLM fallback
 	// classification for sessions the sync TaggingEngine can't confidently tag. Guarded by
 	// headlessPool != nil, same "disable by not registering" pattern as every other
 	// headlessPool-dependent component in this function: no claude binary means every session
 	// simply never gets an LLM-derived tag, sync rules still work unaffected (ADR-001).
-	var sessionTagPoller *session.SessionTagClassificationPoller
+	var sessionTagPoller *tagpoller.SessionTagClassificationPoller
 	if headlessPool != nil {
-		tagPollerCfg := session.DefaultSessionTagPollerConfig()
+		tagPollerCfg := tagpoller.DefaultSessionTagPollerConfig()
 		tagModel, tagFallbacks := services.TaggingClassifierModelHierarchy(cfg)
 		tagPollerCfg.Model = tagModel
 		tagPollerCfg.FallbackModels = tagFallbacks
-		sessionTagPoller = session.NewSessionTagClassificationPollerWithConfig(llmClient, sessionService.GetTaggingEngine(), tagPollerCfg)
+		sessionTagPoller = tagpoller.NewSessionTagClassificationPollerWithConfig(llmClient, sessionService.GetTaggingEngine(), tagPollerCfg)
 		// Wire into SessionService so every session-creation path (CreateSession,
 		// CreateDirectorySession, CreateWorktreeSession, ForkSession) registers new
 		// sessions with the poller too, not just the boot-time instance list set via

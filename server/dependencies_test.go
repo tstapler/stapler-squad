@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -528,7 +529,7 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
-	deps.SessionTagClassificationPoller = session.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
+	deps.SessionTagClassificationPoller = tagpoller.NewSessionTagClassificationPoller(noopTagPoolClient{}, classifier.NewTaggingEngine())
 	require.False(t, deps.SessionTagClassificationPoller.Running(), "poller must not be running before the server wires it up")
 
 	newShutdownOnCleanupServer(t, "localhost:0", deps)
