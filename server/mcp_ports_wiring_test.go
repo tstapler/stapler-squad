@@ -78,7 +78,7 @@ func TestMCPNudgeGate_should_ForwardTheCallAndItsError_When_Present(t *testing.T
 		gotCtx, gotTarget = ctx, inst
 		return want
 	})
-	ctx := context.WithValue(context.Background(), struct{}{}, 1)
+	ctx := context.WithValue(context.Background(), nudgeGateTestKey{}, 1)
 
 	err := gate.VerifyNudgeSafeToWrite(ctx, target)
 
@@ -117,3 +117,5 @@ func TestMCPSessionAdapter_should_ConvertHookNames_When_InjectingHooks(t *testin
 	assert.Contains(t, string(raw), `"Stop"`, "the stop_notification name must reach the injector as services.HookStopNotification")
 	assert.Contains(t, string(raw), `"PermissionRequest"`, "the permission hook is always injected")
 }
+
+type nudgeGateTestKey struct{}
