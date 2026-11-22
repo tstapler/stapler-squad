@@ -17,15 +17,25 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 	patterns := []string{
 		"*_test.go",
 		"../services/*gate*_test.go",
+		"../services/*/*gate*_test.go",
 		"../services/gatestats*_test.go",
+		"../services/*/gatestats*_test.go",
 		"../services/legacy_hidden_counters_test.go",
+		"../services/*/legacy_hidden_counters_test.go",
 		"../services/session_service_events*_test.go",
+		"../services/*/session_service_events*_test.go",
 		"../services/hidden_*_test.go",
+		"../services/*/hidden_*_test.go",
 		"../services/notification_prune_test.go",
+		"../services/*/notification_prune_test.go",
 		"../services/terminal_*_test.go",
+		"../services/*/terminal_*_test.go",
 		"../services/ssq_hook_handler_stamp_test.go",
+		"../services/*/ssq_hook_handler_stamp_test.go",
 		"../services/slack_gate_test.go",
+		"../services/*/slack_gate_test.go",
 		"../services/session_service_diagnose_test.go",
+		"../services/*/session_service_diagnose_test.go",
 	}
 	forbidden := map[string]bool{
 		"log.SetSlogDefaultForTest": true, // the repo's global-logger swap seam

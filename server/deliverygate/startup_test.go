@@ -18,11 +18,17 @@ func TestStartup_ShouldUseNarrowServiceDepsAndNeverCallBuildDependencies_WhenHid
 	patterns := []string{
 		"*_test.go",
 		"../services/*gate*_test.go",
+		"../services/*/*gate*_test.go",
 		"../services/gatestats*_test.go",
+		"../services/*/gatestats*_test.go",
 		"../services/legacy_hidden_counters_test.go",
+		"../services/*/legacy_hidden_counters_test.go",
 		"../services/session_service_events*_test.go",
+		"../services/*/session_service_events*_test.go",
 		"../services/hidden_*_test.go",
+		"../services/*/hidden_*_test.go",
 		"../services/session_service_diagnose_test.go",
+		"../services/*/session_service_diagnose_test.go",
 		"../slack_gate_test.go",
 		"../gatestats_listener_test.go",
 	}
