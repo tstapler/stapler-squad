@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,10 +45,14 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 	}
 	seen := map[string]bool{}
 	fset := token.NewFileSet()
+	leafFiles := 0 // services leaf tests matched; zero means the leaf globs went dead (e.g. missing Bazel data)
 	for _, pat := range patterns {
 		files, err := filepath.Glob(pat)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if strings.HasPrefix(pat, "../services/*/") {
+			leafFiles += len(files)
 		}
 		for _, f := range files {
 			if seen[f] {
@@ -74,6 +79,9 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 				return true
 			})
 		}
+	}
+	if leafFiles == 0 {
+		t.Fatal("no ../services/*/ leaf test files matched; the leaf globs are dead")
 	}
 	if len(seen) < 10 {
 		t.Fatalf("scanned only %d files; the glob patterns drifted", len(seen))

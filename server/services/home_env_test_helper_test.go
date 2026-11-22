@@ -16,7 +16,8 @@ import (
 
 // walkSourceDirs returns root and every Go-source directory beneath it, so a
 // scanner covers a new leaf under server/services/<leaf>/ with no edit. It
-// skips fixture, generated, vendored and hidden directories.
+// skips fixture, vendored and hidden directories at any depth; no generated-code
+// convention exists under server/services, so "gen" is scanned.
 func walkSourceDirs(t testing.TB, root string) []string {
 	t.Helper()
 	var dirs []string
@@ -29,7 +30,7 @@ func walkSourceDirs(t testing.TB, root string) []string {
 		}
 		if path != root {
 			switch name := d.Name(); {
-			case name == "testdata", name == "vendor", name == "node_modules", name == "gen", strings.HasPrefix(name, "."):
+			case name == "testdata", name == "vendor", name == "node_modules", strings.HasPrefix(name, "."):
 				return filepath.SkipDir
 			}
 		}
@@ -46,7 +47,7 @@ func walkSourceDirs(t testing.TB, root string) []string {
 // servicesSourceDirs is walkSourceDirs over this package and all its leaves.
 func servicesSourceDirs(t testing.TB) []string { return walkSourceDirs(t, ".") }
 
-// nonScannedServicesDirs lists immediate subdirectories the scanners skip by design.
+// nonScannedServicesDirs lists directory names (at any depth) the scanners skip by design.
 var nonScannedServicesDirs = map[string]string{
 	"testdata": "fixtures, not Go source",
 }
@@ -66,32 +67,45 @@ func TestServicesScannerDiscovery_WalksNewLeafDirs_WhenOneIsAdded(t *testing.T) 
 	}
 }
 
-// TestServicesScannerDiscovery_CoversEveryLeafDir fails when a subdirectory of
-// server/services is neither scanned nor documented in nonScannedServicesDirs.
+// TestServicesScannerDiscovery_CoversEveryLeafDir fails when any directory
+// holding .go files, at any depth under server/services, is neither scanned nor
+// under a name documented in nonScannedServicesDirs.
 func TestServicesScannerDiscovery_CoversEveryLeafDir(t *testing.T) {
 	t.Parallel()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
 	scanned := map[string]bool{}
 	for _, d := range servicesSourceDirs(t) {
 		scanned[filepath.ToSlash(d)] = true
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
+	withGo := map[string]bool{}
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, ".go") {
+			withGo[filepath.ToSlash(filepath.Dir(path))] = true
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dir := range withGo {
+		if scanned[dir] || excludedByName(dir) {
 			continue
 		}
-		_, excluded := nonScannedServicesDirs[e.Name()]
-		if excluded == scanned[e.Name()] {
-			t.Errorf("leaf dir %s: scanned=%v but excluded=%v; scanners must cover every leaf or list it in nonScannedServicesDirs", e.Name(), scanned[e.Name()], excluded)
-		}
+		t.Errorf("dir %s holds .go files but is not scanned; fix walkSourceDirs or list its name in nonScannedServicesDirs", dir)
 	}
 	for _, leaf := range []string{"backlogsvc", "wsconn", "sessionretention", "webhooktrigger", "unfinishedwork"} {
 		if !scanned[leaf] {
 			t.Errorf("known leaf %s not scanned", leaf)
 		}
 	}
+}
+
+func excludedByName(dir string) bool {
+	for _, seg := range strings.Split(dir, "/") {
+		if _, ok := nonScannedServicesDirs[seg]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // withFakeHomeAsFile points HOME at a regular file rather than a directory,

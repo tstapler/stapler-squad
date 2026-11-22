@@ -237,6 +237,7 @@ filegroup(
         "//tools/shared-node-modules:go_sources",
     ],
     visibility = [
+        "//server/deliverygate:__pkg__",
         "//server/services:__pkg__",
         "//session:__pkg__",
     ],
