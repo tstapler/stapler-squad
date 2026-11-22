@@ -795,7 +795,7 @@ linters:
         text: "LoadInstances"
       # hibernation_sweeper uses the liveProvider fast path when wired; LoadInstances
       # is only reached in the fallback path (e.g. tests without the poller).
-      - path: "session/hibernation_sweeper\\.go"
+      - path: "session/sweeper/hibernation_sweeper\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "_test\\.go"

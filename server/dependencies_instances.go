@@ -21,6 +21,7 @@ import (
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
 )
 
 // wireLoadedInstances attaches the shared collaborators to every loaded instance and
@@ -136,7 +137,7 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance, gat
 		if !config.IsIsolatedInstance() {
 			// minAge=0: safe only here, before any new session creation is possible
 			// in this startup sequence — see ReconcileOrphanedTmuxSessions' doc comment.
-			session.ReconcileOrphanedTmuxSessions(instances, 0)
+			sweeper.ReconcileOrphanedTmuxSessions(instances, 0)
 		}
 
 		// Step 6.5: Persist any auto-detected worktree info (must happen after Step 6)

@@ -45,6 +45,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -339,7 +340,7 @@ type SessionService struct {
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
-	memoryCacheReader session.MemoryCacheReader
+	memoryCacheReader sweeper.MemoryCacheReader
 
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.

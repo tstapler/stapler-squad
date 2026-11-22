@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -460,7 +461,7 @@ func (s *SessionService) SetPermissionRequestHandler(handler sshremote.Permissio
 
 // SetMemoryCacheReader wires the HibernationSweeper so that ListSessions can
 // populate memory_rss_mb, estimated_savings_mb, and system_memory_pct fields.
-func (s *SessionService) SetMemoryCacheReader(r session.MemoryCacheReader) {
+func (s *SessionService) SetMemoryCacheReader(r sweeper.MemoryCacheReader) {
 	s.memoryCacheReader = r
 }
 
