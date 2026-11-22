@@ -121,11 +121,11 @@ func TestDecryptWorkflowSecret_should_RoundTripAndRejectBadInput(t *testing.T) {
 	assert.False(t, VerifyWebhookSecret(got, body, sign("wrong-secret", body)))
 
 	_, err = decryptWorkflowSecret(nil, wf)
-	assert.Error(t, err, "nil config")
+	assert.ErrorContains(t, err, "config unavailable")
 	wf.WebhookSecretEncrypted = ""
 	_, err = decryptWorkflowSecret(infra.Cfg, wf)
-	assert.Error(t, err, "no secret configured")
+	assert.ErrorContains(t, err, "no webhook secret configured")
 	wf.WebhookSecretEncrypted = "not-ciphertext"
 	_, err = decryptWorkflowSecret(infra.Cfg, wf)
-	assert.Error(t, err, "undecryptable ciphertext")
+	assert.ErrorContains(t, err, "decrypt webhook secret")
 }
