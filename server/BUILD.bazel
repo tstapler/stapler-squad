@@ -152,6 +152,7 @@ go_library(
         "//session/stagecfg",
         "//session/streamhub",
         "//session/summaries",
+        "//session/sweeper",
         "//session/tcc",
         "//session/tmux",
         "//session/tokens",

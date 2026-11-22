@@ -45,6 +45,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -1511,7 +1512,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
-		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
+		sweeper := sweeper.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
 		if deps.ReviewQueuePoller != nil {
 			sweeper.SetLiveProvider(deps.ReviewQueuePoller)
 		}
@@ -1527,7 +1528,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// instance (OrphanedTmuxSweeper.Start re-checks this itself; ReviewQueuePoller
 	// nil-check here just avoids starting a sweeper that could never sweep).
 	if deps.ReviewQueuePoller != nil {
-		orphanSweeper := session.NewOrphanedTmuxSweeper()
+		orphanSweeper := sweeper.NewOrphanedTmuxSweeper()
 		orphanSweeper.SetLiveProvider(deps.ReviewQueuePoller)
 		srv.goBackground(func() { orphanSweeper.Start(serverCtx) })
 	}

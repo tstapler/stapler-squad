@@ -1,4 +1,4 @@
-package session
+package sweeper
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appconfig "github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory/memorytest"
@@ -77,10 +78,28 @@ func TestSessionMemoryCache_Get_should_returnZero_When_EntryAbsent(t *testing.T)
 	assert.Equal(t, int64(0), c.Get("nonexistent"))
 }
 
+// createTestStorage returns Storage over a per-test in-memory repository.
+func createTestStorage(t *testing.T) (*session.Storage, func()) {
+	t.Helper()
+	repo := session.NewTestEntRepository(t)
+	storage, err := session.NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	return storage, func() {}
+}
+
+// mockTmuxManager supplies only GetTmuxSessionName; any other TmuxManager
+// method panics on the nil embed so an unexpected call fails visibly.
+type mockTmuxManager struct {
+	session.TmuxManager
+	tmuxSessionName string
+}
+
+func (m *mockTmuxManager) GetTmuxSessionName() string { return m.tmuxSessionName }
+
 // --- HibernationSweeper resource-pressure tests ---
 
 // makeTestSweeper builds a minimal HibernationSweeper with a fake reader and in-memory storage.
-func makeTestSweeper(t *testing.T, memReader *memorytest.FakeReader, threshold int) (*HibernationSweeper, *Storage, func()) {
+func makeTestSweeper(t *testing.T, memReader *memorytest.FakeReader, threshold int) (*HibernationSweeper, *session.Storage, func()) {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 	cfg := &appconfig.Config{
@@ -313,9 +332,9 @@ func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *tes
 	// otherwise every session collapses onto the same "" cache key and this
 	// test can't tell a correct name->UUID mapping from a broken one.
 	instA := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
-	instA.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"}))
+	instA.SetProcessManagerForTest(session.NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"}))
 	instB := makeIdleInstance(t, "uuid-b", "session-b", time.Minute)
-	instB.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"}))
+	instB.SetProcessManagerForTest(session.NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"}))
 	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
 	instC.Status = domain.Paused // inactive — should be excluded from the batch
 

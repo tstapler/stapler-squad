@@ -1,4 +1,4 @@
-package session
+package sweeper
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
 )
@@ -121,7 +122,7 @@ func (c *sessionMemoryCache) SetAll(rssByUUID map[string]int64) {
 // that have been idle longer than the configured timeout or that are consuming
 // memory while the system is under pressure.
 type HibernationSweeper struct {
-	storage      *Storage
+	storage      *session.Storage
 	cfg          *appconfig.Config
 	liveProvider LiveInstancesProvider
 	memReader    memory.Reader
@@ -134,7 +135,7 @@ type HibernationSweeper struct {
 
 // NewHibernationSweeper creates a HibernationSweeper using the given storage, config,
 // and memory reader.
-func NewHibernationSweeper(storage *Storage, cfg *appconfig.Config, reader memory.Reader) *HibernationSweeper {
+func NewHibernationSweeper(storage *session.Storage, cfg *appconfig.Config, reader memory.Reader) *HibernationSweeper {
 	return &HibernationSweeper{
 		storage:   storage,
 		cfg:       cfg,
