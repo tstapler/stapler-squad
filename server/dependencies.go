@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/insights"
+	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
@@ -98,7 +99,7 @@ type ServerDependencies struct {
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
-	UnfinishedWorkService *services.UnfinishedWorkService
+	UnfinishedWorkService *unfinishedwork.UnfinishedWorkService
 	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher discovers repos under the user-configured
@@ -615,7 +616,7 @@ type RuntimeDeps struct {
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
-	UnfinishedWorkService *services.UnfinishedWorkService
+	UnfinishedWorkService *unfinishedwork.UnfinishedWorkService
 	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher (see the identically-named field on

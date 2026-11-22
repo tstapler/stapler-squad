@@ -75,24 +75,6 @@ func TestCheckBranchDivergence_RoutesCountCommitsThroughBackend(t *testing.T) {
 	}
 }
 
-func TestWorktreeHeadSHA_RoutesResolveRefThroughBackend(t *testing.T) {
-	rig := gitfake.NewRig(t)
-	rig.Install(t)
-	rig.GoGit.OnResolveRef = func(backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) { return refsSvcSHA, nil }
-
-	assert.Equal(t, refsSvcSHA, worktreeHeadSHA(context.Background(), "/wt"))
-	rig.RequireOnlyGoGit(t, backend.OpResolveRef)
-	assert.Equal(t, "HEAD", rig.GoGit.Calls()[0].Arg)
-}
-
-func TestWorktreeHeadSHA_EmptyOnError(t *testing.T) {
-	fake := gitfake.New("backend")
-	gitfake.Use(t, fake)
-	fake.OnResolveRef = func(backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) { return "", backend.ErrUnborn }
-
-	assert.Empty(t, worktreeHeadSHA(context.Background(), "/wt"))
-}
-
 func TestGitLogSummary_RoutesLogThroughBackendAndFormatsOneline(t *testing.T) {
 	rig := gitfake.NewRig(t)
 	rig.Install(t)
