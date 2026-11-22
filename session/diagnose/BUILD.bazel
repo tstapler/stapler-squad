@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "diagnose",
+    srcs = [
+        "diagnose_bundle.go",
+        "diagnose_bundle_budget.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/diagnose",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//session/domain/backlogdto",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":diagnose",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "diagnose_test",
+    srcs = [
+        "diagnose_bundle_budget_test.go",
+        "diagnose_bundle_test.go",
+    ],
+    embed = [":diagnose"],
+    deps = [
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)
