@@ -87,7 +87,8 @@ func (s *SessionRetentionSweeper) Start(ctx context.Context) {
 	}
 }
 
-// SweepOnce runs a single retention cycle synchronously.
+// SweepOnce runs one retention cycle synchronously. Exported so server/services tests can drive
+// one sweep against the real SessionService.
 func (s *SessionRetentionSweeper) SweepOnce(ctx context.Context) { s.sweep(ctx) }
 
 // sweep finds archived sessions past the retention window and deletes the ones that

@@ -23,7 +23,6 @@ import (
 // the sweeper; the sweeper's own decision logic is unit-tested in package sessionretention
 // against a fake deleter.
 
-
 // addArchivedInstance persists a session directly into fixture storage with the given
 // ArchivedAt timestamp, applying any additional field mutations via opts.
 func addArchivedInstance(t *testing.T, fix *forkTestFixture, title string, archivedAt time.Time, opts ...func(*instance.Instance)) {
