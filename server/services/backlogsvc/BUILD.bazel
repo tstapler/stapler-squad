@@ -159,6 +159,7 @@ go_test(
         "backlog_transition_denied_recovery_test.go",
         "backlog_transition_notify_test.go",
         "backlog_transition_notify_w21a_test.go",
+        "backlog_triage_harness_test.go",
         "config_surface_proof_flags_readers_bsvc_test.go",
         "config_surface_proof_gate_fields_bsvc_test.go",
         "config_surface_proof_quota_bsvc_test.go",

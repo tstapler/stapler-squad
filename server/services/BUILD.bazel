@@ -450,7 +450,6 @@ go_test(
         "backlog_source_plugin_events_test.go",
         "backlog_stuck_rpc_test.go",
         "backlog_transition_characterization_test.go",
-        "backlog_triage_harness_test.go",
         "callback_config_service_test.go",
         "callback_dispatcher_test.go",
         "capacity_monitor_guardrails_test.go",

@@ -876,22 +876,22 @@ test-delivery-guards-run: $(GOTESTSUM_BIN)
 	done
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
-	go test -v -tags=harness -run TestTriageHarness ./server/services/
+	go test -v -tags=harness -run TestTriageHarness ./server/services/backlogsvc/
 
 test-triage-gate: proto-gen ## Phase 1: verify TriggerTriage is blocked when repoPath is empty
-	go test -v -tags=harness -run TestTriageHarness/Gate ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/Gate ./server/services/backlogsvc/
 
 test-triage-trigger: proto-gen ## Phase 2: trigger triage and poll until item reaches ready status
-	go test -v -tags=harness -run TestTriageHarness/TriggerAndPoll ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/TriggerAndPoll ./server/services/backlogsvc/
 
 test-triage-parser: proto-gen ## Phase 3: verify parser tolerates LLM preamble before JSON block
-	go test -v -tags=harness -run TestTriageHarness/ParserRobust ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/ParserRobust ./server/services/backlogsvc/
 
 test-triage-flow: proto-gen ## Phase 4: full flow — create, gate, set repoPath, trigger, verify
-	go test -v -tags=harness -run TestTriageHarness/FullFlow ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/FullFlow ./server/services/backlogsvc/
 
 test-triage-real: proto-gen ## Run triage with a REAL Claude session (requires claude in PATH, ~30s)
-	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
+	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/backlogsvc/ -timeout 5m
 
 coverage-integration: ensure-tools proto-gen ## Run integration tests, emit integration.out
 	go test -race -tags integration -coverprofile=integration.out -covermode=atomic ./...
@@ -1065,8 +1065,15 @@ fmt-check: ## Verify all Go files are gofmt-formatted (non-destructive; exits 1 
 	fi
 	@echo "✅ All Go files are properly formatted"
 
-vet: gen-gate-strict ensure-tools proto-gen ## Run go vet with all analyzers
+# Opt-in feature tags whose files `go vet ./...` never compiles. A tagged file
+# that stops compiling is otherwise silently dead (the harness suite sat broken
+# for months). embed_tmux/embed_tymux need built artifacts and `tools` conflicts
+# with package main, so they are deliberately absent.
+VET_TAGS := harness integration sinkguard gitoracle live_github otelcauto s14_failing e2e_ghsignal
+
+vet: gen-gate-strict ensure-tools proto-gen ## Run go vet with all analyzers, default build and each opt-in feature tag
 	go vet ./...
+	@set -e; for t in $(VET_TAGS); do echo "go vet -tags=$$t ./..."; go vet -tags=$$t ./...; done
 
 # Nil safety analysis
 nil-safety: ensure-tools ## Run comprehensive nil safety analysis
