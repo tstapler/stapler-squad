@@ -230,7 +230,7 @@ func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 	switch {
 	case err == nil:
 		return nudgeOutcomeSuccess, false
-	case errors.Is(err, autonomous.ErrNudgeSubmitUncertain):
+	case errors.Is(err, domain.ErrNudgeSubmitUncertain):
 		return nudgeOutcomeUncertain, true
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return nudgeOutcomeCtxCancelled, true

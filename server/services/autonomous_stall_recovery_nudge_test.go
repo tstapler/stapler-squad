@@ -247,7 +247,7 @@ func TestStallRecovery_NudgeFailureFallsBackOrLeavesPane(t *testing.T) {
 		{"lease busy", instance.ErrLeaseBusy, true, "nudge_outcome=lease_busy", "action=respawned"},
 		{"slot unavailable", autonomous.ErrNudgeSlotUnavailable, true, "nudge_outcome=slot_unavailable", "action=respawned"},
 		{"ownership", errors.New("pane owned by another session"), true, "nudge_outcome=ownership", "action=respawned"},
-		{"uncertain delivery", fmt.Errorf("%w: boom", autonomous.ErrNudgeSubmitUncertain), false, "nudge_outcome=uncertain", "action=none"},
+		{"uncertain delivery", fmt.Errorf("%w: boom", domain.ErrNudgeSubmitUncertain), false, "nudge_outcome=uncertain", "action=none"},
 		{"cancelled", context.Canceled, false, "nudge_outcome=ctx_cancelled", "action=none"},
 	}
 	for i, tc := range cases {
@@ -351,8 +351,8 @@ func TestClassifyNudgeError(t *testing.T) {
 		{"lease busy", instance.ErrLeaseBusy, nudgeOutcomeLeaseBusy, false},
 		{"slot unavailable", autonomous.ErrNudgeSlotUnavailable, nudgeOutcomeSlotUnavailable, false},
 		{"claim failed", fmt.Errorf("%w: db down", autonomous.ErrNudgeClaimFailed), nudgeOutcomeSlotUnavailable, false},
-		{"uncertain", fmt.Errorf("%w: %w", autonomous.ErrNudgeSubmitUncertain, errors.New("io")), nudgeOutcomeUncertain, true},
-		{"uncertain wrapping cancel", fmt.Errorf("%w: %w", autonomous.ErrNudgeSubmitUncertain, context.Canceled), nudgeOutcomeUncertain, true},
+		{"uncertain", fmt.Errorf("%w: %w", domain.ErrNudgeSubmitUncertain, errors.New("io")), nudgeOutcomeUncertain, true},
+		{"uncertain wrapping cancel", fmt.Errorf("%w: %w", domain.ErrNudgeSubmitUncertain, context.Canceled), nudgeOutcomeUncertain, true},
 		{"deadline", context.DeadlineExceeded, nudgeOutcomeCtxCancelled, true},
 		{"cancelled", context.Canceled, nudgeOutcomeCtxCancelled, true},
 		{"session not active", fmt.Errorf("%w: uuid", autonomous.ErrNudgeSessionNotActive), nudgeOutcomeNotRestartable, true},

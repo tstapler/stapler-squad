@@ -12,6 +12,7 @@ import (
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -56,7 +57,7 @@ func (d *ServerDependencies) sharedWakeMetrics() *wakes.Metrics {
 
 // mcpCoreOptions is the HTTP MCP core's whole CoreOption set.
 func mcpCoreOptions(deps *ServerDependencies) []servermcp.CoreOption {
-	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps), servermcp.WithWorktreeOpener(NewMCPWorktreeOpener()), servermcp.WithGitHub(NewMCPGitHub()), servermcp.WithUserPRCache(mcpUserPRSource(deps.UserPRCache))})
+	return slices.Concat(flowMCPOptions(deps), []servermcp.CoreOption{wakeMCPOptions(deps), servermcp.WithWorktreeOpener(NewMCPWorktreeOpener()), servermcp.WithGitHub(NewMCPGitHub()), servermcp.WithUserPRCache(mcpUserPRSource(deps.UserPRCache)), servermcp.WithNudgeGate(mcpNudgeGate(autonomous.VerifyNudgeSafeToWrite))})
 }
 
 // The real worktree must keep satisfying the MCP tools' port.

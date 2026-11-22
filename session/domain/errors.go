@@ -26,3 +26,7 @@ var ErrConflict = errors.New("conflict")
 // ErrAnswererForbidden is returned when the answerer is not the one a guidance request names;
 // the request is left unchanged.
 var ErrAnswererForbidden = errors.New("answerer is not permitted to answer this request")
+
+// ErrNudgeSubmitUncertain wraps every submit error after a successful nudge claim: the text may
+// have landed unsubmitted, so the slot stays consumed and callers must leave the pane alone.
+var ErrNudgeSubmitUncertain = errors.New("nudge delivery uncertain")

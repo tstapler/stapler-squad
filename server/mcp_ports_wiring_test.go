@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestMCPAutoReopener_should_ReturnNilInterface_When_NoBacklogService(t *testing.T) {
@@ -58,6 +61,36 @@ func TestMCPCoreOptions_should_LeaveUserPRSourceNil_When_DepsHaveNoCache(t *test
 	t.Parallel()
 	got := servermcp.UserPRSourceFromOptions(mcpCoreOptions(&ServerDependencies{})...)
 	assert.True(t, got == nil, "no cache must leave the PR tools unregistered, not a typed-nil source")
+}
+
+func TestMCPNudgeGate_should_ReturnNilInterface_When_NoVerifyFunc(t *testing.T) {
+	t.Parallel()
+	assert.True(t, mcpNudgeGate(nil) == nil, "a nil func must not become a typed-nil interface")
+}
+
+func TestMCPNudgeGate_should_ForwardTheCallAndItsError_When_Present(t *testing.T) {
+	t.Parallel()
+	want := errors.New("not idle")
+	target := &instance.Instance{}
+	var gotCtx context.Context
+	var gotTarget *instance.Instance
+	gate := mcpNudgeGate(func(ctx context.Context, inst *instance.Instance) error {
+		gotCtx, gotTarget = ctx, inst
+		return want
+	})
+	ctx := context.WithValue(context.Background(), struct{}{}, 1)
+
+	err := gate.VerifyNudgeSafeToWrite(ctx, target)
+
+	assert.Same(t, want, err)
+	assert.Equal(t, ctx, gotCtx)
+	assert.Same(t, target, gotTarget)
+}
+
+func TestMCPCoreOptions_should_InjectTheNudgeGate_OnBothTransports(t *testing.T) {
+	t.Parallel()
+	assert.NotNil(t, servermcp.NudgeGateFromOptions(mcpCoreOptions(&ServerDependencies{})...), "HTTP path")
+	assert.NotNil(t, servermcp.NudgeGateFromOptions(stdioMCPOptions(nil)...), "stdio path")
 }
 
 func TestMCPSessionRPC_should_ReturnNilInterface_When_NoSessionService(t *testing.T) {

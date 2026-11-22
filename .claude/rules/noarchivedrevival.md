@@ -6,8 +6,8 @@ Files in scope (`tools/lint/noarchivedrevival`): `session/autonomous/health.go`,
 
 **Wrong:**
 ```go
-func recoverMissingSession(instance *Instance) {
-	if err := instance.Start(false); err != nil { // revives an archived session
+func recoverMissingSession(inst *instance.Instance) {
+	if err := inst.Start(false); err != nil { // revives an archived session
 		...
 	}
 }
@@ -15,11 +15,14 @@ func recoverMissingSession(instance *Instance) {
 
 **Right:**
 ```go
-func (h *SessionHealthChecker) checkSingleSession(instance *Instance) {
-	if reason, skip := healthCheckSkipReason(instance); skip { // reads snap.ArchivedAt
-		return
+func (h *SessionHealthChecker) checkSingleSession(inst *instance.Instance, paneStatus map[string]tmux.PaneDeadStatus) HealthCheckResult {
+	result := HealthCheckResult{IsHealthy: true}
+	if reason, skip := healthCheckSkipReason(inst); skip { // reads snap.ArchivedAt
+		result.Actions = append(result.Actions, reason)
+		return result
 	}
-	h.checkTmuxHealth(instance) // -> recoverMissingSession -> Start(false)
+	h.checkTmuxHealth(inst, paneStatus, &result) // -> recoverMissingSession -> Start(false)
+	return result
 }
 ```
 

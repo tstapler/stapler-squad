@@ -28,6 +28,8 @@ type coreConfig struct {
 	openWorktree WorktreeOpener
 	// github is the GitHub client for the issue/PR/commit tools; nil reports GitHub unavailable.
 	github GitHub
+	// nudgeGate guards diagnose_nudge_session's write; nil makes the nudge refuse (fail closed).
+	nudgeGate NudgeGate
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }
@@ -48,6 +50,18 @@ func WithFlowService(svc FlowService) CoreOption {
 // defeats the absent-source guard.
 func WithUserPRCache(src UserPRSource) CoreOption {
 	return func(c *coreConfig) { c.userPRs = src }
+}
+
+// WithNudgeGate supplies the write-time safety check diagnose_nudge_session
+// runs before typing into a pane. Without it the nudge refuses. Pass an untyped
+// nil or a non-nil value: a typed-nil pointer defeats the absent-gate guard.
+func WithNudgeGate(g NudgeGate) CoreOption {
+	return func(c *coreConfig) { c.nudgeGate = g }
+}
+
+// NudgeGateFromOptions returns the nudge gate the options carry, or nil.
+func NudgeGateFromOptions(opts ...CoreOption) NudgeGate {
+	return newCoreConfig(opts).nudgeGate
 }
 
 // WithPluginRegistry supplies the item-source plugins the tracker import tools
