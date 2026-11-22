@@ -2443,7 +2443,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 // rather than only giving up on waiting for a free gate slot. Added for the
 // SessionDriver polling path (session.PreviewContext), whose stop channel
 // needs to interrupt a capture-pane call already in flight, not just abandon
-// the wait for one — see session/session_driver.go's stop/join mechanism.
+// the wait for one — see session/driver/session_driver.go's stop/join mechanism.
 func (t *TmuxSession) CapturePaneContentContext(ctx context.Context) (string, error) {
 	// Short-circuit on a session already known gone via the cached/coalesced
 	// DoesSessionExist() check, instead of forking capture-pane and letting it

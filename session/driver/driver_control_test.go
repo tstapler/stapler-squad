@@ -8,9 +8,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// Instance code reaches the driver only through this hook; a binary that links session but not
-// this package has none and panics on the first driver start.
-func TestInit_should_RegisterDriverControl_When_PackageIsLinked(t *testing.T) {
-	t.Parallel()
+func TestRegister_should_InstallProductionControl_When_Called(t *testing.T) {
+	Register()
+	Register() // idempotent
 	assert.IsType(t, sessionDriverControl{}, instance.DriverControlHook)
 }

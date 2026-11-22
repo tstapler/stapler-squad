@@ -1,6 +1,10 @@
 package driver
 
-import "github.com/tstapler/stapler-squad/session/instance"
+import (
+	"sync"
+
+	"github.com/tstapler/stapler-squad/session/instance"
+)
 
 // sessionDriverControl is the production DriverControl. It lives outside
 // session_driver.go so the forwarding RestartForRetry is not an unguarded revival
@@ -17,4 +21,13 @@ func (sessionDriverControl) RestartForRetry(inst *instance.Instance, allowedPath
 	return restartForRetry(inst, allowedPath, continuationPrompt, policy, stop)
 }
 
-func init() { instance.DriverControlHook = sessionDriverControl{} }
+// NewControl returns the production instance.DriverControl.
+func NewControl() instance.DriverControl { return sessionDriverControl{} }
+
+var registerOnce sync.Once
+
+// Register installs NewControl as instance.DriverControlHook. The composition root calls it before any
+// instance starts; it is idempotent so repeated dependency builds in one process do not re-write the hook.
+func Register() {
+	registerOnce.Do(func() { instance.DriverControlHook = NewControl() })
+}

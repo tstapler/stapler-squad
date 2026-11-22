@@ -11,7 +11,7 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	gotool.Setup(t)
-	t.Cleanup(nosessiondrivertest.SetDriverPkgPath("example.com/session"))
+	t.Cleanup(nosessiondrivertest.SetDriverPkgPath("example.com/driver"))
 	analysistest.Run(t, analysistest.TestData(), nosessiondrivertest.Analyzer,
-		"user", "dot", "example.com/session", "other/session", "lib", "nonsession")
+		"user", "dot", "example.com/driver", "other/driver", "lib", "nonsession")
 }

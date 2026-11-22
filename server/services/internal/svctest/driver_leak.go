@@ -39,7 +39,7 @@ func LiveSessionDriverStacks() []string {
 	buf = buf[:runtime.Stack(buf, true)]
 	var stacks []string
 	for _, g := range strings.Split(string(buf), "\n\n") {
-		if strings.Contains(g, "session.StartSessionDriver.func") {
+		if strings.Contains(g, "/session/driver.StartSessionDriver.func") {
 			stacks = append(stacks, g)
 		}
 	}

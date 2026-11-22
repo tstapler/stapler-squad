@@ -3,33 +3,33 @@ package user
 import (
 	"testing"
 
-	"example.com/session"
-	s "example.com/session"
+	"example.com/driver"
+	s "example.com/driver"
 )
 
 func TestRaw(t *testing.T) {
-	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
+	driver.StartSessionDriver(&driver.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
 }
 
 func TestAnnotated(t *testing.T) {
 	//nolint:nosessiondrivertest asserts the refused-start path, nothing spawns
-	session.StartSessionDriver(&session.Instance{}, "/tmp")
+	driver.StartSessionDriver(&driver.Instance{}, "/tmp")
 }
 
 func TestBareNolint(t *testing.T) {
 	//nolint:nosessiondrivertest
-	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `requires a reason`
+	driver.StartSessionDriver(&driver.Instance{}, "/tmp") // want `requires a reason`
 }
 
 func TestTrailingCommentDoesNotCoverNextLine(t *testing.T) {
-	session.StartSessionDriver(&session.Instance{}, "/tmp") //nolint:nosessiondrivertest reason one
-	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
+	driver.StartSessionDriver(&driver.Instance{}, "/tmp") //nolint:nosessiondrivertest reason one
+	driver.StartSessionDriver(&driver.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
 }
 
 func TestMultiLineCallWithNolintAbove(t *testing.T) {
 	//nolint:nosessiondrivertest asserts the refused-start path
-	session.StartSessionDriver(
-		&session.Instance{},
+	driver.StartSessionDriver(
+		&driver.Instance{},
 		"/tmp",
 	)
 }
@@ -39,16 +39,16 @@ func TestAliased(t *testing.T) {
 }
 
 func TestMethodValue(t *testing.T) {
-	f := session.StartSessionDriver // want `raw driver.StartSessionDriver`
+	f := driver.StartSessionDriver // want `raw driver.StartSessionDriver`
 	f(nil, "")
 }
 
 func TestGoStatement(t *testing.T) {
-	go session.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
+	go driver.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
 }
 
 func TestInRunClosure(t *testing.T) {
 	t.Run("sub", func(t *testing.T) {
-		session.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
+		driver.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
 	})
 }

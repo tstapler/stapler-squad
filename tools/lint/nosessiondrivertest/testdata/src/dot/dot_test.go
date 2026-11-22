@@ -3,7 +3,7 @@ package dot
 import (
 	"testing"
 
-	. "example.com/session"
+	. "example.com/driver"
 )
 
 func TestDotImport(t *testing.T) {

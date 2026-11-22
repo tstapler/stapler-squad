@@ -4,9 +4,9 @@ package nosessiondrivertest
 import (
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/driver"
 )
 
 func TestViolation(t *testing.T) {
-	session.StartSessionDriver(&session.Instance{}, "/tmp")
+	driver.StartSessionDriver(nil, "/tmp")
 }

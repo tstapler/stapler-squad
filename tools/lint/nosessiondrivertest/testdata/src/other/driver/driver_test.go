@@ -1,9 +1,9 @@
-package session
+package driver
 
 import (
 	"testing"
 
-	real "example.com/session"
+	real "example.com/driver"
 )
 
 func TestSamePackageNameDifferentPath(t *testing.T) {
