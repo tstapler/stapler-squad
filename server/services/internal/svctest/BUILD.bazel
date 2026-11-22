@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "svctest",
@@ -53,6 +54,7 @@ go_library(
         "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/driver",
         "//session/headless",
         "//session/hostclaim",
         "//session/instance",
@@ -127,4 +129,16 @@ filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = ["//tools/bzl/scandata:__pkg__"],
+)
+
+go_test(
+    name = "svctest_test",
+    srcs = ["driver_leak_test.go"],
+    embed = [":svctest"],
+    deps = [
+        "//session/domain",
+        "//session/driver",
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
+    ],
 )

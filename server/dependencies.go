@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -450,6 +451,8 @@ type BuildOptions struct {
 // BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
 // Use BuildOptions to inject a pre-built EntClient (for tests).
 func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
+	driver.Register() // the instance package reaches the session driver only through this hook
+
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
 	flagRegistry := services.FlagRegistry()
 

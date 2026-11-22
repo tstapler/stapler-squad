@@ -1,12 +1,13 @@
-package session
+package driver
 
 import (
 	"fmt"
-	"github.com/tstapler/stapler-squad/session/instance"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // writeTestJSONL writes a JSONL conversation file to a temp path and returns that path.

@@ -5,8 +5,6 @@ import "context"
 
 type Instance struct{}
 
-func StartSessionDriver(inst *Instance, allowedPath string) {}
-
 type Storage struct{}
 
 func (s *Storage) UpdateItemSessionEnded(ctx context.Context, itemID string, code int) error {

@@ -1,7 +1,7 @@
 package lib
 
-import "example.com/session"
+import "example.com/driver"
 
 func Start() {
-	session.StartSessionDriver(nil, "")
+	driver.StartSessionDriver(nil, "")
 }

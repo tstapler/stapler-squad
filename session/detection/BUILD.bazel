@@ -82,6 +82,7 @@ filegroup(
     srcs = glob(["testdata/**"]),
     visibility = [
         "//session:__pkg__",
+        "//session/driver:__pkg__",
         "//session/historyadapters:__pkg__",
     ],
 )

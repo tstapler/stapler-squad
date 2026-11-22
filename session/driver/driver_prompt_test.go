@@ -1,4 +1,4 @@
-package session
+package driver
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
@@ -102,7 +103,7 @@ func TestDriverPrompt_RealPTYReceivesLargePromptIntact(t *testing.T) {
 	checkPTYAvailable(t)
 
 	out := filepath.Join(t.TempDir(), "received")
-	mgr := NewNativeProcessManager(instance.ProcessManagerOptions{
+	mgr := session.NewNativeProcessManager(instance.ProcessManagerOptions{
 		SessionName: "driver-prompt-pty",
 		Program:     "sh",
 		Args:        []string{"-c", "stty raw -echo; exec cat > " + out},
@@ -127,7 +128,7 @@ func TestDriverPrompt_RealPTYReceivesLargePromptIntact(t *testing.T) {
 	assert.True(t, bytes.Equal([]byte(p.Keys()), got), "PTY bytes differ from prompt keys")
 }
 
-type ptyKeySender struct{ m *NativeProcessManager }
+type ptyKeySender struct{ m *session.NativeProcessManager }
 
 func (p ptyKeySender) LeaseOwnerUUID() string { return fixturetest.FakeLeaseOwner }
 func (p ptyKeySender) SendKeys(k string) error {

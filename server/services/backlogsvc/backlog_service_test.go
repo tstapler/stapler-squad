@@ -1548,8 +1548,8 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 // inst.Prompt/inst.InitialPrompt mismatch (ADR-022) breaks the execution phase's
 // prompt delivery. It does not — CreateDirectorySession stores the real prompt in
 // inst.Prompt, and buildClaudeCommand includes it as a CLI arg on first launch
-// (claudeSessionID == ""), so session_driver.go's InitialPrompt-typing step
-// correctly no-ops (see session_driver.go:135 "No initial prompt configured").
+// (claudeSessionID == ""), so session/driver/session_driver.go's InitialPrompt-typing step
+// correctly no-ops (see session/driver/session_driver.go:135 "No initial prompt configured").
 // This test locks in that the real item content — not a generic fallback —
 // reaches the session-creation boundary.
 func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *testing.T) {

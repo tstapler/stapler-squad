@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/driver"
+
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -25,6 +27,7 @@ func Main(m *testing.M, hermeticSetup func()) int {
 	headless.DefaultCapabilitySelfCheck = headless.NewPassedCapabilitySelfCheckForTesting()
 	restore := envtest.ClearAmbientGitHubTokenEnv()
 	restoreState := envtest.ClearAmbientStaplerSquadStateEnv()
+	driver.Register() // tests build SessionService without BuildCoreDeps
 	RecordSessionDriverStarts()
 	ReapLeakedTmuxTestServers()
 	StartTmuxTestServerWatchdog()

@@ -23,9 +23,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// noopDriverControl stands in for session/driver, which imports session and so cannot be linked
+// into this package's tests; the driver's own tests live in session/driver.
+type noopDriverControl struct{}
+
+func (noopDriverControl) Start(*instance.Instance, string) {}
+func (noopDriverControl) RestartForRetry(*instance.Instance, string, string, instance.RetryPolicy, <-chan struct{}) error {
+	return nil
+}
+
 // TestMain runs before all tests to set up the test environment.
 func TestMain(m *testing.M) {
 	dirwatch.ForceFSNotify(true) // history/worktree tests need synchronous in-kernel event delivery
+	instance.DriverControlHook = noopDriverControl{}
 	os.Exit(sessiontest.Main(m))
 }
 

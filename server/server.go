@@ -1512,12 +1512,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
-		sweeper := sweeper.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
+		hibSweeper := sweeper.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
 		if deps.ReviewQueuePoller != nil {
-			sweeper.SetLiveProvider(deps.ReviewQueuePoller)
+			hibSweeper.SetLiveProvider(deps.ReviewQueuePoller)
 		}
-		deps.SessionService.SetMemoryCacheReader(sweeper)
-		srv.goBackground(func() { sweeper.Start(serverCtx) })
+		deps.SessionService.SetMemoryCacheReader(hibSweeper)
+		srv.goBackground(func() { hibSweeper.Start(serverCtx) })
 		log.Info("Hibernation sweeper started",
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}

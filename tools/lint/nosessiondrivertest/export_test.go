@@ -1,8 +1,8 @@
 package nosessiondrivertest
 
-// SetSessionPkgPath points the analyzer at a testdata stub for the test's duration.
-func SetSessionPkgPath(p string) (restore func()) {
-	old := sessionPkgPath
-	sessionPkgPath = p
-	return func() { sessionPkgPath = old }
+// SetDriverPkgPath points the analyzer at a testdata stub for the test's duration.
+func SetDriverPkgPath(p string) (restore func()) {
+	old := driverPkgPath
+	driverPkgPath = p
+	return func() { driverPkgPath = old }
 }
