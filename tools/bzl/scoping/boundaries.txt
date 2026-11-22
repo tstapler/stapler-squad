@@ -15,6 +15,7 @@ session/importer !server
 server/services/wsconn !server/web
 server/services/backlogflow !server/web
 server/services/webhooktrigger !server/web
+server/services/sessionretention !server/web
 server/services/unfinishedwork !server/web
 session/ptyio !server
 session/hostclaim !server

@@ -1,4 +1,4 @@
-package services
+package sessionretention
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func (f *fakeSweepPRSource) ListItemGuardViewsByItemIDs(ctx context.Context, ids
 	return f.guards(got)
 }
 
-func newPRSweeper(fix *forkTestFixture) (*SessionRetentionSweeper, *fakeSweepPRSource) {
+func newPRSweeper(fix *testFixture) (*SessionRetentionSweeper, *fakeSweepPRSource) {
 	sweeper := NewSessionRetentionSweeper(fix.storage, config.DefaultConfig(), fix.svc)
 	fake := &fakeSweepPRSource{real: sweeper.prSource}
 	sweeper.prSource = fake
@@ -62,19 +62,19 @@ func newPRSweeper(fix *forkTestFixture) (*SessionRetentionSweeper, *fakeSweepPRS
 func oldArchive() time.Time { return time.Now().AddDate(0, 0, -20) }
 
 // addArchivedWithUUID adds an archived session past retention with a fixed uuid.
-func addArchivedWithUUID(t *testing.T, fix *forkTestFixture, title, uuid string, opts ...func(*instance.Instance)) {
+func addArchivedWithUUID(t *testing.T, fix *testFixture, title, uuid string, opts ...func(*instance.Instance)) {
 	t.Helper()
 	addArchivedInstance(t, fix, title, oldArchive(), append([]func(*instance.Instance){func(i *instance.Instance) { i.UUID = uuid }}, opts...)...)
 }
 
 // linkPR links number to the session. State rows are shared by PR identity, so
 // each test uses PR numbers no other test session in the same fixture uses.
-func linkPR(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool) {
+func linkPR(t *testing.T, fix *testFixture, uuid string, number int, state domain.PRState, terminal bool) {
 	t.Helper()
 	linkPRKeepingMirror(t, fix, uuid, number, state, terminal, instance.PRMirror{})
 }
 
-func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool, mirror instance.PRMirror) {
+func linkPRKeepingMirror(t *testing.T, fix *testFixture, uuid string, number int, state domain.PRState, terminal bool, mirror instance.PRMirror) {
 	t.Helper()
 	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
@@ -86,8 +86,7 @@ func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number
 
 func TestRetentionSweeper_ShouldNotDelete_WhenOneLinkedPROpen(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "mixed", "u-mixed")
 	linkPR(t, fix, "u-mixed", 11, domain.PRStateMerged, true)
 	linkPR(t, fix, "u-mixed", 12, domain.PRStateOpen, false)
@@ -104,8 +103,7 @@ func TestRetentionSweeper_ShouldNotDelete_WhenOneLinkedPROpen(t *testing.T) {
 
 func TestRetentionSweeper_ShouldFailClosed_WhenLegacyNumberAndNoLinkRows(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "flag-false", "u-f", func(i *instance.Instance) { i.GitHubPRNumber, i.GitHubPRStatusTerminal = 9, false })
 	addArchivedWithUUID(t, fix, "flag-true", "u-t", func(i *instance.Instance) { i.GitHubPRNumber, i.GitHubPRStatusTerminal = 9, true })
 
@@ -118,8 +116,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLegacyNumberAndNoLinkRows(t *test
 
 func TestRetentionSweeper_ShouldFailClosed_WhenUnknownOrUnverifiedTerminal(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "unknown", "u-unk")
 	linkPR(t, fix, "u-unk", 12, domain.PRStateUnknown, false)
 	addArchivedWithUUID(t, fix, "unverified", "u-unv")
@@ -149,8 +146,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenUnknownOrUnverifiedTerminal(t *te
 
 func TestRetentionSweeper_ShouldFailClosed_WhenItemDirectPROpen(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "worker", "u-w")
 	linkPR(t, fix, "u-w", 11, domain.PRStateMerged, true)
 	sweeper, fake := newPRSweeper(fix)
@@ -202,8 +198,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLinkOrItemLookupErrors(t *testing
 	for name, breakIt := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			fix := setupForkTestFixture(t)
-			defer fix.cleanup()
+			fix := newFixture(t)
 			addArchivedWithUUID(t, fix, "err-session", "u-e")
 			sweeper, fake := newPRSweeper(fix)
 			breakIt(fake)
@@ -215,8 +210,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLinkOrItemLookupErrors(t *testing
 
 func TestRetentionSweeper_ShouldFailClosed_WhenRepresentationMismatch(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	legacy := func(terminal bool) func(*instance.Instance) {
 		return func(i *instance.Instance) {
 			i.GitHubPRNumber, i.GitHubOwner, i.GitHubRepo, i.GitHubPRStatusTerminal = 32, "acme", "app", terminal
@@ -245,8 +239,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenRepresentationMismatch(t *testing
 
 func TestRetentionSweeper_ShouldFailClosed_WhenAllScopesOff(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "open", "u-o")
 	linkPR(t, fix, "u-o", 12, domain.PRStateOpen, false)
 
@@ -258,8 +251,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenAllScopesOff(t *testing.T) {
 
 func TestRetentionSweeper_ShouldBeEligible_WhenNoLinksAndNoLegacyNumber(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "plain", "u-p")
 
 	sweeper, _ := newPRSweeper(fix)
@@ -269,8 +261,7 @@ func TestRetentionSweeper_ShouldBeEligible_WhenNoLinksAndNoLegacyNumber(t *testi
 
 func TestRetentionSweeper_ShouldIssueBoundedQueries_WhenManySessions(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	for i := 0; i < 5; i++ {
 		addArchivedWithUUID(t, fix, fmt.Sprintf("s%d", i), fmt.Sprintf("u-%d", i))
 	}
@@ -281,8 +272,7 @@ func TestRetentionSweeper_ShouldIssueBoundedQueries_WhenManySessions(t *testing.
 
 func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelease(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "held", "u-held")
 	sweeper, fake := newPRSweeper(fix)
 	base := time.Now()
@@ -313,8 +303,7 @@ func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelea
 
 func TestRetentionSweeper_ShouldNotDelete_WhenPRLinkAppearsAfterCycleLoad(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "raced", "u-race")
 	sweeper, fake := newPRSweeper(fix)
 	calls := 0
@@ -334,8 +323,7 @@ func TestRetentionSweeper_ShouldNotDelete_WhenPRLinkAppearsAfterCycleLoad(t *tes
 
 func TestRetentionSweeper_ShouldKeepSession_WhenClosedPRWasReopenedOrCheckFails(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "reopened", "u-reo")
 	linkPR(t, fix, "u-reo", 61, domain.PRStateClosed, true)
 	addArchivedWithUUID(t, fix, "errored", "u-err")
@@ -362,8 +350,7 @@ func TestRetentionSweeper_ShouldKeepSession_WhenClosedPRWasReopenedOrCheckFails(
 
 func TestRetentionSweeper_ShouldNotDelete_WhenSessionUnarchivedAfterCycleLoad(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "revived", "u-rev")
 	sweeper, _ := newPRSweeper(fix)
 	sweeper.reread = func(string) (*domain.InstanceData, error) {
@@ -375,8 +362,7 @@ func TestRetentionSweeper_ShouldNotDelete_WhenSessionUnarchivedAfterCycleLoad(t 
 
 func TestRetentionSweeper_ShouldSurfaceSessionPRHold_OnceWhenOverMax(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "held", "u-held")
 	linkPR(t, fix, "u-held", 71, domain.PRStateOpen, false)
 	sweeper, _ := newPRSweeper(fix)
@@ -416,8 +402,7 @@ func TestClassifyReverifyError_ShouldSortOutcomes(t *testing.T) {
 
 func TestRetentionSweeper_ShouldReleaseSession_OnlyAfterClosedPRStaysUnverifiable(t *testing.T) {
 	t.Parallel()
-	fix := setupForkTestFixture(t)
-	defer fix.cleanup()
+	fix := newFixture(t)
 	addArchivedWithUUID(t, fix, "no-token", "u-nt")
 	linkPR(t, fix, "u-nt", 81, domain.PRStateClosed, true)
 	addArchivedWithUUID(t, fix, "rate-limited", "u-rl")

@@ -1,4 +1,4 @@
-package services
+package sessionretention
 
 import (
 	"context"
@@ -20,6 +20,12 @@ import (
 // HibernationSweeper, since eligibility here only changes once a day at the finest.
 const sessionRetentionSweepInterval = 1 * time.Hour
 
+// SessionDeleter is the one SessionService method the sweeper needs; *services.SessionService
+// satisfies it, so the leaf does not import server/services.
+type SessionDeleter interface {
+	DeleteSession(context.Context, *connect.Request[sessionv1.DeleteSessionRequest]) (*connect.Response[sessionv1.DeleteSessionResponse], error)
+}
+
 // SessionRetentionSweeper periodically deletes archived sessions that have passed
 // the configured retention window, reusing SessionService.DeleteSession's existing
 // tmux/worktree/DB cleanup path so deletion logic lives in exactly one place.
@@ -32,7 +38,7 @@ const sessionRetentionSweepInterval = 1 * time.Hour
 type SessionRetentionSweeper struct {
 	storage *session.Storage
 	cfg     *config.Config
-	svc     *SessionService
+	svc     SessionDeleter
 	// prSource supplies the per-cycle PR evidence; tests substitute a fake.
 	prSource sweepPRSource
 	// now is the clock; tests inject one.
@@ -53,7 +59,7 @@ type SessionRetentionSweeper struct {
 // NewSessionRetentionSweeper constructs a sweeper. svc is used to perform the actual
 // deletion via its existing DeleteSession RPC handler, so tmux/worktree/DB cleanup
 // logic is not duplicated here.
-func NewSessionRetentionSweeper(storage *session.Storage, cfg *config.Config, svc *SessionService) *SessionRetentionSweeper {
+func NewSessionRetentionSweeper(storage *session.Storage, cfg *config.Config, svc SessionDeleter) *SessionRetentionSweeper {
 	return &SessionRetentionSweeper{storage: storage, cfg: cfg, svc: svc, prSource: storage, now: time.Now,
 		reread: storage.FindInstanceDataByID, reverifyClosed: newClosedPRReverifier()}
 }
@@ -80,6 +86,10 @@ func (s *SessionRetentionSweeper) Start(ctx context.Context) {
 		}
 	}
 }
+
+// SweepOnce runs one retention cycle synchronously. Exported so server/services tests can drive
+// one sweep against the real SessionService.
+func (s *SessionRetentionSweeper) SweepOnce(ctx context.Context) { s.sweep(ctx) }
 
 // sweep finds archived sessions past the retention window and deletes the ones that
 // pass safety checks. A session that fails a safety check is skipped for this cycle

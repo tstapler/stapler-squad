@@ -89,7 +89,7 @@ const (
 // plain user-created session. Used to extend workflow-only behaviors (like
 // SessionService.maybeAutoArchive) to backlog sessions, which have no
 // WorkflowID of their own but leak the same way if never archived — see
-// session_retention_sweeper.go's ArchivedAt-only scope.
+// server/services/sessionretention/session_retention_sweeper.go's ArchivedAt-only scope.
 func (i *Instance) IsBacklogOriginatedSession() bool {
 	return i.HasTag(TagBacklogWork) || i.HasTag(TagBacklogReview)
 }
