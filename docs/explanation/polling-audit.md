@@ -119,7 +119,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `server/services/approval_handler.go:986` | 30 s | `CleanupExpired` in memory | Per-approval timer | Cheap-enough |
 | `session/sweeper/orphan_tmux_sweeper.go:75`, `tmux/leaked_control_mode_sweeper.go:33` | 5 m | Subprocess scans | none useful | Cheap-enough |
 | `session/wtconsistency/sweep.go:946` | 15 m (flag-gated, default off) | `git worktree list` reconcile | worktree watcher | Cheap-enough |
-| `session/sweeper/hibernation_sweeper.go:216`, `server/services/session_retention_sweeper.go:46` (1 h), `guidance_session_reaper.go:128` (6 h), `contexthistory/recorder.go:100` (6 h), `analytics/retention.go:31` (1 h), `workflows/retention.go:40`, `dependencies.go:1382` (24 h), `dependencies.go:1975` (30 m paused-tmux reaper) | minutes to hours | Retention deletes | none needed | Cheap-enough |
+| `session/sweeper/hibernation_sweeper.go:216`, `server/services/sessionretention/session_retention_sweeper.go` (1 h), `guidance_session_reaper.go:128` (6 h), `contexthistory/recorder.go:100` (6 h), `analytics/retention.go:31` (1 h), `workflows/retention.go:40`, `dependencies.go:1382` (24 h), `dependencies.go:1975` (30 m paused-tmux reaper) | minutes to hours | Retention deletes | none needed | Cheap-enough |
 | `session/dbmaint/dbmaint.go:167` | 15 m | SQLite maintenance | none | Cheap-enough |
 | `session/host_advertiser.go:76`, `claim_gossiper.go:107` (5 m), `main.go:1486,1730`, `sshremote/health_prober.go:300` | 5 m | Multi-host heartbeats | peer events | Cheap-enough |
 | `server/notifications/subscriber.go:110,152`, `resolved_item_reaper.go:79`, `server/events` heartbeats (`pkg/events/heartbeat.go`, 15 s per Watch stream) | 15 s | Stream keepalives | n/a | Cheap-enough |
