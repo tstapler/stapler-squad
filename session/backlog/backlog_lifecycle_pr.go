@@ -2140,7 +2140,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *session.EntRepository, r
 	return nil, false
 }
 
-// TriggerPRFixForEvent satisfies services.PRFixEventRouter (defined in the
+// TriggerPRFixForEvent satisfies webhooktrigger.PRFixEventRouter (defined in the
 // consuming package, per the `interface-pollution-checklist` skill). It
 // looks up the pr_pending item tracking (repoFullName, prNumber) and, if
 // found, runs the same per-item reconciliation ReconcilePRPending's 60s tick

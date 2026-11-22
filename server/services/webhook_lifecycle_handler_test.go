@@ -54,7 +54,7 @@ func TestWebhookLifecycle_should_StopAcceptingDeliveriesAndBumpVersion_When_Disa
 	assert.EqualValues(t, 2, got.Registration.Version)
 	assert.False(t, *got.Registration.Webhook.Enabled)
 	assert.Equal(t, http.StatusNotFound, h.deliver(t, hookSlug, testMgmtSecret).Code, "a disabled webhook must not accept deliveries")
-	assert.Equal(t, int32(1), h.infra.sessionSvc.callCount.Load())
+	assert.Equal(t, int32(1), h.infra.SessionSvc.CallCount.Load())
 
 	replay := h.act(t, h.token, "disable", h.lifecycleReq("req-dis-0001", 1))
 	assert.True(t, decodeBody[WebhookReconcileResponse](t, replay).Replayed)
@@ -120,7 +120,7 @@ func TestWebhookLifecycle_should_RemoveEverythingAndAllowRecreate_When_Deleted(t
 
 func TestWebhookLifecycle_should_HideRegistrationFromOtherPrincipals_When_TheyDisableOrDelete(t *testing.T) {
 	h := newMgmtHarness(t).seeded(t)
-	intruder, err := h.infra.entRepo.IssueIntegrationCredential(context.Background(),
+	intruder, err := h.infra.EntRepo.IssueIntegrationCredential(context.Background(),
 		session.IntegrationCredentialInfo{PrincipalID: "intruder", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: h.root})
 	require.NoError(t, err)
 
@@ -201,7 +201,7 @@ func TestWebhookLifecycle_should_RejectReuse_When_RequestIDSpansActions(t *testi
 
 func TestWebhookLifecycle_should_StillWork_When_ReceiverIsDisabled(t *testing.T) {
 	h := newMgmtHarness(t).seeded(t)
-	svc := NewWebhookRegistrationService(h.infra.entRepo, h.infra.cfg, testMgmtWorkspace, false)
+	svc := NewWebhookRegistrationService(h.infra.EntRepo, h.infra.Cfg, testMgmtWorkspace, false)
 	mux := http.NewServeMux()
 	NewWebhookRegistrationHandler(svc).RegisterRoutes(mux)
 	h.mux = mux

@@ -122,6 +122,7 @@ filegroup(
         "//server/services/internal/streammetrics:go_sources",
         "//server/services/internal/svctest:go_sources",
         "//server/services/sessionbundle:go_sources",
+        "//server/services/webhooktrigger:go_sources",
         "//server/services/wsconn:go_sources",
         "//server/terminal:go_sources",
         "//server/wakes:go_sources",

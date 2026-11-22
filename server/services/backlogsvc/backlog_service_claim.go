@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -38,7 +39,7 @@ func (s *BacklogService) crossHostClaimDedupEnabled() bool {
 	if s.claimDedupFlag != nil {
 		return s.claimDedupFlag()
 	}
-	return config.LoadConfig().GetFeatureFlag(services.CrossHostClaimDedupFlagName)
+	return config.LoadConfig().GetFeatureFlag(featureflags.CrossHostClaimDedupFlagName)
 }
 
 func (s *BacklogService) checker() services.CrossHostClaimChecker {
@@ -405,7 +406,7 @@ func NewFlagGatedPRProvenance(inner session.PRProvenanceSource) session.PRProven
 }
 
 func (f flagGatedPRProvenance) PRProvenanceComment(item *backlogdto.BacklogItemData) (string, bool) {
-	if !config.LoadConfig().GetFeatureFlag(services.CrossHostClaimDedupFlagName) {
+	if !config.LoadConfig().GetFeatureFlag(featureflags.CrossHostClaimDedupFlagName) {
 		return "", false
 	}
 	return f.inner.PRProvenanceComment(item)
