@@ -39,7 +39,8 @@ func TestNewCreateSessionLimiter_should_AllowThreePerMinute_When_DrawnRepeatedly
 }
 
 // TestCreateSession_should_ReturnRateLimitExceeded_When_InjectedBucketExhausted
-// proves the handler draws from its injected bucket.
+// proves the handler draws from its injected bucket. The empty request would
+// fail validation, so this also pins that the limiter runs before validation.
 func TestCreateSession_should_ReturnRateLimitExceeded_When_InjectedBucketExhausted(t *testing.T) {
 	t.Parallel()
 	tb := newCreateSessionLimiter()
