@@ -11,7 +11,7 @@ In force today (enforced by `.golangci.yml` depguard rules and `tools/bzl/scopin
 - External-system adapters are isolated (`git_*` rules, `isolate_*` rules), and `scoping boundaries` (`tools/bzl/scoping/boundaries.txt`) forbids transitive imports for the packages listed there.
 - Per-package size, file and import caps ratchet down (`tools/bzl/scoping/budget.txt`).
 
-Still a direction (see `project_plans/package-split-ocp/`): `session` (about 23.4k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`; `budget.txt`'s 23308 is a tight cap from `scoping budget`) and `server/services` (about 70.2k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
+Still a direction (see `project_plans/package-split-ocp/`): `session` (about 22.2k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`) and `server/services` (about 70.2k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
 
 ### Leaves that exist today
 
@@ -27,6 +27,7 @@ Checked with `ls -d` against this PR's base, `origin/main` (2026-11-20). "Embedd
 | `session/domain` | persistence DTOs and value types such as `InstanceData`, `LoadOptions`, `UpdateSkip` | imported by the stores and `session` |
 | `session/instance` | the `Instance` family | interim budget exception, to be decomposed |
 | `session/historyadapters`, `session/itemsources`, `session/migrations` | history adapters, tracker plugins, ent-only startup migrations | registry-style leaves |
+| `session/external` | external-session approval, discovery and tmux streaming (an upper leaf: imports `session`, never imported by it) | upper leaf |
 | `server/services/featureflags` | flag `Spec`, immutable `Registry` | stage 2 injects the registry: `flags-stage2-plan.md` |
 | `server/reviewqueue` | review queue manager | imported by the composition root (`server/dependencies*.go`) and an integration test |
 

@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 )
@@ -23,7 +24,7 @@ type TerminalService struct {
 	// poller and extDiscovery are wired after construction via SetPoller /
 	// SetExternalDiscovery, forwarded from SessionService's own setters.
 	poller       *session.ReviewQueuePoller
-	extDiscovery *session.ExternalSessionDiscovery
+	extDiscovery *external.ExternalSessionDiscovery
 	// guards is the live hidden_session_readonly_guards value; nil means on.
 	guards GuardsFlag
 	// nudges records user-originated writes as manual-nudge flow markers; nil is a no-op.
@@ -58,7 +59,7 @@ func (ts *TerminalService) SetPoller(p *session.ReviewQueuePoller) {
 }
 
 // SetExternalDiscovery wires the external session discovery (mux-enabled sessions).
-func (ts *TerminalService) SetExternalDiscovery(d *session.ExternalSessionDiscovery) {
+func (ts *TerminalService) SetExternalDiscovery(d *external.ExternalSessionDiscovery) {
 	ts.extDiscovery = d
 }
 

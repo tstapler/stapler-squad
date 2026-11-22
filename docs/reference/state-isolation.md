@@ -51,7 +51,7 @@ go test ./...
 
 Startup orphan reconciliation is already skipped for isolated instances (`config.IsIsolatedInstance`, `server/dependencies.go`).
 
-Three external-session paths still use the default socket by design, because they attach to user-created sessions outside any private server: the control-mode attach in `session/external_tmux_streamer.go` (~line 202), the `capture-pane` in the same file (~line 476), and the `capture-pane` in `session/instance_tmux.go` (~line 821). Each is marked `//nolint:tmuxsocketscope`.
+Three external-session paths still use the default socket by design, because they attach to user-created sessions outside any private server: the control-mode attach in `session/external/external_tmux_streamer.go` (~line 202), the `capture-pane` in the same file (~line 476), and the `capture-pane` in `session/instance_tmux.go` (~line 821). Each is marked `//nolint:tmuxsocketscope`.
 
 ## Instance Identification in Logs
 

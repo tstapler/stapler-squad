@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
@@ -335,10 +336,10 @@ func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.Reac
 // wireExternalSessions builds external-session discovery and the external approval
 // monitor, bridging both into the review queue, pollers and persistence.
 func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinker, sessionTagPoller *session.SessionTagClassificationPoller,
-	backlogLifecycleListener *backlog.BacklogLifecycleListener, sessionSummaryGenerator *summaries.SessionSummaryGenerator) (*session.ExternalSessionDiscovery, *session.ExternalApprovalMonitor) {
+	backlogLifecycleListener *backlog.BacklogLifecycleListener, sessionSummaryGenerator *summaries.SessionSummaryGenerator) (*external.ExternalSessionDiscovery, *external.ExternalApprovalMonitor) {
 	storage, reviewQueue, statusManager, reviewQueuePoller, eventBus, sessionService := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.ReviewQueuePoller, svc.EventBus, svc.SessionService
 	// Step 11: ExternalDiscovery with session-added/removed callbacks
-	externalDiscovery := session.NewExternalSessionDiscovery()
+	externalDiscovery := external.NewExternalSessionDiscovery()
 	externalDiscovery.OnSessionAdded(func(instance *instance.Instance) {
 		if gate := sessionService.DeliveryGate(); gate != nil {
 			gate.UpsertInstance(instance)
@@ -384,8 +385,8 @@ func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinke
 	})
 
 	// Step 12: ExternalApprovalMonitor — wire approval-to-review-queue bridge
-	externalApprovalMonitor := session.NewExternalApprovalMonitor()
-	externalApprovalMonitor.OnApproval(func(event *session.ExternalApprovalEvent) {
+	externalApprovalMonitor := external.NewExternalApprovalMonitor()
+	externalApprovalMonitor.OnApproval(func(event *external.ExternalApprovalEvent) {
 		if event == nil || event.Request == nil {
 			return
 		}
@@ -432,7 +433,7 @@ func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinke
 // unified session listing.
 func wireSessionServiceRuntime(sessionService *services.SessionService, reactiveQueueMgr *reviewqueue.ReactiveQueueManager,
 	historyLinker *importer.HistoryLinker, instances []*instance.Instance, scrollbackManager *scrollback.ScrollbackManager,
-	externalDiscovery *session.ExternalSessionDiscovery) error {
+	externalDiscovery *external.ExternalSessionDiscovery) error {
 	// Wire external discovery to SessionService for unified session listing
 	// (moved from server.go to keep all dependency wiring in BuildRuntimeDeps)
 
