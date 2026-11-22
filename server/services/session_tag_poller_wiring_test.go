@@ -13,8 +13,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
 // fakeSessionTagPoolClient is a minimal headless.PoolClient test double, mirroring
@@ -55,7 +55,7 @@ func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreat
 
 	engine := classifier.NewTaggingEngine()
 	fake := &fakeSessionTagPoolClient{response: `{"results":[{"name":"tag-poller-post-startup-session","tags":["Unclassified"]}]}`}
-	poller := session.NewSessionTagClassificationPollerWithConfig(fake, engine, session.SessionTagPollerConfig{
+	poller := tagpoller.NewSessionTagClassificationPollerWithConfig(fake, engine, tagpoller.SessionTagPollerConfig{
 		PollInterval: 20 * time.Millisecond,
 		CallTimeout:  5 * time.Second,
 	})

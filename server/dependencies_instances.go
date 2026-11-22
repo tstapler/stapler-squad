@@ -22,12 +22,13 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
 // wireLoadedInstances attaches the shared collaborators to every loaded instance and
 // registers the instance list with the pollers.
 func wireLoadedInstances(svc *ServiceDeps, instances []*instance.Instance, backlogLifecycleListener *backlog.BacklogLifecycleListener,
-	sessionSummaryGenerator *summaries.SessionSummaryGenerator, sessionTagPoller *session.SessionTagClassificationPoller) error {
+	sessionSummaryGenerator *summaries.SessionSummaryGenerator, sessionTagPoller *tagpoller.SessionTagClassificationPoller) error {
 	storage, reviewQueue, statusManager, reviewQueuePoller, eventBus := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.ReviewQueuePoller, svc.EventBus
 	// Step 5 (continued): wire dependencies to each instance
 	// inst.SetReviewQueue and inst.SetStatusManager are called per-instance in a loop;
@@ -337,7 +338,7 @@ func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.Reac
 
 // wireExternalSessions builds external-session discovery and the external approval
 // monitor, bridging both into the review queue, pollers and persistence.
-func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinker, sessionTagPoller *session.SessionTagClassificationPoller,
+func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinker, sessionTagPoller *tagpoller.SessionTagClassificationPoller,
 	backlogLifecycleListener *backlog.BacklogLifecycleListener, sessionSummaryGenerator *summaries.SessionSummaryGenerator) (*external.ExternalSessionDiscovery, *external.ExternalApprovalMonitor) {
 	storage, reviewQueue, statusManager, reviewQueuePoller, eventBus, sessionService := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.ReviewQueuePoller, svc.EventBus, svc.SessionService
 	// Step 11: ExternalDiscovery with session-added/removed callbacks

@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -272,7 +273,7 @@ func (s *SessionService) SetHistoryLinker(hl *importer.HistoryLinker) {
 // after server startup are added to it (previously only the boot-time instance list
 // ever reached it via a one-shot SetInstances call — see server/dependencies.go).
 // Must be called during server startup before any session-creation RPCs are used.
-func (s *SessionService) SetSessionTagPoller(poller *session.SessionTagClassificationPoller) {
+func (s *SessionService) SetSessionTagPoller(poller *tagpoller.SessionTagClassificationPoller) {
 	s.sessionTagPoller = poller
 }
 

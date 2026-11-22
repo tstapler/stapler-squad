@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
 // maxTaggingClassifierFallbacks caps the fallback hierarchy length: every entry is one
@@ -160,7 +160,7 @@ func (s *SessionService) ReclassifySessionTags(
 	}
 	if err := s.sessionTagPoller.ClassifyNow(ctx, id); err != nil {
 		code := connect.CodeNotFound
-		if errors.Is(err, session.ErrClassificationDegraded) {
+		if errors.Is(err, tagpoller.ErrClassificationDegraded) {
 			code = connect.CodeUnavailable
 		}
 		return nil, connect.NewError(code, err)

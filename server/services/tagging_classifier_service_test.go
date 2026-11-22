@@ -14,9 +14,9 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
 // isolatedClassifierService builds a SessionService with config I/O redirected to a temp dir,
@@ -114,7 +114,7 @@ func TestTaggingClassifierService_should_LiveUpdatePoller_When_Updated(t *testin
 
 	// Attach a poller with no sessions: Update must still hot-apply without error, and a
 	// later Get must report the new hierarchy (persistence + live path together).
-	svc.SetSessionTagPoller(session.NewSessionTagClassificationPoller(nil, nil))
+	svc.SetSessionTagPoller(tagpoller.NewSessionTagClassificationPoller(nil, nil))
 	_, err := svc.UpdateTaggingClassifierConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateTaggingClassifierConfigRequest{
 		Config: &sessionv1.TaggingClassifierConfigProto{Model: "sonnet", FallbackModels: []string{"proxy-free"}},
 	}))
@@ -135,7 +135,7 @@ func TestTaggingClassifierService_should_RejectReclassify_When_BadRequest(t *tes
 	assertConnectCode(t, err, connect.CodeUnimplemented)
 
 	// Poller attached but session unknown: NotFound.
-	svc.SetSessionTagPoller(session.NewSessionTagClassificationPoller(nil, nil))
+	svc.SetSessionTagPoller(tagpoller.NewSessionTagClassificationPoller(nil, nil))
 	_, err = svc.ReclassifySessionTags(context.Background(), connect.NewRequest(&sessionv1.ReclassifySessionTagsRequest{SessionId: "no-such-session"}))
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
@@ -168,7 +168,7 @@ func (f *errTagPoolClient) CallBlocking(_ context.Context, _ headless.FeatureKey
 func reclassifyFixture(t *testing.T, client headless.PoolClient, title string) (*SessionService, *instance.Instance) {
 	t.Helper()
 	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
-	poller := session.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
+	poller := tagpoller.NewSessionTagClassificationPoller(client, classifier.NewTaggingEngine())
 	svc.SetSessionTagPoller(poller)
 	inst, err := svc.CreateDirectorySession(context.Background(), t.TempDir(), SessionSpawnOptions{Title: title, OneShot: true})
 	require.NoError(t, err)

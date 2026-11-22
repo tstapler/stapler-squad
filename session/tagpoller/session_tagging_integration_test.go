@@ -1,10 +1,11 @@
-package session
+package tagpoller
 
 import (
 	"errors"
 	"regexp"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
@@ -21,6 +22,22 @@ import (
 // Unclassified-drop) end to end, since every other test in this package proves one seam in
 // isolation. Uses a real *classifier.TaggingEngine, a real *Instance driven through its actor
 // setters, and a fake headless.PoolClient — no real subprocess (deterministic-fast-tests).
+
+func minimalInstance(t *testing.T) *instance.Instance {
+	t.Helper()
+	i := &instance.Instance{
+		Title:       t.Name(),
+		Status:      domain.Creating,
+		Program:     "echo",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		IsManaged:   true,
+		Permissions: domain.GetManagedPermissions(),
+	}
+	i.InitTagManagerForTest()
+	instance.FinishInstanceConstruction(i)
+	return i
+}
 
 // neverMatchingRule returns a TaggingRule whose condition can never hold for any Instance
 // built by minimalInstance, used purely so a given OutputTag appears in

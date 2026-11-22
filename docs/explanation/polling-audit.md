@@ -109,7 +109,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/history_linker.go:248` | 5 s | `scanAllSessions` correlates every monitored instance with Claude history | History-file fsnotify watcher (`HistoryFileWatcher` exists) | Pure-event |
 | `session/mux/discovery.go:352` | 30 s backstop | Scan for external PTY sessions | Mux socket events | Cheap-enough |
 | `session/autonomous/health.go:636` | configured interval | `RecoverUnhealthySessions` over all instances, may `SaveInstances` | tmux session-closed notifications | Needs-new-event-source |
-| `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `session/jules/session_poller.go:236`, `session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
+| `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `session/jules/session_poller.go:236`, `session/tagpoller/session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
 | `server/services/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
 | `server/services/guidance_ack_detector.go:155` | 3 s | per-row sample (name) | same | Pure-event |
 | `server/services/config_file_rules_reload.go:76` | 3 s | stat `shared_rules.yaml` | FSEvents or a parent-directory watch, not per-file kqueue (editors replace the file by rename) | Pure-event, trivial |
