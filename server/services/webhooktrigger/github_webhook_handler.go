@@ -211,7 +211,7 @@ func (h *GitHubWebhookHandler) repoCandidatesFor(ctx context.Context, fullName s
 func verifiedWorkflowCandidates(cfg *config.Config, candidates []*ent.Workflow, body []byte, sigHeader string) []*ent.Workflow {
 	var verified []*ent.Workflow
 	for _, wf := range candidates {
-		secret, err := DecryptWorkflowSecret(cfg, wf)
+		secret, err := decryptWorkflowSecret(cfg, wf)
 		if err != nil {
 			log.Warn("[GitHubWebhookHandler] failed to decrypt webhook secret", "slug", wf.Slug, "err", err)
 			continue

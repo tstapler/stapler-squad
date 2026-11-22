@@ -31,7 +31,7 @@ Checked with `ls -d` against this PR's base, `origin/main` (2026-11-20). "Embedd
 | `session/external` | external-session approval, discovery and tmux streaming (an upper leaf: imports `session`, never imported by it) | upper leaf |
 | `session/sweeper` | hibernation sweeper, orphaned-tmux sweeper and orphan reconcile (an upper leaf: imports `session`, never imported by it) | upper leaf |
 | `server/services/featureflags` | flag `Spec`, immutable `Registry` | stage 2 injects the registry: `flags-stage2-plan.md` |
-| `server/services/webhooktrigger` | inbound webhook trigger handlers: GitHub (PR-fix routing, provenance, reopened) and generic HMAC webhooks, shared trigger claim-and-fire (an upper leaf: never imports `server/services`) | wired by `server/server.go`; the registration service and callback validators stay in `server/services` |
+| `server/services/webhooktrigger` | inbound webhook trigger handlers: GitHub (PR-fix routing, provenance, reopened) and generic HMAC webhooks, shared trigger claim-and-fire (an upper leaf: never imports `server/services`; its production code imports `server/workflows` and `session/ent`, allowed by the `no_ent_in_services` exclusions in `.golangci.yml`) | wired by `server/server.go`; the registration service and callback validators stay in `server/services` |
 | `server/reviewqueue` | review queue manager | imported by the composition root (`server/dependencies*.go`) and an integration test |
 
 The instance store is done (I0-I6 in `instance-dto-lowering-plan.md`); `ent_repository.go` keeps only the constructor, `initStores`, `GetEntClient`, `MaintenanceDriver` and `Close`.

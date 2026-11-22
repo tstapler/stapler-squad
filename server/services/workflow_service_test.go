@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -847,6 +848,16 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
+// decryptStoredSecret reverses encryptWebhookSecret with cfg's machine key.
+func decryptStoredSecret(t *testing.T, cfg *config.Config, enc string) string {
+	t.Helper()
+	key, err := cfg.GetOrCreateEncryptionKey()
+	require.NoError(t, err)
+	secret, err := domain.DecryptToken(key, enc)
+	require.NoError(t, err)
+	return secret
+}
+
 // ─── webhook_secret (Phase 7 follow-up, Task 7.2) ──────────────────────────────
 //
 // These tests use webhookTestInfra (webhook_handler_test_helpers_test.go) rather than
@@ -854,7 +865,7 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // encryptWebhookSecret (workflow_service.go) calls config.LoadConfig(), which without
 // that isolation would read/write the developer's real ~/.stapler-squad/config.json.
 //
-// The first two tests below verify the round trip via webhooktrigger.DecryptWorkflowSecret +
+// The first two tests below verify the round trip via domain.DecryptToken (the inverse of encryptWebhookSecret) +
 // VerifyWebhookSecret directly (the exact two functions GenericWebhookHandler.Handle
 // itself calls for HMAC verification). TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip
 // closes the loop further by driving an actual HTTP request through
@@ -871,7 +882,7 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification proves the gap
 // closed by CreateWorkflowRequest.webhook_secret: a plaintext secret set via the RPC is
 // encrypted, stored, and actually usable by the real inbound webhook HMAC verification
-// logic (webhooktrigger.DecryptWorkflowSecret + VerifyWebhookSecret) — not merely persisted in
+// logic (decryption + VerifyWebhookSecret) — not merely persisted in
 // isolation.
 func TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification(t *testing.T) {
 	infra := svctest.NewWebhookTestInfra(t)
@@ -894,8 +905,7 @@ func TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification(t *testi
 	require.NoError(t, err)
 	require.NotEmpty(t, wf.WebhookSecretEncrypted, "webhook_secret must have been encrypted and stored")
 
-	decrypted, err := webhooktrigger.DecryptWorkflowSecret(infra.Cfg, wf)
-	require.NoError(t, err)
+	decrypted := decryptStoredSecret(t, infra.Cfg, wf.WebhookSecretEncrypted)
 	assert.Equal(t, "s3cr3t-plain", decrypted)
 
 	body := svctest.JiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -936,8 +946,7 @@ func TestUpdateWorkflow_WebhookSecret_OmittedLeavesExistingSecretUsable(t *testi
 
 	wf, err := infra.WorkflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
 	require.NoError(t, err)
-	decrypted, err := webhooktrigger.DecryptWorkflowSecret(infra.Cfg, wf)
-	require.NoError(t, err)
+	decrypted := decryptStoredSecret(t, infra.Cfg, wf.WebhookSecretEncrypted)
 	assert.Equal(t, "original-secret", decrypted)
 
 	body := svctest.JiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
@@ -972,8 +981,7 @@ func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) 
 
 	wf, err := infra.WorkflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
 	require.NoError(t, err)
-	decrypted, err := webhooktrigger.DecryptWorkflowSecret(infra.Cfg, wf)
-	require.NoError(t, err)
+	decrypted := decryptStoredSecret(t, infra.Cfg, wf.WebhookSecretEncrypted)
 	assert.Equal(t, "new-secret", decrypted)
 
 	body := svctest.JiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")

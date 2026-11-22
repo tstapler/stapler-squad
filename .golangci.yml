@@ -650,7 +650,7 @@ linters:
             # override requires naming the type. Same justification as
             # handoff_summary_service_test.go above: a test-only fixture the
             # production API has no way to construct otherwise. The production
-            # file (github_webhook_pr_fix.go) does NOT need this exclusion.
+            # file (webhooktrigger/github_webhook_pr_fix.go) does NOT need this exclusion.
             - "!**/server/services/webhooktrigger/github_webhook_pr_fix_test.go"
             # session_service.go's *ent.Client usage (SetAnalyticsClient) moved here
             # verbatim in the session_service_*.go file-size split (2026-10) — same

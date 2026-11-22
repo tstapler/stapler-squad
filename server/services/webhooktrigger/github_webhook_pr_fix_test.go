@@ -592,7 +592,7 @@ func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretE
 		TriggerType:            "github_push",
 		GitHubRepo:             "tstapler/stapler-squad",
 		GitHubBranch:           "main",
-		WebhookSecretEncrypted: "", // empty — DecryptWorkflowSecret must early-return
+		WebhookSecretEncrypted: "", // empty — decryptWorkflowSecret must early-return
 		PromptTemplate:         "x",
 		Enabled:                svctest.BoolPtr(true),
 	})

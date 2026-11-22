@@ -186,7 +186,7 @@ func resolveTriggerType(triggerType string, cronEnabled bool) string {
 }
 
 // encryptWebhookSecret encrypts a plaintext webhook/HMAC shared secret with the same
-// machine encryption key decryptWorkflowSecret (webhook_trigger_common.go) later
+// machine encryption key decryptWorkflowSecret (webhooktrigger/webhook_trigger_common.go) later
 // decrypts with — closing the gap left by Phase 1/2/3, which wrote/read
 // WebhookSecretEncrypted only via direct repository calls in tests, never via an RPC
 // (Phase 7 follow-up, Task 7.2).
@@ -304,7 +304,7 @@ func (s *WorkflowService) CreateWorkflow(
 		createInput.ArchiveAfterHours = &v
 	}
 	// Write-only webhook secret (Task 7.2): "" means no secret configured, matching
-	// decryptWorkflowSecret's existing "has no webhook secret configured" error path.
+	// webhooktrigger.decryptWorkflowSecret's existing "has no webhook secret configured" error path.
 	if req.Msg.WebhookSecret != "" {
 		encrypted, err := encryptWebhookSecret(req.Msg.WebhookSecret)
 		if err != nil {

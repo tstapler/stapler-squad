@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // sign computes the "sha256=<hex>" header value GitHub (and this repo's generic
@@ -104,4 +106,26 @@ func TestVerifyWebhookSecret_should_ReturnFalse_When_SignatureIsInvalid(t *testi
 	t.Parallel()
 	body := []byte(`{"event":"issue_created"}`)
 	assert.False(t, VerifyWebhookSecret("generic-secret", body, "sha256=deadbeef"))
+}
+
+func TestDecryptWorkflowSecret_should_RoundTripAndRejectBadInput(t *testing.T) {
+	infra := svctest.NewWebhookTestInfra(t)
+	wf := svctest.NewGenericWebhookWorkflow(t, infra, "rt", "s3cr3t-plain", "", "", "")
+
+	got, err := decryptWorkflowSecret(infra.Cfg, wf)
+	require.NoError(t, err)
+	assert.Equal(t, "s3cr3t-plain", got)
+
+	body := []byte(`{"a":1}`)
+	assert.True(t, VerifyWebhookSecret(got, body, sign("s3cr3t-plain", body)))
+	assert.False(t, VerifyWebhookSecret(got, body, sign("wrong-secret", body)))
+
+	_, err = decryptWorkflowSecret(nil, wf)
+	assert.Error(t, err, "nil config")
+	wf.WebhookSecretEncrypted = ""
+	_, err = decryptWorkflowSecret(infra.Cfg, wf)
+	assert.Error(t, err, "no secret configured")
+	wf.WebhookSecretEncrypted = "not-ciphertext"
+	_, err = decryptWorkflowSecret(infra.Cfg, wf)
+	assert.Error(t, err, "undecryptable ciphertext")
 }
