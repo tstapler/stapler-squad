@@ -114,6 +114,7 @@ func TestBuildDependencies_should_WireGeminiCaller_When_GeminiBinaryDetected(t *
 
 	deps, err := BuildDependencies()
 	require.NoError(t, err)
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 
 	require.NotNil(t, deps.GeminiCaller, "expected GeminiCaller to be wired when the gemini binary is detected at startup")
 	assert.True(t, deps.GeminiCaller.Available())
@@ -205,6 +206,7 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 
 	if deps.BacklogService == nil {
 		t.Fatal("expected BacklogService to be wired")
@@ -252,6 +254,7 @@ func TestBuildRuntimeDeps_should_PopulateBacklogLifecycleListener_When_ServerBoo
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 
 	if deps.BacklogLifecycleListener == nil {
 		t.Fatal("expected BacklogLifecycleListener to be wired")
@@ -281,6 +284,7 @@ func TestBuildRuntimeDeps_should_WireSessionSteererAndSessionStopper_When_Server
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 	if deps.BacklogService.GetSessionSteerer() == nil {
 		t.Fatal("expected SessionSteerer to be wired onto BacklogService")
 	}
@@ -304,6 +308,7 @@ func TestBuildRuntimeDeps_should_CallReconcileSynchronouslyAtBoot_When_BacklogFl
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 	if deps.QuotaGate == nil {
 		t.Fatal("expected QuotaGate to be wired onto ServerDependencies")
 	}
@@ -333,6 +338,7 @@ func TestBuildRuntimeDeps_should_ReadLiveConfigOnEveryCfgFnCall_When_ConfigJSONC
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 	if deps.QuotaGate == nil {
 		t.Fatal("expected QuotaGate to be wired onto ServerDependencies")
 	}
@@ -416,6 +422,7 @@ func TestSetSyncFeatureEnabledCheck_should_MatchPlainIsEnabled_When_NotThrottled
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 	if deps.QuotaGate == nil || deps.BacklogService == nil {
 		t.Fatal("expected QuotaGate and BacklogService to be wired")
 	}

@@ -659,6 +659,7 @@ func TestSessionService_CreateThenImmediateDelete_NoDataRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDependencies: %v", err)
 	}
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // joins deps' background goroutines before the state dir is removed
 
 	title := fmt.Sprintf("ptmx-race-repro-%d", time.Now().UnixNano())
 	resp, err := deps.SessionService.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
