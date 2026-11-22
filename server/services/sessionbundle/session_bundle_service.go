@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
@@ -87,7 +88,7 @@ type SessionBundleService struct {
 	ctxHistory   ContextHistoryReader // may be nil when analytics disabled
 	scrollback   ScrollbackReader
 	poller       *session.ReviewQueuePoller
-	extDiscovery *session.ExternalSessionDiscovery
+	extDiscovery *external.ExternalSessionDiscovery
 	// exportSem caps concurrent in-memory ZIP assemblies at 3 to bound OOM risk
 	// (assembleBundle materialises the full ZIP before streaming).
 	exportSem chan struct{}
@@ -111,7 +112,7 @@ func (s *SessionBundleService) SetPoller(p *session.ReviewQueuePoller) {
 }
 
 // SetExternalDiscovery wires external session discovery (mux-enabled sessions).
-func (s *SessionBundleService) SetExternalDiscovery(disc *session.ExternalSessionDiscovery) {
+func (s *SessionBundleService) SetExternalDiscovery(disc *external.ExternalSessionDiscovery) {
 	s.extDiscovery = disc
 }
 

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
@@ -20,7 +20,7 @@ const pausedTmuxReapInterval = 30 * time.Minute
 type sessionIOWiring struct {
 	historyLinker       *importer.HistoryLinker
 	scrollbackManager   *scrollback.ScrollbackManager
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager
 }
 
 // buildSessionIO builds the HistoryLinker (links Claude JSONL conversation UUIDs
@@ -40,7 +40,7 @@ func buildSessionIO(instanceCount int) sessionIOWiring {
 	return sessionIOWiring{
 		historyLinker:       historyLinker,
 		scrollbackManager:   scrollbackManager,
-		tmuxStreamerManager: session.NewExternalTmuxStreamerManager(),
+		tmuxStreamerManager: external.NewExternalTmuxStreamerManager(),
 	}
 }
 

@@ -19,6 +19,7 @@ go_test(
         "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/external",
         "//session/importer",
         "//session/instance",
         "//session/prpoller",

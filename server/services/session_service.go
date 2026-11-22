@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
@@ -201,7 +202,7 @@ type SessionService struct {
 	taggingEngine *classifier.TaggingEngine
 
 	// External session discovery (for mux-enabled sessions from external terminals)
-	externalDiscovery *session.ExternalSessionDiscovery
+	externalDiscovery *external.ExternalSessionDiscovery
 
 	// historyLinker tracks JSONL conversation files per session.
 	// Must be kept in sync with deletions so the shutdown hook does not
@@ -223,7 +224,7 @@ type SessionService struct {
 	// name (main sessions and shell siblings alike). Wired in so StopShell can
 	// evict a shell's streamer on close instead of letting a stale/degraded one
 	// persist across shell restarts.
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager
 
 	// userPRCache supplies enterprise hosts from dynamically-added GitHub
 	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -471,7 +472,7 @@ func (s *SessionService) SetStatusManager(mgr *instance.InstanceStatusManager) {
 }
 
 // SetExternalDiscovery sets the external session discovery for accessing mux-enabled sessions.
-func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSessionDiscovery) {
+func (s *SessionService) SetExternalDiscovery(discovery *external.ExternalSessionDiscovery) {
 	s.externalDiscovery = discovery
 	s.checkpointSvc.SetExternalDiscovery(discovery)
 	s.terminalSvc.SetExternalDiscovery(discovery)
@@ -480,7 +481,7 @@ func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSession
 // SetTmuxStreamerManager wires the shared ExternalTmuxStreamerManager so StopShell
 // can evict a shell's streamer when the shell closes. Must be called during server
 // startup with the same instance passed to NewConnectRPCWebSocketHandler.
-func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreamerManager) {
+func (s *SessionService) SetTmuxStreamerManager(mgr *external.ExternalTmuxStreamerManager) {
 	s.tmuxStreamerManager = mgr
 }
 
