@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
@@ -959,7 +960,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	} else if err := importer.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
 		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
 	}
-	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
+	importSvc := importsvc.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
 	importOpts := append(
 		ConnectOptions(deps.ErrorRegistry),
 		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
