@@ -11,7 +11,7 @@ In force today (enforced by `.golangci.yml` depguard rules and `tools/bzl/scopin
 - External-system adapters are isolated (`git_*` rules, `isolate_*` rules), and `scoping boundaries` (`tools/bzl/scoping/boundaries.txt`) forbids transitive imports for the packages listed there.
 - Per-package size, file and import caps ratchet down (`tools/bzl/scoping/budget.txt`).
 
-Still a direction (see `project_plans/package-split-ocp/`): `session` (about 17.6k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`) and `server/services` (about 68.7k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
+Still a direction (see `project_plans/package-split-ocp/`): `session` (about 17.6k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`) and `server/services` (about 68.0k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
 
 ### Leaves that exist today
 
@@ -33,6 +33,7 @@ Checked with `ls -d` against this PR's base, `origin/main` (2026-11-20). "Embedd
 | `session/autonomous` | the autonomous driver, session health checker (dead-pane recovery), nudge gate and dedup, idle-status gate and review transcript reader (an upper leaf: imports `session`, never imported by it) | upper leaf |
 | `server/services/featureflags` | flag `Spec`, immutable `Registry` | stage 2 injects the registry: `flags-stage2-plan.md` |
 | `server/services/webhooktrigger` | inbound webhook trigger handlers: GitHub (PR-fix routing, provenance, reopened) and generic HMAC webhooks, shared trigger claim-and-fire (an upper leaf: never imports `server/services`; its production code imports `server/workflows` and `session/ent`, allowed by the `no_ent_in_services` exclusions in `.golangci.yml`) | wired by `server/server.go`; the registration service and callback validators stay in `server/services` |
+| `server/services/unfinishedwork` | `UnfinishedWorkService`: ConnectRPC handlers for the Unfinished tab (scan, dismiss/snooze, AI summary, quick commit-push, watch-dir config) over `session/unfinished` (an upper leaf: never imports `server/services`) | wired by `server/dependencies_analytics.go` and `server/server.go` |
 | `server/reviewqueue` | review queue manager | imported by the composition root (`server/dependencies*.go`) and an integration test |
 
 The instance store is done (I0-I6 in `instance-dto-lowering-plan.md`); `ent_repository.go` keeps only the constructor, `initStores`, `GetEntClient`, `MaintenanceDriver` and `Close`.

@@ -112,6 +112,7 @@ go_library(
         "//server/services/featureflags",
         "//server/services/insights",
         "//server/services/sessionbundle",
+        "//server/services/unfinishedwork",
         "//server/services/webhooktrigger",
         "//server/services/wsconn",
         "//server/wakes",
