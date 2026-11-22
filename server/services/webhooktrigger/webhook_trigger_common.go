@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"context"
@@ -22,9 +22,9 @@ import (
 // plan.md pitfalls §1.3).
 const MaxWebhookBodyBytes = 5 << 20 // 5 MiB
 
-// decryptWorkflowSecret decrypts wf.WebhookSecretEncrypted using the machine
+// DecryptWorkflowSecret decrypts wf.WebhookSecretEncrypted using the machine
 // encryption key. Shared by both webhook handlers.
-func decryptWorkflowSecret(cfg *config.Config, wf *ent.Workflow) (string, error) {
+func DecryptWorkflowSecret(cfg *config.Config, wf *ent.Workflow) (string, error) {
 	if cfg == nil {
 		return "", fmt.Errorf("config unavailable")
 	}

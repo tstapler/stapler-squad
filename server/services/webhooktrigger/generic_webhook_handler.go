@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"crypto/sha256"
@@ -73,7 +73,7 @@ func (h *GenericWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secret, err := decryptWorkflowSecret(h.cfg, wf)
+	secret, err := DecryptWorkflowSecret(h.cfg, wf)
 	if err != nil {
 		log.Warn("[GenericWebhookHandler] failed to decrypt webhook secret", "slug", wf.Slug, "err", err)
 		persistTriggerFireEvent(ctx, h.fireEvents, session.TriggerFireEventInput{

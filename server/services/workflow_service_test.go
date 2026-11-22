@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -853,7 +854,7 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // encryptWebhookSecret (workflow_service.go) calls config.LoadConfig(), which without
 // that isolation would read/write the developer's real ~/.stapler-squad/config.json.
 //
-// The first two tests below verify the round trip via decryptWorkflowSecret +
+// The first two tests below verify the round trip via webhooktrigger.DecryptWorkflowSecret +
 // VerifyWebhookSecret directly (the exact two functions GenericWebhookHandler.Handle
 // itself calls for HMAC verification). TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip
 // closes the loop further by driving an actual HTTP request through
@@ -870,11 +871,11 @@ func TestUpdateWorkflow_MalformedPromptTemplate_Rejected(t *testing.T) {
 // TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification proves the gap
 // closed by CreateWorkflowRequest.webhook_secret: a plaintext secret set via the RPC is
 // encrypted, stored, and actually usable by the real inbound webhook HMAC verification
-// logic (decryptWorkflowSecret + VerifyWebhookSecret) — not merely persisted in
+// logic (webhooktrigger.DecryptWorkflowSecret + VerifyWebhookSecret) — not merely persisted in
 // isolation.
 func TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	svc := NewWorkflowService(infra.workflowRepo, nil, nil)
+	infra := svctest.NewWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.WorkflowRepo, nil, nil)
 	ctx := context.Background()
 
 	resp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -889,21 +890,21 @@ func TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, "secret-rt", resp.Msg.Workflow.WebhookSlug)
 
-	wf, err := infra.workflowRepo.GetByID(ctx, uuid.MustParse(resp.Msg.Workflow.Id))
+	wf, err := infra.WorkflowRepo.GetByID(ctx, uuid.MustParse(resp.Msg.Workflow.Id))
 	require.NoError(t, err)
 	require.NotEmpty(t, wf.WebhookSecretEncrypted, "webhook_secret must have been encrypted and stored")
 
-	decrypted, err := decryptWorkflowSecret(infra.cfg, wf)
+	decrypted, err := webhooktrigger.DecryptWorkflowSecret(infra.Cfg, wf)
 	require.NoError(t, err)
 	assert.Equal(t, "s3cr3t-plain", decrypted)
 
-	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
-	goodSig := sign("s3cr3t-plain", body)
-	assert.True(t, VerifyWebhookSecret(decrypted, body, goodSig),
+	body := svctest.JiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	goodSig := svctest.SignWebhook("s3cr3t-plain", body)
+	assert.True(t, webhooktrigger.VerifyWebhookSecret(decrypted, body, goodSig),
 		"a request signed with the plaintext secret sent via CreateWorkflow must verify")
 
-	badSig := sign("wrong-secret", body)
-	assert.False(t, VerifyWebhookSecret(decrypted, body, badSig),
+	badSig := svctest.SignWebhook("wrong-secret", body)
+	assert.False(t, webhooktrigger.VerifyWebhookSecret(decrypted, body, badSig),
 		"a request signed with a different secret must not verify")
 }
 
@@ -912,8 +913,8 @@ func TestCreateWorkflow_WebhookSecret_RoundTripsThroughHMACVerification(t *testi
 // leaves webhook_secret empty must not clear the previously-set secret — it must still
 // decrypt to the original value and verify requests signed with it.
 func TestUpdateWorkflow_WebhookSecret_OmittedLeavesExistingSecretUsable(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	svc := NewWorkflowService(infra.workflowRepo, nil, nil)
+	infra := svctest.NewWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.WorkflowRepo, nil, nil)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -933,23 +934,23 @@ func TestUpdateWorkflow_WebhookSecret_OmittedLeavesExistingSecretUsable(t *testi
 	}))
 	require.NoError(t, err)
 
-	wf, err := infra.workflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
+	wf, err := infra.WorkflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
 	require.NoError(t, err)
-	decrypted, err := decryptWorkflowSecret(infra.cfg, wf)
+	decrypted, err := webhooktrigger.DecryptWorkflowSecret(infra.Cfg, wf)
 	require.NoError(t, err)
 	assert.Equal(t, "original-secret", decrypted)
 
-	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
-	sig := sign("original-secret", body)
-	assert.True(t, VerifyWebhookSecret(decrypted, body, sig))
+	body := svctest.JiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	sig := svctest.SignWebhook("original-secret", body)
+	assert.True(t, webhooktrigger.VerifyWebhookSecret(decrypted, body, sig))
 }
 
 // TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret proves the complementary
 // case: a non-empty webhook_secret on UpdateWorkflow actually rotates the stored secret
 // — the old secret stops verifying and the new one takes over.
 func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	svc := NewWorkflowService(infra.workflowRepo, nil, nil)
+	infra := svctest.NewWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.WorkflowRepo, nil, nil)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -969,15 +970,15 @@ func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) 
 	}))
 	require.NoError(t, err)
 
-	wf, err := infra.workflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
+	wf, err := infra.WorkflowRepo.GetByID(ctx, uuid.MustParse(createResp.Msg.Workflow.Id))
 	require.NoError(t, err)
-	decrypted, err := decryptWorkflowSecret(infra.cfg, wf)
+	decrypted, err := webhooktrigger.DecryptWorkflowSecret(infra.Cfg, wf)
 	require.NoError(t, err)
 	assert.Equal(t, "new-secret", decrypted)
 
-	body := jiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
-	assert.False(t, VerifyWebhookSecret(decrypted, body, sign("old-secret", body)))
-	assert.True(t, VerifyWebhookSecret(decrypted, body, sign("new-secret", body)))
+	body := svctest.JiraTicketBody(t, "issue_created", nil, "PROJ-1", "fix it")
+	assert.False(t, webhooktrigger.VerifyWebhookSecret(decrypted, body, svctest.SignWebhook("old-secret", body)))
+	assert.True(t, webhooktrigger.VerifyWebhookSecret(decrypted, body, svctest.SignWebhook("new-secret", body)))
 }
 
 // TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip is the true end-to-end proof: a
@@ -988,8 +989,8 @@ func TestUpdateWorkflow_WebhookSecret_NonEmptyRotatesStoredSecret(t *testing.T) 
 // verify function accepts it" (already covered above), but the full stack an operator
 // using TriggerFormModal would exercise.
 func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	svc := NewWorkflowService(infra.workflowRepo, infra.scheduler, nil)
+	infra := svctest.NewWebhookTestInfra(t)
+	svc := NewWorkflowService(infra.WorkflowRepo, infra.Scheduler, nil)
 	ctx := context.Background()
 
 	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
@@ -1007,19 +1008,20 @@ func TestCreateWorkflow_WebhookSecret_FullHTTPRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, createResp.Msg.Workflow.Enabled, "enabled must default to true when the create request doesn't set it")
 
-	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)
-	mux := newGenericWebhookMux(h)
+	h := webhooktrigger.NewGenericWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
 
-	body := jiraTicketBody(t, "issue_created", []string{"urgent"}, "PROJ-1", "fix it")
-	sig := sign("e2e-plain-secret", body)
+	body := svctest.JiraTicketBody(t, "issue_created", []string{"urgent"}, "PROJ-1", "fix it")
+	sig := svctest.SignWebhook("e2e-plain-secret", body)
 
-	rec := doGenericWebhookRequest(t, mux, "e2e-slug", body, sig)
+	rec := svctest.DoGenericWebhookRequest(t, mux, "e2e-slug", body, sig)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, int32(1), infra.sessionSvc.callCount.Load(),
+	assert.Equal(t, int32(1), infra.SessionSvc.CallCount.Load(),
 		"a session must have been created via the real handler, not just the direct verify functions")
 
-	req := infra.sessionSvc.LastRequest()
+	req := infra.SessionSvc.LastRequest()
 	require.NotNil(t, req)
 	assert.Contains(t, req.InitialPrompt, "Triage PROJ-1: fix it")
 }

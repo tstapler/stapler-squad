@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"crypto/hmac"

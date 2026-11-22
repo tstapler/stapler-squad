@@ -101,7 +101,7 @@ func TestConfigSurfaceProof_CrossHostClaimDedup_ChangesClaimLookup(t *testing.T)
 	set := bkfFlagWriter(t)
 	lookup := NewFlagGatedForeignClaimLookup(bkfForeignClaims{})
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(CrossHostClaimDedupFlagName, setting.(bool))
+		set(featureflags.CrossHostClaimDedupFlagName, setting.(bool))
 		_, found := lookup.ForeignClaim("https://example.test/issues/1")
 		return found
 	}, false, true)

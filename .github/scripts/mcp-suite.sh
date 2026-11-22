@@ -8,7 +8,7 @@ timeout 25m go test "${args[@]}" "$PACKAGES" 2>&1 | tee "$out" || true
 rc=${PIPESTATUS[0]}
 # Only a budget breach carries the marker, not a plain test failure (the auto-fix webhook would
 # skip it as "slow, not broken"): the outer `timeout` firing (124), or go test's own -timeout.
-# keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+# keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
 if [ "$rc" -eq 124 ] || grep -q 'panic: test timed out' "$out"; then
   echo "::error::CI-BUDGET-EXCEEDED: 'mcp-integration ($SUITE)' exceeded its 25m budget"
   echo "CI-BUDGET-EXCEEDED: 'mcp-integration ($SUITE)' exceeded its 25m budget" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

@@ -1216,7 +1216,7 @@ jobs:
         env:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
         run: |
-          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           # Outer 14m soft budget wraps both inner 90s-per-binary stress runs: a backstop for the
           # whole step running away, not a second per-command timeout duplicating the inner ones.
           run_pty_race_regression() {

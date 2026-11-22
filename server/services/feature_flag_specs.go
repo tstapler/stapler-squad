@@ -71,7 +71,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
-		Name:        CrossHostClaimDedupFlagName,
+		Name:        featureflags.CrossHostClaimDedupFlagName,
 		Description: "Cross-host duplicate-work prevention: before importing a GitHub issue or creating an item with an external URL, and before dequeuing a queued item, check whether another stapler-squad host already claimed that URL. A blocked import offers 'Import anyway' with an audited reason; a blocked dequeue shows up as a stuck item with an override. Claims are always recorded regardless. Default: off.",
 	},
 	{

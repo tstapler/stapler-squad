@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -87,7 +88,7 @@ var provenanceReader = newPRProvenanceReader(github.GetPRComments)
 // it reads the stamped provenance comment back and logs the originating item and
 // host. Gated by cross_host_claim_dedup because stamping is.
 func (h *GitHubWebhookHandler) traceUnmatchedPR(ctx context.Context, payload map[string]interface{}, fullName string, prNumber int) (session.PRProvenance, bool) {
-	if h.cfg == nil || !h.cfg.GetFeatureFlag(CrossHostClaimDedupFlagName) || provenanceReader == nil {
+	if h.cfg == nil || !h.cfg.GetFeatureFlag(featureflags.CrossHostClaimDedupFlagName) || provenanceReader == nil {
 		return session.PRProvenance{}, false
 	}
 	base, ok := splitRepoFullName(fullName)

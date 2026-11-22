@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"bytes"
@@ -22,12 +22,12 @@ import (
 )
 
 // requirePersistedOutcome fetches the (assumed single) TriggerFireEvent row for
-// deliveryID directly via the ent client — infra.fireEvents.ListByWorkflow can't see
+// deliveryID directly via the ent client — infra.FireEvents.ListByWorkflow can't see
 // these rows, since PR-fix outcomes always persist with WorkflowID: nil — and asserts
 // its Outcome and that WorkflowID is nil, per the Migration Plan.
-func requirePersistedOutcome(t *testing.T, infra *webhookTestInfra, deliveryID, wantOutcome string) {
+func requirePersistedOutcome(t *testing.T, infra *svctest.WebhookTestInfra, deliveryID, wantOutcome string) {
 	t.Helper()
-	row, err := infra.entRepo.GetEntClient().TriggerFireEvent.Query().
+	row, err := infra.EntRepo.GetEntClient().TriggerFireEvent.Query().
 		Where(triggerfireevent.DeliveryID(deliveryID)).Only(context.Background())
 	require.NoError(t, err, "expected exactly one TriggerFireEvent row for delivery_id=%q", deliveryID)
 	assert.Equal(t, wantOutcome, row.Outcome)
@@ -35,9 +35,9 @@ func requirePersistedOutcome(t *testing.T, infra *webhookTestInfra, deliveryID, 
 }
 
 // requireNoRowPersisted asserts zero TriggerFireEvent rows exist for deliveryID.
-func requireNoRowPersisted(t *testing.T, infra *webhookTestInfra, deliveryID string) {
+func requireNoRowPersisted(t *testing.T, infra *svctest.WebhookTestInfra, deliveryID string) {
 	t.Helper()
-	exists, err := infra.entRepo.GetEntClient().TriggerFireEvent.Query().
+	exists, err := infra.EntRepo.GetEntClient().TriggerFireEvent.Query().
 		Where(triggerfireevent.DeliveryID(deliveryID)).Exist(context.Background())
 	require.NoError(t, err)
 	assert.False(t, exists, "expected no TriggerFireEvent row for delivery_id=%q", deliveryID)
@@ -425,12 +425,12 @@ func checkRunFailureBody(t *testing.T) []byte {
 }
 
 func TestHandlePRFixEvent_should_Return200WithNoAuditRow_When_FeatureFlagDisabled(t *testing.T) {
-	infra := newWebhookTestInfra(t)
+	infra := svctest.NewWebhookTestInfra(t)
 	// pr_event_webhooks left unset (default false); webhook_triggers is on so Handle
 	// reaches the event-type branch.
 	newGitHubPushWorkflow(t, infra, "gh-1", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-flag-off", sign("s3cr3t", body))
@@ -448,11 +448,11 @@ func TestHandlePRFixEvent_should_LogPrEventWebhooksOffWarningOnce_When_MultipleD
 	// captureLogs holds slogDefaultMu for the test's duration (see the comment on
 	// slogDefaultMu in autonomous_orchestration_service_test.go) — not t.Parallel().
 	buf := svctest.CaptureLogs(t)
-	infra := newWebhookTestInfra(t)
+	infra := svctest.NewWebhookTestInfra(t)
 	// pr_event_webhooks left unset (default false); webhook_triggers is on so Handle
 	// reaches handlePRFixEvent's early return.
 	newGitHubPushWorkflow(t, infra, "gh-warn-once", "s3cr3t", "tstapler/stapler-squad", "main", "x")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, nil, nil)
 
 	body := checkRunFailureBody(t)
 	rec1 := doPRFixEventRequest(t, h, "check_run", body, "delivery-warn-1", sign("s3cr3t", body))
@@ -467,11 +467,11 @@ func TestHandlePRFixEvent_should_LogPrEventWebhooksOffWarningOnce_When_MultipleD
 }
 
 func TestHandlePRFixEvent_should_CallRouterAndPersistFiredSuccess_When_DeliveryActionableAndMatched(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-fired", sign("s3cr3t", body))
@@ -488,12 +488,12 @@ func TestHandlePRFixEvent_should_CallRouterAndPersistFiredSuccess_When_DeliveryA
 // tracked PR must also invoke GitHubPollerInvalidator, as a second consumer of
 // the same event alongside PRFixEventRouter — same per-PR-number loop shape.
 func TestHandlePRFixEvent_should_CallInvalidateForEventOncePerPRNumber_When_CheckRunEventReceived(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-invalidate-1", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
 	invalidator := &spyPollerInvalidator{}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, invalidator)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, invalidator)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-invalidate", sign("s3cr3t", body))
@@ -509,11 +509,11 @@ func TestHandlePRFixEvent_should_CallInvalidateForEventOncePerPRNumber_When_Chec
 // possibility in production per NewGitHubWebhookHandler's doc comment) is
 // skipped rather than panicking.
 func TestHandlePRFixEvent_should_SkipInvalidatorCall_When_NotConfigured(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-invalidate-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-no-invalidator", sign("s3cr3t", body))
@@ -529,11 +529,11 @@ func TestHandlePRFixEvent_should_SkipInvalidatorCall_When_NotConfigured(t *testi
 // (NULL != NULL) — a GitHub redelivery must still be recognized as a duplicate via
 // ExistsByDeliveryID before ever reaching the router a second time.
 func TestHandlePRFixEvent_should_NotReprocess_When_SameDeliveryIDRedelivered(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-9", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := checkRunFailureBody(t)
 	rec1 := doPRFixEventRequest(t, h, "check_run", body, "delivery-redelivered", sign("s3cr3t", body))
@@ -546,10 +546,10 @@ func TestHandlePRFixEvent_should_NotReprocess_When_SameDeliveryIDRedelivered(t *
 }
 
 func TestHandlePRFixEvent_should_PersistFiredFailed_When_PRFixRouterIsNilConfigured(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-3", "s3cr3t", "tstapler/stapler-squad", "main", "x")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, nil, nil)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-no-router", sign("s3cr3t", body))
@@ -559,11 +559,11 @@ func TestHandlePRFixEvent_should_PersistFiredFailed_When_PRFixRouterIsNilConfigu
 }
 
 func TestHandlePRFixEvent_should_PersistNoMatchWithoutCallingRouter_When_DeliveryNotActionable(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-4", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := jsonBody(t, map[string]interface{}{
 		"action": "completed",
@@ -583,22 +583,22 @@ func TestHandlePRFixEvent_should_PersistNoMatchWithoutCallingRouter_When_Deliver
 }
 
 func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretEmpty(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
-	_, err := infra.workflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
+	_, err := infra.WorkflowRepo.Create(context.Background(), stagecfg.WorkflowCreateInput{
 		Slug:                   "gh-5",
 		Name:                   "GH Push Trigger",
 		Command:                "base instructions",
 		TriggerType:            "github_push",
 		GitHubRepo:             "tstapler/stapler-squad",
 		GitHubBranch:           "main",
-		WebhookSecretEncrypted: "", // empty — decryptWorkflowSecret must early-return
+		WebhookSecretEncrypted: "", // empty — DecryptWorkflowSecret must early-return
 		PromptTemplate:         "x",
 		Enabled:                svctest.BoolPtr(true),
 	})
 	require.NoError(t, err)
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-empty-secret", "sha256=whatever")
@@ -608,11 +608,11 @@ func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretE
 }
 
 func TestHandlePRFixEvent_should_Return500NotUnauthorized_When_CandidateLookupErrors(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-8", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(&erroringWorkflowRepo{WorkflowRepository: infra.workflowRepo}, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(&erroringWorkflowRepo{WorkflowRepository: infra.WorkflowRepo}, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	body := checkRunFailureBody(t)
 	rec := doPRFixEventRequest(t, h, "check_run", body, "delivery-lookup-error", sign("s3cr3t", body))
@@ -622,11 +622,11 @@ func TestHandlePRFixEvent_should_Return500NotUnauthorized_When_CandidateLookupEr
 }
 
 func TestHandlePRFixEvent_should_NeverApplySelfFilter_When_EventTypeIsCheckRunOrWorkflowRun(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-6", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 	// Prime the self-login cache to something that would match if extractActorLogin
 	// were (incorrectly) consulted for check_run — it never has an actor field, so this
 	// only proves the filter path isn't reached, not that it's bypassed.
@@ -642,11 +642,11 @@ func TestHandlePRFixEvent_should_NeverApplySelfFilter_When_EventTypeIsCheckRunOr
 }
 
 func TestHandlePRFixEvent_should_SuppressActionable_When_CommentAuthorIsSelf(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-7", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 	h.selfLogin.mu.Lock()
 	h.selfLogin.entries[""] = selfLoginCacheEntry{login: "stapler-squad-bot", fetchedAt: time.Now()}
 	h.selfLogin.mu.Unlock()
@@ -667,13 +667,13 @@ func TestHandlePRFixEvent_should_SuppressActionable_When_CommentAuthorIsSelf(t *
 // coverage gap: every other handlePRFixEvent test drives it via check_run/issue_comment,
 // leaving Handle's dispatch switch untested for its other two case labels.
 func TestHandle_should_DispatchWorkflowRunAndPullRequestReviewToHandlePRFixEvent(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-10", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 
 	t.Run("workflow_run", func(t *testing.T) {
 		router := &fakePRFixEventRouter{matched: true}
-		h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+		h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 		body := jsonBody(t, map[string]interface{}{
 			"action": "completed",
 			"workflow_run": map[string]interface{}{
@@ -689,7 +689,7 @@ func TestHandle_should_DispatchWorkflowRunAndPullRequestReviewToHandlePRFixEvent
 
 	t.Run("pull_request_review", func(t *testing.T) {
 		router := &fakePRFixEventRouter{matched: true}
-		h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+		h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 		body := jsonBody(t, map[string]interface{}{
 			"action":       "submitted",
 			"review":       map[string]interface{}{"state": "changes_requested", "user": map[string]interface{}{"login": "some-reviewer"}},
@@ -706,11 +706,11 @@ func TestHandle_should_DispatchWorkflowRunAndPullRequestReviewToHandlePRFixEvent
 // dispatch switch's default branch (e.g. GitHub's own "ping" delivery on webhook
 // setup) — no signature verification or persistence, just a trivial 200.
 func TestHandle_should_Return200NoAuditRow_When_EventTypeIsUnrecognized(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-11", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	rec := doPRFixEventRequest(t, h, "ping", []byte(`{"zen":"hello"}`), "delivery-ping", "")
 
@@ -725,11 +725,11 @@ func TestHandle_should_Return200NoAuditRow_When_EventTypeIsUnrecognized(t *testi
 // 5.4.1c's positive case: a verified (signature-checked, actionable, non-self)
 // check_run delivery must advance lastPRFixDeliveryUnixNano["check_run"].
 func TestWebhookLastDelivery_should_UpdateTimestamp_When_DeliveryVerified(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-staleness-1", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	before := lastPRFixDeliveryUnixNano["check_run"].Load()
 
@@ -747,11 +747,11 @@ func TestWebhookLastDelivery_should_UpdateTimestamp_When_DeliveryVerified(t *tes
 // 5.4.1c's negative case: a rejected (bad-signature) delivery never reaches the
 // verified-delivery boundary, so it must not move the timestamp.
 func TestWebhookLastDelivery_should_NotUpdateTimestamp_When_SignatureInvalid(t *testing.T) {
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
 	newGitHubPushWorkflow(t, infra, "gh-staleness-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	before := lastPRFixDeliveryUnixNano["check_run"].Load()
 
@@ -768,11 +768,11 @@ func TestWebhookLastDelivery_should_NotUpdateTimestamp_When_SignatureInvalid(t *
 // Task 5.4.1c's other negative case: pr_event_webhooks off short-circuits before
 // signature verification even runs, so this must not advance the timestamp either.
 func TestWebhookLastDelivery_should_NotUpdateTimestamp_When_PREventWebhooksDisabled(t *testing.T) {
-	infra := newWebhookTestInfra(t)
+	infra := svctest.NewWebhookTestInfra(t)
 	// pr_event_webhooks left unset (default false).
 	newGitHubPushWorkflow(t, infra, "gh-staleness-3", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	router := &fakePRFixEventRouter{matched: true}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 
 	before := lastPRFixDeliveryUnixNano["check_run"].Load()
 
@@ -804,10 +804,10 @@ func pullRequestEventBody(t *testing.T, action string) []byte {
 }
 
 func TestHandlePullRequestEvent_should_InvalidateForReopened_When_ReopenedDeliveryVerified(t *testing.T) {
-	infra := newWebhookTestInfra(t)
+	infra := svctest.NewWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-reopen-1", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	invalidator := &spyPollerInvalidator{}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, &fakePRFixEventRouter{}, invalidator)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, &fakePRFixEventRouter{}, invalidator)
 
 	body := pullRequestEventBody(t, "reopened")
 	rec := doPRFixEventRequest(t, h, "pull_request", body, "delivery-reopen", sign("s3cr3t", body))
@@ -820,10 +820,10 @@ func TestHandlePullRequestEvent_should_InvalidateForReopened_When_ReopenedDelive
 }
 
 func TestHandlePullRequestEvent_should_NotInvalidate_When_BadSignatureOrOtherAction(t *testing.T) {
-	infra := newWebhookTestInfra(t)
+	infra := svctest.NewWebhookTestInfra(t)
 	newGitHubPushWorkflow(t, infra, "gh-reopen-2", "s3cr3t", "tstapler/stapler-squad", "main", "x")
 	invalidator := &spyPollerInvalidator{}
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, &fakePRFixEventRouter{}, invalidator)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, &fakePRFixEventRouter{}, invalidator)
 
 	body := pullRequestEventBody(t, "reopened")
 	rec := doPRFixEventRequest(t, h, "pull_request", body, "d1", sign("wrong", body))

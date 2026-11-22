@@ -626,12 +626,12 @@ linters:
             - "!**/server/services/backlogsvc/backlog_service_ship_status.go"
             - "!**/server/services/session_summary_service_test.go"
             - "!**/server/services/backlogsvc/backlog_service_sync.go"
-            - "!**/server/services/github_webhook_handler.go"
+            - "!**/server/services/webhooktrigger/github_webhook_handler.go"
             - "!**/server/services/session_summary_service.go"
             - "!**/server/services/backlogsvc/backlog_service_pipeline_mode_test.go"
-            - "!**/server/services/webhook_trigger_common.go"
-            - "!**/server/services/github_webhook_handler_test.go"
-            - "!**/server/services/generic_webhook_handler_test.go"
+            - "!**/server/services/webhooktrigger/webhook_trigger_common.go"
+            - "!**/server/services/webhooktrigger/github_webhook_handler_test.go"
+            - "!**/server/services/webhooktrigger/generic_webhook_handler_test.go"
             # handoff_summary_service_test.go legitimately needs raw ent access
             # to construct precise fixtures (e.g. a stale GENERATING row with a
             # controlled generation_started_at in the past) that the generator's
@@ -649,7 +649,7 @@ linters:
             # handoff_summary_service_test.go above: a test-only fixture the
             # production API has no way to construct otherwise. The production
             # file (github_webhook_pr_fix.go) does NOT need this exclusion.
-            - "!**/server/services/github_webhook_pr_fix_test.go"
+            - "!**/server/services/webhooktrigger/github_webhook_pr_fix_test.go"
             # session_service.go's *ent.Client usage (SetAnalyticsClient) moved here
             # verbatim in the session_service_*.go file-size split (2026-10) — same
             # already-grandfathered exclusion, not newly introduced.
