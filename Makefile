@@ -952,6 +952,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
+.PHONY: vet-tags
 .PHONY: vet-architecture
 vet-architecture: ## Run all architectural lint checks (depguard + import cycle check)
 	golangci-lint run --enable depguard ./...
@@ -1065,15 +1066,22 @@ fmt-check: ## Verify all Go files are gofmt-formatted (non-destructive; exits 1 
 	fi
 	@echo "✅ All Go files are properly formatted"
 
-# Opt-in feature tags whose files `go vet ./...` never compiles. A tagged file
-# that stops compiling is otherwise silently dead (the harness suite sat broken
-# for months). embed_tmux/embed_tymux need built artifacts and `tools` conflicts
-# with package main, so they are deliberately absent.
-VET_TAGS := harness integration sinkguard gitoracle live_github otelcauto s14_failing e2e_ghsignal
+# Opt-in feature tags whose files `go vet ./...` never compiles; a tagged file
+# that stops compiling is otherwise silently dead (the harness suite rotted so).
+# The tag list is derived from the tracked sources so a new tag is covered
+# automatically. Excluded: GOOS/GOARCH/race constraints (not opt-in), embed_tmux
+# and embed_tymux (need built embed/ artifacts), tools (clashes with package
+# main), ignore (never built).
+space := $(subst ,, )
+VET_TAGS_EXCLUDE := darwin linux unix windows race embed_tmux embed_tymux tools ignore
+VET_TAGS = $(shell git ls-files -z '*.go' | xargs -0 grep -hoE '^//go:build [a-z0-9_]+$$' | awk '{print $$2}' | sort -u | grep -vxE '$(subst $(space),|,$(VET_TAGS_EXCLUDE))' | paste -sd, -)
 
-vet: gen-gate-strict ensure-tools proto-gen ## Run go vet with all analyzers, default build and each opt-in feature tag
+vet-tags: ## go vet every opt-in feature build tag in one pass (needs gen/, session/ent and server/web/dist already present; make vet provides them)
+	@echo "go vet -tags=$(VET_TAGS) ./..."
+	go vet -tags=$(VET_TAGS) ./...
+
+vet: gen-gate-strict ensure-tools proto-gen server/web/dist vet-tags ## Run go vet with all analyzers, default build and every opt-in feature tag
 	go vet ./...
-	@set -e; for t in $(VET_TAGS); do echo "go vet -tags=$$t ./..."; go vet -tags=$$t ./...; done
 
 # Nil safety analysis
 nil-safety: ensure-tools ## Run comprehensive nil safety analysis

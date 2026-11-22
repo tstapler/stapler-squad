@@ -393,13 +393,13 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	require.NoError(t, getErr)
 
 	item := getResp.Msg.Item
+	if fastPool.notLoggedIn() {
+		t.Skip("claude binary is on PATH but reports \"Not logged in\" under the harness — run `claude /login` first")
+	}
 	require.NotEmpty(t, item.ItemSessions, "item must have a triage session")
 	is := item.ItemSessions[0]
 
 	// Report service error log entries (only non-empty when triage failed).
-	if fastPool.notLoggedIn() {
-		t.Skip("claude binary is on PATH but reports \"Not logged in\" under the harness — run `claude /login` first")
-	}
 	if captured := strings.TrimSpace(errBuf.String()); captured != "" {
 		t.Logf("Service error log:\n%s", captured)
 	}

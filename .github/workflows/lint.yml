@@ -219,6 +219,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: go build ./...
 
+      # Opt-in build tags (harness, live_github, ...) are invisible to go build/vet ./...;
+      # this keeps tagged files from rotting. Tag list is derived in the Makefile.
+      - name: Vet opt-in build tags
+        if: ${{ !cancelled() }}
+        run: make vet-tags
+
       - name: Check formatting (PR-changed files only)
         if: ${{ !cancelled() }}
         run: |
