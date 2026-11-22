@@ -39,6 +39,7 @@ type fakeDaemon struct {
 
 	attachCalls     atomic.Int64
 	captureCalls    atomic.Int64
+	captureSnaps    atomic.Int64 // captures whose pane snapshot is already taken (captureCalls counts entry)
 	captureFailures atomic.Int32
 	captureHold     atomic.Pointer[chan struct{}]
 }
@@ -97,6 +98,7 @@ func (d *fakeDaemon) capture(ctx context.Context, _ *connect.Request[v1.CaptureP
 	d.captureFailures.Store(0)
 	d.mu.Lock()
 	snap := d.snapshotLocked()
+	d.captureSnaps.Add(1)
 	d.mu.Unlock()
 	if hold := d.captureHold.Load(); hold != nil {
 		select {
@@ -394,6 +396,7 @@ func TestStreamConsistency_ConcurrentRedrawRequestsShareOneCapture(t *testing.T)
 	h.converge()
 
 	before := h.d.captureCalls.Load()
+	snapsBefore := h.d.captureSnaps.Load()
 	hold := make(chan struct{})
 	h.d.captureHold.Store(&hold)
 	const callers = 8
@@ -409,7 +412,7 @@ func TestStreamConsistency_ConcurrentRedrawRequestsShareOneCapture(t *testing.T)
 			replies[i] = data
 		}()
 	}
-	require.Eventually(t, func() bool { return h.d.captureCalls.Load() > before }, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return h.d.captureSnaps.Load() > snapsBefore }, 2*time.Second, time.Millisecond)
 	atCapture := h.d.screen()
 	h.emitAll(frames(rng, 10, 500)) // output after the capture instant, before it returns
 	close(hold)
