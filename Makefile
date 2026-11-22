@@ -1305,7 +1305,7 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	    server/services/workflow_service.go \
 	    session/prpoller/pr_status_poller.go \
 	    session/review_queue_poller.go \
-	    session/autonomous_driver.go \
+	    session/autonomous/autonomous_driver.go \
 	    daemon/daemon.go \
 	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
 	    echo "❌ actor-field-guard: direct Instance field writes found — route through actor setters (see IAC Epic 5)"; \

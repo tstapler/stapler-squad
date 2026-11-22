@@ -436,7 +436,7 @@ type Instance struct {
 
 	// ExitReason records why this session's pane exited when Status == Crashed
 	// (e.g. "signal SIGKILL (exit code 137)"). Empty otherwise. Set by
-	// SessionHealthChecker when it detects a dead pane (session/health.go).
+	// SessionHealthChecker when it detects a dead pane (session/autonomous/health.go).
 	ExitReason string `json:"exit_reason,omitempty"`
 
 	// WorkflowID is the UUID of the Workflow that spawned this session.

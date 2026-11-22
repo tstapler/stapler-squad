@@ -35,7 +35,7 @@ STUBS = {
 SEEDS = {
     "entfullscan": ("entfullscan/seed.go", "", []),
     "hotpolllog": ("hotpolllog/seed.go", "", []),
-    "noarchivedrevival": ("noarchivedrevival/session/health.go", "", []),
+    "noarchivedrevival": ("noarchivedrevival/session/autonomous/health.go", "", []),
     "nocommandpattern": (
         "nocommandpattern/pkg/classifier/seed.go",
         _SEED + "nocommandpattern/pkg/classifier",

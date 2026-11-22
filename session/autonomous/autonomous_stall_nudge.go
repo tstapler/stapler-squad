@@ -1,4 +1,4 @@
-package session
+package autonomous
 
 // autonomous_stall_nudge.go is the one session-level writer the autonomous
 // stall path uses to nudge an idle work session. Order is verify -> lease ->

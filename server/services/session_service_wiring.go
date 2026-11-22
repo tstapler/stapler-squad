@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/external"
@@ -243,7 +244,7 @@ func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
 func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.AutonomousSvc }
 
 // DeadPaneRecorder is the health checker's sink for dead-pane stop snapshots.
-func (s *SessionService) DeadPaneRecorder() session.DeadPaneRecorder {
+func (s *SessionService) DeadPaneRecorder() autonomous.DeadPaneRecorder {
 	return s.AutonomousSvc.RecordDeadPane
 }
 
@@ -291,7 +292,7 @@ func (s *SessionService) SetHeadlessClient(c headless.PoolClient) {
 }
 
 // autonomousDriverClient prefers the selector-backed client over the raw claude pool.
-func (s *SessionService) autonomousDriverClient() session.HeadlessPoolClient {
+func (s *SessionService) autonomousDriverClient() autonomous.HeadlessPoolClient {
 	if s.headlessClient != nil {
 		return s.headlessClient
 	}

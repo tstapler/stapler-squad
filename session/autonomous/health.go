@@ -1,10 +1,11 @@
-package session
+package autonomous
 
 import (
 	"errors"
 	"fmt"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -15,8 +16,8 @@ import (
 
 // SessionHealthChecker manages session health validation and recovery
 type SessionHealthChecker struct {
-	storage    *Storage
-	tmuxSocket TmuxSocketQuerier // Tmux server-socket queries for CheckAllSessions; fakeable in tests
+	storage    *session.Storage
+	tmuxSocket session.TmuxSocketQuerier // Tmux server-socket queries for CheckAllSessions; fakeable in tests
 
 	// failureCounts tracks consecutive health-check failures per session title.
 	// Recovery is only attempted after failureThreshold consecutive failures,
@@ -86,10 +87,10 @@ func markStartFailed(instance *instance.Instance, err error) {
 }
 
 // NewSessionHealthChecker creates a new session health checker
-func NewSessionHealthChecker(storage *Storage, opts ...HealthCheckerOption) *SessionHealthChecker {
+func NewSessionHealthChecker(storage *session.Storage, opts ...HealthCheckerOption) *SessionHealthChecker {
 	h := &SessionHealthChecker{
 		storage:       storage,
-		tmuxSocket:    realTmuxSocketQuerier{},
+		tmuxSocket:    session.NewRealTmuxSocketQuerier(),
 		failureCounts: make(map[string]int),
 		startedAt:     time.Now(),
 	}

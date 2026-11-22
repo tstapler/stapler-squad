@@ -10,7 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -71,7 +71,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 	backlogSvc.SetEventBus(eventBus)
 	svc.SetAutonomousStuckRespawner(backlogSvc)
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	// The respawn runs in a goroutine and takes ~1s under -race when idle; the bound is a hang guard, not a latency assertion.
@@ -92,7 +92,7 @@ func TestOnAutonomousDriverComplete_should_LeaveIdeaAndRaiseOneDenial_When_Syste
 	h := wireEnforcedGate(t, bs)
 	h.blockWithGate(t, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 
-	f.complete(session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
+	f.complete(autonomous.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
 
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)

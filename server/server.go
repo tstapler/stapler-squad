@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
@@ -219,7 +220,7 @@ func (s *Server) joinAfterCancel(ctx context.Context, join func()) {
 }
 
 // sessionHealthCheckInterval is how often SessionHealthChecker polls for dead
-// tmux panes and stale sessions. With failureThreshold (session/health.go) at 2
+// tmux panes and stale sessions. With failureThreshold (session/autonomous/health.go) at 2
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
@@ -307,9 +308,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// started-but-tmux-missing instances, marking dead panes Crashed/Stopped so
 	// the UI can surface a banner instead of raw pane text. Previously this
 	// checker was constructed only in tests and never actually started in
-	// production -- see session/health.go.
+	// production -- see session/autonomous/health.go.
 	if deps.Storage != nil {
-		healthChecker := session.NewSessionHealthChecker(deps.Storage, session.WithDeadPaneRecorder(deps.SessionService.DeadPaneRecorder()))
+		healthChecker := autonomous.NewSessionHealthChecker(deps.Storage, autonomous.WithDeadPaneRecorder(deps.SessionService.DeadPaneRecorder()))
 		srv.goBackground(func() {
 			healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, serverCtx.Done())
 		})

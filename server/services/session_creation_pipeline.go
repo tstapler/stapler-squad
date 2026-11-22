@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -344,11 +345,11 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	driver.StartSessionDriver(p.instance, instanceRootDir)
 
 	if p.instance.AutonomousMode && s.headlessPool != nil {
-		costOpt := session.NoopDriverOption
+		costOpt := autonomous.NoopDriverOption
 		if concreteStorage := s.GetStorage(); concreteStorage != nil {
-			costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
+			costOpt = autonomous.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
 		}
-		driver := session.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
+		driver := autonomous.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
 		driver.RegisterCompletionCallback(s.AutonomousSvc.OnAutonomousDriverComplete)
 		if driverErr := driver.Start(s.AutonomousSvc.driverCtx()); driverErr != nil {
 			log.Warn("[session pipeline] failed to start autonomous driver", "session", p.instanceTitle, "err", driverErr)

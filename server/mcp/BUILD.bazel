@@ -63,6 +63,7 @@ go_library(
         "//proto/session/v1:sessionv1_go",
         "//server/wakes",
         "//session",
+        "//session/autonomous",
         "//session/backlog/pipeline",
         "//session/domain",
         "//session/domain/backlogdto",

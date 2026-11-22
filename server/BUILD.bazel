@@ -118,6 +118,7 @@ go_library(
         "//server/workflows",
         "//session",
         "//session/artifacts",
+        "//session/autonomous",
         "//session/backlog",
         "//session/backlog/chains",
         "//session/backlog/liveness",

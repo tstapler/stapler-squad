@@ -40,6 +40,7 @@ var allowedImports = map[string]string{
 	modulePrefix + "pkg/localtoken":                      "local token",
 	modulePrefix + "server/wakes":                        "wake metrics",
 	modulePrefix + "session":                             "M4b-4: Storage, InstanceStore",
+	modulePrefix + "session/autonomous":                  "diagnose nudge: VerifyNudgeSafeToWrite, ErrNudgeSubmitUncertain",
 	modulePrefix + "session/backlog/pipeline":            "pipeline helpers",
 	modulePrefix + "session/domain":                      "domain values",
 	modulePrefix + "session/domain/backlogdto":           "backlog DTOs",

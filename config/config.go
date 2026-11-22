@@ -346,7 +346,7 @@ type Config struct {
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
-	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// stopping without a DONE signal (session/autonomous/autonomous_driver.go). 0 = use the default
 	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`

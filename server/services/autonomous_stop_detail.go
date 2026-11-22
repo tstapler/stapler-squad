@@ -8,7 +8,7 @@ import (
 	"unicode"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -46,7 +46,7 @@ func sanitizeStopTail(raw string) string {
 	}
 
 	s = RedactErrorDetail(s)
-	return session.TailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
+	return autonomous.TailBytes(foldToOneLine(s), stopTailSinkMaxBytes)
 }
 
 // vendorTokenRe withholds the tail on vendor token prefixes and `curl -u user:pass`.
@@ -357,7 +357,7 @@ type stopRecord struct {
 	Session  string
 	ItemID   string
 	Role     string
-	Outcome  session.AutonomousDriverOutcome
+	Outcome  autonomous.AutonomousDriverOutcome
 	State    domain.ObservedState
 	Recovery stopRecovery
 	MaxTurns int

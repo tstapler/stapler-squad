@@ -64,3 +64,4 @@ session/instancestore !github
 session/driver !server
 session/external !server
 session/sweeper !server
+session/autonomous !server

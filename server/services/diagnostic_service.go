@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -151,7 +152,7 @@ func (d *DiagnosticService) DispatchDiagnose(
 
 // evaluateNudgeEligibility applies AC2's two-part gate: the item's
 // cap/cooldown (session.DiagnoseNudgeAllowed) and the target's current
-// idle-status (session.CheckNudgeEligible). No target, or no stuck reason to
+// idle-status (autonomous.CheckNudgeEligible). No target, or no stuck reason to
 // key the cap on, means diagnose-only — nudgeAllowed is false, not an error.
 // The write-time pane-ownership re-verification
 // (session.VerifyPaneOwnershipBeforeWrite) happens later, immediately before
@@ -174,7 +175,7 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 	if target == nil {
 		return false, "nudge target session not found or not live"
 	}
-	if eligErr := session.CheckNudgeEligible(target); eligErr != nil {
+	if eligErr := autonomous.CheckNudgeEligible(target); eligErr != nil {
 		return false, eligErr.Error()
 	}
 	return true, ""

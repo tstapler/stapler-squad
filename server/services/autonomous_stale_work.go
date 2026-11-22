@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -63,7 +64,7 @@ func (a *AutonomousOrchestrationService) InspectStaleWork(ctx context.Context, s
 		Session:  title,
 		ItemID:   item.ID,
 		Role:     instance.SessionRoleWork,
-		Outcome:  session.AutonomousDriverOutcome{StopReason: domain.StopReasonStaleWork, Snapshot: snap},
+		Outcome:  autonomous.AutonomousDriverOutcome{StopReason: domain.StopReasonStaleWork, Snapshot: snap},
 		State:    domain.ClassifyObserved(snap),
 		Tail:     sanitizeStopTail(snap.PaneTail),
 		Recovery: stopRecovery{Action: stopActionNone},
@@ -90,7 +91,7 @@ func (a *AutonomousOrchestrationService) captureStaleSnapshot(inst *instance.Ins
 	if a.staleSnapshot != nil {
 		return a.staleSnapshot(inst)
 	}
-	return session.CaptureInstanceStopSnapshot(inst, 0)
+	return autonomous.CaptureInstanceStopSnapshot(inst, 0)
 }
 
 // concreteStorage returns the wired backing store, or nil.
@@ -158,7 +159,7 @@ func (a *AutonomousOrchestrationService) RecordDeadPane(sessionUUID, title strin
 		Session:  title,
 		ItemID:   item.ID,
 		Role:     instance.SessionRoleWork,
-		Outcome:  session.AutonomousDriverOutcome{StopReason: domain.StopReasonDeadPane, Snapshot: snap},
+		Outcome:  autonomous.AutonomousDriverOutcome{StopReason: domain.StopReasonDeadPane, Snapshot: snap},
 		State:    state,
 		Tail:     sanitizeStopTail(snap.PaneTail),
 		Recovery: stopRecovery{Action: stopActionRespawned},

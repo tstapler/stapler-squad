@@ -17,7 +17,7 @@ import (
 
 // TestKillSessionThenStart_RebuildsLaunchCommand traces whether
 // Instance.KillSession() + Instance.Start(false) — the exact sequence
-// session/health.go's dead-pane recovery loop uses — rebuilds the tmux launch
+// session/autonomous/health.go's dead-pane recovery loop uses — rebuilds the tmux launch
 // command from the current i.claudeSession.ConversationUUID, or reuses
 // whatever program string was baked in at the last SetSession() call.
 //

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -319,7 +320,7 @@ func TestAutonomousTriageDenied_should_StayQuietAndFinishByItself_When_TheOperat
 	listener.SetTriageRespawner(spy)
 	ctx := context.Background()
 
-	f.complete(session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
+	f.complete(autonomous.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
 	triageSessions := denTriageSessionCount(t, svc, f.itemID)
 	for range 5 {
 		listener.ReconcileStuck(ctx)

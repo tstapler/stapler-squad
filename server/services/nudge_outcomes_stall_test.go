@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -33,7 +34,7 @@ func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 		rec := session.NewNudgeOutcomeRecorder("", nil)
 		defer session.SwapNudgeOutcomeRecorder(rec)()
 		f := newStallNudgeFixture(t, "nud-uncertain", domain.BacklogStatusInProgress, true, true)
-		f.nudger.err = fmt.Errorf("%w: boom", session.ErrNudgeSubmitUncertain)
+		f.nudger.err = fmt.Errorf("%w: boom", autonomous.ErrNudgeSubmitUncertain)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 

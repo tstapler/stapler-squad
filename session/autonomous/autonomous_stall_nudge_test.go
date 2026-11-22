@@ -1,4 +1,4 @@
-package session
+package autonomous
 
 // These tests live in the session package because only here can a cancelled
 // ctx, a held lease and a pane that records keystrokes be observed together. A

@@ -97,7 +97,7 @@ func TestWorktreeMissingLevel_WarnsOnFirstDebugsOnRepeat(t *testing.T) {
 
 // TestLoggedMissingWorktree_DedupesAcrossSeparateInstanceObjects guards the
 // actual reason this is a package-level map rather than an Instance field:
-// session/health.go's ~15s LoadInstances() tick constructs a brand-new
+// session/autonomous/health.go's ~15s LoadInstances() tick constructs a brand-new
 // Instance object from disk every time, so dedup must survive across
 // distinct Instance objects sharing the same title, not just repeated calls
 // on one object.

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -118,7 +119,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus domain.B
 	return f
 }
 
-func (f *charFixture) complete(outcome session.AutonomousDriverOutcome) {
+func (f *charFixture) complete(outcome autonomous.AutonomousDriverOutcome) {
 	f.svc.AutonomousSvc.OnAutonomousDriverComplete(f.title, outcome)
 }
 

@@ -117,7 +117,7 @@ func buildReasonSignature(fixContext string) reasonSignature {
 // ---------------------------------------------------------------------------
 
 // lastSteerReason is per-item dedup state (BacklogService.steerDedup,
-// key=itemID), mirroring session/nudge_dedup.go's lastNudge shape plus
+// key=itemID), mirroring session/autonomous/nudge_dedup.go's lastNudge shape plus
 // sessionUUID — the session that actually received the delivery, so a
 // changed active work session is never mistaken for an already-delivered
 // reason it never actually saw.

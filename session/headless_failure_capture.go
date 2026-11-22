@@ -35,7 +35,7 @@ const headlessFailureCaptureFilePrefix = "headless-failure-"
 // includes a ~200-byte preview, and the log file itself rotates out of
 // ~/.stapler-squad/logs/ within a few hours — for a long-running call there was
 // previously no way to recover what the LLM actually returned once that window
-// closed. Unlike WriteReviewTranscriptFile (session/review_transcript.go),
+// closed. Unlike WriteReviewTranscriptFile (session/autonomous/review_transcript.go),
 // which writes into a real repo checkout and is cleaned up immediately after a
 // review completes, this file is meant to persist indefinitely for later
 // diagnosis, so it is written to the caller-supplied dir (in practice
