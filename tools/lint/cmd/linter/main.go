@@ -29,8 +29,8 @@
 //     log.Info/Warn/Error/Debug API
 //   - notimesleeptest: rejects time.Sleep in _test.go files outside
 //     tests/realtime/ (ADR-003); //nolint:notimesleeptest <reason> exempts
-//   - nosessiondrivertest: rejects raw session.StartSessionDriver in _test.go files
-//     outside package session; use session.StartSessionDriverForTest
+//   - nosessiondrivertest: rejects raw driver.StartSessionDriver in _test.go files
+//     outside package driver; use driver.StartSessionDriverForTest
 //   - noarchivedrevival: requires Start(false)/RecoverFromStopped()/restartForRetry/
 //     transitionToLocked(..., Active) in the automated-lifecycle files to follow an
 //     IsArchived()/ArchivedAt check (.claude/rules/noarchivedrevival.md)

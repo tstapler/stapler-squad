@@ -16,6 +16,10 @@ STUBS = {
         "session.go",
         _ROOT + "session",
     ),
+    "stub_driver": (
+        "driver.go",
+        _ROOT + "session/driver",
+    ),
     "stub_ent": (
         "ent.go",
         _ROOT + "session/ent",
@@ -79,7 +83,7 @@ SEEDS = {
 
 # The analyzers that only look at _test.go files get a go_test seed.
 TEST_SEEDS = {
-    "nosessiondrivertest": [":stub_session"],
+    "nosessiondrivertest": [":stub_driver"],
     "notimesleeptest": [],
     "novartestseam": [],
 }

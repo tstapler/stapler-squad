@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -340,7 +341,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	// initial prompt (typed into the session terminal once the session reaches Ready).
 	// StartSessionDriver is idempotent (CAS guard) -- safe to call even if a driver
 	// was already started by another code path.
-	session.StartSessionDriver(p.instance, instanceRootDir)
+	driver.StartSessionDriver(p.instance, instanceRootDir)
 
 	if p.instance.AutonomousMode && s.headlessPool != nil {
 		costOpt := session.NoopDriverOption

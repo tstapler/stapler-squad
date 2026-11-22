@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -287,7 +288,7 @@ func bootResumeDrivers(instances []*instance.Instance) {
 		if status == domain.Paused || status == domain.Stopped || status == domain.Hibernated {
 			continue
 		}
-		session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
+		driver.StartSessionDriver(inst, inst.GetEffectiveRootDir())
 	}
 }
 

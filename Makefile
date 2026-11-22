@@ -1313,7 +1313,7 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
 
-# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
+# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session/driver/session_driver.go do not trip it.
 # Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
 pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance/ and session/session_pr_*.go
 	@echo "pr-field-guard: scanning for direct PR field writes..."

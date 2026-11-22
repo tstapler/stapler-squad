@@ -177,21 +177,23 @@ func JoinSessionDriver(inst *Instance) {
 }
 
 // DriverControl is the seam through which Instance code starts the session driver
-// and runs a retry restart without naming session_driver.go, which stays above the
-// Instance file set. Two implementations: sessionDriverControl (production) and any
-// test fake installed in driverControlHook.
+// and runs a retry restart without importing session/driver, which sits above the
+// Instance file set. Two implementations: driver.NewControl() (production) and any
+// test fake installed in DriverControlHook.
 type DriverControl interface {
 	Start(inst *Instance, allowedPath string)
 	RestartForRetry(inst *Instance, allowedPath, continuationPrompt string, policy RetryPolicy, stop <-chan struct{}) error
 }
 
-// driverControlHook is assigned once, in an init() of the staying driver code, so it is
-// race-free and never written after startup.
+// DriverControlHook is installed by driver.Register, called from BuildCoreDepsWithOptions (server/dependencies.go) and
+// svctest.Main. Any new main that loads instances and can resume them
+// (hibernated or crashed resume, RetryNow) MUST call driver.Register() first. The daemon, reset,
+// debug-pty and list paths in main.go do not resume instances today, which is why they run without it.
 var DriverControlHook DriverControl
 
 func driverControl() DriverControl {
 	if DriverControlHook == nil {
-		panic("session: DriverControl not registered (the package implementing the session driver must set driverControlHook in init)")
+		panic("instance: DriverControl not registered (call driver.Register() from the composition root or test main)")
 	}
 	return DriverControlHook
 }

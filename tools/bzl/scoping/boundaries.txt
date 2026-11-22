@@ -61,4 +61,5 @@ session/analyticsstore !server
 session/analyticsstore !github
 session/instancestore !server
 session/instancestore !github
+session/driver !server
 session/external !server

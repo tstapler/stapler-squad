@@ -251,7 +251,7 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 // capture-pane process rather than only abandoning the exec-gate wait. Used
 // by Instance.PreviewContext for the SessionDriver polling path, whose stop
 // channel needs to interrupt a capture already underway — see
-// session/session_driver.go's stop/join mechanism.
+// session/driver/session_driver.go's stop/join mechanism.
 func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (string, error) {
 	tm.mu.RLock()
 	if time.Since(tm.captureContentAt) < capturePaneCacheTTL {
