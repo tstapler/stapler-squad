@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -18,7 +18,7 @@ import (
 func TestMain(m *testing.M) {
 	var mu sync.Mutex
 	var started []*instance.Instance
-	session.SetSessionDriverStartHookForTest(func(inst *instance.Instance) {
+	driver.SetSessionDriverStartHookForTest(func(inst *instance.Instance) {
 		mu.Lock()
 		started = append(started, inst)
 		mu.Unlock()
@@ -31,7 +31,7 @@ func TestMain(m *testing.M) {
 	for {
 		leaked := 0
 		for _, inst := range started {
-			if session.SessionDriverRunningForTest(inst) {
+			if driver.SessionDriverRunningForTest(inst) {
 				leaked++
 			}
 		}

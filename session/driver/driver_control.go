@@ -1,4 +1,4 @@
-package session
+package driver
 
 import "github.com/tstapler/stapler-squad/session/instance"
 

@@ -130,6 +130,7 @@ go_library(
         "//session/dbpool",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/driver",
         "//session/flow",
         "//session/git",
         "//session/gitwiring",

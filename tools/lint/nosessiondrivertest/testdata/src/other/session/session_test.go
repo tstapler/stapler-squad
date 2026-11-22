@@ -7,5 +7,5 @@ import (
 )
 
 func TestSamePackageNameDifferentPath(t *testing.T) {
-	real.StartSessionDriver(nil, "") // want `raw session.StartSessionDriver`
+	real.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
 }

@@ -38,7 +38,7 @@ var Analyzer = &analysis.Analyzer{
 var lifecycleFiles = []string{
 	"session/health.go",
 	"session/review_queue_poller.go",
-	"session/session_driver.go",
+	"session/driver/session_driver.go",
 	"session/instance/instance_claude.go",
 	"session/instance/instance_serialization.go",
 	"session/instance/hot_restore.go",

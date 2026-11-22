@@ -1,4 +1,4 @@
-package session
+package driver
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
@@ -140,8 +141,7 @@ func TestScanAndLinkPRURL_ShouldUseCanonicalIdentity_WhenURLCasingDiffers(t *tes
 	inst.SetPRPersister(storage)
 
 	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, "remote: https://github.com/Acme/App/pull/12\n")
-	assert.Equal(t, 1, countStates(t, storage.Repo))
-	assert.Equal(t, 1, countLinks(t, storage.Repo))
+	assert.Equal(t, 1, countLinks(t, storage, inst.UUID))
 	require.Equal(t, []int{12}, attachNumbers(t, inst))
 	assert.Equal(t, "acme", inst.Snapshot().GitHub.PRs[0].Ref.Owner())
 }
@@ -156,17 +156,17 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	require.NoError(t, err)
 	_, err = storage.Repo.DeleteSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
-	require.Equal(t, 0, countLinks(t, storage.Repo))
+	require.Equal(t, 0, countLinks(t, storage, inst.UUID))
 
 	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, "remote: https://github.com/Acme/App/pull/12\n")
 
-	assert.Equal(t, 0, countLinks(t, storage.Repo), "a tombstone for Acme/App#12 suppresses the scan")
+	assert.Equal(t, 0, countLinks(t, storage, inst.UUID), "a tombstone for Acme/App#12 suppresses the scan")
 	assert.Empty(t, inst.Snapshot().GitHub.PRs)
 }
 
 // failingTerminalPersister fails the title-keyed terminal write once, like a busy database.
 type failingTerminalPersister struct {
-	*Storage
+	*session.Storage
 	failed bool
 }
 
@@ -182,14 +182,13 @@ func TestScanAndLinkPRURL_ShouldReloadTerminalFalse_WhenSessionHasNoLink(t *test
 	t.Parallel()
 	for _, tt := range []struct {
 		name    string
-		persist func(*Storage) instance.PrSetPersister
+		persist func(*session.Storage) instance.PrSetPersister
 	}{
-		{"immediate write", func(s *Storage) instance.PrSetPersister { return s }},
-		{"retried by the next full save", func(s *Storage) instance.PrSetPersister { return &failingTerminalPersister{Storage: s} }},
+		{"immediate write", func(s *session.Storage) instance.PrSetPersister { return s }},
+		{"retried by the next full save", func(s *session.Storage) instance.PrSetPersister { return &failingTerminalPersister{Storage: s} }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			storage, cleanup := createTestStorage(t)
-			t.Cleanup(cleanup)
+			storage := createTestStorage(t)
 			prLoadFixture(t, storage, "legacy-scan", "", "acme", "app", 11)
 			require.NoError(t, storage.Repo.UpdateGitHubPRStatusTerminal(context.Background(), "legacy-scan", true))
 			loaded, err := storage.LoadInstances()
@@ -209,5 +208,26 @@ func TestScanAndLinkPRURL_ShouldReloadTerminalFalse_WhenSessionHasNoLink(t *test
 			assert.Equal(t, 12, g.GitHubPRNumber)
 			assert.False(t, g.GitHubPRStatusTerminal, "the stored true must not survive the restart")
 		})
+	}
+}
+
+// The terminal scan now attaches every push URL it sees instead of linking once,
+// and clears the stored terminal flag when it changes the number of a session
+// that cannot hold a link (T2.2.1). A session that already tracks #42 keeps it.
+func TestLegacyScanAndLinkPRURL_AccumulatesLinks(t *testing.T) {
+	t.Parallel()
+	const first = "remote:      https://github.com/acme/app/pull/42\n"
+	const second = "remote:      https://github.com/acme/app/pull/43\n"
+
+	inst := newPRTestInstance(t)
+	seen := scannedPRURLs{}
+
+	scanAndLinkPRURL(inst, true, seen, nil, first)
+	if got := attachNumbers(t, inst); len(got) != 1 || got[0] != 42 {
+		t.Fatalf("first scan: PRs = %v, want [42]", got)
+	}
+	scanAndLinkPRURL(inst, true, seen, nil, first+second)
+	if got := attachNumbers(t, inst); len(got) != 2 || got[0] != 42 || got[1] != 43 {
+		t.Errorf("second scan: PRs = %v, want [42 43] (a later push URL is scanned too)", got)
 	}
 }

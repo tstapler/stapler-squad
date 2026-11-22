@@ -1,4 +1,4 @@
-package session
+package driver
 
 // session_driver.go runs a background goroutine after a session is started to:
 //  1. Answer startup dialogs (trust-folder check, directory-access prompts) by
@@ -25,6 +25,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -298,9 +299,7 @@ func runSessionDriverWithPrompt(inst *instance.Instance, allowedPath string, ini
 
 	// Skips the per-tick capture-pane while the pane is provably unchanged (pane_activity_gate.go).
 	// Local tmux only: the snapshot is the local server's list-panes.
-	paneGate := newPaneActivityGate(func() map[string]time.Time {
-		return driverPaneSnapshot(inst.IsRemote())
-	}, time.Now, driverPaneActivityGateEnabled)
+	preview := session.NewDriverPreview(inst)
 
 	// PR URLs from terminal output that the scan has already handled.
 	scannedURLs := scannedPRURLs{}
@@ -355,7 +354,7 @@ func runSessionDriverWithPrompt(inst *instance.Instance, allowedPath string, ini
 
 		// Always check Preview for startup dialogs that appear before the status
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
-		output, previewErr := driverPreview(ctx, paneGate, inst)
+		output, previewErr := preview(ctx)
 		hasOutput := previewErr == nil && output != ""
 		// Tail-slice once per tick: Preview() returns the entire accumulated PTY
 		// buffer (not a tailed "current screen" snapshot, despite its doc comment),
@@ -420,7 +419,7 @@ func markInitialPromptIfAlreadySent(ctx context.Context, inst *instance.Instance
 		attempt.sentInitial = true
 		attempt.initialPromptSentAt = time.Now()
 		inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
-	} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
+	} else if _, err := session.FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 		attempt.sentInitial = true
 		attempt.initialPromptSentAt = time.Now()
 		inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
@@ -665,7 +664,7 @@ func sendInitialPromptTick(ctx context.Context, inst *instance.Instance, initial
 		return
 	}
 
-	if _, convErr := FindConversationFilePath(ctx, inst.GetStableID()); convErr == nil {
+	if _, convErr := session.FindConversationFilePath(ctx, inst.GetStableID()); convErr == nil {
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)
@@ -1033,7 +1032,7 @@ func handleDriverFailure(inst *instance.Instance, allowedPath string, policy ins
 	now := time.Now()
 	rs := inst.Snapshot().Retry
 
-	switch instance.EvaluateSessionRetry(rs, policy, reason, now, ServerStartTime) {
+	switch instance.EvaluateSessionRetry(rs, policy, reason, now, session.ServerStartTime) {
 	case instance.RetryDecisionScheduled:
 		nextAttempt := rs.RetryAttempt + 1
 		delay := instance.BackoffDelay(rs.RetryAttempt, policy.InitialDelay, policy.MaxDelay, instance.DefaultJitterFraction)

@@ -8,7 +8,7 @@ import (
 )
 
 func TestRaw(t *testing.T) {
-	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `raw session.StartSessionDriver`
+	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
 }
 
 func TestAnnotated(t *testing.T) {
@@ -23,7 +23,7 @@ func TestBareNolint(t *testing.T) {
 
 func TestTrailingCommentDoesNotCoverNextLine(t *testing.T) {
 	session.StartSessionDriver(&session.Instance{}, "/tmp") //nolint:nosessiondrivertest reason one
-	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `raw session.StartSessionDriver`
+	session.StartSessionDriver(&session.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
 }
 
 func TestMultiLineCallWithNolintAbove(t *testing.T) {
@@ -35,20 +35,20 @@ func TestMultiLineCallWithNolintAbove(t *testing.T) {
 }
 
 func TestAliased(t *testing.T) {
-	s.StartSessionDriver(&s.Instance{}, "/tmp") // want `raw session.StartSessionDriver`
+	s.StartSessionDriver(&s.Instance{}, "/tmp") // want `raw driver.StartSessionDriver`
 }
 
 func TestMethodValue(t *testing.T) {
-	f := session.StartSessionDriver // want `raw session.StartSessionDriver`
+	f := session.StartSessionDriver // want `raw driver.StartSessionDriver`
 	f(nil, "")
 }
 
 func TestGoStatement(t *testing.T) {
-	go session.StartSessionDriver(nil, "") // want `raw session.StartSessionDriver`
+	go session.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
 }
 
 func TestInRunClosure(t *testing.T) {
 	t.Run("sub", func(t *testing.T) {
-		session.StartSessionDriver(nil, "") // want `raw session.StartSessionDriver`
+		session.StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
 	})
 }

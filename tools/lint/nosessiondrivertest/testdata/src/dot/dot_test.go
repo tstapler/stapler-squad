@@ -7,5 +7,5 @@ import (
 )
 
 func TestDotImport(t *testing.T) {
-	StartSessionDriver(nil, "") // want `raw session.StartSessionDriver`
+	StartSessionDriver(nil, "") // want `raw driver.StartSessionDriver`
 }

@@ -1,0 +1,80 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "driver",
+    srcs = [
+        "driver_control.go",
+        "driver_prompt.go",
+        "driver_stall.go",
+        "session_driver.go",
+        "session_driver_tail.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/driver",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session",
+        "//session/detection",
+        "//session/domain",
+        "//session/instance",
+        "@com_github_spaolacci_murmur3//:murmur3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":driver",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "driver_test",
+    srcs = [
+        "driver_prompt_test.go",
+        "driver_stall_loop_test.go",
+        "driver_stall_test.go",
+        "helpers_test.go",
+        "instance_write_lease_driver_test.go",
+        "instance_write_lease_pty_test.go",
+        "retry_state_test.go",
+        "session_driver_attempt_test.go",
+        "session_driver_continuation_test.go",
+        "session_driver_pr_scan_test.go",
+        "session_driver_tail_test.go",
+        "session_driver_test.go",
+    ],
+    data = ["//session/detection:testdata"],
+    embed = [":driver"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//log",
+        "//session",
+        "//session/detection",
+        "//session/domain",
+        "//session/git",
+        "//session/instance",
+        "//session/internal/fixturetest",
+        "//session/internal/sessiontest",
+        "//session/queue",
+        "//session/tmux",
+        "//testutil/wait",
+        "@com_github_creack_pty//:pty",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_term//:term",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

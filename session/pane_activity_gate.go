@@ -204,3 +204,12 @@ func driverPreview(ctx context.Context, gate *paneActivityGate, inst *instance.I
 	}
 	return gate.preview(ctx, inst.GetTmuxSessionName(), inst.PreviewContext)
 }
+
+// NewDriverPreview returns inst's per-tick gated preview source for a session driver. The gate is
+// local tmux only: a remote instance has no local snapshot, so every tick captures.
+func NewDriverPreview(inst *instance.Instance) func(ctx context.Context) (string, error) {
+	gate := newPaneActivityGate(func() map[string]time.Time {
+		return driverPaneSnapshot(inst.IsRemote())
+	}, time.Now, driverPaneActivityGateEnabled)
+	return func(ctx context.Context) (string, error) { return driverPreview(ctx, gate, inst) }
+}

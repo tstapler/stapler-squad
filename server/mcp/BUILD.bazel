@@ -192,6 +192,7 @@ go_test(
         "//session/backlogstore",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/driver",
         "//session/flow",
         "//session/git",
         "//session/headless",

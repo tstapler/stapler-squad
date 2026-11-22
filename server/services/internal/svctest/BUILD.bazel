@@ -53,6 +53,7 @@ go_library(
         "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/driver",
         "//session/headless",
         "//session/hostclaim",
         "//session/instance",
