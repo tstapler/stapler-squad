@@ -399,7 +399,7 @@ func buildTemplatedPrompt(wf *ent.Workflow, arg string, sessionTitle string) str
 //
 // deliveryID identifies the inbound webhook delivery that caused this fire, or "" for
 // FireNow's manual/cron callers. It is significant to the audit trail: webhook callers
-// (server/services/webhook_trigger_common.go's claimAndFireTrigger /
+// (server/services/webhooktrigger/webhook_trigger_common.go's claimAndFireTrigger /
 // renderAndFireTrigger) already claim a "pending" TriggerFireEvent row for
 // (wf.ID, deliveryID) via TriggerFireEventRepository.Create *before* calling
 // FireTrigger, and update that same row's outcome themselves once FireTrigger returns

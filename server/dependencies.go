@@ -204,7 +204,7 @@ type ServerDependencies struct {
 	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
 	// BacklogLifecycleListener drives backlog item state transitions and, via its
-	// TriggerPRFixForEvent method, satisfies services.PRFixEventRouter for the
+	// TriggerPRFixForEvent method, satisfies webhooktrigger.PRFixEventRouter for the
 	// pr-event-webhooks feature (immediate PR-fix reconciliation on a GitHub
 	// webhook delivery, instead of waiting for PRStatusPoller's next tick).
 	BacklogLifecycleListener *backlog.BacklogLifecycleListener
@@ -706,7 +706,7 @@ type RuntimeDeps struct {
 	// (Story 2.2.1). Nil when storage is not ent-backed.
 	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
-	// BacklogLifecycleListener satisfies services.PRFixEventRouter for the
+	// BacklogLifecycleListener satisfies webhooktrigger.PRFixEventRouter for the
 	// pr-event-webhooks feature — see the identical field's doc comment on
 	// ServerDependencies above.
 	BacklogLifecycleListener *backlog.BacklogLifecycleListener

@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -27,7 +29,7 @@ const (
 )
 
 type mgmtHarness struct {
-	infra   *webhookTestInfra
+	infra   *svctest.WebhookTestInfra
 	svc     *WebhookRegistrationService
 	handler *WebhookRegistrationHandler
 	mux     *http.ServeMux
@@ -40,15 +42,15 @@ type mgmtHarness struct {
 
 func newMgmtHarness(t *testing.T) *mgmtHarness {
 	t.Helper()
-	infra := newWebhookTestInfra(t)
-	svc := NewWebhookRegistrationService(infra.entRepo, infra.cfg, testMgmtWorkspace, true)
+	infra := svctest.NewWebhookTestInfra(t)
+	svc := NewWebhookRegistrationService(infra.EntRepo, infra.Cfg, testMgmtWorkspace, true)
 	mux := http.NewServeMux()
 	handler := NewWebhookRegistrationHandler(svc)
 	handler.RegisterRoutes(mux)
-	NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg).RegisterRoutes(mux)
+	webhooktrigger.NewGenericWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg).RegisterRoutes(mux)
 
 	root := t.TempDir()
-	token, err := infra.entRepo.IssueIntegrationCredential(context.Background(),
+	token, err := infra.EntRepo.IssueIntegrationCredential(context.Background(),
 		session.IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: root})
 	require.NoError(t, err)
 	return &mgmtHarness{infra: infra, svc: svc, handler: handler, mux: mux, root: root, token: token}
@@ -124,7 +126,7 @@ func (h *mgmtHarness) deliver(t *testing.T, slug, secret string) *httptest.Respo
 	t.Helper()
 	body := []byte(`{"type":"pull_request.opened","event":"x"}`)
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/"+slug, bytes.NewReader(body))
-	req.Header.Set("X-Webhook-Signature", sign(secret, body))
+	req.Header.Set("X-Webhook-Signature", svctest.SignWebhook(secret, body))
 	rec := httptest.NewRecorder()
 	h.mux.ServeHTTP(rec, req)
 	return rec
@@ -132,7 +134,7 @@ func (h *mgmtHarness) deliver(t *testing.T, slug, secret string) *httptest.Respo
 
 func workflowCount(t *testing.T, h *mgmtHarness) int {
 	t.Helper()
-	n, err := h.infra.entRepo.GetEntClient().Workflow.Query().Count(context.Background())
+	n, err := h.infra.EntRepo.GetEntClient().Workflow.Query().Count(context.Background())
 	require.NoError(t, err)
 	return n
 }
@@ -171,7 +173,7 @@ func TestWebhookManagement_ExecutionTemplateLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
 	check(created, fields)
 	check(h.do(t, http.MethodGet, mgmtBase+testInstance, h.token, nil), fields)
-	wf, err := h.infra.entRepo.GetEntClient().Workflow.Query().Only(context.Background())
+	wf, err := h.infra.EntRepo.GetEntClient().Workflow.Query().Only(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"review {{input}}", "new_worktree", "family:sonnet", "claude"}, []string{wf.InputTemplate, wf.SessionType, wf.Model, wf.AgentType})
 	retry := post("exec-create-001", 0, testMgmtSecret, fields)
@@ -245,7 +247,7 @@ func TestWebhookManagement_LegacyFingerprintAndLedgerReplay(t *testing.T) {
 	assert.Equal(t, keyedHex(macKey, []byte(canonical)), in.Fingerprint)
 	created := h.reconcile(t, h.token, req)
 	require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
-	c := h.infra.entRepo.GetEntClient()
+	c := h.infra.EntRepo.GetEntClient()
 	row, err := c.WebhookRequestLedger.Query().Only(context.Background())
 	require.NoError(t, err)
 	var stored map[string]any
@@ -273,8 +275,8 @@ func TestWebhookManagement_LegacyFingerprintAndLedgerReplay(t *testing.T) {
 
 func TestWebhookManagement_should_Return401Uniformly_When_CredentialIsNotValid(t *testing.T) {
 	h := newMgmtHarness(t)
-	require.NoError(t, h.infra.entRepo.RevokeIntegrationCredential(context.Background(), "gh-signal"))
-	otherWS, err := h.infra.entRepo.IssueIntegrationCredential(context.Background(),
+	require.NoError(t, h.infra.EntRepo.RevokeIntegrationCredential(context.Background(), "gh-signal"))
+	otherWS, err := h.infra.EntRepo.IssueIntegrationCredential(context.Background(),
 		session.IntegrationCredentialInfo{PrincipalID: "elsewhere", WorkspaceID: "some-other-workspace", AllowedDirRoot: h.root})
 	require.NoError(t, err)
 
@@ -328,19 +330,19 @@ func TestWebhookManagement_should_ProvisionRegistrationThatAcceptsSignedDeliveri
 
 	ok := h.deliver(t, "gh-signal-events", testMgmtSecret)
 	assert.Equal(t, http.StatusOK, ok.Code, ok.Body.String())
-	assert.Equal(t, int32(1), h.infra.sessionSvc.callCount.Load(), "a correctly signed delivery must fire the workflow")
-	assert.Contains(t, h.infra.sessionSvc.LastRequest().InitialPrompt, "event pull_request.opened")
+	assert.Equal(t, int32(1), h.infra.SessionSvc.CallCount.Load(), "a correctly signed delivery must fire the workflow")
+	assert.Contains(t, h.infra.SessionSvc.LastRequest().InitialPrompt, "event pull_request.opened")
 
 	bad := h.deliver(t, "gh-signal-events", "wrong-secret-wrong-secret-wrong-secret")
 	assert.Equal(t, http.StatusUnauthorized, bad.Code)
-	assert.Equal(t, int32(1), h.infra.sessionSvc.callCount.Load(), "a badly signed delivery must not fire")
+	assert.Equal(t, int32(1), h.infra.SessionSvc.CallCount.Load(), "a badly signed delivery must not fire")
 }
 
 func TestWebhookManagement_should_NeverStoreSecretInPlaintext_When_RegistrationCreated(t *testing.T) {
 	h := newMgmtHarness(t)
 	require.Equal(t, http.StatusCreated, h.reconcile(t, h.token, h.reconcileReq("req-00000001", 0, testMgmtSecret)).Code)
 	ctx := context.Background()
-	c := h.infra.entRepo.GetEntClient()
+	c := h.infra.EntRepo.GetEntClient()
 
 	wfs, err := c.Workflow.Query().All(ctx) //nolint:entfullscan inspect every row in the isolated fixture for plaintext secret leakage
 	require.NoError(t, err)
@@ -441,7 +443,7 @@ func TestWebhookManagement_should_ReportUnchanged_When_DesiredStateAlreadyHolds(
 func TestWebhookManagement_should_HideAndProtectRegistration_When_AnotherPrincipalProbesIt(t *testing.T) {
 	h := newMgmtHarness(t)
 	require.Equal(t, http.StatusCreated, h.reconcile(t, h.token, h.reconcileReq("req-00000001", 0, testMgmtSecret)).Code)
-	other, err := h.infra.entRepo.IssueIntegrationCredential(context.Background(),
+	other, err := h.infra.EntRepo.IssueIntegrationCredential(context.Background(),
 		session.IntegrationCredentialInfo{PrincipalID: "intruder", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: h.root})
 	require.NoError(t, err)
 
@@ -460,13 +462,13 @@ func TestWebhookManagement_should_HideAndProtectRegistration_When_AnotherPrincip
 
 func TestWebhookManagement_should_PreserveUserManagedWebhook_When_RegistrationTargetsItsSlug(t *testing.T) {
 	h := newMgmtHarness(t)
-	user := newGenericWebhookWorkflow(t, h.infra, "gh-signal-events", "users-own-secret", "", "", "user template")
+	user := svctest.NewGenericWebhookWorkflow(t, h.infra, "gh-signal-events", "users-own-secret", "", "", "user template")
 
 	rec := h.reconcile(t, h.token, h.reconcileReq("req-00000001", 0, testMgmtSecret))
 
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Equal(t, "SLUG_UNAVAILABLE", errCode(t, rec))
-	after, err := h.infra.workflowRepo.GetByID(context.Background(), user.ID)
+	after, err := h.infra.WorkflowRepo.GetByID(context.Background(), user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, user.WebhookSecretEncrypted, after.WebhookSecretEncrypted)
 	assert.Equal(t, user.PromptTemplate, after.PromptTemplate)
@@ -539,7 +541,7 @@ func TestWebhookManagement_should_RejectMalformedBodies_When_StrictDecodingViola
 
 func TestWebhookManagement_should_RefuseToCreate_When_ReceiverIsNotEnabled(t *testing.T) {
 	h := newMgmtHarness(t)
-	svc := NewWebhookRegistrationService(h.infra.entRepo, h.infra.cfg, testMgmtWorkspace, false)
+	svc := NewWebhookRegistrationService(h.infra.EntRepo, h.infra.Cfg, testMgmtWorkspace, false)
 	mux := http.NewServeMux()
 	NewWebhookRegistrationHandler(svc).RegisterRoutes(mux)
 	h.mux = mux

@@ -89,12 +89,6 @@ type SessionSteerer interface {
 	SteerSessionGuarded(ctx context.Context, sessionUUID, sig, message string) (SteerOutcome, error)
 }
 
-// crossHostClaimDedupFlagName gates every cross-host claim check. Off by
-// default: with it off, creation and dequeue behave exactly as they did before
-// the claim substrate existed. Claim recording (Storage.CreateBacklogItem) is
-// always on.
-const CrossHostClaimDedupFlagName = "cross_host_claim_dedup"
-
 type transitionCallerKey struct{}
 
 // WithTransitionCaller names the registered operator caller of an RPC that

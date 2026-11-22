@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -36,13 +37,13 @@ func provenanceComments(t *testing.T) ([]github.PRComment, hostclaim.HostID) {
 	return []github.PRComment{{Body: "lgtm"}, {Body: stamp}, {Body: "CI is red"}}, identity.ID
 }
 
-func newProvenanceWebhookHandler(t *testing.T, router PRFixEventRouter, lister *countingCommentLister, dedupFlag bool) (*GitHubWebhookHandler, *webhookTestInfra) {
+func newProvenanceWebhookHandler(t *testing.T, router PRFixEventRouter, lister *countingCommentLister, dedupFlag bool) (*GitHubWebhookHandler, *svctest.WebhookTestInfra) {
 	t.Helper()
-	infra := newWebhookTestInfra(t)
-	infra.cfg.FeatureFlags["pr_event_webhooks"] = true
-	infra.cfg.FeatureFlags[CrossHostClaimDedupFlagName] = dedupFlag
+	infra := svctest.NewWebhookTestInfra(t)
+	infra.Cfg.FeatureFlags["pr_event_webhooks"] = true
+	infra.Cfg.FeatureFlags[featureflags.CrossHostClaimDedupFlagName] = dedupFlag
 	newGitHubPushWorkflow(t, infra, "gh-prov", "s3cr3t", "tstapler/stapler-squad", "main", "x")
-	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, router, nil)
+	h := NewGitHubWebhookHandler(infra.WorkflowRepo, infra.Scheduler, infra.FireEvents, infra.Cfg, router, nil)
 	prev := provenanceReader
 	provenanceReader = newPRProvenanceReader(lister.list)
 	t.Cleanup(func() { provenanceReader = prev })

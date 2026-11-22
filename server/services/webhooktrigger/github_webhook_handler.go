@@ -1,4 +1,4 @@
-package services
+package webhooktrigger
 
 import (
 	"context"
@@ -110,7 +110,7 @@ func (h *GitHubWebhookHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// X-GitHub-Event branching (Story 2.1.1): "" is kept as a synonym for "push" since
 	// the existing push-path tests don't set the header at all. Any of the 4 new
-	// PR-fix event types dispatch to handlePRFixEvent (server/services/github_webhook_pr_fix.go);
+	// PR-fix event types dispatch to handlePRFixEvent (server/services/webhooktrigger/github_webhook_pr_fix.go);
 	// anything else (e.g. GitHub's own "ping" delivery on webhook setup) needs no
 	// signature verification or persistence and just succeeds trivially.
 	switch eventType := r.Header.Get("X-GitHub-Event"); {

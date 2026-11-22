@@ -127,7 +127,7 @@ jobs:
           # goroutine under CPU contention (see session/instance_tmux_test.go).
           # Fixed by leaving the real 30s default delay in place; validated with a
           # clean -race run of all three packages together sans -p 1.
-          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           run_test_suite() {
             TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=20m -coverprofile=coverage.tmux.out \
               -covermode=atomic ./session ./session/mux ./session/tmux \
@@ -212,7 +212,7 @@ jobs:
           STAPLER_SQUAD_TMUX_CREATE_TIMEOUT_SECONDS: "30"
           FIDELITY_REQUIRE_ORACLE: "1"
         run: |
-          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           run_test_suite() {
             REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
             # REST_TEST_PKGS is deliberately unquoted below: it's a
