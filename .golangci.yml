@@ -632,6 +632,8 @@ linters:
             - "!**/server/services/webhooktrigger/webhook_trigger_common.go"
             - "!**/server/services/webhooktrigger/github_webhook_handler_test.go"
             - "!**/server/services/webhooktrigger/generic_webhook_handler_test.go"
+            # The shared webhook fixture returns the *ent.Workflow rows the handlers read (moved from generic_webhook_handler_test.go).
+            - "!**/server/services/internal/svctest/webhook_infra.go"
             # handoff_summary_service_test.go legitimately needs raw ent access
             # to construct precise fixtures (e.g. a stale GENERATING row with a
             # controlled generation_started_at in the past) that the generator's
