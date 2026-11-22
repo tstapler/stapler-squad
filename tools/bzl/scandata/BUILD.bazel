@@ -5,6 +5,7 @@ go_library(
     name = "scandata_lib",
     srcs = [
         "consumers.go",
+        "leaves.go",
         "main.go",
         "module.go",
         "nobuild.go",
@@ -22,7 +23,10 @@ go_binary(
 
 go_test(
     name = "scandata_test",
-    srcs = ["main_test.go"],
+    srcs = [
+        "fix_test.go",
+        "main_test.go",
+    ],
     embed = [":scandata_lib"],
     deps = ["@com_github_stretchr_testify//require"],
 )

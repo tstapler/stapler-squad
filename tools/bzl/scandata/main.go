@@ -14,7 +14,9 @@
 // BUILD.bazel (listed in tools/bzl/no-build-packages.txt).
 //
 // Usage: scandata [-fix] [repo-root]. -fix appends missing go_sources
-// filegroups and regenerates the aggregator.
+// filegroups, adds session/ leaf labels to both scanner data lists and
+// regenerates the aggregator, whose visibility is the scanners plus every
+// package whose BUILD.bazel references it.
 package main
 
 import (
@@ -65,7 +67,7 @@ func main() {
 	}
 }
 
-// printFooter gives each class of problem its own remedy: -fix only adds filegroups and the aggregator.
+// printFooter gives each class of problem its own remedy: -fix adds filegroups, session leaf data entries and the aggregator.
 func printFooter(problems []string) {
 	fmt.Fprintf(os.Stderr, "scandata: %d problem(s).\n", len(problems))
 	var fixable, visibility bool
@@ -77,8 +79,8 @@ func printFooter(problems []string) {
 		}
 	}
 	if fixable {
-		fmt.Fprintln(os.Stderr, "Run `go run ./tools/bzl/scandata -fix .` to add missing go_sources filegroups and regenerate the aggregator\n"+
-			"(a session/ leaf also needs its label in the go_test data of session/BUILD.bazel and server/services/BUILD.bazel).")
+		fmt.Fprintln(os.Stderr, "Run `go run ./tools/bzl/scandata -fix .` to add missing go_sources filegroups (including session/ leaves and their\n"+
+			"label in the go_test data of session/BUILD.bazel and server/services/BUILD.bazel) and regenerate the aggregator.")
 	}
 	if visibility {
 		fmt.Fprintln(os.Stderr, "For a go_sources reference that is not visible: -fix does not change visibility. Add the referencing package's\n"+
