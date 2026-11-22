@@ -382,17 +382,6 @@ func newFakeTmuxSocketQuerier() *fakeTmuxSocketQuerier {
 	}
 }
 
-// setLiveSessions declares that exactly these session names are alive on serverSocket.
-func (f *fakeTmuxSocketQuerier) setLiveSessions(serverSocket string, names ...string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	set := make(map[string]bool, len(names))
-	for _, n := range names {
-		set[n] = true
-	}
-	f.sessions[serverSocket] = set
-}
-
 func (f *fakeTmuxSocketQuerier) setDown(serverSocket string, down bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
