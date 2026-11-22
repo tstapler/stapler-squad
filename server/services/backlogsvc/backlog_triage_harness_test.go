@@ -1,32 +1,32 @@
 //go:build harness
 
-package services
+package backlogsvc
 
 // Headless triage test harness — no browser or UI required.
 //
 // Run all phases (fake pool, fast):
 //
-//	go test -v -tags=harness -run TestTriageHarness ./server/services/
+//	go test -v -tags=harness -run TestTriageHarness ./server/services/backlogsvc/
 //
 // Run a specific phase (fake pool):
 //
-//	go test -v -tags=harness -run TestTriageHarness/Gate            ./server/services/
-//	go test -v -tags=harness -run TestTriageHarness/TriggerAndPoll  ./server/services/
-//	go test -v -tags=harness -run TestTriageHarness/ParserRobust    ./server/services/
-//	go test -v -tags=harness -run TestTriageHarness/FullFlow        ./server/services/
+//	go test -v -tags=harness -run TestTriageHarness/Gate            ./server/services/backlogsvc/
+//	go test -v -tags=harness -run TestTriageHarness/TriggerAndPoll  ./server/services/backlogsvc/
+//	go test -v -tags=harness -run TestTriageHarness/ParserRobust    ./server/services/backlogsvc/
+//	go test -v -tags=harness -run TestTriageHarness/FullFlow        ./server/services/backlogsvc/
 //
 // Run with a real Claude session (requires claude in PATH, ~30s with fast prompt):
 //
-//	go test -v -tags=harness -run TestTriageHarness_RealClaude      ./server/services/ -timeout 5m
+//	go test -v -tags=harness -run TestTriageHarness_RealClaude      ./server/services/backlogsvc/ -timeout 5m
 
 import (
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -37,6 +37,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -45,7 +46,7 @@ import (
 // behind an httptest.Server. Returns a typed client and the service itself.
 func setupTriageHarness(t *testing.T, pool headless.PoolClient) (sessionv1connect.BacklogServiceClient, *BacklogService) {
 	t.Helper()
-	svc := NewBacklogService(createTestStorage(t), nil, nil, nil, nil, nil)
+	svc := NewBacklogService(svctest.CreateTestStorage(t), nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 	t.Cleanup(svc.Shutdown)
 
@@ -256,23 +257,9 @@ func checkPoolStartAllowed(t *testing.T) {
 	if runErr := cmd.Run(); runErr != nil {
 		if strings.Contains(runErr.Error(), "operation not permitted") ||
 			strings.Contains(runErr.Error(), "permission denied") {
-			t.Skip("subprocess with Setsid blocked by seccomp sandbox — run this test from a real terminal:\n\tgo test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m")
+			t.Skip("subprocess with Setsid blocked by seccomp sandbox — run this test from a real terminal:\n\tgo test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/backlogsvc/ -timeout 5m")
 		}
 		t.Fatalf("pool start pre-check failed unexpectedly: %v", runErr)
-	}
-}
-
-// initGitRepo initialises a minimal git repository in dir so claude has a valid
-// WorkDir with version control context. Without this, claude may exit immediately
-// on some systems that require a git repo for project-context features. Uses
-// go-git directly rather than shelling out — see
-// the `prefer-go-git-over-subshells` skill.
-func initGitRepo(t *testing.T, dir string) {
-	t.Helper()
-	initGitRepoForTest(t, dir)
-	// A minimal, uncommitted README so the working tree is non-empty.
-	if err := os.WriteFile(dir+"/README.md", []byte("# Test Repo\n"), 0o644); err != nil {
-		t.Skipf("write README: %v", err)
 	}
 }
 
@@ -282,6 +269,17 @@ func initGitRepo(t *testing.T, dir string) {
 // ~60s while still exercising the real claude binary and the full service pipeline.
 type fastTriagePool struct {
 	pool *headless.Pool
+
+	mu      sync.Mutex
+	lastErr error
+}
+
+// notLoggedIn reports whether the last real call failed because the claude
+// binary has no usable credentials in this environment.
+func (p *fastTriagePool) notLoggedIn() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastErr != nil && strings.Contains(p.lastErr.Error(), "Not logged in")
 }
 
 // fastTriageSystemPrompt asks claude for direct JSON output with no tool use.
@@ -310,7 +308,11 @@ func (p *fastTriagePool) CallBlocking(
 ) (string, error) {
 	// Strip WorkDir — the fast prompt doesn't need git context.
 	opts.WorkDir = ""
-	return p.pool.CallBlocking(ctx, key, fastTriageSystemPrompt, fastTriageUserPrompt, opts, sink)
+	out, err := p.pool.CallBlocking(ctx, key, fastTriageSystemPrompt, fastTriageUserPrompt, opts, sink)
+	p.mu.Lock()
+	p.lastErr = err
+	p.mu.Unlock()
+	return out, err
 }
 
 // TestTriageHarness_RealClaude exercises the full triage pipeline against a live Claude
@@ -322,7 +324,7 @@ func (p *fastTriagePool) CallBlocking(
 //
 // Run with:
 //
-//	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
+//	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/backlogsvc/ -timeout 5m
 func TestTriageHarness_RealClaude(t *testing.T) {
 	t.Parallel()
 	// Skip if the process sandbox blocks Setsid — headless pool will fail immediately.
@@ -338,7 +340,8 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wrap the real pool with the fast system prompt override.
-	client, _ := setupTriageHarness(t, &fastTriagePool{pool: realPool})
+	fastPool := &fastTriagePool{pool: realPool}
+	client, _ := setupTriageHarness(t, fastPool)
 
 	// Redirect ssqlog.ErrorLog to a buffer so we can surface service errors in t.Log.
 	// RedirectLogger's SyncBuffer (not a raw bytes.Buffer) is required here: this
@@ -390,6 +393,9 @@ func TestTriageHarness_RealClaude(t *testing.T) {
 	require.NoError(t, getErr)
 
 	item := getResp.Msg.Item
+	if fastPool.notLoggedIn() {
+		t.Skip("claude binary is on PATH but reports \"Not logged in\" under the harness — run `claude /login` first")
+	}
 	require.NotEmpty(t, item.ItemSessions, "item must have a triage session")
 	is := item.ItemSessions[0]
 
