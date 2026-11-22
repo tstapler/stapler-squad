@@ -102,6 +102,7 @@ go_test(
         "identity_context_test.go",
         "import_set_guard_test.go",
         "logging_test.go",
+        "main_test.go",
         "proxy_proof_test.go",
         "proxy_test.go",
         "rate_limiter_test.go",

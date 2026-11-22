@@ -51,10 +51,19 @@ func newWorktreeGuardHandlers(t *testing.T, occupants ...*instance.Instance) *li
 	storage := newTestBacklogStorage(t)
 	bus := events.NewEventBus(16)
 	svc := services.NewSessionService(storage, bus)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
+	// Registered first so it runs after Shutdown: Shutdown joins the async creation pipeline
+	// that starts a created session's driver, which would otherwise keep polling config.json
+	// from the process-wide state dir after this test's TempDir is gone.
+	t.Cleanup(func() {
+		for _, inst := range poller.GetInstances() {
+			instance.StopSessionDriver(inst)
+			instance.JoinSessionDriver(inst)
+		}
+	})
 	t.Cleanup(func() { bus.Close() })
 	t.Cleanup(func() { svc.Shutdown() })
 
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	poller.SetInstances(occupants)
 	svc.SetReviewQueuePoller(poller)
 

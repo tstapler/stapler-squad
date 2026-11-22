@@ -291,6 +291,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.StopPRMaintenance != nil {
 		srv.joinAfterCancel(serverCtx, deps.StopPRMaintenance)
 	}
+	if deps.StopBootInit != nil {
+		srv.joinAfterCancel(serverCtx, deps.StopBootInit)
+	}
 
 	if deps.SessionTagClassificationPoller != nil {
 		deps.SessionTagClassificationPoller.Start(serverCtx)
