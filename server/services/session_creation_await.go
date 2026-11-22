@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -14,31 +13,6 @@ import (
 // implementation) so they stay fast and deterministic without waiting out a
 // real 250ms cadence — see Story 2.3.3c.
 const creationAwaitPollInterval = 250 * time.Millisecond
-
-// ErrCreationAwaitTimeout is returned by AwaitCreationTerminal when timeout
-// elapses before the watched instance reaches a terminal status (Active or
-// Failed). Distinct from ErrCreationVanished: the instance is still present
-// and (from this reader's point of view) genuinely still resolving.
-var ErrCreationAwaitTimeout = errors.New("timed out waiting for session creation to reach a terminal status")
-
-// ErrCreationVanished is returned by AwaitCreationTerminal when the watched
-// instance, previously observed to exist, disappears mid-wait — the
-// signature of a concurrent CancelSessionCreation deleting the row rather
-// than writing a terminal status. Distinct from ErrCreationAwaitTimeout: the
-// instance is gone, not merely slow.
-var ErrCreationVanished = errors.New("session creation was cancelled while waiting for it to complete")
-
-// CreationOutcome is the atomic snapshot AwaitCreationTerminal returns on its
-// terminal-status exit. Status and FailureReason are captured together in one
-// actor round-trip (session.Instance.StatusAndFailureReason) so the pair can
-// never straddle an intervening TryStartRetry/TryForceStatusIfEpoch write —
-// see the Domain Glossary entry in project_plans/async-session-creation for
-// why a second, separate re-read of Status()/FailureReason() would be unsafe.
-type CreationOutcome struct {
-	Status        domain.Status
-	FailureReason string
-	InstanceID    string
-}
 
 // isTerminalCreationStatus reports whether status is a terminal outcome of
 // the Background Resolution Pipeline: the instance either made it to
@@ -57,17 +31,17 @@ func isTerminalCreationStatus(status domain.Status) bool {
 // ADR-002 already guarantees exactly one terminal writer for.
 //
 // Returns:
-//   - (CreationOutcome{Status, FailureReason, InstanceID}, nil) as soon as the
+//   - (domain.CreationOutcome{Status, FailureReason, InstanceID}, nil) as soon as the
 //     polled instance's status is terminal (Active/Running or Failed). Status
 //     and FailureReason come from the same poll iteration's atomic read —
 //     never re-read afterward.
-//   - (CreationOutcome{}, ErrCreationAwaitTimeout) if timeout elapses first.
-//   - (CreationOutcome{}, ErrCreationVanished) if the instance, previously
+//   - (domain.CreationOutcome{}, domain.ErrCreationAwaitTimeout) if timeout elapses first.
+//   - (domain.CreationOutcome{}, domain.ErrCreationVanished) if the instance, previously
 //     found, is no longer found by FindLiveInstance (a concurrent
 //     CancelSessionCreation removed it).
-//   - (CreationOutcome{}, ctx.Err()) if the caller's own ctx is done first —
+//   - (domain.CreationOutcome{}, ctx.Err()) if the caller's own ctx is done first —
 //     returned as-is, not wrapped in a sentinel.
-func (s *SessionService) AwaitCreationTerminal(ctx context.Context, instanceID string, timeout time.Duration) (CreationOutcome, error) {
+func (s *SessionService) AwaitCreationTerminal(ctx context.Context, instanceID string, timeout time.Duration) (domain.CreationOutcome, error) {
 	return s.awaitCreationTerminal(ctx, instanceID, timeout, creationAwaitPollInterval)
 }
 
@@ -81,7 +55,7 @@ func (s *SessionService) awaitCreationTerminal(
 	instanceID string,
 	timeout time.Duration,
 	pollInterval time.Duration,
-) (CreationOutcome, error) {
+) (domain.CreationOutcome, error) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(pollInterval)
@@ -89,24 +63,24 @@ func (s *SessionService) awaitCreationTerminal(
 
 	// seenAlive tracks whether FindLiveInstance has ever found instanceID, so a
 	// caller-supplied ID that never existed at all (a caller bug) times out
-	// rather than being misreported as ErrCreationVanished — that sentinel is
+	// rather than being misreported as domain.ErrCreationVanished — that sentinel is
 	// reserved for "existed, then was removed."
 	var seenAlive bool
 
-	checkOnce := func() (CreationOutcome, error, bool) {
+	checkOnce := func() (domain.CreationOutcome, error, bool) {
 		inst := s.FindLiveInstance(instanceID)
 		if inst == nil {
 			if seenAlive {
-				return CreationOutcome{}, ErrCreationVanished, true
+				return domain.CreationOutcome{}, domain.ErrCreationVanished, true
 			}
-			return CreationOutcome{}, nil, false
+			return domain.CreationOutcome{}, nil, false
 		}
 		seenAlive = true
 		status, failureReason := inst.StatusAndFailureReason()
 		if !isTerminalCreationStatus(status) {
-			return CreationOutcome{}, nil, false
+			return domain.CreationOutcome{}, nil, false
 		}
-		return CreationOutcome{
+		return domain.CreationOutcome{
 			Status:        status,
 			FailureReason: failureReason,
 			InstanceID:    instanceID,
@@ -123,9 +97,9 @@ func (s *SessionService) awaitCreationTerminal(
 	for {
 		select {
 		case <-ctx.Done():
-			return CreationOutcome{}, ctx.Err()
+			return domain.CreationOutcome{}, ctx.Err()
 		case <-deadline.C:
-			return CreationOutcome{}, ErrCreationAwaitTimeout
+			return domain.CreationOutcome{}, domain.ErrCreationAwaitTimeout
 		case <-ticker.C:
 			if outcome, err, done := checkOnce(); done {
 				return outcome, err

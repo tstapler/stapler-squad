@@ -21,11 +21,11 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -2528,7 +2528,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		// Same live check the web import runs; a disabled flag, an error or an
 		// indeterminate result never blocks (LookupCrossHostClaim reports those
 		// as unclaimed or an error we ignore).
-		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == hostclaim.ClaimHeldByOther {
 			return errResult(ErrInvalidArgument,
 				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", issue.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
 				"Open that link to see the owning item, or import from the web UI with an override reason."), nil

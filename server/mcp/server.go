@@ -10,7 +10,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -123,7 +122,7 @@ func newCoreConfig(opts []CoreOption) coreConfig {
 // opts carry optional dependencies (see CoreOption).
 func NewCore(
 	store session.InstanceStore,
-	svc *services.SessionService,
+	svc SessionRPC,
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
@@ -157,7 +156,7 @@ func NewCore(
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore.
 func NewHTTPHandler(
 	store session.InstanceStore,
-	svc *services.SessionService,
+	svc SessionRPC,
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
@@ -188,7 +187,7 @@ func NewHTTPHandler(
 func RunServer(
 	ctx context.Context,
 	store session.InstanceStore,
-	svc *services.SessionService,
+	svc SessionRPC,
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,

@@ -52,7 +52,7 @@ func appendNotification(t *testing.T, store *notifications.NotificationHistorySt
 
 func TestGetNotificationHistory_ReturnsFilteredRecords_When_TypeFilterApplied(t *testing.T) {
 	h := newTestNotificationHandlers(t)
-	store := h.svc.GetNotificationStore()
+	store := h.svc.(*services.SessionService).GetNotificationStore()
 
 	appendNotification(t, store, "sess-1", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
 	appendNotification(t, store, "sess-2", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR), false)
@@ -82,7 +82,7 @@ func TestGetNotificationHistory_ReturnsInvalidArgument_When_TypeFilterUnknown(t 
 
 func TestGetNotificationHistory_ReturnsAndedResults_When_UnreadOnlyAndTypeFilterCombined(t *testing.T) {
 	h := newTestNotificationHandlers(t)
-	store := h.svc.GetNotificationStore()
+	store := h.svc.(*services.SessionService).GetNotificationStore()
 
 	for i := 0; i < 5; i++ {
 		appendNotification(t, store, uuid.New().String(), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
@@ -106,7 +106,7 @@ func TestGetNotificationHistory_ReturnsAndedResults_When_UnreadOnlyAndTypeFilter
 
 func TestGetNotificationHistory_ReturnsDefaultLimitOf10_When_NoLimitArgGiven(t *testing.T) {
 	h := newTestNotificationHandlers(t)
-	store := h.svc.GetNotificationStore()
+	store := h.svc.(*services.SessionService).GetNotificationStore()
 	for i := 0; i < 100; i++ {
 		appendNotification(t, store, uuid.New().String(), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
 	}
@@ -122,7 +122,7 @@ func TestGetNotificationHistory_ReturnsDefaultLimitOf10_When_NoLimitArgGiven(t *
 
 func TestGetNotificationHistory_ReturnsFilteredRecords_When_SessionIDFilterApplied(t *testing.T) {
 	h := newTestNotificationHandlers(t)
-	store := h.svc.GetNotificationStore()
+	store := h.svc.(*services.SessionService).GetNotificationStore()
 
 	appendNotification(t, store, "sess-a", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
 	appendNotification(t, store, "sess-b", int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
@@ -140,7 +140,7 @@ func TestGetNotificationHistory_ReturnsFilteredRecords_When_SessionIDFilterAppli
 
 func TestGetNotificationHistory_ClampsLimitAboveMax(t *testing.T) {
 	h := newTestNotificationHandlers(t)
-	store := h.svc.GetNotificationStore()
+	store := h.svc.(*services.SessionService).GetNotificationStore()
 	for i := 0; i < 60; i++ {
 		appendNotification(t, store, uuid.New().String(), int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE), false)
 	}

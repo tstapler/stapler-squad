@@ -14,7 +14,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -36,7 +35,7 @@ const mcpAwaitTerminalTimeout = 150 * time.Second
 
 type lifecycleHandlers struct {
 	store session.InstanceStore
-	svc   *services.SessionService
+	svc   SessionLifecycle
 	// diagnoseCheck gates resume_session away from a dispatched Diagnose &
 	// Nudge session — see diagnose_role_gate.go's denyIfDiagnoseCaller. May
 	// be nil (no restriction applied; matches pre-fix behavior).
@@ -231,7 +230,7 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 	uiURL := sessionUIURL(lh.publicURL, sessionID)
 
 	outcome, awaitErr := lh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
-	if errors.Is(awaitErr, services.ErrCreationAwaitTimeout) {
+	if errors.Is(awaitErr, domain.ErrCreationAwaitTimeout) {
 		return okResult(CreateSessionResult{
 			MCPResult: MCPResult{Success: true},
 			Session: &SessionDetail{SessionSummary: SessionSummary{
@@ -259,17 +258,17 @@ func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, 
 	}
 
 	// Hook injection: inject permission_approval hook (always) + any requested hooks.
-	var hookNames []services.HookName
+	var hookNames []string
 	if rawHooks, ok := args["hooks"]; ok {
 		if arr, ok := rawHooks.([]interface{}); ok {
 			for _, v := range arr {
 				if s, ok := v.(string); ok {
-					hookNames = append(hookNames, services.HookName(s))
+					hookNames = append(hookNames, s)
 				}
 			}
 		}
 	}
-	if err := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, hookNames); err != nil {
+	if err := lh.svc.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, hookNames); err != nil {
 		log.Warn("mcp hook injection failed for session", "title", title, "err", err)
 	}
 
@@ -359,7 +358,7 @@ func mapCreateSessionRPCError(err error, title string) *mcpgo.CallToolResult {
 
 // mapCreationOutcome maps AwaitCreationTerminal's Failed/vanished/caller-ctx
 // exits onto the MCP result shape (async-session-creation Epic 2.3, Story
-// 2.3.4). The timeout exit (services.ErrCreationAwaitTimeout) is handled by
+// 2.3.4). The timeout exit (domain.ErrCreationAwaitTimeout) is handled by
 // each caller directly, before calling this, since its "still creating"
 // result carries a tool-specific result type (CreateSessionResult vs
 // CreateSessionForPRResult) that this shared helper can't build generically.
@@ -373,7 +372,7 @@ func mapCreateSessionRPCError(err error, title string) *mcpgo.CallToolResult {
 // -- the caller should proceed with post-creation steps. Returns a non-nil
 // error result for every other case: Failed, vanished (cancelled), or the
 // caller's own ctx ending first.
-func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.CallToolResult {
+func mapCreationOutcome(outcome domain.CreationOutcome, err error) *mcpgo.CallToolResult {
 	switch {
 	case err == nil:
 		if outcome.Status == domain.Failed {
@@ -382,7 +381,7 @@ func mapCreationOutcome(outcome services.CreationOutcome, err error) *mcpgo.Call
 				"Use get_session to inspect the session, or call create_session again to retry.")
 		}
 		return nil // Active/Running: proceed with post-creation steps.
-	case errors.Is(err, services.ErrCreationVanished):
+	case errors.Is(err, domain.ErrCreationVanished):
 		return errResult(ErrSessionCreationCancelled,
 			"session creation was cancelled while waiting for it to complete",
 			"The session no longer exists; call create_session again if you still need it.")
@@ -473,7 +472,7 @@ func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallTo
 	if err := inst.Resume(); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("resume session: %v", err), ""), nil
 	}
-	services.RefreshInstanceHookProof(inst)
+	lh.svc.RefreshInstanceHookProof(inst)
 
 	if err := lh.store.SaveInstances([]*instance.Instance{inst}); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("save: %v", err), ""), nil

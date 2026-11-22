@@ -4,7 +4,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -32,7 +31,7 @@ func WithToolModules(mods ...ToolModule) CoreOption {
 // composition root (see single_root_guard_test.go).
 type coreDeps struct {
 	store          session.InstanceStore
-	svc            *services.SessionService
+	svc            SessionRPC
 	sbMgr          TerminalScrollback
 	storage        *session.Storage
 	eventBus       *events.EventBus
@@ -50,7 +49,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 	if d.storage != nil {
 		d.gate = &callerIdentityGate{metrics: d.cfg.wakeMetrics, roleOf: roleLookupFrom(d.storage.GetItemSessionBySessionUUID)}
 	}
-	// A nil *services.SessionService or *session.Storage stored directly in an
+	// A nil *session.Storage stored directly in an
 	// interface-typed field would be a non-nil interface around a nil pointer,
 	// so each gate below is an explicit pointer comparison.
 	var diagnoseCheck diagnoseCallerCheck
@@ -91,7 +90,7 @@ func newDiscoveryModule(store session.InstanceStore) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerDiscoveryTools(s, &discoveryHandlers{store: store}) })
 }
 
-func newLifecycleModule(store session.InstanceStore, svc *services.SessionService, diagnoseCheck diagnoseCallerCheck) ToolModule {
+func newLifecycleModule(store session.InstanceStore, svc SessionLifecycle, diagnoseCheck diagnoseCallerCheck) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
 		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck, publicURL: publicURLFromEnv()})
 	})
@@ -113,35 +112,35 @@ func newVCSModule(store session.InstanceStore, open WorktreeOpener) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerVCSTools(s, &vcsHandlers{store: store, open: open}) })
 }
 
-func newWorkflowModule(svc *services.SessionService) ToolModule {
+func newWorkflowModule(svc WorkflowRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerWorkflowTools(s, &workflowHandlers{svc: svc}) })
 }
 
-func newRulesModule(svc *services.SessionService) ToolModule {
+func newRulesModule(svc ApprovalRulesRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerRulesTools(s, &rulesHandlers{svc: svc}) })
 }
 
-func newTaggingRulesModule(svc *services.SessionService) ToolModule {
+func newTaggingRulesModule(svc TaggingRulesRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerTaggingRulesTools(s, &taggingRulesHandlers{svc: svc}) })
 }
 
-func newNotificationsModule(svc *services.SessionService) ToolModule {
+func newNotificationsModule(svc NotificationHistoryRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerNotificationTools(s, &notificationHandlers{svc: svc}) })
 }
 
-func newHistoryModule(svc *services.SessionService) ToolModule {
+func newHistoryModule(svc ClaudeHistoryRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
@@ -205,7 +204,7 @@ func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage,
 	}
 }
 
-func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc *services.SessionService) ToolModule {
+func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc SessionCreator) ToolModule {
 	if prCache == nil {
 		return nil
 	}

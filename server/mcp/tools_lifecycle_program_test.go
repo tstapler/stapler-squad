@@ -83,9 +83,11 @@ func createSessionArgs(t *testing.T, title string, extra map[string]interface{})
 // lh.svc, mirroring server/services' destroyCreatedSession -- that helper's
 // svc.waitForPendingCleanup() call is unexported outside the services
 // package, so this uses the exported DeleteSession RPC instead.
-func destroyMCPCreatedSession(t *testing.T, lh *lifecycleHandlers, id string) {
+func destroyMCPCreatedSession(t *testing.T, svc any, id string) {
 	t.Helper()
-	_, err := lh.svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
+	_, err := svc.(interface {
+		DeleteSession(context.Context, *connect.Request[sessionv1.DeleteSessionRequest]) (*connect.Response[sessionv1.DeleteSessionResponse], error)
+	}).DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: id}))
 	if err != nil {
 		t.Logf("destroyMCPCreatedSession: cleanup for %q failed (non-fatal): %v", id, err)
 	}
@@ -107,7 +109,7 @@ func TestCreateSession_should_AcceptPreviouslyUnreachableBuiltin_When_ProgramIsB
 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, m["session"].(map[string]interface{})["id"].(string)) })
 	assert.Empty(t, m["program_warning"], "a recognized built-in must not set program_warning")
 }
 
@@ -127,7 +129,7 @@ func TestCreateSession_should_AcceptCustomProgram_When_RegisteredViaUpsertProgra
 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, m["session"].(map[string]interface{})["id"].(string)) })
 	assert.Empty(t, m["program_warning"], "a registered custom program must not set program_warning")
 }
 
@@ -144,7 +146,7 @@ func TestCreateSession_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider
 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, m["session"].(map[string]interface{})["id"].(string)) })
 	assert.Empty(t, m["program_warning"])
 }
 
@@ -160,7 +162,7 @@ func TestCreateSession_should_DefaultToClaudeProgram_When_ProgramOmitted(t *test
 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, m["session"].(map[string]interface{})["id"].(string)) })
 	assert.Empty(t, m["program_warning"], "the default program must never itself warn")
 }
 
@@ -179,7 +181,7 @@ func TestCreateSession_should_SetProgramWarning_When_ProgramNotInKnownList(t *te
 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "an unrecognized program must warn, not reject, got: %+v", m)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, m["session"].(map[string]interface{})["id"].(string)) })
 	warning, _ := m["program_warning"].(string)
 	assert.Contains(t, warning, "clade")
 }
@@ -218,7 +220,7 @@ func TestCreateSession_should_ReturnUIURL_When_PublicURLConfigured(t *testing.T)
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	id := m["session"].(map[string]interface{})["id"].(string)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, id) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, id) })
 	link, err := url.Parse(m["ui_url"].(string))
 	require.NoError(t, err)
 	assert.Equal(t, "https://workspace.example.com", link.Scheme+"://"+link.Host)
@@ -240,6 +242,6 @@ func TestCreateSession_should_OmitUIURL_When_PublicURLUnset(t *testing.T) {
 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
-	t.Cleanup(func() { destroyMCPCreatedSession(t, lh, m["session"].(map[string]interface{})["id"].(string)) })
+	t.Cleanup(func() { destroyMCPCreatedSession(t, lh.svc, m["session"].(map[string]interface{})["id"].(string)) })
 	assert.NotContains(t, m, "ui_url")
 }
