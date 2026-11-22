@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -86,7 +87,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 
 	prStatusPoller := prpoller.NewPRStatusPoller(storage)
 
-	registry := session.NewRegistry(storage, sessionService.WireInstanceCallbacks)
+	registry := registry.NewRegistry(storage, sessionService.WireInstanceCallbacks)
 	sessionService.SetRegistry(registry)
 
 	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)

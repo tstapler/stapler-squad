@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 )
 
 type hibernationIdentityStore struct {
@@ -41,7 +42,7 @@ func newHibernationIdentityFixture(t *testing.T) (*SessionService, *instance.Ins
 	store := &hibernationIdentityStore{loaded: stale}
 	bus := events.NewEventBus(8)
 	t.Cleanup(bus.Close)
-	registry := session.NewRegistry(nil, nil)
+	registry := registry.NewRegistry(nil, nil)
 	t.Cleanup(registry.Shutdown)
 	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	poller.AddInstance(canonical)

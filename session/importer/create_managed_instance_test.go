@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/registry"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 // TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid is the
@@ -26,7 +26,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	registry := session.NewRegistry(storage, nil)
+	registry := registry.NewRegistry(storage, nil)
 
 	dir := t.TempDir()
 

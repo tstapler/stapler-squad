@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/procinfo"
+	"github.com/tstapler/stapler-squad/session/registry"
 )
 
 // Compile-time check: ImportService must implement ImportServiceHandler.
@@ -45,7 +46,7 @@ type ImportService struct {
 	// working with these left as nil/zero.
 	aliveChecker importer.AliveChecker
 	storage      session.InstanceStore
-	registry     *session.Registry
+	registry     *registry.Registry
 	linker       *importer.HistoryLinker
 	suspended    *importer.SuspendedProcessStore
 	tmuxQuerier  session.TmuxSocketQuerier
@@ -93,7 +94,7 @@ func NewImportService(detector *instance.HistoryFileDetector, inspector ProcessC
 // dependencies needed by the three mutating RPCs.
 func NewImportServiceWithRealInspector(
 	storage session.InstanceStore,
-	registry *session.Registry,
+	registry *registry.Registry,
 	linker *importer.HistoryLinker,
 	suspended *importer.SuspendedProcessStore,
 ) *ImportService {

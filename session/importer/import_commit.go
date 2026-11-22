@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/registry"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
@@ -55,7 +56,7 @@ var ErrAmbiguousWithoutChoice = errors.New("import commit: correlation is ambigu
 type CommitImportParams struct {
 	Detector     *instance.HistoryFileDetector
 	Storage      session.InstanceStore
-	Registry     *session.Registry
+	Registry     *registry.Registry
 	Linker       *HistoryLinker
 	Suspended    *SuspendedProcessStore
 	AliveChecker AliveChecker

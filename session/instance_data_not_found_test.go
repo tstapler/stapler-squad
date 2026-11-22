@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/registry"
 )
 
 // Every layer must keep matching the one domain sentinel with errors.Is.
@@ -26,8 +27,8 @@ func TestInstanceDataNotFound_should_MatchDomainSentinel_When_IDIsMissing(t *tes
 		assert.False(t, archived)
 	})
 	t.Run("registry maps the sentinel to ErrSessionNotFound", func(t *testing.T) {
-		_, _, err := NewRegistry(storage, nil).Acquire("no-such-session")
-		assert.ErrorIs(t, err, ErrSessionNotFound)
+		_, _, err := registry.NewRegistry(storage, nil).Acquire("no-such-session")
+		assert.ErrorIs(t, err, registry.ErrSessionNotFound)
 	})
 	t.Run("ent repository returns the sentinel", func(t *testing.T) {
 		t.Parallel()

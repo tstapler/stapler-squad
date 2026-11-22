@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/sweeper"
@@ -184,7 +185,7 @@ func (s *SessionService) resolveMCPServerURL() string {
 
 // SetRegistry wires the Registry into this service. Called during server startup after
 // the Registry is constructed in BuildServiceDeps.
-func (s *SessionService) SetRegistry(r *session.Registry) {
+func (s *SessionService) SetRegistry(r *registry.Registry) {
 	s.registry = r
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -4696,7 +4697,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 // here rather than changed in the shared fixture.
 func wireRegistryForActorSerialization(fix *forkTestFixture) {
 	if fix.svc.registry == nil {
-		fix.svc.SetRegistry(session.NewRegistry(fix.storage, nil))
+		fix.svc.SetRegistry(registry.NewRegistry(fix.storage, nil))
 	}
 }
 

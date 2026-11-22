@@ -38,6 +38,7 @@ import (
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/summaries"
@@ -192,7 +193,7 @@ type ServerDependencies struct {
 	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
-	Registry *session.Registry
+	Registry *registry.Registry
 
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed. Its NotificationDecisionLister/TokenStore
@@ -533,7 +534,7 @@ type ServiceDeps struct {
 	StatusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
-	Registry          *session.Registry
+	Registry          *registry.Registry
 
 	// AttentionOptions is the one cached attention-flag source shared by the review-queue poller and the startup scanner.
 	AttentionOptions session.FlagOptionsSource
@@ -558,7 +559,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller.SetOptionsSource(attentionOptions)
 	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
-	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
+	registry := registry.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
 	core.SessionService.SetRegistry(registry)
 
 	w := warren.NewWire("ServiceDeps")
@@ -698,7 +699,7 @@ type RuntimeDeps struct {
 	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
-	Registry *session.Registry
+	Registry *registry.Registry
 
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
