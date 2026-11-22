@@ -185,8 +185,10 @@ type DriverControl interface {
 	RestartForRetry(inst *Instance, allowedPath, continuationPrompt string, policy RetryPolicy, stop <-chan struct{}) error
 }
 
-// DriverControlHook is installed once at startup by driver.Register (the server composition root
-// and test mains); it is never written after that.
+// DriverControlHook is installed by driver.Register, called from BuildCoreDepsWithOptions (server/dependencies.go) and
+// svctest.Main. Any new main that loads instances and can resume them
+// (hibernated or crashed resume, RetryNow) MUST call driver.Register() first. The daemon, reset,
+// debug-pty and list paths in main.go do not resume instances today, which is why they run without it.
 var DriverControlHook DriverControl
 
 func driverControl() DriverControl {
