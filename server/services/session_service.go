@@ -46,6 +46,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -148,7 +149,7 @@ type SessionService struct {
 	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
 	// claude binary found) — every AddInstance/RemoveInstance call site below
 	// guards for nil the same way reviewQueuePoller does.
-	sessionTagPoller *session.SessionTagClassificationPoller
+	sessionTagPoller *tagpoller.SessionTagClassificationPoller
 
 	// concStorage is the concrete backing store, used for operations (like
 	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a

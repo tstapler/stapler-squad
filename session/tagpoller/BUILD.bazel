@@ -1,0 +1,54 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "tagpoller",
+    srcs = ["session_tag_poller.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/tagpoller",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/classifier",
+        "//session/domain",
+        "//session/headless",
+        "//session/instance",
+        "@com_github_linkdata_deadlock//:deadlock",
+        "@com_github_puzpuzpuz_xsync_v4//:xsync",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tagpoller",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tagpoller_test",
+    srcs = [
+        "main_test.go",
+        "session_tag_poller_test.go",
+        "session_tagging_integration_test.go",
+    ],
+    embed = [":tagpoller"],
+    deps = [
+        "//log",
+        "//pkg/classifier",
+        "//session/domain",
+        "//session/headless",
+        "//session/instance",
+        "//session/internal/fixturetest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

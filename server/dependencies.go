@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
@@ -212,7 +213,7 @@ type ServerDependencies struct {
 
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
-	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+	SessionTagClassificationPoller *tagpoller.SessionTagClassificationPoller
 
 	// CtxHistoryStore persists per-turn context-window occupancy samples. Nil
 	// when the history directory cannot be resolved at startup (see the
@@ -714,7 +715,7 @@ type RuntimeDeps struct {
 
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
-	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+	SessionTagClassificationPoller *tagpoller.SessionTagClassificationPoller
 
 	// CtxHistoryStore persists per-turn context-window occupancy samples for use
 	// in diagnostic bundles (RUM session bundle Epic 1.1). Nil when analytics is
