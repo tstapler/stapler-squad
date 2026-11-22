@@ -103,21 +103,33 @@ func TestWithNudgeGate_should_ExposeTheGateThroughTheOptions(t *testing.T) {
 	assert.True(t, NudgeGateFromOptions() == nil)
 }
 
-func TestRecordDiagnoseWriteFailure_should_CountUncertainApartFromFailed(t *testing.T) {
-	// Swaps the process-wide recorder, so it cannot run in parallel.
-	rec := session.NewNudgeOutcomeRecorder("", nil)
-	defer session.SwapNudgeOutcomeRecorder(rec)()
-	target := instance.NewStartedInstanceForTest(t, "outcome-target", &recordingPM{})
-
-	recordDiagnoseWriteFailure(target, fmt.Errorf("%w: boom", domain.ErrNudgeSubmitUncertain))
-	recordDiagnoseWriteFailure(target, errors.New("plain failure"))
-
-	got := map[session.NudgeOutcomeLabel]int64{}
-	for _, row := range rec.Snapshot().Totals {
-		got[row.Outcome] += row.Value
+func TestRecordDiagnoseWriteFailure_should_LabelEachErrorByItsKind(t *testing.T) {
+	// Swaps the process-wide recorder per case, so it cannot run in parallel.
+	cases := []struct {
+		name                      string
+		err                       error
+		wantUncertain, wantFailed int64
+	}{
+		{"bare uncertain sentinel", domain.ErrNudgeSubmitUncertain, 1, 0},
+		{"wrapped uncertain", fmt.Errorf("%w: boom", domain.ErrNudgeSubmitUncertain), 1, 0},
+		{"plain failure", errors.New("plain failure"), 0, 1},
 	}
-	assert.Equal(t, int64(1), got[session.NudgeOutcomeUncertain])
-	assert.Equal(t, int64(1), got[session.NudgeOutcomeFailed])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := session.NewNudgeOutcomeRecorder("", nil)
+			defer session.SwapNudgeOutcomeRecorder(rec)()
+			target := instance.NewStartedInstanceForTest(t, "outcome-target", &recordingPM{})
+
+			recordDiagnoseWriteFailure(target, tc.err)
+
+			got := map[session.NudgeOutcomeLabel]int64{}
+			for _, row := range rec.Snapshot().Totals {
+				got[row.Outcome] += row.Value
+			}
+			assert.Equal(t, tc.wantUncertain, got[session.NudgeOutcomeUncertain])
+			assert.Equal(t, tc.wantFailed, got[session.NudgeOutcomeFailed])
+		})
+	}
 }
 
 // ctxHonouringNudgeGate fails with the context error, as the real gate's settle wait does.
