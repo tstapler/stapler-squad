@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
+// Mirrors server/services/internal/svctest's driver-leak helpers, which internal/ keeps out of reach; keep in sync.
 // TestMain fails the run if a test leaves a SessionDriver running: the driver
 // re-reads config.json from the ambient state dir, so one that outlives its test
 // writes into a later test's TempDir ("RemoveAll cleanup: directory not empty").

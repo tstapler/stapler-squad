@@ -82,7 +82,8 @@ func wireLoadedInstances(svc *ServiceDeps, instances []*instance.Instance, backl
 // can bind immediately. Step order inside is load-bearing; see the step comments.
 // The returned stop cancels the remaining steps and waits for the goroutine to exit, so
 // an owner that tears down its state dir cannot be written into afterwards.
-func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) (stop func()) {
+// gate, nil in production, runs first inside the goroutine so a test can hold it at a known point.
+func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance, gate func()) (stop func()) {
 	storage, reviewQueue, statusManager, eventBus := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.EventBus
 	// Perform heavy initialization (tmux starting, controllers, scanning) in the background
 	// so the HTTP server can bind and start immediately.
@@ -95,6 +96,9 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) (st
 				log.ErrorLog().Printf("[startup] panic in background init goroutine: %v", r)
 			}
 		}()
+		if gate != nil {
+			gate()
+		}
 		bootStartInstances(instances, eventBus)
 
 		bootHotRestoreLive(instances, eventBus)

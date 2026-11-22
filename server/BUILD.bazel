@@ -244,6 +244,7 @@ go_test(
         "changelog_handler_test.go",
         "context_health_publisher_test.go",
         "delivery_gate_startup_test.go",
+        "dependencies_boot_init_join_test.go",
         "dependencies_boot_init_test.go",
         "dependencies_defer_reconcile_test.go",
         "dependencies_flag_registry_test.go",
