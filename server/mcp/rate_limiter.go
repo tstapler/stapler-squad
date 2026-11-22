@@ -30,6 +30,9 @@ func newTokenBucket(rate, capacity float64) *tokenBucket {
 
 // allow returns true if the key has tokens available and consumes one.
 func (tb *tokenBucket) allow(key string) bool {
+	if tb == nil {
+		return true
+	}
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 
@@ -56,6 +59,9 @@ func (tb *tokenBucket) allow(key string) bool {
 	return true
 }
 
-// createSessionLimiter limits create_session to 3 per minute globally.
-// Using "global" as the key since create_session has no per-session identity yet.
-var createSessionLimiter = newTokenBucket(3.0/60.0, 3)
+// newCreateSessionLimiter builds the bucket limiting create_session and
+// create_session_for_pr to 3 per minute. Callers draw with the "global" key
+// since create_session has no per-session identity yet. One instance is built
+// per toolset so both tools share it; a nil *tokenBucket in a handler means
+// "no limit" (test fixtures that don't exercise rate limiting).
+func newCreateSessionLimiter() *tokenBucket { return newTokenBucket(3.0/60.0, 3) }

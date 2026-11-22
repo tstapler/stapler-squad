@@ -116,6 +116,7 @@ go_test(
         "single_root_guard_test.go",
         "spawn_path_matrix_test.go",
         "testhelpers_test.go",
+        "tool_modules_limiter_test.go",
         "tool_set_characterization_test.go",
         "tool_set_golden_test.go",
         "tools_backlog_blocked_notify_test.go",

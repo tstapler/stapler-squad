@@ -28,6 +28,8 @@ type githubHandlers struct {
 	// Epic 2.3, Story 2.3.2) instead of constructing/starting an *Instance
 	// inline. May be nil in tests that don't exercise createSessionForPR.
 	svc SessionCreator
+	// createLimiter is shared with lifecycleHandlers.createLimiter; nil means unlimited.
+	createLimiter *tokenBucket
 }
 
 // GitHubPRSummary is the MCP representation of one open pull request.
@@ -156,7 +158,7 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 // lifecycleHandlers.createSessionWithAwaitTimeout's doc comment in
 // tools_lifecycle.go for why this seam exists.
 func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
-	if !createSessionLimiter.allow("global") {
+	if !gh.createLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)", "Wait before creating another session."), nil
 	}
 

@@ -43,6 +43,8 @@ type lifecycleHandlers struct {
 	// publicURL is the instance's externally reachable UI base (STAPLER_SQUAD_PUBLIC_URL);
 	// empty means create_session returns no ui_url.
 	publicURL string
+	// createLimiter is shared with githubHandlers.createLimiter; nil means unlimited.
+	createLimiter *tokenBucket
 }
 
 // CreateSessionResult is returned by create_session.
@@ -153,7 +155,7 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 // bound — the same interval-parameterized-implementation seam
 // AwaitCreationTerminal itself uses (server/services/session_creation_await.go).
 func (lh *lifecycleHandlers) createSessionWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
-	if !createSessionLimiter.allow("global") {
+	if !lh.createLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)",
 			"Wait before creating another session."), nil
 	}

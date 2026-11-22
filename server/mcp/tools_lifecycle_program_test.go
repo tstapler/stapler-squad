@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,32 +15,43 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
-// resetCreateSessionLimiterForTest restores the package-level
-// createSessionLimiter (capacity 3, shared by every create_session/
-// create_session_for_pr call in this test binary) so tests that call the
-// handler directly don't exhaust each other's tokens. Not t.Parallel()-safe.
-func resetCreateSessionLimiterForTest(t *testing.T) {
-	t.Helper()
-	createSessionLimiter = newTokenBucket(3.0/60.0, 3)
-}
-
-// TestResetCreateSessionLimiterForTest_should_RestoreCapacity_When_BucketExhausted
-// proves the reset helper the other rate-limited tests in this file and
-// tools_github_test.go depend on actually restores capacity, rather than
-// leaving that trust implicit -- an incorrect reset would otherwise surface
-// as a flaky ErrRateLimitExceeded failure in an unrelated test.
-func TestResetCreateSessionLimiterForTest_should_RestoreCapacity_When_BucketExhausted(t *testing.T) {
-	for createSessionLimiter.allow("global") {
-		// Drain the bucket.
-	}
-	require.False(t, createSessionLimiter.allow("global"), "test setup: bucket must be exhausted before reset")
-
-	resetCreateSessionLimiterForTest(t)
+// TestNewCreateSessionLimiter_should_AllowThreePerMinute_When_DrawnRepeatedly
+// pins the production default: burst 3, refill 3 per minute. Each bucket is
+// its own instance, so tests never share rate-limit state.
+func TestNewCreateSessionLimiter_should_AllowThreePerMinute_When_DrawnRepeatedly(t *testing.T) {
+	t.Parallel()
+	tb := newCreateSessionLimiter()
+	clock := time.Unix(1_000_000, 0)
+	tb.now = func() time.Time { return clock }
 
 	for i := 0; i < 3; i++ {
-		assert.True(t, createSessionLimiter.allow("global"), "expected capacity restored after reset (draw %d)", i)
+		assert.True(t, tb.allow("global"), "burst draw %d", i)
 	}
-	assert.False(t, createSessionLimiter.allow("global"), "bucket should be exhausted again after 3 draws")
+	assert.False(t, tb.allow("global"), "4th draw within the minute must be refused")
+
+	clock = clock.Add(19 * time.Second)
+	assert.False(t, tb.allow("global"), "less than one token (20s) refilled")
+	clock = clock.Add(2 * time.Second)
+	assert.True(t, tb.allow("global"), "one token refilled after 20s")
+	assert.False(t, tb.allow("global"))
+
+	assert.True(t, newCreateSessionLimiter().allow("global"), "a fresh limiter shares no state")
+}
+
+// TestCreateSession_should_ReturnRateLimitExceeded_When_InjectedBucketExhausted
+// proves the handler draws from its injected bucket. The empty request would
+// fail validation, so this also pins that the limiter runs before validation.
+func TestCreateSession_should_ReturnRateLimitExceeded_When_InjectedBucketExhausted(t *testing.T) {
+	t.Parallel()
+	tb := newCreateSessionLimiter()
+	for tb.allow("global") {
+	}
+	lh := &lifecycleHandlers{store: &stubStore{}, createLimiter: tb}
+	res, err := lh.createSession(context.Background(), mcpgo.CallToolRequest{})
+	require.NoError(t, err)
+	m := parseResult(t, res)
+	assert.Equal(t, false, m["success"])
+	assert.Equal(t, string(ErrRateLimitExceeded), m["error"].(map[string]interface{})["code"])
 }
 
 // TestRegisterLifecycleTools_should_IncludeAllBuiltinsInProgramEnum_When_SvcIsWired
@@ -99,7 +112,6 @@ func destroyMCPCreatedSession(t *testing.T, svc any, id string) {
 // reached the backend. It must also carry no ProgramWarning, since it is a
 // recognized program (Story 1.2.1's AC).
 func TestCreateSession_should_AcceptPreviouslyUnreachableBuiltin_When_ProgramIsBash(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 
 	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "program-test-bash", map[string]interface{}{
@@ -118,7 +130,6 @@ func TestCreateSession_should_AcceptPreviouslyUnreachableBuiltin_When_ProgramIsB
 // UpsertProgramConfig must be accepted by create_session's MCP schema, not
 // just the ConnectRPC API directly.
 func TestCreateSession_should_AcceptCustomProgram_When_RegisteredViaUpsertProgramConfig(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 	upsertTestCustomProgram(t, lh.svc)
 
@@ -136,7 +147,6 @@ func TestCreateSession_should_AcceptCustomProgram_When_RegisteredViaUpsertProgra
 // TestCreateSession_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider
 // is AC3's regression pin: explicit program="aider" must keep working.
 func TestCreateSession_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 
 	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "program-test-aider", map[string]interface{}{
@@ -154,7 +164,6 @@ func TestCreateSession_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider
 // AC3's default-unchanged claim: omitting program entirely must still
 // default to "claude" (via defaultProgramID) and must never itself warn.
 func TestCreateSession_should_DefaultToClaudeProgram_When_ProgramOmitted(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 
 	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "program-test-default", nil)))
@@ -171,7 +180,6 @@ func TestCreateSession_should_DefaultToClaudeProgram_When_ProgramOmitted(t *test
 // succeed (a custom program registered after server start must still work),
 // but must warn so the calling agent isn't left silently guessing.
 func TestCreateSession_should_SetProgramWarning_When_ProgramNotInKnownList(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 
 	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "program-test-typo", map[string]interface{}{
@@ -208,7 +216,6 @@ func TestRegisterLifecycleTools_should_OmitEnum_When_SvcIsNil(t *testing.T) {
 }
 
 func TestCreateSession_should_ReturnUIURL_When_PublicURLConfigured(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 	lh.publicURL = "https://workspace.example.com"
 
@@ -232,7 +239,6 @@ func TestCreateSession_should_ReturnUIURL_When_PublicURLConfigured(t *testing.T)
 }
 
 func TestCreateSession_should_OmitUIURL_When_PublicURLUnset(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	lh := newWorktreeGuardHandlers(t)
 
 	res, err := lh.createSession(context.Background(), makeToolReq(createSessionArgs(t, "ui-url-test-unset", map[string]interface{}{

@@ -172,7 +172,7 @@ func lifecycleOver(f *recordingSessionRPC) *lifecycleHandlers {
 }
 
 func TestCreateSession_should_ReportStillCreatingAndSkipHooks_When_AwaitTimesOut(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.awaitErr = domain.ErrCreationAwaitTimeout
 
@@ -201,7 +201,7 @@ func TestCreateSession_should_MapCreationOutcomeToErrorCodes_When_AwaitDoesNotSu
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resetCreateSessionLimiterForTest(t)
+			t.Parallel()
 			f := newRecordingSessionRPC()
 			f.outcome, f.awaitErr = tc.outcome, tc.awaitErr
 
@@ -215,7 +215,7 @@ func TestCreateSession_should_MapCreationOutcomeToErrorCodes_When_AwaitDoesNotSu
 }
 
 func TestCreateSession_should_PassHooksAndRootToTheInjector_When_PipelineReachedActive(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.outcome = domain.CreationOutcome{Status: domain.Active, InstanceID: "created-id"}
 	f.live = liveCreated(t)
@@ -236,7 +236,7 @@ func TestCreateSession_should_PassHooksAndRootToTheInjector_When_PipelineReached
 }
 
 func TestCreateSession_should_StillSucceed_When_HookInjectionFails(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.outcome = domain.CreationOutcome{Status: domain.Active}
 	f.live = liveCreated(t)
@@ -250,7 +250,7 @@ func TestCreateSession_should_StillSucceed_When_HookInjectionFails(t *testing.T)
 }
 
 func TestCreateSession_should_ReportInternalError_When_ActiveSessionIsNoLongerFindable(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.outcome = domain.CreationOutcome{Status: domain.Active}
 
@@ -262,7 +262,7 @@ func TestCreateSession_should_ReportInternalError_When_ActiveSessionIsNoLongerFi
 }
 
 func TestCreateSession_should_MapCreateRPCError_When_CreateSessionFails(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.errs["CreateSession"] = connect.NewError(connect.CodeInternal, errors.New("boom"))
 
@@ -286,7 +286,7 @@ func TestCreateSession_should_WarnOnUnknownProgramOnly_When_ProgramListIsAvailab
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resetCreateSessionLimiterForTest(t)
+			t.Parallel()
 			f := newRecordingSessionRPC()
 			f.programs = tc.programs
 			if tc.listErr != nil {
@@ -305,6 +305,7 @@ func TestCreateSession_should_WarnOnUnknownProgramOnly_When_ProgramListIsAvailab
 }
 
 func TestStopSession_should_RefuseBeforeRemovingFromPollers_When_WorktreeIsShared(t *testing.T) {
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.live = &instance.Instance{Title: "stop-me", UUID: "stop-uuid", Path: t.TempDir(), Status: domain.Paused}
 	f.refuseErr = connect.NewError(connect.CodeFailedPrecondition, errors.New("sibling still running"))
@@ -318,6 +319,7 @@ func TestStopSession_should_RefuseBeforeRemovingFromPollers_When_WorktreeIsShare
 }
 
 func TestStopSession_should_RemoveFromPollersUnderTheCanonicalTitle_When_Allowed(t *testing.T) {
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.live = &instance.Instance{Title: "stop-me", UUID: "stop-uuid", Path: t.TempDir(), Status: domain.Paused}
 
@@ -329,7 +331,7 @@ func TestStopSession_should_RemoveFromPollersUnderTheCanonicalTitle_When_Allowed
 }
 
 func TestCreateSessionForPR_should_ReportStillCreatingAndSkipHooks_When_AwaitTimesOut(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.awaitErr = domain.ErrCreationAwaitTimeout
 	gh := &githubHandlers{cache: &fakeUserPRSource{}, store: &stubStore{}, svc: f}
@@ -345,7 +347,7 @@ func TestCreateSessionForPR_should_ReportStillCreatingAndSkipHooks_When_AwaitTim
 }
 
 func TestCreateSessionForPR_should_InjectOnlyTheDefaultHook_When_PipelineReachedActive(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.outcome = domain.CreationOutcome{Status: domain.Active}
 	f.live = liveCreated(t)
@@ -361,7 +363,7 @@ func TestCreateSessionForPR_should_InjectOnlyTheDefaultHook_When_PipelineReached
 }
 
 func TestCreateSessionForPR_should_MapOutcomeErrors_When_AwaitDoesNotSucceed(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
+	t.Parallel()
 	f := newRecordingSessionRPC()
 	f.awaitErr = domain.ErrCreationVanished
 	gh := &githubHandlers{cache: &fakeUserPRSource{}, store: &stubStore{}, svc: f}
@@ -373,6 +375,7 @@ func TestCreateSessionForPR_should_MapOutcomeErrors_When_AwaitDoesNotSucceed(t *
 }
 
 func TestWorkflowTools_should_MapRPCErrorsAndPassArguments_When_ServiceReplies(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRecordingSessionRPC()
 	h := &workflowHandlers{svc: f}
@@ -407,6 +410,7 @@ func TestWorkflowTools_should_MapRPCErrorsAndPassArguments_When_ServiceReplies(t
 }
 
 func TestApprovalRuleTools_should_MapRPCErrors_When_ServiceFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRecordingSessionRPC()
 	h := &rulesHandlers{svc: f}
@@ -436,6 +440,7 @@ func TestApprovalRuleTools_should_MapRPCErrors_When_ServiceFails(t *testing.T) {
 }
 
 func TestTaggingRuleTools_should_MapRPCErrors_When_ServiceFails(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRecordingSessionRPC()
 	h := &taggingRulesHandlers{svc: f}
@@ -473,6 +478,7 @@ func assertRPCErrorMapping(t *testing.T, f *recordingSessionRPC, calls map[strin
 }
 
 func TestNotificationHistoryTool_should_PassFiltersAndMapErrors_When_ServiceReplies(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRecordingSessionRPC()
 	h := &notificationHandlers{svc: f}
@@ -493,6 +499,7 @@ func TestNotificationHistoryTool_should_PassFiltersAndMapErrors_When_ServiceRepl
 }
 
 func TestClaudeHistoryTool_should_PassQueryAndMapErrors_When_ServiceReplies(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newRecordingSessionRPC()
 	h := &historyHandlers{svc: f}
@@ -510,6 +517,7 @@ func TestClaudeHistoryTool_should_PassQueryAndMapErrors_When_ServiceReplies(t *t
 }
 
 func TestToolModules_should_BeAbsent_When_NoSessionServiceIsWired(t *testing.T) {
+	t.Parallel()
 	var none SessionRPC
 	assert.Nil(t, newWorkflowModule(none))
 	assert.Nil(t, newRulesModule(none))
