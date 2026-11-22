@@ -14,7 +14,7 @@ import (
 
 // recordingHelpAnswerer is the second HelpAnswerer implementation (the first is
 // *services.GuidanceRequestService): it pins the arguments answer_help forwards and
-// reaches the error branches a real store cannot produce on demand.
+// adds the generic-error and wrapped-forbidden branches the real-service rig does not drive.
 type recordingHelpAnswerer struct {
 	id, answer, who string
 	data            *domain.GuidanceRequestData
