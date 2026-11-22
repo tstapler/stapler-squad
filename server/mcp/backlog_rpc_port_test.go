@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -38,9 +39,9 @@ type recordingBacklogRPC struct {
 
 var _ BacklogRPC = (*recordingBacklogRPC)(nil)
 
-func (f *recordingBacklogRPC) LookupCrossHostClaim(_ context.Context, u string) (services.ClaimVerdict, error) {
+func (f *recordingBacklogRPC) LookupCrossHostClaim(_ context.Context, u string) (hostclaim.ClaimVerdict, error) {
 	f.claimURLs = append(f.claimURLs, u)
-	return services.NewUnclaimedVerdict(), f.claimErr
+	return hostclaim.NewUnclaimedVerdict(), f.claimErr
 }
 func (f *recordingBacklogRPC) MaybeTriggerTriage(context.Context, string, bool, string) bool {
 	return false

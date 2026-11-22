@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -565,7 +564,7 @@ func TestTransitionBacklogItemStatus_SpawnBackoffClearScopedToUser(t *testing.T)
 	t.Run("agent keeps the backoff", func(t *testing.T) {
 		t.Parallel()
 		svc, storage, itemID := setup(t)
-		require.NoError(t, move(services.WithTransitionActor(t.Context(), instance.TriggeredByAgent), svc, itemID))
+		require.NoError(t, move(domain.WithTransitionActor(t.Context(), instance.TriggeredByAgent), svc, itemID))
 		_, ok := openSpawnFailedRow(t, storage, itemID)
 		assert.True(t, ok)
 	})

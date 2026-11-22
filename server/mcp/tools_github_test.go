@@ -306,7 +306,7 @@ func TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertP
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	assert.Empty(t, m["program_warning"])
 }
@@ -324,7 +324,7 @@ func TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitly
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	assert.Empty(t, m["program_warning"])
 }
@@ -340,7 +340,7 @@ func TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted(t 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	assert.Empty(t, m["program_warning"], "the default program must never itself warn")
 }
@@ -358,7 +358,7 @@ func TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList(
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "an unrecognized program must warn, not reject, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	warning, _ := m["program_warning"].(string)
 	assert.Contains(t, warning, "clade")

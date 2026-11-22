@@ -107,7 +107,7 @@ func (s *BacklogService) gateOnClaim(ctx context.Context, c preCreateClaimCheck)
 		return claimGateResult{}, nil
 	}
 	switch verdict.Kind {
-	case services.ClaimHeldByOther:
+	case hostclaim.ClaimHeldByOther:
 		if !c.Override {
 			return claimGateResult{Claimed: alreadyClaimedElsewhereProto(c.ExternalURL, verdict.Record)}, nil
 		}
@@ -115,7 +115,7 @@ func (s *BacklogService) gateOnClaim(ctx context.Context, c preCreateClaimCheck)
 			"external_url", c.ExternalURL,
 			"claiming_host_id", verdict.Record.ClaimingHostID.String(),
 			"reason", strings.TrimSpace(c.Reason))
-	case services.ClaimCheckIndeterminate:
+	case hostclaim.ClaimCheckIndeterminate:
 		log.Warn(c.LogPrefix+".claim_check_indeterminate", "external_url", c.ExternalURL)
 	}
 	return claimGateResult{}, nil
@@ -123,9 +123,9 @@ func (s *BacklogService) gateOnClaim(ctx context.Context, c preCreateClaimCheck)
 
 // LookupCrossHostClaim runs the same live claim check the import and create paths
 // use, for the check_cross_host_claim MCP tool and the CheckCrossHostClaim RPC.
-func (s *BacklogService) LookupCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error) {
+func (s *BacklogService) LookupCrossHostClaim(ctx context.Context, externalURL string) (hostclaim.ClaimVerdict, error) {
 	if !s.crossHostClaimDedupEnabled() {
-		return services.NewUnclaimedVerdict(), domain.ErrCrossHostClaimDedupDisabled
+		return hostclaim.NewUnclaimedVerdict(), domain.ErrCrossHostClaimDedupDisabled
 	}
 	return s.checker().CheckClaim(ctx, externalURL)
 }
@@ -142,7 +142,7 @@ func (s *BacklogService) CheckCrossHostClaim(ctx context.Context, req *connect.R
 	if !s.crossHostClaimDedupEnabled() {
 		return connect.NewResponse(&sessionv1.CheckCrossHostClaimResponse{}), nil
 	}
-	var verdict services.ClaimVerdict
+	var verdict hostclaim.ClaimVerdict
 	var err error
 	if req.Msg.LocalOnly {
 		verdict, err = s.checker().CheckClaimLocalOnly(ctx, externalURL)
@@ -154,13 +154,13 @@ func (s *BacklogService) CheckCrossHostClaim(ctx context.Context, req *connect.R
 	}
 	resp := &sessionv1.CheckCrossHostClaimResponse{Enabled: true}
 	switch verdict.Kind {
-	case services.ClaimHeldByOther:
+	case hostclaim.ClaimHeldByOther:
 		resp.Checked = true
 		resp.Claim = alreadyClaimedElsewhereProto(externalURL, verdict.Record)
 		if !verdict.Record.ClaimedAt.IsZero() {
 			resp.ClaimedAtUnix = verdict.Record.ClaimedAt.Unix()
 		}
-	case services.ClaimCheckIndeterminate:
+	case hostclaim.ClaimCheckIndeterminate:
 	default:
 		resp.Checked = true
 	}
@@ -321,7 +321,7 @@ func (s *BacklogService) OverrideClaimBlock(ctx context.Context, req *connect.Re
 	}
 
 	claimingHost := ""
-	if verdict, checkErr := s.checker().CheckClaimLocalOnly(ctx, item.ExternalURL); checkErr == nil && verdict.Kind == services.ClaimHeldByOther {
+	if verdict, checkErr := s.checker().CheckClaimLocalOnly(ctx, item.ExternalURL); checkErr == nil && verdict.Kind == hostclaim.ClaimHeldByOther {
 		claimingHost = verdict.Record.ClaimingHostID.String()
 	}
 	log.Info("dequeue.claim_override",
@@ -363,7 +363,7 @@ func (s *BacklogService) RecordClaimOverride(ctx context.Context, req *connect.R
 		return nil, err
 	}
 	claimingHost := ""
-	if verdict, err := s.checker().CheckClaimLocalOnly(ctx, externalURL); err == nil && verdict.Kind == services.ClaimHeldByOther {
+	if verdict, err := s.checker().CheckClaimLocalOnly(ctx, externalURL); err == nil && verdict.Kind == hostclaim.ClaimHeldByOther {
 		claimingHost = verdict.Record.ClaimingHostID.String()
 	}
 	log.Info("banner.claim_override",

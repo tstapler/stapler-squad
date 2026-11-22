@@ -67,7 +67,7 @@ func newWorktreeGuardHandlers(t *testing.T, occupants ...*instance.Instance) *li
 	poller.SetInstances(occupants)
 	svc.SetReviewQueuePoller(poller)
 
-	return &lifecycleHandlers{store: storage, svc: svc}
+	return &lifecycleHandlers{store: storage, svc: realSession{svc}}
 }
 
 // newLiveOccupant builds an instance whose tmux backend reports alive and whose

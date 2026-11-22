@@ -1,4 +1,4 @@
-package session
+package external
 
 import (
 	"errors"
@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/mux"
@@ -127,6 +128,6 @@ func TestHandleNewSession_GlobalTymux_ExternalSessionStaysTmux(t *testing.T) {
 
 	require.NotNil(t, got)
 	assert.Equal(t, domain.BackendTmux, got.Backend)
-	_, isTmux := got.ProcessManagerForTest().(*TmuxBackend)
+	_, isTmux := got.ProcessManagerForTest().(*session.TmuxBackend)
 	assert.True(t, isTmux, "process manager must be a TmuxBackend, got %T", got.ProcessManagerForTest())
 }

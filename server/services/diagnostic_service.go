@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -37,7 +38,7 @@ type DiagnosticService struct {
 	storage      *session.Storage
 	spawner      DiagnosticSpawner
 	poller       *session.ReviewQueuePoller
-	extDiscovery *session.ExternalSessionDiscovery
+	extDiscovery *external.ExternalSessionDiscovery
 }
 
 // NewDiagnosticService creates a DiagnosticService. spawner may be nil in
@@ -53,7 +54,7 @@ func (d *DiagnosticService) SetPoller(p *session.ReviewQueuePoller) {
 }
 
 // SetExternalDiscovery wires external session discovery (mux-enabled sessions).
-func (d *DiagnosticService) SetExternalDiscovery(disc *session.ExternalSessionDiscovery) {
+func (d *DiagnosticService) SetExternalDiscovery(disc *external.ExternalSessionDiscovery) {
 	d.extDiscovery = disc
 }
 

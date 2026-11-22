@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -10,10 +9,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// ErrAnswererForbidden is returned when the answerer is not the one the request
-// names; the request is left unchanged.
-var ErrAnswererForbidden = errors.New("answerer is not permitted to answer this request")
 
 // Answerer is who answers a guidance request. The zero value is not valid; use
 // HumanAnswerer or SessionAnswerer.
@@ -44,7 +39,14 @@ func (who Answerer) authorize(data *domain.GuidanceRequestData) error {
 			return nil
 		}
 	}
-	return ErrAnswererForbidden
+	return domain.ErrAnswererForbidden
+}
+
+// AnswerAsSession is AnswerAs for a session whose identity the caller verified;
+// it is the surface server/mcp's HelpAnswerer port names, so that package need
+// not import Answerer.
+func (s *GuidanceRequestService) AnswerAsSession(ctx context.Context, id, answer, sessionUUID string) (*domain.GuidanceRequestData, bool, error) {
+	return s.AnswerAs(ctx, id, answer, SessionAnswerer(sessionUUID))
 }
 
 // AnswerAs records answer on request id if who is permitted to give it. applied

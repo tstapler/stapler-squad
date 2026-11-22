@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -77,9 +78,9 @@ type ServerDependencies struct {
 	StopBootInit            func()
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
-	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
-	ExternalDiscovery       *session.ExternalSessionDiscovery
-	ExternalApprovalMonitor *session.ExternalApprovalMonitor
+	TmuxStreamerManager     *external.ExternalTmuxStreamerManager
+	ExternalDiscovery       *external.ExternalSessionDiscovery
+	ExternalApprovalMonitor *external.ExternalApprovalMonitor
 	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
@@ -596,9 +597,9 @@ type RuntimeDeps struct {
 	Instances               []*instance.Instance
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
-	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
-	ExternalDiscovery       *session.ExternalSessionDiscovery
-	ExternalApprovalMonitor *session.ExternalApprovalMonitor
+	TmuxStreamerManager     *external.ExternalTmuxStreamerManager
+	ExternalDiscovery       *external.ExternalSessionDiscovery
+	ExternalApprovalMonitor *external.ExternalApprovalMonitor
 	PRStatusPoller          *prpoller.PRStatusPoller
 	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry

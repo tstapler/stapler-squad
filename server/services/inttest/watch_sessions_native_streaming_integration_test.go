@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -94,9 +95,9 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	scrollbackConfig.StoragePath = t.TempDir()
 	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
 
-	tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
-	externalDiscovery := session.NewExternalSessionDiscovery()
-	externalApprovalMonitor := session.NewExternalApprovalMonitor()
+	tmuxStreamerManager := external.NewExternalTmuxStreamerManager()
+	externalDiscovery := external.NewExternalSessionDiscovery()
+	externalApprovalMonitor := external.NewExternalApprovalMonitor()
 
 	// Safe under this test's STAPLER_SQUAD_TEST_DIR isolation (see
 	// NewHistoryLinkerFromRealInspector's own doc comment): it resolves its

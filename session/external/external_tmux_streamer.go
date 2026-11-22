@@ -1,4 +1,4 @@
-package session
+package external
 
 import (
 	"bufio"

@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=104 loc=21720 imports=58
+session files=101 loc=20501 imports=57
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/historyadapters files=10 loc=1863 imports=6
@@ -17,7 +17,7 @@ session/projectstore files=2 loc=136 imports=5
 session/rulestore files=2 loc=233 imports=6
 session/analyticsstore files=1 loc=271 imports=5
 session/instancestore files=8 loc=1596 imports=11
-session/domain files=45 loc=5912 imports=0
+session/domain files=47 loc=5961 imports=0
 session/sessionpr files=6 loc=1900 imports=14
 session/backlogstore files=31 loc=5956 imports=21
 session/claudectl files=3 loc=1400 imports=9
@@ -43,17 +43,18 @@ session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/prpoller files=7 loc=2080 imports=8
-server/services files=291 loc=72877 imports=77
+server/services files=291 loc=72877 imports=78
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
-server/services/wsconn files=23 loc=9895 imports=24
+server/services/wsconn files=23 loc=9895 imports=25
 server/services/backlogsvc files=37 loc=15666 imports=34
 server/services/internal/svctest files=36 loc=1459 imports=20
-server/services/sessionbundle files=4 loc=862 imports=8
+server/services/sessionbundle files=4 loc=862 imports=9
 server/services/devtools files=4 loc=501 imports=4
 server/services/antigravityexport files=2 loc=400 imports=3
 server/services/backlogflow files=4 loc=748 imports=8
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
-session/driver files=6 loc=1661 imports=7
+session/driver files=6 loc=1674 imports=7
+session/external files=3 loc=1220 imports=8

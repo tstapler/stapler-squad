@@ -131,6 +131,7 @@ go_library(
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/driver",
+        "//session/external",
         "//session/flow",
         "//session/git",
         "//session/gitwiring",
