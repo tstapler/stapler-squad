@@ -952,7 +952,6 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
-.PHONY: vet-tags
 .PHONY: vet-architecture
 vet-architecture: ## Run all architectural lint checks (depguard + import cycle check)
 	golangci-lint run --enable depguard ./...
@@ -1076,7 +1075,9 @@ space := $(subst ,, )
 VET_TAGS_EXCLUDE := darwin linux unix windows race embed_tmux embed_tymux tools ignore
 VET_TAGS = $(shell git ls-files -z '*.go' | xargs -0 grep -hoE '^//go:build [a-z0-9_]+$$' | awk '{print $$2}' | sort -u | grep -vxE '$(subst $(space),|,$(VET_TAGS_EXCLUDE))' | paste -sd, -)
 
+.PHONY: vet-tags
 vet-tags: ## go vet every opt-in feature build tag in one pass (needs gen/, session/ent and server/web/dist already present; make vet provides them)
+	@test -n "$(VET_TAGS)" || { echo "vet-tags: derived build-tag list is empty (is this a git checkout?)" >&2; exit 1; }
 	@echo "go vet -tags=$(VET_TAGS) ./..."
 	go vet -tags=$(VET_TAGS) ./...
 
