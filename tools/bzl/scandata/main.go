@@ -114,6 +114,11 @@ func check(root string) ([]string, error) {
 	for _, leaf := range leaves {
 		out = append(out, checkLeaf(root, leaf, data)...)
 	}
+	for _, s := range scanners {
+		for _, label := range staleLeafLabels(data[s], leaves) {
+			out = append(out, fmt.Sprintf("%s: stale go_sources entry in %s/BUILD.bazel go_test %s data (no such session leaf)", label, s, scannerTests[s]))
+		}
+	}
 	more, err := checkModule(root, data)
 	if err != nil {
 		return nil, err

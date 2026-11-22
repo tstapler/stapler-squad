@@ -105,6 +105,15 @@ func checkModule(root string, data map[string]map[string]bool) ([]string, error)
 			out = append(out, fmt.Sprintf("%s: %s %s //%s", aggregatorLabel, aggregatorName, msg, pkg))
 		}
 	}
+	wanted := map[string]bool{}
+	for _, dir := range dirs {
+		wanted[labelFor(dir)] = true
+	}
+	for label := range listed {
+		if !wanted[label] {
+			out = append(out, fmt.Sprintf("%s: stale entry in %s srcs (no such package with Go files)", label, aggregatorLabel))
+		}
+	}
 	for _, dir := range dirs {
 		out = append(out, checkModuleDir(root, dir, listed)...)
 	}
