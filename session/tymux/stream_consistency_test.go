@@ -386,6 +386,19 @@ func TestStreamConsistency_GivesUpAfterMaxAttemptsAndRecoversOnNextGap(t *testin
 	h.converge()
 }
 
+// parkProbe counts callers that have reached the flight's wait: resyncFlight.wait selects on
+// ctx.Done(), and the flight is already registered by then. Only each caller's first Done() counts.
+type parkProbe struct {
+	context.Context
+	parked *atomic.Int32
+	once   sync.Once
+}
+
+func (p *parkProbe) Done() <-chan struct{} {
+	p.once.Do(func() { p.parked.Add(1) })
+	return p.Context.Done()
+}
+
 // Concurrent consumers asking for a redraw share one CapturePane, and each reply reproduces the
 // pane exactly as it was at the capture instant (it travels outside the stream, so it must not
 // include output the stream will still deliver).
@@ -401,18 +414,23 @@ func TestStreamConsistency_ConcurrentRedrawRequestsShareOneCapture(t *testing.T)
 	h.d.captureHold.Store(&hold)
 	const callers = 8
 	replies := make([]string, callers)
+	var parked atomic.Int32
 	var wg sync.WaitGroup
 	for i := range replies {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			data, _, ok, err := h.s.CapturePaneRedraw(context.Background())
+			data, _, ok, err := h.s.CapturePaneRedraw(&parkProbe{Context: context.Background(), parked: &parked})
 			assert.NoError(t, err)
 			assert.True(t, ok)
 			replies[i] = data
 		}()
 	}
 	require.Eventually(t, func() bool { return h.d.captureSnaps.Load() > snapsBefore }, 2*time.Second, time.Millisecond)
+	// Every caller must be waiting on the in-flight capture before it is released; a straggler
+	// arriving after it completes would start a second capture of the later pane.
+	require.Eventually(t, func() bool { return parked.Load() == callers }, 5*time.Second, time.Millisecond,
+		"all callers must join the in-flight capture before it is released")
 	atCapture := h.d.screen()
 	h.emitAll(frames(rng, 10, 500)) // output after the capture instant, before it returns
 	close(hold)
