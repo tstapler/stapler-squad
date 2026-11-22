@@ -835,7 +835,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, err
 	}
 
-	stopBootInit := startInstanceBootInit(svc, instances)
+	stopBootInit := startInstanceBootInit(svc, instances, nil)
 
 	reactiveQueueMgr, slackNotifier := buildReactiveQueue(svc, cfg)
 
