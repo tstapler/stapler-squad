@@ -1,5 +1,5 @@
-// Package session mimics session/health.go, a file in noarchivedrevival's lifecycle set; never import it.
-package session
+// Package autonomous mimics session/autonomous/health.go, a file in noarchivedrevival's lifecycle set; never import it.
+package autonomous
 
 type Instance struct{}
 

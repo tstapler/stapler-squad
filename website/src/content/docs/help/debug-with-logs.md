@@ -164,7 +164,7 @@ of an underlying poll/retry loop, forever. Before adding a log line inside
 anything that runs on a ticker, in a retry loop, or per-item in a bulk
 operation, ask:
 
-1. **Does this repeat for state that hasn't changed?** `session/health.go`'s
+1. **Does this repeat for state that hasn't changed?** `session/autonomous/health.go`'s
    `SessionHealthChecker` reloads every instance from storage every ~15s;
    `session/instance_serialization.go`'s worktree-missing detection used to
    re-fire its Warn on every single reload for the same already-paused

@@ -26,7 +26,7 @@ import (
 // loggedMissingWorktree suppresses repeat "worktree directory missing"
 // warnings for a session whose on-disk status is never persisted back as
 // Paused (see instanceFromData) — every health-check LoadInstances() tick
-// (session/health.go, ~15s) constructs a brand-new, throwaway Instance from
+// (session/autonomous/health.go, ~15s) constructs a brand-new, throwaway Instance from
 // disk (see health.go's checkSingleSession comment) and re-detects the same
 // missing worktree, so an Instance-scoped flag can't dedupe across ticks the
 // way this package-level map does; it must outlive any single Instance
@@ -345,7 +345,7 @@ func restoreStoppedInstance(instance *Instance, deferStart bool) {
 	// health checker had just legitimately marked Stopped would be revived right
 	// back to Active on the very next LoadInstances() -- SessionHealthChecker's
 	// tick calls LoadInstances() every poll, so this raced the exact fix in
-	// session/health.go that makes freshly-created sessions reach Stopped promptly.
+	// session/autonomous/health.go that makes freshly-created sessions reach Stopped promptly.
 	//
 	// Skip this probe entirely for archived sessions: ArchivedAt is set only by
 	// archiveItemWorkSessions, which explicitly kills the tmux pane at archive
@@ -600,7 +600,7 @@ func instanceFromData(data domain.InstanceData, deferStart bool) (*Instance, err
 		// unconditionally calls Start(false) on every !Started() instance --
 		// silently auto-resuming every Crashed session on the very next server
 		// restart, exactly what the new Crashed status is designed to prevent
-		// (see session/health.go's "must not be silently respawned" comment).
+		// (see session/autonomous/health.go's "must not be silently respawned" comment).
 		instance.wireTmuxSession(ShellLaunch(instance.Program))
 		instance.started.Store(true)
 	} else {

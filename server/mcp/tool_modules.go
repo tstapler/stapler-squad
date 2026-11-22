@@ -169,9 +169,13 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerGuidanceTools(s, h) }),
 		newFlowModule(d.cfg.flowSvc, d.backlogEnabled),
 		toolModuleFunc(func(s *mcpserver.MCPServer) {
-			registerDiagnoseTools(s, &diagnoseHandlers{storage: d.storage, live: liveFinder, eventBus: d.eventBus})
+			registerDiagnoseTools(s, newDiagnoseHandlers(d, liveFinder))
 		}),
 	}
+}
+
+func newDiagnoseHandlers(d coreDeps, liveFinder liveInstanceFinder) *diagnoseHandlers {
+	return &diagnoseHandlers{storage: d.storage, live: liveFinder, eventBus: d.eventBus, nudgeGate: d.cfg.nudgeGate}
 }
 
 func newClaimModule(backlogSvc BacklogRPC, enabled func() bool) ToolModule {

@@ -137,6 +137,7 @@ go_test(
         "tools_backlog_wait_cap_test.go",
         "tools_claim_test.go",
         "tools_diagnose_actions_test.go",
+        "tools_diagnose_nudge_gate_test.go",
         "tools_diagnose_nudge_outcome_test.go",
         "tools_diagnose_test.go",
         "tools_discovery_proof_test.go",

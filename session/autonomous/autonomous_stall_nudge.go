@@ -1,4 +1,4 @@
-package session
+package autonomous
 
 // autonomous_stall_nudge.go is the one session-level writer the autonomous
 // stall path uses to nudge an idle work session. Order is verify -> lease ->
@@ -21,10 +21,6 @@ var (
 	// ErrNudgeSlotUnavailable means the claim was refused (cap, cooldown or no
 	// open row); nothing was written.
 	ErrNudgeSlotUnavailable = errors.New("nudge slot unavailable")
-	// ErrNudgeSubmitUncertain wraps every submit error after a successful
-	// claim: the text may have landed unsubmitted, so the slot stays consumed
-	// and callers must leave the pane alone.
-	ErrNudgeSubmitUncertain = errors.New("nudge delivery uncertain")
 	// ErrNudgeClaimFailed wraps a storage error while claiming the slot; nothing was written.
 	ErrNudgeClaimFailed = errors.New("claim nudge slot")
 	// ErrNudgeSessionNotActive means the target is paused, stopped or archived;
@@ -45,7 +41,7 @@ type nudgeSeams struct {
 // NudgeStalledAutonomousSession types autonomousStallNudgeText into inst after
 // the idle, ownership and lease gates pass and claim() grants a nudge slot.
 // claim must only touch storage. Returns ErrNudgeTargetNotIdle, ErrLeaseBusy,
-// ErrNudgeSlotUnavailable, ErrNudgeSubmitUncertain or ctx's error; on every
+// ErrNudgeSlotUnavailable, domain.ErrNudgeSubmitUncertain or ctx's error; on every
 // pre-claim error nothing was written and no slot was spent.
 func NudgeStalledAutonomousSession(ctx context.Context, inst *instance.Instance, claim func() (bool, error)) error {
 	if inst == nil {
@@ -99,7 +95,7 @@ func nudgeStalledWith(ctx context.Context, inst *instance.Instance, claim func()
 
 	// submit owns the lease from here and releases it on every path.
 	if err := s.submit(ctx, inst, lease, autonomousStallNudgeText, instance.DefaultPaneSettlePollInterval, instance.DefaultPaneSettleMaxWait); err != nil {
-		return fmt.Errorf("%w: %w", ErrNudgeSubmitUncertain, err)
+		return fmt.Errorf("%w: %w", domain.ErrNudgeSubmitUncertain, err)
 	}
 	return nil
 }

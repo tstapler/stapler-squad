@@ -211,7 +211,7 @@ type InstanceData struct {
 	PauseReason string `json:"pause_reason,omitempty"`
 
 	// ExitReason records why this session's pane crashed (Status == Crashed).
-	// Empty otherwise. Set by SessionHealthChecker (session/health.go).
+	// Empty otherwise. Set by SessionHealthChecker (session/autonomous/health.go).
 	ExitReason string `json:"exit_reason,omitempty"`
 
 	// WorkflowID is the UUID of the Workflow that spawned this session.

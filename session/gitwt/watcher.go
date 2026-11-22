@@ -95,7 +95,7 @@ func (d *WorktreeChangeDetector) GitWatchActive() bool {
 // one individually -- matching this codebase's own repeated convention for
 // cross-boundary callback dispatch (session/ent_repository_backlog.go's
 // publishItemChanged, session/chain_firer.go:160, session/backlog_lifecycle.go's
-// runStuckDetector, session/autonomous_driver.go:285). This detector invokes
+// runStuckDetector, session/autonomous/autonomous_driver.go:285). This detector invokes
 // multiple independently-registered callbacks (Manager's own
 // diff-stats-clearing callback, plus WorkspaceService's lazily-registered
 // vcsStatusCache.Delete closure per Story 2.3.2) -- an unrecovered panic in

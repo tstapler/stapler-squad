@@ -1,4 +1,4 @@
-package session
+package autonomous
 
 // These tests live in the session package because only here can a cancelled
 // ctx, a held lease and a pane that records keystrokes be observed together. A
@@ -252,7 +252,7 @@ func TestNudgeStalledAutonomousSession_CancelAfterGateBeforeLease(t *testing.T) 
 }
 
 // NDG-7: an unconfirmed submit keeps the slot (the row count stays
-// incremented) and wraps ErrNudgeSubmitUncertain.
+// incremented) and wraps domain.ErrNudgeSubmitUncertain.
 func TestNudgeStalledAutonomousSession_SubmitNotConfirmed_UncertainNoRefund(t *testing.T) {
 	t.Parallel()
 	storage, _, itemID, ctx := newDiagnoseNudgeTestFixture(t)
@@ -265,7 +265,7 @@ func TestNudgeStalledAutonomousSession_SubmitNotConfirmed_UncertainNoRefund(t *t
 
 	err := nudgeStalledWith(ctx, inst, claim, testNudgeSeams(inst))
 
-	require.ErrorIs(t, err, ErrNudgeSubmitUncertain)
+	require.ErrorIs(t, err, domain.ErrNudgeSubmitUncertain)
 	require.ErrorIs(t, err, instance.ErrSubmitNotConfirmed)
 	rows, findErr := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, findErr)
@@ -283,7 +283,7 @@ func TestNudgeStalledAutonomousSession_FailureAfterTextSent_Uncertain(t *testing
 
 	err := nudgeStalledWith(context.Background(), inst, cc.claim, testNudgeSeams(inst))
 
-	require.ErrorIs(t, err, ErrNudgeSubmitUncertain)
+	require.ErrorIs(t, err, domain.ErrNudgeSubmitUncertain)
 	require.ErrorIs(t, err, errTestSendKeysFailure)
 	assert.Equal(t, []string{autonomousStallNudgeText}, pm.recorded())
 	instance.AssertLeaseFree(t, inst)

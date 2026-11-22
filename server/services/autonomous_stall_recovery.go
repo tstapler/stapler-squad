@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -30,7 +31,7 @@ type StallNudger interface {
 type defaultStallNudger struct{}
 
 func (defaultStallNudger) NudgeStalledSession(ctx context.Context, inst *instance.Instance, claim func() (bool, error)) error {
-	return session.NudgeStalledAutonomousSession(ctx, inst, claim)
+	return autonomous.NudgeStalledAutonomousSession(ctx, inst, claim)
 }
 
 // SetStallNudger replaces the nudge writer (tests).
@@ -229,19 +230,19 @@ func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 	switch {
 	case err == nil:
 		return nudgeOutcomeSuccess, false
-	case errors.Is(err, session.ErrNudgeSubmitUncertain):
+	case errors.Is(err, domain.ErrNudgeSubmitUncertain):
 		return nudgeOutcomeUncertain, true
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return nudgeOutcomeCtxCancelled, true
-	case errors.Is(err, errNotRestartable), errors.Is(err, session.ErrNudgeSessionNotActive):
+	case errors.Is(err, errNotRestartable), errors.Is(err, autonomous.ErrNudgeSessionNotActive):
 		return nudgeOutcomeNotRestartable, true
-	case errors.Is(err, session.ErrNudgeClaimFailed):
+	case errors.Is(err, autonomous.ErrNudgeClaimFailed):
 		return nudgeOutcomeSlotUnavailable, false
-	case errors.Is(err, session.ErrNudgeTargetNotIdle):
+	case errors.Is(err, autonomous.ErrNudgeTargetNotIdle):
 		return nudgeOutcomeNotIdle, false
 	case errors.Is(err, instance.ErrLeaseBusy):
 		return nudgeOutcomeLeaseBusy, false
-	case errors.Is(err, session.ErrNudgeSlotUnavailable):
+	case errors.Is(err, autonomous.ErrNudgeSlotUnavailable):
 		return nudgeOutcomeSlotUnavailable, false
 	default:
 		return nudgeOutcomeOwnership, false

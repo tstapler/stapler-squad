@@ -8,6 +8,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TerminalScrollback is the slice of the scrollback manager the terminal tools
@@ -53,6 +54,13 @@ type FlowService interface {
 	ListDeadlockCandidates(context.Context, *connect.Request[sessionv1.ListDeadlockCandidatesRequest]) (*connect.Response[sessionv1.ListDeadlockCandidatesResponse], error)
 	ListThrashEpisodes(context.Context, *connect.Request[sessionv1.ListThrashEpisodesRequest]) (*connect.Response[sessionv1.ListThrashEpisodesResponse], error)
 	GetItemFlowTimeline(context.Context, *connect.Request[sessionv1.GetItemFlowTimelineRequest]) (*connect.Response[sessionv1.GetItemFlowTimelineResponse], error)
+}
+
+// NudgeGate is the write-time safety check the diagnose nudge runs on its
+// target (idle eligibility, then pane-ownership re-verification). The real one
+// waits on a live pane, so a recording fake is the genuine test seam.
+type NudgeGate interface {
+	VerifyNudgeSafeToWrite(ctx context.Context, target *instance.Instance) error
 }
 
 // UserPRSource is the slice of the user PR cache the GitHub PR tools read.

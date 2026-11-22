@@ -132,7 +132,7 @@ func (s *SessionService) ResumeHibernatedSession(
 }
 
 // ResumeCrashedSession re-launches the AI process for a Crashed session (dead
-// tmux pane detected by SessionHealthChecker, session/health.go), transitioning
+// tmux pane detected by SessionHealthChecker, session/autonomous/health.go), transitioning
 // it back to Active status. The tmux session was already killed when the
 // instance was marked Crashed, so Start(false) takes the cold-restore path and
 // threads --resume automatically when a conversation UUID is known.

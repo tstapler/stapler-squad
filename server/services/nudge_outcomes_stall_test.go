@@ -33,7 +33,7 @@ func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 		rec := session.NewNudgeOutcomeRecorder("", nil)
 		defer session.SwapNudgeOutcomeRecorder(rec)()
 		f := newStallNudgeFixture(t, "nud-uncertain", domain.BacklogStatusInProgress, true, true)
-		f.nudger.err = fmt.Errorf("%w: boom", session.ErrNudgeSubmitUncertain)
+		f.nudger.err = fmt.Errorf("%w: boom", domain.ErrNudgeSubmitUncertain)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 

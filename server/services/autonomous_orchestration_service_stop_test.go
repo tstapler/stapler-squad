@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -38,10 +38,10 @@ func stoppedLines(lines []string) []string {
 	return out
 }
 
-func stallWith(reason domain.StopReason, turns int, tail string) session.AutonomousDriverOutcome {
+func stallWith(reason domain.StopReason, turns int, tail string) autonomous.AutonomousDriverOutcome {
 	snap := svctest.IdleSnapshot
 	snap.PaneTail = tail
-	return session.AutonomousDriverOutcome{StopReason: reason, Turns: turns, Snapshot: snap, RunID: 7}
+	return autonomous.AutonomousDriverOutcome{StopReason: reason, Turns: turns, Snapshot: snap, RunID: 7}
 }
 
 func notificationMessages(evs []*events.Event) []string {
@@ -73,14 +73,14 @@ func TestOnAutonomousDriverComplete_StopDetailRedacted(t *testing.T) {
 func TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine(t *testing.T) {
 	cases := []struct {
 		name    string
-		outcome session.AutonomousDriverOutcome
+		outcome autonomous.AutonomousDriverOutcome
 		level   string
 		nudge   string
 	}{
 		// An idle-prompt stall with the nudge flags off records that the nudge was disabled.
 		{"stall", stallWith(domain.StopReasonOrchestratorError, 2, "TAILMARKER-xyz"), "level=WARN", "nudge_outcome=disabled"},
-		{"done", session.AutonomousDriverOutcome{StopReason: domain.StopReasonDone, Turns: 3, RunID: 7}, "level=INFO", "nudge_outcome=n/a"},
-		{"cancelled", session.AutonomousDriverOutcome{StopReason: domain.StopReasonCancelledExternal, RunID: 7}, "level=INFO", "nudge_outcome=n/a"},
+		{"done", autonomous.AutonomousDriverOutcome{StopReason: domain.StopReasonDone, Turns: 3, RunID: 7}, "level=INFO", "nudge_outcome=n/a"},
+		{"cancelled", autonomous.AutonomousDriverOutcome{StopReason: domain.StopReasonCancelledExternal, RunID: 7}, "level=INFO", "nudge_outcome=n/a"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

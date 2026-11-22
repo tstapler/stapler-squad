@@ -529,7 +529,7 @@ type PaneDeadStatus struct {
 // serverSocket in a single tmux invocation, keyed by session name. Intended
 // for bulk health checks (SessionHealthChecker) that would otherwise issue
 // one `display-message` subprocess call per session per tick -- see
-// session/health.go's checkInstances, which groups instances by socket and
+// session/autonomous/health.go's checkInstances, which groups instances by socket and
 // calls this once per socket per tick instead of once per session.
 // Returns ErrServerDown when the tmux server is not running.
 func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error) {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -18,6 +20,7 @@ var (
 	_ servermcp.BacklogRPC         = (*backlogsvc.BacklogService)(nil)
 	_ servermcp.SessionRPC         = mcpSessionAdapter{}
 	_ servermcp.HelpAnswerer       = (*services.GuidanceRequestService)(nil)
+	_ servermcp.NudgeGate          = nudgeGateFunc(nil)
 )
 
 // mcpAutoReopener returns a nil interface for a nil service: boxing the nil
@@ -71,4 +74,20 @@ func mcpSessionRPC(svc *services.SessionService) servermcp.SessionRPC {
 		return nil
 	}
 	return mcpSessionAdapter{svc}
+}
+
+// nudgeGateFunc adapts a verify function to servermcp.NudgeGate.
+type nudgeGateFunc func(ctx context.Context, target *instance.Instance) error
+
+func (f nudgeGateFunc) VerifyNudgeSafeToWrite(ctx context.Context, target *instance.Instance) error {
+	return f(ctx, target)
+}
+
+// mcpNudgeGate returns a nil interface for a nil function: boxing the nil func
+// would defeat the diagnose handler's `nudgeGate == nil` guard and panic.
+func mcpNudgeGate(verify func(ctx context.Context, target *instance.Instance) error) servermcp.NudgeGate {
+	if verify == nil {
+		return nil
+	}
+	return nudgeGateFunc(verify)
 }

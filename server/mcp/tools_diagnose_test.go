@@ -242,7 +242,7 @@ func TestWriteNudge_CancelledRequestCtx_ClassifiedCleanly(t *testing.T) {
 	pm := &recordingPM{}
 	target := instance.NewStartedInstanceForTest(t, "nudge-cancel-target", pm)
 	live := &fakeLiveInstanceFinder{instances: map[string]*instance.Instance{"target-1": target}}
-	dh := &diagnoseHandlers{storage: storage, live: live}
+	dh := &diagnoseHandlers{storage: storage, live: live, nudgeGate: ctxHonouringNudgeGate{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

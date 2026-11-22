@@ -11,15 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 var cancelledReasons = []domain.StopReason{domain.StopReasonCancelledExternal, domain.StopReasonCancelledShutdown}
 
-func cancelledOutcome(reason domain.StopReason) session.AutonomousDriverOutcome {
-	return session.AutonomousDriverOutcome{StopReason: reason, Reason: "cancelled", Turns: 4}
+func cancelledOutcome(reason domain.StopReason) autonomous.AutonomousDriverOutcome {
+	return autonomous.AutonomousDriverOutcome{StopReason: reason, Reason: "cancelled", Turns: 4}
 }
 
 func (f *charFixture) setReadoption(on bool) {
@@ -195,7 +195,7 @@ func TestOnAutonomousDriverComplete_UnlinkedCancelled_NoFinalNotification(t *tes
 func TestOnAutonomousDriverComplete_StallOutcomeUnlinked_TodayHandling(t *testing.T) {
 	f := newUnlinkedCharFixture(t, "stall-unlinked")
 
-	f.complete(session.AutonomousDriverOutcome{StopReason: domain.StopReasonOrchestratorError, Turns: 2})
+	f.complete(autonomous.AutonomousDriverOutcome{StopReason: domain.StopReasonOrchestratorError, Turns: 2})
 
 	snap := f.inst.Snapshot().Autonomous
 	assert.False(t, snap.AutonomousMode)

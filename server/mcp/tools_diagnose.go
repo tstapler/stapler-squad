@@ -30,6 +30,8 @@ type diagnoseHandlers struct {
 	storage  *session.Storage
 	live     liveInstanceFinder
 	eventBus *events.EventBus
+	// nudgeGate is the write-time safety check; nil refuses every nudge.
+	nudgeGate NudgeGate
 }
 
 // diagnoseOutcomeValues are the valid submit_diagnosis_result outcomes,
@@ -398,7 +400,7 @@ func (dh *diagnoseHandlers) claimNudgeAttemptForWrite(ctx context.Context, calle
 
 // resolveNudgeTarget finds and idle/pane-ownership-verifies a's target
 // instance — extracted from performNudge purely to stay under the funlen
-// gate. See session.VerifyNudgeSafeToWrite's doc comment for why the
+// gate. See NudgeGate.VerifyNudgeSafeToWrite's doc comment for why the
 // write-time pane-ownership re-verification can't be skipped even though
 // DiagnoseNudgeAllowed/dispatch-time eligibility already looked idle (AC2's
 // two-part write-time gate).
@@ -410,7 +412,10 @@ func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessi
 	if target == nil {
 		return nil, errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found or not live", a.targetSessionID), "")
 	}
-	if verifyErr := session.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
+	if dh.nudgeGate == nil {
+		return nil, errResult(ErrInternalError, "nudge safety gate unavailable", "")
+	}
+	if verifyErr := dh.nudgeGate.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
 		// The settle wait honours ctx: a cancelled request is not a refusal
 		// to nudge, so it must not tell the agent to decline.
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -473,7 +478,7 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 // submit may still have reached the pane, so it is kept apart from "failed".
 func recordDiagnoseWriteFailure(target *instance.Instance, err error) {
 	outcome := session.NudgeOutcomeFailed
-	if errors.Is(err, session.ErrNudgeSubmitUncertain) {
+	if errors.Is(err, domain.ErrNudgeSubmitUncertain) {
 		outcome = session.NudgeOutcomeUncertain
 	}
 	session.RecordNudgeOutcome(session.NudgeKindDiagnose, outcome, target.Snapshot().Title)

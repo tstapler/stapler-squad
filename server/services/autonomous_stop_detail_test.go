@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -354,7 +354,7 @@ func TestStopCopy_GoldenStringsAndNoCodes(t *testing.T) {
 
 func detailFor(snap domain.StopSnapshot, turns int, reason domain.StopReason) string {
 	return formatStopDetail(stopRecord{
-		Outcome:  session.AutonomousDriverOutcome{StopReason: reason, Turns: turns, Snapshot: snap},
+		Outcome:  autonomous.AutonomousDriverOutcome{StopReason: reason, Turns: turns, Snapshot: snap},
 		State:    domain.ClassifyObserved(snap),
 		Recovery: stopRecovery{Action: stopActionRespawned},
 		Tail:     sanitizeStopTail(snap.PaneTail),

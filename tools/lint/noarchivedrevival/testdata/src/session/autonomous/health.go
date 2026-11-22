@@ -1,5 +1,5 @@
-// Package session mimics session/health.go, a file in the automated-lifecycle set.
-package session
+// Package autonomous mimics session/autonomous/health.go, a file in the automated-lifecycle set.
+package autonomous
 
 type Status int
 

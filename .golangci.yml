@@ -792,7 +792,7 @@ linters:
       - path: "server/services/([a-z]+/)?(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
-      - path: "session/health\\.go"
+      - path: "session/autonomous/health\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       # hibernation_sweeper uses the liveProvider fast path when wired; LoadInstances

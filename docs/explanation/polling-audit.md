@@ -108,7 +108,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/unfinished/scanner.go:508`, `watcher.go:171`, `scanner.go:360,983` | 60 s / 2 m backstop, 60 s re-walk, maintenance, 5 m repo prune | Repo scan with signature skip | Per-repo FSEvents/inotify tree watcher (exists); new-repo watch | Mostly done (rank 8) |
 | `session/history_linker.go:248` | 5 s | `scanAllSessions` correlates every monitored instance with Claude history | History-file fsnotify watcher (`HistoryFileWatcher` exists) | Pure-event |
 | `session/mux/discovery.go:352` | 30 s backstop | Scan for external PTY sessions | Mux socket events | Cheap-enough |
-| `session/health.go:636` | configured interval | `RecoverUnhealthySessions` over all instances, may `SaveInstances` | tmux session-closed notifications | Needs-new-event-source |
+| `session/autonomous/health.go:636` | configured interval | `RecoverUnhealthySessions` over all instances, may `SaveInstances` | tmux session-closed notifications | Needs-new-event-source |
 | `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `session/jules/session_poller.go:236`, `session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
 | `server/services/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
 | `server/services/guidance_ack_detector.go:155` | 3 s | per-row sample (name) | same | Pure-event |
@@ -123,7 +123,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/dbmaint/dbmaint.go:167` | 15 m | SQLite maintenance | none | Cheap-enough |
 | `session/host_advertiser.go:76`, `claim_gossiper.go:107` (5 m), `main.go:1486,1730`, `sshremote/health_prober.go:300` | 5 m | Multi-host heartbeats | peer events | Cheap-enough |
 | `server/notifications/subscriber.go:110,152`, `resolved_item_reaper.go:79`, `server/events` heartbeats (`pkg/events/heartbeat.go`, 15 s per Watch stream) | 15 s | Stream keepalives | n/a | Cheap-enough |
-| `server/services/session_creation_await.go:87` (250 ms), `backlog_service_verdict_steer.go:148` (5 s), `server/wakes/revive.go` (1 s), `session/autonomous_driver.go` (150-500 ms settle polls) | short | Bounded waits | n/a | Cheap-enough (bounded) |
+| `server/services/session_creation_await.go:87` (250 ms), `backlog_service_verdict_steer.go:148` (5 s), `server/wakes/revive.go` (1 s), `session/autonomous/autonomous_driver.go` (150-500 ms settle polls) | short | Bounded waits | n/a | Cheap-enough (bounded) |
 | `session/pty_discovery.go:459` (5 s), `external_tmux_streamer.go:426` (100 ms, control-mode-unavailable fallback only), `session/workspace/notify.go:51` (5 s, a no-op body), `daemon/daemon.go:107,210` (3 s / 5 s) | short | Discovery and fallbacks | n/a | Cheap-enough; `workspace/notify.go` ticker does nothing today |
 | Telemetry: `server/analytics/escape_event_batch_writer.go:47` (500 ms), `profiling/profiling.go:201`, `log/service_log_rotation.go:34`, `server/auth/session.go:233`, `scrollback/manager.go:53`, `workflow_engine_shadow.go:622`, `gitwiring/soak.go:83`, `tmux/fork_metrics.go:197`, `server/server_gatestats.go:22` | 500 ms to 10 m | Flush and metrics | n/a | Cheap-enough |
 

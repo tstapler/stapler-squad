@@ -1,4 +1,4 @@
-package session
+package autonomous
 
 // nudge_gate_settle_window_test.go is the regression suite for gap #5:
 // CheckNudgeEligible previously accepted StatusIdle||StatusReady||StatusSuccess

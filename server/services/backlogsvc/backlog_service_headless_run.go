@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -385,7 +386,7 @@ Do not modify the code. Only write the review verdict.
 			extras.ItemDescription = item.Description
 			extras.StatusEvents = item.StatusEvents
 			if sm := s.getScrollbackManager(); sm != nil && mostRecentWorkSession != nil {
-				relPath, cleanup, transcriptErr := session.WriteReviewTranscriptFile(sm, mostRecentWorkSession.SessionUUID, codebaseWorkDir, session.DefaultReviewTranscriptMaxBytes)
+				relPath, cleanup, transcriptErr := autonomous.WriteReviewTranscriptFile(sm, mostRecentWorkSession.SessionUUID, codebaseWorkDir, autonomous.DefaultReviewTranscriptMaxBytes)
 				transcriptCleanup = cleanup
 				if transcriptErr != nil {
 					log.Warn("[TriggerReReview] WriteReviewTranscriptFile failed", "item", item.ID, "error", transcriptErr)

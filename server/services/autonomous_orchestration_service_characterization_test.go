@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -71,7 +72,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus domain.B
 	return f
 }
 
-func (f *charFixture) complete(outcome session.AutonomousDriverOutcome) {
+func (f *charFixture) complete(outcome autonomous.AutonomousDriverOutcome) {
 	f.svc.AutonomousSvc.OnAutonomousDriverComplete(f.title, outcome)
 }
 
@@ -108,7 +109,7 @@ func (f *charFixture) openStuckRow(t *testing.T) backlogdto.OpenStuckStateData {
 	return open[0]
 }
 
-var stallOutcome = session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+var stallOutcome = autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 
 // signalingRespawner reports each respawn on a buffered channel.
 type signalingRespawner struct{ called chan string }
@@ -205,10 +206,10 @@ func TestOnAutonomousDriverComplete_Characterization_NilRespawner_LeavesItemInPr
 func TestOnAutonomousDriverComplete_Characterization_EventPayloadEqualsPostWriteSnapshot(t *testing.T) {
 	cases := []struct {
 		name        string
-		outcome     session.AutonomousDriverOutcome
+		outcome     autonomous.AutonomousDriverOutcome
 		wantOutcome string
 	}{
-		{"done", session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}, "done"},
+		{"done", autonomous.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}, "done"},
 		{"stall", stallOutcome, "stuck"},
 	}
 	for i, tc := range cases {
@@ -253,7 +254,7 @@ func TestOnAutonomousDriverComplete_Characterization_MarkStuckOncePerRolePerStal
 			if done {
 				name = r.name + "/done"
 				want = 0
-				outcome = session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}
+				outcome = autonomous.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}
 			}
 			t.Run(name, func(t *testing.T) {
 				f := newCharFixture(t, "char-markstuck-"+r.name+"-"+name[len(r.name)+1:], r.role, r.status)

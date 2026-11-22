@@ -19,7 +19,7 @@ package session
 // Every untrusted string (item description, activity-note/log/diff content)
 // is XML-tag-escaped and wrapped in a named delimiter tag before being
 // folded into the prompt, mirroring buildOrchestrationPrompt's
-// anti-prompt-injection technique (session/autonomous_driver.go) — the
+// anti-prompt-injection technique (session/autonomous/autonomous_driver.go) — the
 // dispatched diagnostic agent's action space includes filing bugs and
 // nudging a live session, so this is treated as a hard requirement here,
 // not optional.

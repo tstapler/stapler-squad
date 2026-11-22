@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -726,7 +727,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	// database/sql connection-pool cleaners from their own createTestStorage
 	// pools) starting mid-flight and getting misattributed as "leaked" by this
 	// test. See withShrunkIdleSettleTimers's identical rationale in
-	// session/autonomous_driver_test.go.
+	// session/autonomous/autonomous_driver_test.go.
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -2466,7 +2467,7 @@ func TestIsSafeSteerStatus_TurnCompleteOnly(t *testing.T) {
 			turnComplete = p.Description
 		}
 	}
-	require.Equal(t, session.TurnCompleteStatusContext, turnComplete, "claude.go's verb_duration_completion description changed")
+	require.Equal(t, autonomous.TurnCompleteStatusContext, turnComplete, "claude.go's verb_duration_completion description changed")
 
 	require.True(t, isSafeSteerStatus(detection.StatusSuccess, turnComplete))
 	require.False(t, isSafeSteerStatus(detection.StatusSuccess, "All tests passed"))
