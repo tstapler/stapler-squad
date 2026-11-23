@@ -8,9 +8,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
 // recordingNudgeGate records every verify call and returns a scripted error.
@@ -116,18 +116,18 @@ func TestRecordDiagnoseWriteFailure_should_LabelEachErrorByItsKind(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := session.NewNudgeOutcomeRecorder("", nil)
-			defer session.SwapNudgeOutcomeRecorder(rec)()
+			rec := nudgeoutcomes.NewNudgeOutcomeRecorder("", nil)
+			defer nudgeoutcomes.SwapNudgeOutcomeRecorder(rec)()
 			target := instance.NewStartedInstanceForTest(t, "outcome-target", &recordingPM{})
 
 			recordDiagnoseWriteFailure(target, tc.err)
 
-			got := map[session.NudgeOutcomeLabel]int64{}
+			got := map[nudgeoutcomes.NudgeOutcomeLabel]int64{}
 			for _, row := range rec.Snapshot().Totals {
 				got[row.Outcome] += row.Value
 			}
-			assert.Equal(t, tc.wantUncertain, got[session.NudgeOutcomeUncertain])
-			assert.Equal(t, tc.wantFailed, got[session.NudgeOutcomeFailed])
+			assert.Equal(t, tc.wantUncertain, got[nudgeoutcomes.NudgeOutcomeUncertain])
+			assert.Equal(t, tc.wantFailed, got[nudgeoutcomes.NudgeOutcomeFailed])
 		})
 	}
 }

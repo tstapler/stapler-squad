@@ -76,3 +76,4 @@ session/paneactivity !server
 session/registry !server
 session/pipelinemode !server
 session/claudehistory !server
+session/nudgeoutcomes !server

@@ -13,11 +13,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -153,7 +153,7 @@ func handleActuatorDB(w http.ResponseWriter, _ *http.Request) {
 // and the time of the first record (Story 4.1.2).
 func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(session.DefaultNudgeOutcomes().Snapshot())
+	_ = json.NewEncoder(w).Encode(nudgeoutcomes.DefaultNudgeOutcomes().Snapshot())
 }
 
 // handleActuatorWsUnary serves the unary WebSocket bridge counters as JSON. The bridge is
