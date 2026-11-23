@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "steertext",
+    srcs = ["steertext.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/steertext",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":steertext",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "steertext_test",
+    srcs = ["steertext_test.go"],
+    embed = [":steertext"],
+    deps = ["@com_github_stretchr_testify//require"],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

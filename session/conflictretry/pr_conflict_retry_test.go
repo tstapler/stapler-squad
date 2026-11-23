@@ -1,4 +1,4 @@
-package session
+package conflictretry
 
 import (
 	"strings"
@@ -167,6 +167,44 @@ func TestConflictRetryLedger_SessionsRanExcludesFailedStarts(t *testing.T) {
 	}
 }
 
+func TestConflictRetryLedger_RefundWithNoGrantIsIgnored(t *testing.T) {
+	var g ConflictRetryLedger
+	g.Take("a", time.Unix(1_000_000, 0), time.Hour, 0)
+	g.Refund("a")
+	g.Refund("a") // nothing left to refund
+	if grants, refunds := g.Counters("a"); grants != 0 || refunds != 1 {
+		t.Fatalf("counters = %d,%d; want 0,1", grants, refunds)
+	}
+	if got := g.FailedStarts("a"); got != 1 {
+		t.Fatalf("failedStarts = %d; want 1 (second refund had no grant)", got)
+	}
+}
+
+func TestConflictRetryLedger_UnknownItemReportsZeroCounters(t *testing.T) {
+	var g ConflictRetryLedger
+	if g.SessionsRan("nope") != 0 || g.FailedStarts("nope") != 0 {
+		t.Fatal("unknown item must report zero ran and zero failed starts")
+	}
+	if grants, refunds := g.Counters("nope"); grants != 0 || refunds != 0 {
+		t.Fatalf("unknown item counters = %d,%d; want 0,0", grants, refunds)
+	}
+}
+
+func TestConflictRetryLedger_CountersReportNetGrantsAndRefunds(t *testing.T) {
+	var g ConflictRetryLedger
+	t0 := time.Unix(1_000_000, 0)
+	g.Take("a", t0, time.Hour, 0)
+	g.Take("a", t0.Add(2*time.Hour), time.Hour, 0)
+	g.Refund("a")
+	grants, refunds := g.Counters("a")
+	if grants != 1 || refunds != 1 {
+		t.Fatalf("counters = %d,%d; want 1,1 (two grants, one refunded)", grants, refunds)
+	}
+	if g.FailedStarts("a") != 1 || g.SessionsRan("a") != 1 {
+		t.Fatalf("failed=%d ran=%d; want 1,1", g.FailedStarts("a"), g.SessionsRan("a"))
+	}
+}
+
 func TestConflictExhaustionMessage_DoesNotClaimSessionsThatNeverRan(t *testing.T) {
 	none := ConflictExhaustionMessage("Item", 0, 9)
 	if strings.Contains(none, "survived") {
@@ -176,7 +214,7 @@ func TestConflictExhaustionMessage_DoesNotClaimSessionsThatNeverRan(t *testing.T
 		t.Fatalf("message should say the fix could not be started: %q", none)
 	}
 	ran := ConflictExhaustionMessage("Item", 6, 0)
-	if !strings.Contains(ran, "survived 6 automated fix sessions") {
+	if strings.Contains(ran, "could not be started") || !strings.Contains(ran, "survived 6 automated fix sessions") {
 		t.Fatalf("message lost the normal wording: %q", ran)
 	}
 	mixed := ConflictExhaustionMessage("Item", 4, 2)

@@ -8,8 +8,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/steertext"
 )
 
 const (
@@ -76,7 +76,7 @@ func BuildPRNudgePrompt(d githubpkg.PRNudgeDetail) (prompt string, reasons []ses
 	if len(d.FailingChecks) > 0 {
 		b.WriteString("Failing checks:\n")
 		for _, c := range capped(d.FailingChecks) {
-			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(session.SanitizeUntrusted(c.Name, nudgeMaxCheckName)+" "+safeNudgeURL(c.URL, "")))
+			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(steertext.SanitizeUntrusted(c.Name, nudgeMaxCheckName)+" "+safeNudgeURL(c.URL, "")))
 		}
 		writeMore(&b, len(d.FailingChecks))
 	}
@@ -84,8 +84,8 @@ func BuildPRNudgePrompt(d githubpkg.PRNudgeDetail) (prompt string, reasons []ses
 		b.WriteString("Unresolved review threads:\n")
 		for _, t := range capped(d.UnresolvedThreads) {
 			line := fmt.Sprintf("%s by %s",
-				session.SanitizeUntrusted(t.Path, nudgeMaxPath),
-				session.SanitizeUntrusted(t.AuthorLogin, nudgeMaxAuthor))
+				steertext.SanitizeUntrusted(t.Path, nudgeMaxPath),
+				steertext.SanitizeUntrusted(t.AuthorLogin, nudgeMaxAuthor))
 			if link := safeNudgeURL(t.URL, d.Key.Host()); link != "" {
 				line += ": " + link
 			}
@@ -121,7 +121,7 @@ func safeNudgeURL(raw, wantHost string) string {
 	if wantHost != "" && !strings.EqualFold(u.Hostname(), wantHost) {
 		return ""
 	}
-	clean := session.SanitizeUntrusted(u.String(), nudgeMaxURL+1)
+	clean := steertext.SanitizeUntrusted(u.String(), nudgeMaxURL+1)
 	if clean != u.String() || len(clean) > nudgeMaxURL {
 		return ""
 	}
@@ -131,9 +131,9 @@ func safeNudgeURL(raw, wantHost string) string {
 // nudgePRLink builds the PR URL from the key rather than trusting a
 // GitHub-returned string.
 func nudgePRLink(k githubpkg.PRKey) string {
-	return "https://" + session.SanitizeUntrusted(k.Host(), nudgeMaxRepoSegment) +
-		"/" + session.SanitizeUntrusted(k.Owner(), nudgeMaxRepoSegment) +
-		"/" + session.SanitizeUntrusted(k.RepoName(), nudgeMaxRepoSegment) +
+	return "https://" + steertext.SanitizeUntrusted(k.Host(), nudgeMaxRepoSegment) +
+		"/" + steertext.SanitizeUntrusted(k.Owner(), nudgeMaxRepoSegment) +
+		"/" + steertext.SanitizeUntrusted(k.RepoName(), nudgeMaxRepoSegment) +
 		"/pull/" + strconv.Itoa(k.Number())
 }
 
@@ -144,5 +144,5 @@ func boundNudgePrompt(p string) string {
 	if len(p) <= instance.MaxSteerMessageLength {
 		return p
 	}
-	return session.TruncateUTF8Bytes(p, instance.MaxSteerMessageLength-len(nudgeTruncationNote)) + nudgeTruncationNote
+	return steertext.TruncateUTF8Bytes(p, instance.MaxSteerMessageLength-len(nudgeTruncationNote)) + nudgeTruncationNote
 }
