@@ -1,4 +1,4 @@
-package session
+package diagnose
 
 // diagnose_bundle.go — pure context-bundle assembly for Diagnose & Nudge
 // (AC0/AC1). BuildDiagnosticBundle takes pre-fetched data (the caller,

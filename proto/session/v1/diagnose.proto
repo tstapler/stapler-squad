@@ -17,7 +17,7 @@ service DiagnosticService {
   // context bundle for item_id: description/AC/status/history, review
   // verdicts, linked-session state, recent logs, and git diff/log — capped
   // at ~250k estimated tokens via whole-section compaction, never
-  // mid-section truncation (session.BuildDiagnosticBundle).
+  // mid-section truncation (diagnose.BuildDiagnosticBundle).
   rpc AssembleDiagnosticBundle(AssembleDiagnosticBundleRequest) returns (AssembleDiagnosticBundleResponse) {}
 
   // DispatchDiagnose spawns a new hidden, one-shot diagnostic agent session
