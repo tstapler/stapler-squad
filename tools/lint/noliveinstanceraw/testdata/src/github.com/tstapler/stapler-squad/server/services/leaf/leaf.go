@@ -15,3 +15,16 @@ func (s *SessionService) FindLiveInstance(id string) *Instance { return nil }
 func (s *SessionService) IsSessionLive(id string) bool {
 	return s.FindLiveInstance(id) != nil // want `raw FindLiveInstance\(\.\.\.\) nil-comparison`
 }
+
+// otherDecision is not monitored, so a raw comparison in a leaf must not be flagged.
+func (s *SessionService) otherDecision(id string) bool {
+	return s.FindLiveInstance(id) != nil
+}
+
+// confirmed stands in for the approved wrapper; delegating to it in a monitored method is clean.
+func (s *SessionService) confirmed(id string) *Instance { return s.FindLiveInstance(id) }
+
+// KillTmuxPaneOnly is monitored and clean: it goes through the wrapper.
+func (s *SessionService) KillTmuxPaneOnly(id string) bool {
+	return s.confirmed(id) != nil
+}

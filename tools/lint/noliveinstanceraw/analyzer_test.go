@@ -12,5 +12,5 @@ import (
 func TestAnalyzer(t *testing.T) {
 	gotool.Setup(t)
 	testdata := analysistest.TestData()
-	analysistest.Run(t, testdata, noliveinstanceraw.Analyzer, "github.com/tstapler/stapler-squad/server/services", "github.com/tstapler/stapler-squad/server/services/leaf")
+	analysistest.Run(t, testdata, noliveinstanceraw.Analyzer, "github.com/tstapler/stapler-squad/server/services", "github.com/tstapler/stapler-squad/server/services/leaf", "github.com/tstapler/stapler-squad/server/servicesx")
 }

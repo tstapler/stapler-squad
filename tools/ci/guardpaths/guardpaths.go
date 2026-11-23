@@ -125,7 +125,7 @@ func CheckLiveInstanceRawScope(fsys fs.FS) []string {
 	var problems []string
 	for _, name := range want {
 		if !declared[name] {
-			problems = append(problems, fmt.Sprintf("noliveinstanceraw guards method %s, but no file under %s declares it; the analyzer is inert for it (extend its scope or the watchlist in %s)", name, servicesDir, liveRawAnalyzer))
+			problems = append(problems, fmt.Sprintf("noliveinstanceraw guards method %s, but no non-mock %s method on a SessionService or Handler receiver declares it; the analyzer is inert for it (extend its scope or the watchlist in %s)", name, servicesDir, liveRawAnalyzer))
 		}
 	}
 	return problems
@@ -133,11 +133,27 @@ func CheckLiveInstanceRawScope(fsys fs.FS) []string {
 
 var bzlRowKey = regexp.MustCompile(`(?m)^    "([^"]+)":`)
 
-// declaredMethods returns the names of methods declared in non-test files at or under server/services.
+// liveRawReceivers are the receiver types that may implement the noliveinstanceraw watchlist. Today only
+// SessionService; Handler is the type the hub plan gives the sessionrpc, sessioncreate and sessionstream leaves
+// (project_plans/package-split-ocp/session-service-hub-plan.md, section 2). Mock receivers in internal/svctest
+// never count.
+var liveRawReceivers = map[string]bool{"SessionService": true, "Handler": true}
+
+// declaredMethods returns the names of methods declared on a liveRawReceivers type in non-test files at or
+// under server/services, outside internal/svctest and testdata.
 func declaredMethods(fsys fs.FS) map[string]bool {
 	declared := map[string]bool{}
 	_ = fs.WalkDir(fsys, servicesDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !isProdGo(p) {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" || strings.HasSuffix(p, "internal/svctest") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !isProdGo(p) {
 			return nil
 		}
 		pf, perr := parseFile(fsys, p)
@@ -145,13 +161,27 @@ func declaredMethods(fsys fs.FS) map[string]bool {
 			return nil
 		}
 		for _, decl := range pf.Decls {
-			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv != nil {
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv != nil && liveRawReceivers[receiverName(fd)] {
 				declared[fd.Name.Name] = true
 			}
 		}
 		return nil
 	})
 	return declared
+}
+
+func receiverName(fd *ast.FuncDecl) string {
+	if len(fd.Recv.List) == 0 {
+		return ""
+	}
+	t := fd.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }
 
 func isProdGo(p string) bool {
@@ -228,7 +258,7 @@ func CheckSvctestMain(fsys fs.FS) []string {
 	var problems []string
 	for dir := range startsDrivers {
 		if !hasMain[dir] {
-			problems = append(problems, fmt.Sprintf("%s imports session/driver but no test file calls svctest.Main; add a testmain_test.go so leaked drivers fail the package", dir))
+			problems = append(problems, fmt.Sprintf("%s imports session/driver but no test file calls svctest.Main; add a testmain_test.go so leaked drivers fail the package (this check sees direct imports only, so a leaf that starts drivers through another package is not caught)", dir))
 		}
 	}
 	sort.Strings(problems)
@@ -236,27 +266,60 @@ func CheckSvctestMain(fsys fs.FS) []string {
 }
 
 // scanDriverStarters returns the directories whose non-test code imports driverImport and those whose
-// tests call svctest.Main. The svctest helper package itself is not a starter.
+// tests call svctest.Main. Parsed, so a commented-out import or call does not count. The svctest helper
+// package and testdata are skipped.
 func scanDriverStarters(fsys fs.FS, driverImport string) (startsDrivers, hasMain map[string]bool) {
 	startsDrivers, hasMain = map[string]bool{}, map[string]bool{}
 	_ = fs.WalkDir(fsys, servicesDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") {
+		if err != nil {
 			return nil
 		}
-		src, rerr := fs.ReadFile(fsys, p)
-		if rerr != nil {
+		if d.IsDir() {
+			if d.Name() == "testdata" || strings.HasSuffix(p, "internal/svctest") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		f, perr := parseFile(fsys, p)
+		if perr != nil {
 			return nil
 		}
 		dir := path.Dir(p)
-		switch {
-		case !isProdGo(p):
-			if strings.Contains(string(src), "svctest.Main(") {
+		if !isProdGo(p) {
+			if callsSvctestMain(f) {
 				hasMain[dir] = true
 			}
-		case strings.Contains(string(src), driverImport) && !strings.HasSuffix(dir, "internal/svctest"):
+		} else if importsPath(f, driverImport) {
 			startsDrivers[dir] = true
 		}
 		return nil
 	})
 	return startsDrivers, hasMain
+}
+
+func importsPath(f *ast.File, quoted string) bool {
+	for _, imp := range f.Imports {
+		if imp.Path.Value == quoted {
+			return true
+		}
+	}
+	return false
+}
+
+func callsSvctestMain(f *ast.File) bool {
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Main" {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "svctest" {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
 }

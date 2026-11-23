@@ -79,7 +79,7 @@ func TestCheckLiveInstanceRawScope_ReportsMovedMethod(t *testing.T) {
 	t.Parallel()
 	fsys := fstest.MapFS{
 		liveRawAnalyzer:             file("package a\nvar monitoredFuncNames = map[string]bool{\"IsSessionLive\": true, \"Gone\": true}\n"),
-		"server/services/leaf/x.go": file("package leaf\nfunc (s *S) IsSessionLive() {}\nfunc (s *S) FindLiveInstance() {}\n"),
+		"server/services/leaf/x.go": file("package leaf\nfunc (s *SessionService) IsSessionLive() {}\nfunc (s *SessionService) FindLiveInstance() {}\n"),
 	}
 	requireOne(t, CheckLiveInstanceRawScope(fsys), "method Gone")
 }
@@ -113,4 +113,29 @@ func TestCheckSvctestMain_ReportsLeafWithoutMain(t *testing.T) {
 		"server/services/internal/svctest/driver.go": file(imp),
 	}
 	requireOne(t, CheckSvctestMain(fsys), "server/services/nomain")
+}
+
+func TestCheckLiveInstanceRawScope_IgnoresMocksInSvctest(t *testing.T) {
+	t.Parallel()
+	fsys := fstest.MapFS{
+		liveRawAnalyzer:                         file("package a\nvar monitoredFuncNames = map[string]bool{\"IsSessionLive\": true}\n"),
+		"server/services/internal/svctest/m.go": file("package svctest\nfunc (m *MockStopper) IsSessionLive() {}\nfunc (m *Stub) FindLiveInstance() {}\n"),
+		"server/services/other.go":              file("package services\nfunc (m *Unrelated) IsSessionLive() {}\n"),
+	}
+	problems := CheckLiveInstanceRawScope(fsys)
+	if len(problems) != 2 {
+		t.Fatalf("want IsSessionLive and FindLiveInstance reported, got %q", problems)
+	}
+}
+
+func TestCheckSvctestMain_IgnoresCommentedImportAndCall(t *testing.T) {
+	t.Parallel()
+	fsys := fstest.MapFS{
+		"server/services/a/a.go":          file("package a\n// import \"github.com/tstapler/stapler-squad/session/driver\"\n"),
+		"server/services/b/b.go":          file("package b\nimport _ \"github.com/tstapler/stapler-squad/session/driver\"\n"),
+		"server/services/b/m_test.go":     file("package b\n// svctest.Main(m) TODO\n"),
+		"server/services/testdata/c/c.go": file("package c\nimport _ \"github.com/tstapler/stapler-squad/session/driver\"\n"),
+	}
+	requireOne(t, CheckSvctestMain(fsys), "server/services/b")
+	requireOne(t, CheckSvctestMain(fsys), "direct imports only")
 }
