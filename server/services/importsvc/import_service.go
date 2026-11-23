@@ -94,7 +94,7 @@ func NewImportService(detector *instance.HistoryFileDetector, inspector ProcessC
 // dependencies needed by the three mutating RPCs.
 func NewImportServiceWithRealInspector(
 	storage session.InstanceStore,
-	registry *registry.Registry,
+	reg *registry.Registry,
 	linker *importer.HistoryLinker,
 	suspended *importer.SuspendedProcessStore,
 ) *ImportService {
@@ -104,7 +104,7 @@ func NewImportServiceWithRealInspector(
 		inspector:    inspector,
 		aliveChecker: inspector,
 		storage:      storage,
-		registry:     registry,
+		registry:     reg,
 		linker:       linker,
 		suspended:    suspended,
 		tmuxQuerier:  session.NewRealTmuxSocketQuerier(),

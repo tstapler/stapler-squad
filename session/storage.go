@@ -300,7 +300,7 @@ func (s *Storage) applyBulkArtifacts(instances []*instance.Instance) {
 	}
 }
 
-// hydrateSessionPRs attaches each session's PR links to its InstanceData before
+// HydrateSessionPRs (exported only to satisfy registry.Store; not for general callers) attaches each session's PR links to its InstanceData before
 // the Instance (and so its first snapshot) is built: one bulk read of links+states
 // (and one of tombstones) instead of a query per session. A legacy PR number with
 // neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves

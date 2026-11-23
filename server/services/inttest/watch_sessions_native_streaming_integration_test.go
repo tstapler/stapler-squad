@@ -87,8 +87,8 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 
 	prStatusPoller := prpoller.NewPRStatusPoller(storage)
 
-	registry := registry.NewRegistry(storage, sessionService.WireInstanceCallbacks)
-	sessionService.SetRegistry(registry)
+	reg := registry.NewRegistry(storage, sessionService.WireInstanceCallbacks)
+	sessionService.SetRegistry(reg)
 
 	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
 
@@ -121,7 +121,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 		ExternalApprovalMonitor: externalApprovalMonitor,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           errorRegistry,
-		Registry:                registry,
+		Registry:                reg,
 		BacklogEnabledCheck:     func() bool { return false },
 	}
 }

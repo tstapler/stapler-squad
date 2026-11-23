@@ -559,8 +559,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller.SetOptionsSource(attentionOptions)
 	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
-	registry := registry.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
-	core.SessionService.SetRegistry(registry)
+	reg := registry.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
+	core.SessionService.SetRegistry(reg)
 
 	w := warren.NewWire("ServiceDeps")
 	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
@@ -586,7 +586,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		StatusManager:     statusManager,
 		ReviewQueuePoller: reviewQueuePoller,
 		PRStatusPoller:    prStatusPoller,
-		Registry:          registry,
+		Registry:          reg,
 		AttentionOptions:  attentionOptions,
 	}, nil
 }
@@ -949,7 +949,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}, nil
 }
 
-// registryInstanceChecker is the narrow slice of *session.Registry that
+// registryInstanceChecker is the narrow slice of *registry.Registry that
 // newSessionLivenessChecker's fallback path needs — defined here (the consuming
 // package) rather than in session, per this repo's interface-pollution convention,
 // so a fake with no real *session.Storage can stand in for tests.

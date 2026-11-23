@@ -92,8 +92,8 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	// with no cross-goroutine synchronization at all — a real -race finding in
 	// this test, caused by the test omitting production wiring rather than by any
 	// bug in the actor itself.
-	registry := registry.NewRegistry(nil, svc.WireInstanceCallbacks)
-	svc.SetRegistry(registry)
+	reg := registry.NewRegistry(nil, svc.WireInstanceCallbacks)
+	svc.SetRegistry(reg)
 
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 

@@ -42,12 +42,12 @@ func newHibernationIdentityFixture(t *testing.T) (*SessionService, *instance.Ins
 	store := &hibernationIdentityStore{loaded: stale}
 	bus := events.NewEventBus(8)
 	t.Cleanup(bus.Close)
-	registry := registry.NewRegistry(nil, nil)
-	t.Cleanup(registry.Shutdown)
+	reg := registry.NewRegistry(nil, nil)
+	t.Cleanup(reg.Shutdown)
 	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	poller.AddInstance(canonical)
 	svc := &SessionService{
-		storage: store, eventBus: bus, registry: registry, ReviewQueuePoller: poller,
+		storage: store, eventBus: bus, registry: reg, ReviewQueuePoller: poller,
 		AutonomousSvc: &AutonomousOrchestrationService{},
 	}
 	release := instance.HoldHibernationTeardownForTest(t, canonical)

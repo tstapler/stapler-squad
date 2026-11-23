@@ -4681,7 +4681,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 	})
 }
 
-// wireRegistryForActorSerialization wires a *session.Registry into fix.svc if
+// wireRegistryForActorSerialization wires a *registry.Registry into fix.svc if
 // one isn't already present -- mirroring newRetryTestInstance's doc comment
 // in session_retry_creation_test.go: CreateManagedInstance only wraps the new
 // instance in a session.LiveInstance (session/create_managed_instance.go)
@@ -4742,7 +4742,7 @@ func wireRegistryForActorSerialization(fix *forkTestFixture) {
 //
 // This test caught a real bug on first run: DeleteSession and
 // CancelSessionCreation never released the creating instance's entry from
-// the SessionService-wide *session.Registry (Registry.ForceRelease was only
+// the SessionService-wide *registry.Registry (Registry.ForceRelease was only
 // ever called from CreateManagedInstance's own register-then-fail-to-persist
 // rollback path), so every deleted/cancelled session leaked its runActor
 // goroutine (session/actor.go) for the life of the process. Confirmed via

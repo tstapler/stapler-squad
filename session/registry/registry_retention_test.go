@@ -42,3 +42,39 @@ func TestRegistryRetain_AdoptsUnregisteredActor(t *testing.T) {
 	require.Nil(t, registry.Lookup(inst.UUID))
 	require.Error(t, actor.ContextErrForTest())
 }
+
+func TestRegistryRelease_KeepsEntryWhileAnotherHolderRemains(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil, nil)
+	defer reg.Shutdown()
+	actor := instance.NewLiveInstance(&instance.Instance{UUID: "shared"})
+	releaseFirst, err := reg.Register(actor)
+	require.NoError(t, err)
+	got, releaseSecond, err := reg.Acquire("shared")
+	require.NoError(t, err)
+	require.Same(t, actor, got)
+
+	releaseFirst()
+	require.Same(t, actor, reg.Lookup("shared"), "one holder remains, entry must survive")
+	require.NoError(t, actor.ContextErrForTest())
+
+	releaseSecond()
+	require.Nil(t, reg.Lookup("shared"))
+	require.Error(t, actor.ContextErrForTest())
+}
+
+func TestRegistryRelease_RemovesUnretainedEntryAtZero(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil, nil)
+	defer reg.Shutdown()
+	first := instance.NewLiveInstance(&instance.Instance{UUID: "gone"})
+	release, err := reg.Register(first)
+	require.NoError(t, err)
+
+	release()
+	require.Equal(t, 0, reg.Count())
+	replacement := instance.NewLiveInstance(&instance.Instance{UUID: "gone"})
+	_, err = reg.Register(replacement)
+	require.NoError(t, err, "the released ID must be free to register again")
+	require.Same(t, replacement, reg.Lookup("gone"))
+}

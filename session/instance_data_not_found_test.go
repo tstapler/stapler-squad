@@ -11,6 +11,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/registry"
 )
 
+// *Storage must keep satisfying the registry leaf's persistence port.
+var _ registry.Store = (*Storage)(nil)
+
 // Every layer must keep matching the one domain sentinel with errors.Is.
 func TestInstanceDataNotFound_should_MatchDomainSentinel_When_IDIsMissing(t *testing.T) {
 	t.Parallel()

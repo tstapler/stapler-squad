@@ -26,7 +26,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	registry := registry.NewRegistry(storage, nil)
+	reg := registry.NewRegistry(storage, nil)
 
 	dir := t.TempDir()
 
@@ -38,7 +38,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 			SessionType: domain.SessionTypeDirectory,
 		},
 		Storage:  storage,
-		Registry: registry,
+		Registry: reg,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, instance)
@@ -57,7 +57,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 	assert.True(t, found, "instance must be persisted via Storage.AddInstance")
 
 	// Registered: live handle acquirable from the registry.
-	live, release, acquireErr := registry.Acquire(instance.GetStableID())
+	live, release, acquireErr := reg.Acquire(instance.GetStableID())
 	require.NoError(t, acquireErr, "expected instance to be registered in the live-handle registry")
 	defer release()
 	assert.NotNil(t, live)
