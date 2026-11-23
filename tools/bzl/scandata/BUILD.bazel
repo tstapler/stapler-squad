@@ -122,6 +122,7 @@ filegroup(
         "//server/services/debugseed:go_sources",
         "//server/services/devtools:go_sources",
         "//server/services/featureflags:go_sources",
+        "//server/services/federation:go_sources",
         "//server/services/importsvc:go_sources",
         "//server/services/insights:go_sources",
         "//server/services/internal/streammetrics:go_sources",
