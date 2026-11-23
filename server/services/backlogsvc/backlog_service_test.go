@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -4119,7 +4120,7 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     repoPath,
-		PipelineMode: session.DefaultSDDPipelineModeSlug,
+		PipelineMode: pipelinemode.DefaultSDDPipelineModeSlug,
 	})
 	require.NoError(t, err)
 
@@ -4241,7 +4242,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	pipelineMode := session.DefaultSDDPipelineModeSlug
+	pipelineMode := pipelinemode.DefaultSDDPipelineModeSlug
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "widget integration",
 		RepoPath:     repoPath,
@@ -4520,7 +4521,7 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	pipelineMode := session.DefaultSDDPipelineModeSlug
+	pipelineMode := pipelinemode.DefaultSDDPipelineModeSlug
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:            "sdd auto-handoff item",
 		RepoPath:         repoPath,
@@ -4529,7 +4530,7 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 	}))
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
-	assert.Equal(t, session.DefaultSDDPipelineModeSlug, *createResp.Msg.Item.PipelineMode)
+	assert.Equal(t, pipelinemode.DefaultSDDPipelineModeSlug, *createResp.Msg.Item.PipelineMode)
 
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), itemID)

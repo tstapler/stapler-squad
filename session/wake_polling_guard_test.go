@@ -29,7 +29,7 @@ var pollingReferences = map[string]int{
 	"server/services/notification_quality_metrics_test.go":        6,
 	"session/backlog/pipeline/post_review_prompt_test.go":         1,
 	"session/domain/backlog.go":                                   1,
-	"session/prompt_sections.go":                                  1, // the one shared ban, used by every work prompt
+	"session/pipelinemode/prompt_sections.go":                     1, // the one shared ban, used by every work prompt
 }
 
 func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.T) {

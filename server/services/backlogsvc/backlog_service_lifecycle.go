@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 // resolveStuckOnManualTransition immediately resolves the durable stuck
@@ -170,7 +171,7 @@ func (s *BacklogService) defaultPipelineModeForNewItem(requested *string) string
 	if !services.SddDefaultPipelineEnabled(s.flags) {
 		return ""
 	}
-	return session.DefaultSDDPipelineModeSlug
+	return pipelinemode.DefaultSDDPipelineModeSlug
 }
 
 // --- CreateBacklogItem ---

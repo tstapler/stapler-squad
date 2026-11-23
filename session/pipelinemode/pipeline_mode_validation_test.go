@@ -1,4 +1,4 @@
-package session
+package pipelinemode
 
 // pipeline_mode_validation_test.go — tests for ValidatePipelineModeContent
 // (Epic 2.3 of project_plans/backlog-configurable-pipeline). Test names and
@@ -238,6 +238,20 @@ func TestValidateStageExecutors_should_Reject_When_ModelContainsShellMetacharact
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "triage")
+}
+
+// The pricing cross-check also rejects a metacharacter model, so force_unknown_model
+// isolates the character-class guard.
+func TestValidateStageExecutors_should_RejectShellMetacharacters_When_ForceUnknownModelSet(t *testing.T) {
+	t.Parallel()
+	err := ValidatePipelineModeContent(PipelineModeContentFields{
+		StageExecutors: map[stagecfg.StageRole]stagecfg.PipelineStageExecutor{
+			stagecfg.StageRoleTriage: {Model: "claude; rm -rf /"},
+		},
+		ForceUnknownModel: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stage_executors[triage].model")
 }
 
 // TestValidateStageExecutors_should_RejectNamingModelAndOverride_When_ModelIsUnrecognized
