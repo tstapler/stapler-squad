@@ -580,7 +580,7 @@ const HiddenSessionGateFeatureFlag = "hidden_session_gate"
 const HiddenSessionGateDefault = true
 
 // DriverPaneActivityGateDefault is the registry default of the session driver's
-// pane-activity gate (session.FeatureFlagDriverPaneActivityGate), shared by the
+// pane-activity gate (paneactivity.FeatureFlagDriverPaneActivityGate), shared by the
 // flag service and the driver's reader so they cannot disagree.
 const DriverPaneActivityGateDefault = true
 

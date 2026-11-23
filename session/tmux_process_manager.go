@@ -24,9 +24,9 @@ type panePIDInspector interface {
 	IsAlive(pid int32, expectedCreateTimeMs int64) bool
 }
 
-// capturePaneCacheTTL is the TTL for the CapturePaneContent result cache.
+// CapturePaneCacheTTL is the TTL for the CapturePaneContent result cache.
 // Avoids spawning a tmux subprocess on every poll tick.
-const capturePaneCacheTTL = time.Second
+const CapturePaneCacheTTL = time.Second
 
 // TmuxProcessManager owns the tmux session and preview-size tracking state that
 // were previously scattered as bare fields on Instance.
@@ -221,12 +221,12 @@ func (tm *TmuxProcessManager) cacheCaptureContent(content string) string {
 }
 
 // CapturePaneContent returns the current visible pane content.
-// Results are cached for capturePaneCacheTTL to reduce subprocess/forkLock
+// Results are cached for CapturePaneCacheTTL to reduce subprocess/forkLock
 // contention when called per-session on every poll tick.
 func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 	// Fast path: serve from cache if fresh.
 	tm.mu.RLock()
-	if time.Since(tm.captureContentAt) < capturePaneCacheTTL {
+	if time.Since(tm.captureContentAt) < CapturePaneCacheTTL {
 		cached := tm.captureContent
 		tm.mu.RUnlock()
 		return cached, nil
@@ -246,7 +246,7 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 }
 
 // CapturePaneContentContext mirrors CapturePaneContent (including its
-// capturePaneCacheTTL cache) but threads ctx onto the underlying subprocess
+// CapturePaneCacheTTL cache) but threads ctx onto the underlying subprocess
 // call on a cache miss, so a caller that cancels ctx can kill an in-flight
 // capture-pane process rather than only abandoning the exec-gate wait. Used
 // by Instance.PreviewContext for the SessionDriver polling path, whose stop
@@ -254,7 +254,7 @@ func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
 // session/driver/session_driver.go's stop/join mechanism.
 func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (string, error) {
 	tm.mu.RLock()
-	if time.Since(tm.captureContentAt) < capturePaneCacheTTL {
+	if time.Since(tm.captureContentAt) < CapturePaneCacheTTL {
 		cached := tm.captureContent
 		tm.mu.RUnlock()
 		return cached, nil
@@ -276,7 +276,7 @@ func (tm *TmuxProcessManager) CapturePaneContentContext(ctx context.Context) (st
 // CapturePaneContentPriority mirrors CapturePaneContent but routes the
 // subprocess call through the resync exec-gate fast lane instead of the
 // default pool (Epic 4.2, terminal:resync-exec-gate-fast-lane), and always
-// captures fresh — it deliberately bypasses the capturePaneCacheTTL cache
+// captures fresh — it deliberately bypasses the CapturePaneCacheTTL cache
 // since resync's whole point is an up-to-date snapshot, not the cached value
 // a concurrent poll tick may have populated.
 func (tm *TmuxProcessManager) CapturePaneContentPriority() (string, error) {

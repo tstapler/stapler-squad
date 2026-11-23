@@ -5,7 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/paneactivity"
 )
 
 // coreFlagSpecs are the flags whose name constants live in package services. A flag owned by a leaf package
@@ -133,7 +133,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
-		Name:        session.FeatureFlagDriverPaneActivityGate,
+		Name:        paneactivity.FeatureFlagDriverPaneActivityGate,
 		Description: "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
 		Default:     config.DriverPaneActivityGateDefault,
 	},
