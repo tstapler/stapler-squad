@@ -16,6 +16,7 @@ go_library(
         "//config",
         "//log",
         "//session",
+        "//session/claudehistory",
         "//session/detection",
         "//session/domain",
         "//session/instance",

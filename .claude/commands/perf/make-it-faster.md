@@ -236,7 +236,7 @@ prompt: |
 
   | Issue | Location | Profile signal | Impact |
   |-------|----------|----------------|--------|
-  | `findConversationFilePath` fresh 1MB scanner buffer per file during walk | `session/history.go:360` | allocs: 36.05% cum (2026-08-06) | see PerfFix-1 below — pool the `bufio.Scanner` buffer instead of allocating fresh per file |
+  | `findConversationFilePath` fresh 1MB scanner buffer per file during walk | `session/claudehistory/history.go:360` | allocs: 36.05% cum (2026-08-06) | see PerfFix-1 below — pool the `bufio.Scanner` buffer instead of allocating fresh per file |
   | `ArtifactExtractor.scanFile` fresh 10MB scanner buffer per call | `session/artifacts/scan.go:37` | allocs: 18.56%/20.96% cum (2026-08-06) | see PerfFix-2 below — shared pool with `tokens/parser.go` |
   | `Parser.ParseReader` fresh 10MB scanner buffer per call | `session/tokens/parser.go:73` | allocs: 17.49%/20.46% cum (2026-08-06) | see PerfFix-3 below — shared pool with `artifacts/scan.go` |
   | `GoGitVCSReader.diffShortstatUncached` (via `unfinished.Scanner.worker`→`scanRepo`/`scanWorktree`) | `session/unfinished/gogit_vcs_reader.go:1365` | CPU: 17.6% flat / 18.6% cum of a live 8s `-seconds` sample (2026-09-10), almost entirely `runtime.tryDeferToSpanScan` (GC mark-assist billed to the allocating goroutine) | intrinsic cost of go-git's pure-Go diff/tree-walk on every background scan poll, not a leak — see the architecture note in Phase 2b below before micro-optimizing further; the 2026-08 alloc-focused fix (HEAD tree hash caching, `4cd1d384a`) cut allocation *volume* but not this function's CPU share |
@@ -646,7 +646,7 @@ total allocation, or top-5 by cum ms for mutex/block).
 
 | Location | Profile | Signal (as of session date) | Fix direction |
 |----------|---------|--------|---------------|
-| `session/history.go:360` (`findConversationFilePath`) | allocs | 36.05% cum (2026-08-06) | pool the 1MB `bufio.Scanner` buffer instead of allocating fresh per file during `filepath.Walk` |
+| `session/claudehistory/history.go:360` (`findConversationFilePath`) | allocs | 36.05% cum (2026-08-06) | pool the 1MB `bufio.Scanner` buffer instead of allocating fresh per file during `filepath.Walk` |
 | `session/artifacts/scan.go:37` (`scanFile`) | allocs | 18.56%/20.96% cum (2026-08-06) | pool the 10MB scanner buffer, share helper with `tokens/parser.go` |
 | `session/tokens/parser.go:73` (`ParseReader`) | allocs | 17.49%/20.46% cum (2026-08-06) | pool the 10MB scanner buffer, share helper with `artifacts/scan.go` |
 

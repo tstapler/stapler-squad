@@ -12,7 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -66,7 +66,7 @@ type historyBranchEntry struct {
 
 // historySnapshot is an immutable COW record stored in atomic.Value.
 type historySnapshot struct {
-	cache *session.ClaudeSessionHistory
+	cache *claudehistory.ClaudeSessionHistory
 	at    time.Time
 }
 
@@ -173,7 +173,7 @@ func (ss *SearchService) liveSessionStatus(conversationID string) sessionv1.Sess
 // getOrRefreshHistoryCache returns the cached history or refreshes it if stale.
 // Fast-path reads are lock-free (atomic.Value Load). Concurrent refreshes are
 // coalesced via singleflight so at most one disk scan runs at a time.
-func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session.ClaudeSessionHistory, error) {
+func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*claudehistory.ClaudeSessionHistory, error) {
 	ctx, span := telemetry.StartSpan(ctx, "SearchService.getOrRefreshHistoryCache")
 	defer span.End()
 
@@ -194,7 +194,7 @@ func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session
 	// Slow path: coalesce concurrent refreshes with singleflight.
 	span.SetAttributes(attribute.Bool("cache.hit", false))
 	type result struct {
-		hist *session.ClaudeSessionHistory
+		hist *claudehistory.ClaudeSessionHistory
 	}
 	v, err, _ := ss.historyGroup.Do("refresh", func() (interface{}, error) {
 		// Re-check after winning the coalesce race — another goroutine may have
@@ -208,7 +208,7 @@ func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session
 
 		_, loadSpan := telemetry.StartSpan(ctx, "SearchService.loadHistoryFromDisk")
 		loadStart := time.Now()
-		hist, loadErr := session.NewClaudeSessionHistoryFromClaudeDir()
+		hist, loadErr := claudehistory.NewClaudeSessionHistoryFromClaudeDir()
 		loadDuration := time.Since(loadStart)
 		loadSpan.SetAttributes(attribute.Int64("load.duration_ms", loadDuration.Milliseconds()))
 		if loadErr != nil {
@@ -255,7 +255,7 @@ func (ss *SearchService) ListClaudeHistory(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
-	var entries []session.ClaudeHistoryEntry
+	var entries []claudehistory.ClaudeHistoryEntry
 
 	if req.Msg.Project != nil && *req.Msg.Project != "" {
 		entries = hist.GetByProject(*req.Msg.Project)
@@ -355,9 +355,9 @@ func (ss *SearchService) ListClaudeHistory(
 // follow-up lookup (e.g. GetMessagesFromConversationFile) can reuse it.
 func (ss *SearchService) resolveHistoryEntry(
 	ctx context.Context,
-	hist *session.ClaudeSessionHistory,
+	hist *claudehistory.ClaudeSessionHistory,
 	id string,
-) (*session.ClaudeHistoryEntry, string, error) {
+) (*claudehistory.ClaudeHistoryEntry, string, error) {
 	entry, err := hist.GetByID(id)
 	if err == nil {
 		return entry, id, nil

@@ -98,3 +98,11 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 		assert.Positive(t, mock.startCalls, "control: a live session must still recover from a stale --resume uuid")
 	})
 }
+
+// makeTestInstance creates a minimal Instance for testing (no tmux, not started).
+func makeTestInstance(title string) *instance.Instance {
+	return &instance.Instance{
+		Title:  title,
+		Status: domain.Active,
+	}
+}
