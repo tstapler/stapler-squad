@@ -127,27 +127,6 @@ func parseProcessState(state string) PTYStatus {
 	}
 }
 
-// listAllPanes runs one `tmux list-panes -a -F format` against socket for a background poller:
-// ok is false when no exec-gate slot is free right now (skip this tick) or tmux failed.
-func listAllPanes(socket, format string) (output []byte, ok bool) {
-	resolved := tmux.ResolveSocket(socket)
-	args := resolved.Args("list-panes", "-a", "-F", format)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	release, acquired := tmux.TryAcquireExecSlot(resolved.String())
-	if !acquired {
-		return nil, false
-	}
-	defer release()
-
-	out, err := safeexec.CommandContext(ctx, tmux.Binary(), args...).Output()
-	if err != nil {
-		return nil, false
-	}
-	return out, true
-}
-
 // batchPaneActivity returns the newest window-activity timestamp for each session
 // by running a single `tmux list-panes -a` call. The tmux format #{window_activity}
 // is a Unix timestamp updated whenever the window produces output (#{pane_last_activity}
@@ -156,7 +135,7 @@ func listAllPanes(socket, format string) (output []byte, ok bool) {
 // Empty or non-numeric values are treated as unknown (session omitted).
 // Returns nil when tmux is unavailable.
 func batchPaneActivity(socket string) map[string]time.Time {
-	output, ok := listAllPanes(socket, "#{session_name} #{window_activity}")
+	output, ok := tmux.ListAllPanes(socket, "#{session_name} #{window_activity}")
 	if !ok {
 		return nil
 	}

@@ -19,6 +19,7 @@ go_library(
         "//session/detection",
         "//session/domain",
         "//session/instance",
+        "//session/paneactivity",
         "@com_github_spaolacci_murmur3//:murmur3",
     ],
 )

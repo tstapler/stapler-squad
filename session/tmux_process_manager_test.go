@@ -41,7 +41,7 @@ func newCapturePaneCountingTmuxSession(t *testing.T, name string) (*tmux.TmuxSes
 }
 
 // TestTmuxProcessManager_CapturePaneContentContext_ServesFromCacheWithinTTL proves the
-// capturePaneCacheTTL cache (item 7 of PR #548's review: zero coverage for
+// CapturePaneCacheTTL cache (item 7 of PR #548's review: zero coverage for
 // CapturePaneContentContext's branching) actually short-circuits the underlying
 // subprocess call on a cache hit, rather than merely documenting that it should.
 func TestTmuxProcessManager_CapturePaneContentContext_ServesFromCacheWithinTTL(t *testing.T) {
@@ -55,12 +55,12 @@ func TestTmuxProcessManager_CapturePaneContentContext_ServesFromCacheWithinTTL(t
 
 	second, err := tm.CapturePaneContentContext(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, first, second, "a call within capturePaneCacheTTL must return the cached content unchanged")
+	require.Equal(t, first, second, "a call within CapturePaneCacheTTL must return the cached content unchanged")
 	require.Equal(t, 1, *calls, "a cache hit must not invoke the subprocess again")
 }
 
 // TestTmuxProcessManager_CapturePaneContentContext_RefetchesAfterTTLExpires proves the
-// cache is not permanent: once capturePaneCacheTTL elapses, the next call must go back
+// cache is not permanent: once CapturePaneCacheTTL elapses, the next call must go back
 // to the subprocess and observe fresh content instead of serving stale cached output
 // forever.
 func TestTmuxProcessManager_CapturePaneContentContext_RefetchesAfterTTLExpires(t *testing.T) {
@@ -72,10 +72,10 @@ func TestTmuxProcessManager_CapturePaneContentContext_RefetchesAfterTTLExpires(t
 	require.NoError(t, err)
 	require.Equal(t, 1, *calls)
 
-	// Backdate the cache timestamp instead of sleeping capturePaneCacheTTL (1s) — same
+	// Backdate the cache timestamp instead of sleeping CapturePaneCacheTTL (1s) — same
 	// effect, deterministic, and doesn't slow the suite down.
 	tm.mu.Lock()
-	tm.captureContentAt = time.Now().Add(-2 * capturePaneCacheTTL)
+	tm.captureContentAt = time.Now().Add(-2 * CapturePaneCacheTTL)
 	tm.mu.Unlock()
 
 	second, err := tm.CapturePaneContentContext(context.Background())

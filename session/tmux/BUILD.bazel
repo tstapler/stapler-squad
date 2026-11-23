@@ -17,6 +17,7 @@ go_library(
         "exec_gate_observability.go",
         "fork_metrics.go",
         "leaked_control_mode_sweeper.go",
+        "list_all_panes.go",
         "program_kind.go",
         "pty.go",
         "registry_port.go",

@@ -1,4 +1,5 @@
-package session
+// Package paneactivity lets a session driver skip its per-tick capture-pane while the pane is provably unchanged.
+package paneactivity
 
 import (
 	"bytes"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // FeatureFlagDriverPaneActivityGate is the kill switch for paneActivityGate. Default on: with
@@ -101,9 +103,11 @@ func driverPaneSnapshot(remote bool) map[string]time.Time {
 }
 
 // captureStaleness bounds how old the content behind a capture can be: the process manager serves
-// a cached capture for up to capturePaneCacheTTL, stamped at completion, so a capture that began at T
+// a cached capture for up to its capture-cache TTL, stamped at completion, so a capture that began at T
 // may show the pane as of T minus the TTL minus the capture latency.
-const captureStaleness = capturePaneCacheTTL + captureLatencyAllowance
+func captureStaleness(captureCacheTTL time.Duration) time.Duration {
+	return captureCacheTTL + captureLatencyAllowance
+}
 
 // captureLatencyAllowance covers the cache being stamped when a capture finishes while its content is
 // as of when tmux ran it; 3 s is the control-mode capture timeout, the longest a capture runs.
@@ -114,12 +118,14 @@ const captureLatencyAllowance = 3 * time.Second
 //
 // A cached capture is reused only when all hold: the session is in the snapshot with the same
 // pane_last_activity as at the last capture, that capture's content is provably newer than the
-// activity second (capture start minus captureStaleness falls in a later whole second, so any later
+// activity second (capture start minus the staleness bound falls in a later whole second, so any later
 // output moves the activity), and the capture is under paneGateMaxCaptureAge old. Otherwise it captures, exactly as before.
 type paneActivityGate struct {
 	snapshot func() map[string]time.Time
 	now      func() time.Time
 	enabled  func() bool
+	// staleness is captureStaleness for the process manager's capture-cache TTL.
+	staleness time.Duration
 
 	valid      bool
 	activity   time.Time
@@ -127,8 +133,8 @@ type paneActivityGate struct {
 	content    string
 }
 
-func newPaneActivityGate(snapshot func() map[string]time.Time, now func() time.Time, enabled func() bool) *paneActivityGate {
-	return &paneActivityGate{snapshot: snapshot, now: now, enabled: enabled}
+func newPaneActivityGate(snapshot func() map[string]time.Time, now func() time.Time, enabled func() bool, captureCacheTTL time.Duration) *paneActivityGate {
+	return &paneActivityGate{snapshot: snapshot, now: now, enabled: enabled, staleness: captureStaleness(captureCacheTTL)}
 }
 
 // reset drops the cached capture; the driver calls it when the instance's preview is blocked.
@@ -144,7 +150,7 @@ func (g *paneActivityGate) preview(ctx context.Context, tmuxName string, capture
 	activity, inSnapshot := g.snapshot()[tmuxName]
 	start := g.now()
 	if inSnapshot && g.valid && activity.Equal(g.activity) &&
-		g.capturedAt.Add(-captureStaleness).Unix() > activity.Unix() && start.Sub(g.capturedAt) < paneGateMaxCaptureAge {
+		g.capturedAt.Add(-g.staleness).Unix() > activity.Unix() && start.Sub(g.capturedAt) < paneGateMaxCaptureAge {
 		return g.content, nil
 	}
 	content, err := capture(ctx)
@@ -163,7 +169,7 @@ func (g *paneActivityGate) preview(ctx context.Context, tmuxName string, capture
 // `capture-pane -t <session>` reads. window_activity covers every pane in the window, so it can
 // only over-report change, never miss it. Returns nil when no slot is free or tmux failed.
 func batchWindowActivity(socket string) map[string]time.Time {
-	out, ok := listAllPanes(socket, "#{session_name} #{window_active}#{pane_active} #{window_activity}")
+	out, ok := tmux.ListAllPanes(socket, "#{session_name} #{window_active}#{pane_active} #{window_activity}")
 	if !ok {
 		return nil
 	}
@@ -207,9 +213,10 @@ func driverPreview(ctx context.Context, gate *paneActivityGate, inst *instance.I
 
 // NewDriverPreview returns inst's per-tick gated preview source for a session driver. The gate is
 // local tmux only: a remote instance has no local snapshot, so every tick captures.
-func NewDriverPreview(inst *instance.Instance) func(ctx context.Context) (string, error) {
+// captureCacheTTL is the process manager's capture-cache TTL (session.CapturePaneCacheTTL).
+func NewDriverPreview(inst *instance.Instance, captureCacheTTL time.Duration) func(ctx context.Context) (string, error) {
 	gate := newPaneActivityGate(func() map[string]time.Time {
 		return driverPaneSnapshot(inst.IsRemote())
-	}, time.Now, driverPaneActivityGateEnabled)
+	}, time.Now, driverPaneActivityGateEnabled, captureCacheTTL)
 	return func(ctx context.Context) (string, error) { return driverPreview(ctx, gate, inst) }
 }

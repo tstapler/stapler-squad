@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "paneactivity",
+    srcs = ["gate.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/paneactivity",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//session/instance",
+        "//session/tmux",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":paneactivity",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "paneactivity_test",
+    srcs = ["gate_test.go"],
+    embed = [":paneactivity"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)
