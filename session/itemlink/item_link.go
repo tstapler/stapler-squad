@@ -1,4 +1,4 @@
-package session
+package itemlink
 
 import (
 	"context"
@@ -32,7 +32,7 @@ const (
 // describes what went wrong; Remediation is caller-facing guidance text,
 // carried over verbatim from the resolveItemLink implementation this type
 // was extracted from (server/mcp/tools_backlog.go) so both the MCP and RPC
-// adapters surface identical copy — see item_link_test.go and
+// adapters surface identical copy — see session/item_link_test.go and
 // server/services/guidance_request_ownership_parity_test.go.
 type ItemLinkError struct {
 	Code        ItemLinkErrorCode

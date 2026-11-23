@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
@@ -175,10 +176,10 @@ func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.Call
 // resolveDiagnoseItemLink is resolveItemLink's diagnose-role counterpart:
 // backlogHandlers.resolveItemLink is a method on a different struct, so this
 // is a small free-function duplicate calling the same
-// session.ResolveItemLink — mirrors submitReviewVerdict's own
+// itemlink.ResolveItemLink — mirrors submitReviewVerdict's own
 // resolveItemLink-then-role-check shape for SessionRoleReview.
 func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := session.ResolveItemLink(ctx, storage, callerUUID, itemID)
+	itemSession, linkErr := itemlink.ResolveItemLink(ctx, storage, callerUUID, itemID)
 	if linkErr == nil {
 		if itemSession.Role != instance.SessionRoleDiagnose {
 			return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only %q may call this tool", itemSession.Role, instance.SessionRoleDiagnose), "")
@@ -186,9 +187,9 @@ func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, call
 		return itemSession, nil
 	}
 	switch linkErr.Code {
-	case session.ItemLinkNotFound:
+	case itemlink.ItemLinkNotFound:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
-	case session.ItemLinkPermissionDenied:
+	case itemlink.ItemLinkPermissionDenied:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
