@@ -80,5 +80,6 @@ filegroup(
     visibility = [
         "//server/services:__pkg__",
         "//session:__pkg__",
+        "//tools/ci/guardpaths:__pkg__",
     ],
 )

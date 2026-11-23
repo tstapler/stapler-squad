@@ -652,10 +652,14 @@ go_test(
 
 # Read by session/tymux's metrics guard test, which scans these sources.
 # Read by server/services tests that scan session sources.
+# Read by tools/ci/guardpaths (checks that path-keyed guards still name existing session files).
 filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
-    visibility = ["//server/services:__pkg__"],
+    visibility = [
+        "//server/services:__pkg__",
+        "//tools/ci/guardpaths:__pkg__",
+    ],
 )
 
 filegroup(
