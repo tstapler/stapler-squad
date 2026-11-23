@@ -65,7 +65,7 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 // regression test for the 2026-09-12 mass tmux-kill-server incident: after a
 // tmux server crash, every instance's in-process TmuxSession pointer is still
 // non-nil (HasSession() true) even though the OS-level session it points to
-// is gone (IsAlive() false) -- exactly what a fake TmuxManager reports here
+// is gone (IsAlive() false) -- exactly what a fake tmux.TmuxManager reports here
 // without needing a real tmux server. Before the fix, initTmuxSession()'s
 // guard checked HasSession() alone and returned early, skipping
 // buildLaunchCommand() entirely and leaving i.LaunchCommand as whatever
