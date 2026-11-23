@@ -31,7 +31,7 @@ const (
 // third-party comment bodies, and never a slash command (a one-click nudge
 // leaves the user in the loop; chaining untrusted text to an auto-executing
 // command would widen prompt-injection blast radius). Every GitHub-sourced
-// string is passed through session.SanitizeUntrusted and sits under a line
+// string is passed through steertext.SanitizeUntrusted and sits under a line
 // stating it is data, not instructions.
 func BuildPRNudgePrompt(d githubpkg.PRNudgeDetail) (prompt string, reasons []sessionv1.NudgeReason) {
 	if d.State == "closed" || d.State == "merged" || d.IsDraft {

@@ -23,6 +23,7 @@ func TestSanitizeUntrusted_should_StripC0C1CSIAndOSCAndCollapseNewlines_When_Tab
 		{"dcs", "a\x1bPq#0;2;0\x1b\\b", "ab"},
 		{"two byte escape", "a\x1bcb", "ab"},
 		{"lone trailing esc", "a\x1b", "a"},
+		{"newline then space dedupes to one space", "a\n b", "a b"},
 		{"nF escape with intermediate", "a\x1b(Bb", "ab"},
 		{"nF escape unterminated after intermediate", "a\x1b(", "a"},
 		{"nF escape with space intermediate", "a\x1b Fb", "ab"},
@@ -70,4 +71,10 @@ func TestSanitizeUntrusted_should_TruncateOnRuneBoundary_When_OverByteLimit(t *t
 	require.Equal(t, "世", got)
 	require.True(t, utf8.ValidString(got))
 	require.Equal(t, "", SanitizeUntrusted("abc", 0))
+}
+
+func TestTruncate_should_ReturnEmpty_When_MaxBytesNegative(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "", SanitizeUntrusted("abc", -1))
+	require.Equal(t, "", TruncateUTF8Bytes("abc", -1))
 }

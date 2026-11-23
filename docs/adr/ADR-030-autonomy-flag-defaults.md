@@ -70,7 +70,7 @@ lines finds it, add it to the table above rather than inferring one.
 3. Each default has one declaration: in `config` for the diagnose, stall-nudge and triage flags, in the registry row for
    `backlog:sdd-default-pipeline`.
 4. Flipping a code default on needs measurable exit criteria. Outcomes are now countable through the nudge-outcome ledger
-   (`/actuator/nudge-outcomes`, `session/nudge_outcomes.go`); the thresholds are an open owner decision and are not set here.
+   (`/actuator/nudge-outcomes`, `session/nudgeoutcomes/nudge_outcomes.go`); the thresholds are an open owner decision and are not set here.
 
 ## Alternatives rejected
 

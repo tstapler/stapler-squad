@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
 // stallNudgeRestartTimeout is the driver warm-up after a nudge, the value triage uses.
@@ -189,37 +190,37 @@ func recordStallCapSkip(in domain.StallDecisionInput, title string) {
 	}
 	in.NudgeAllowed = true
 	if domain.DecideStallAction(in) == domain.StallActionNudge {
-		session.RecordNudgeOutcome(session.NudgeKindStall, session.NudgeOutcomeSkippedCap, title)
+		nudgeoutcomes.RecordNudgeOutcome(nudgeoutcomes.NudgeKindStall, nudgeoutcomes.NudgeOutcomeSkippedCap, title)
 	}
 }
 
 // nudgeOutcomeLabel maps the stop-row outcome to the durable counter's
 // vocabulary; ok is false for outcomes that are not attempts.
-func nudgeOutcomeLabel(o nudgeOutcome) (label session.NudgeOutcomeLabel, ok bool) {
+func nudgeOutcomeLabel(o nudgeOutcome) (label nudgeoutcomes.NudgeOutcomeLabel, ok bool) {
 	switch o {
 	case nudgeOutcomeSuccess:
-		return session.NudgeOutcomeDelivered, true
+		return nudgeoutcomes.NudgeOutcomeDelivered, true
 	case nudgeOutcomeUncertain:
-		return session.NudgeOutcomeUncertain, true
+		return nudgeoutcomes.NudgeOutcomeUncertain, true
 	case nudgeOutcomeCtxCancelled, nudgeOutcomeNotRestartable:
-		return session.NudgeOutcomeCancelled, true
+		return nudgeoutcomes.NudgeOutcomeCancelled, true
 	case nudgeOutcomeSlotUnavailable:
-		return session.NudgeOutcomeSkippedCap, true
+		return nudgeoutcomes.NudgeOutcomeSkippedCap, true
 	case nudgeOutcomeNotIdle:
-		return session.NudgeOutcomeNotIdle, true
+		return nudgeoutcomes.NudgeOutcomeNotIdle, true
 	case nudgeOutcomeLeaseBusy:
-		return session.NudgeOutcomeLeaseBusy, true
+		return nudgeoutcomes.NudgeOutcomeLeaseBusy, true
 	case nudgeOutcomeOwnership:
-		return session.NudgeOutcomeOwnership, true
+		return nudgeoutcomes.NudgeOutcomeOwnership, true
 	case nudgeOutcomeRestartFailed:
-		return session.NudgeOutcomeRestartFailed, true
+		return nudgeoutcomes.NudgeOutcomeRestartFailed, true
 	}
 	return "", false
 }
 
 func recordStallNudgeOutcome(title string, o nudgeOutcome) {
 	if label, ok := nudgeOutcomeLabel(o); ok {
-		session.RecordNudgeOutcome(session.NudgeKindStall, label, title)
+		nudgeoutcomes.RecordNudgeOutcome(nudgeoutcomes.NudgeKindStall, label, title)
 	}
 }
 

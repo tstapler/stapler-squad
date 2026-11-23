@@ -1,4 +1,4 @@
-package session
+package nudgeoutcomes
 
 // nudge_outcomes.go is the durable nudge_outcome_total{kind,outcome} counter
 // (Story 4.1.2). Q5's exit criteria for the diagnose and stall nudge flags need

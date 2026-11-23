@@ -180,6 +180,14 @@ func TestConflictRetryLedger_RefundWithNoGrantIsIgnored(t *testing.T) {
 	}
 }
 
+func TestConflictRetryLedger_ZeroLastNeverThrottlesFirstTake(t *testing.T) {
+	var g ConflictRetryLedger
+	// An interval beyond any representable gap would throttle a zero last time if the guard were absent.
+	if g.Take("a", time.Time{}, time.Duration(1<<63-1), 0) != ConflictRetryGranted {
+		t.Fatal("first take must be granted even when now is the zero time")
+	}
+}
+
 func TestConflictRetryLedger_UnknownItemReportsZeroCounters(t *testing.T) {
 	var g ConflictRetryLedger
 	if g.SessionsRan("nope") != 0 || g.FailedStarts("nope") != 0 {
