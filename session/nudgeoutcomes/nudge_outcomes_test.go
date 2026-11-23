@@ -62,8 +62,9 @@ func TestNudgeOutcomeRecorder_SnapshotSortedByKindThenOutcome(t *testing.T) {
 	r.Record(NudgeKindStall, NudgeOutcomeDelivered, "S1")
 	r.Record(NudgeKindDiagnose, NudgeOutcomeUncertain, "S1")
 
-	var got []string
-	for _, c := range r.Snapshot().Totals {
+	totals := r.Snapshot().Totals
+	got := make([]string, 0, len(totals))
+	for _, c := range totals {
 		got = append(got, string(c.Kind)+"/"+string(c.Outcome))
 	}
 	assert.Equal(t, []string{"diagnose/uncertain", "stall/delivered", "stall/not_idle"}, got)
