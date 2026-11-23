@@ -9,6 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -78,7 +79,7 @@ func (s *SessionService) ListSessions(
 	if err != nil || s.federation == nil || req.Msg.HiddenOnly {
 		return resp, err
 	}
-	resp.Msg.Sessions = append(resp.Msg.Sessions, s.federation.filtered(req.Msg)...)
+	resp.Msg.Sessions = append(resp.Msg.Sessions, s.federation.Filtered(req.Msg)...)
 	return resp, nil
 }
 
@@ -106,7 +107,7 @@ func (s *SessionService) LocalPaneSnapshot(sessionID string) (string, error) {
 }
 
 // SetFederation enables merging peer sessions into ListSessions.
-func (s *SessionService) SetFederation(f *FederatedSessions) { s.federation = f }
+func (s *SessionService) SetFederation(f *federation.FederatedSessions) { s.federation = f }
 
 // instanceMatchesListFilters applies ListSessions' status, category, hidden,
 // archived and workflow filters to a managed instance.

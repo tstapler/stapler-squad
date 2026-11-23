@@ -103,7 +103,7 @@ describe("PaneSplitRenderer — mobile layout", () => {
       render(
         <PaneSplitRenderer state={singlePaneState} dispatch={jest.fn()} sessions={[]} />
       );
-      expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Switch pane/ })).not.toBeInTheDocument();
     });
   });
 
@@ -112,7 +112,7 @@ describe("PaneSplitRenderer — mobile layout", () => {
       render(
         <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
       );
-      expect(screen.getByRole("tablist", { name: "Pane switcher" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Switch pane/ })).toBeInTheDocument();
     });
 
     it("collapses to show only the focused pane on mobile vertical split", () => {
@@ -181,7 +181,7 @@ describe("PaneSplitRenderer — mobile layout", () => {
       );
       // Tab strip shows for any multi-pane layout on mobile (including horizontal splits)
       // so the "+" add-pane button is always accessible on mobile
-      expect(screen.getByRole("tablist")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Switch pane/ })).toBeInTheDocument();
     });
 
     it("does not render a resize handle for horizontal splits on mobile", () => {
@@ -207,7 +207,7 @@ describe("PaneSplitRenderer — foldable width (isFoldable, not isMobile)", () =
     render(
       <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
     );
-    expect(screen.getByRole("tablist", { name: "Pane switcher" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Switch pane/ })).toBeInTheDocument();
   });
 
   it("hides the reset layout button at foldable width even with multiple panes", () => {
@@ -252,7 +252,7 @@ describe("PaneSplitRenderer — desktop layout", () => {
     render(
       <PaneSplitRenderer state={verticalSplitState} dispatch={jest.fn()} sessions={sessions} />
     );
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Switch pane/ })).not.toBeInTheDocument();
   });
 
   it("renders resize handle between panes on desktop", () => {
