@@ -12,9 +12,9 @@ import (
 func filterFixture() *FederatedSessions {
 	f := &FederatedSessions{hosts: map[string]*peerSnapshot{}, watch: NewFederatedWatchAggregator()}
 	f.hosts["h1"] = &peerSnapshot{reachable: true, sessions: []*sessionv1.Session{
-		{Id: "a", Category: "x", Status: sessionv1.SessionStatus_SESSION_STATUS_RUNNING},
+		{Id: "a", Category: "x", Status: sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
 		{Id: "b", Category: "y", Status: sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
-		{Id: "c", Category: "x", Status: sessionv1.SessionStatus_SESSION_STATUS_RUNNING, Hidden: true},
+		{Id: "c", Category: "x", Status: sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, Hidden: true},
 	}}
 	return f
 }
@@ -24,7 +24,7 @@ func strp(s string) *string { return &s }
 func TestFederatedSessions_Filtered_should_ApplyListFilters(t *testing.T) {
 	t.Parallel()
 	f := filterFixture()
-	running := sessionv1.SessionStatus_SESSION_STATUS_RUNNING
+	running := sessionv1.SessionStatus_SESSION_STATUS_ACTIVE
 	unspecified := sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 
 	assert.Len(t, f.Filtered(&sessionv1.ListSessionsRequest{}), 3)
