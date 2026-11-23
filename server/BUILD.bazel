@@ -147,6 +147,7 @@ go_library(
         "//session/itemsources",
         "//session/jules",
         "//session/memory",
+        "//session/pipelinemode",
         "//session/prpoller",
         "//session/queue",
         "//session/registry",

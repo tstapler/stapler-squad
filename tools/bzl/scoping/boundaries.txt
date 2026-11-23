@@ -72,3 +72,4 @@ session/autonomous !server
 session/diagnose !server
 session/tagpoller !server
 session/registry !server
+session/pipelinemode !server

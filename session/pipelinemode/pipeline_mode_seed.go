@@ -1,4 +1,4 @@
-package session
+package pipelinemode
 
 // pipeline_mode_seed.go — boot-time, idempotent seed for the "sdd" PipelineMode
 // (project_plans/backlog-sdd-default-pipeline). Mirrors the create-if-missing

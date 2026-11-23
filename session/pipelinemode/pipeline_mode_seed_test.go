@@ -1,4 +1,4 @@
-package session
+package pipelinemode
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/internal/entdbtest"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
@@ -17,9 +18,7 @@ import (
 // state against a real ent-backed repository.
 func TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(entdbtest.NewClient(t))
 
 	err := EnsureDefaultSDDPipelineMode(t.Context(), repo)
 	require.NoError(t, err)
@@ -40,9 +39,7 @@ func TestEnsureDefaultSDDPipelineMode_should_CreateRow_When_Missing(t *testing.T
 // every subsequent server restart (ADR-001's runtime-editability guarantee).
 func TestEnsureDefaultSDDPipelineMode_should_BeNoOp_When_AlreadyExists(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
-	defer cleanup()
-	repo := stagecfg.NewEntPipelineModeRepository(storage.GetEntClient())
+	repo := stagecfg.NewEntPipelineModeRepository(entdbtest.NewClient(t))
 
 	require.NoError(t, EnsureDefaultSDDPipelineMode(t.Context(), repo))
 

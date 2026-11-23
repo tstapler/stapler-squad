@@ -858,6 +858,7 @@ go_test(
         "//session/mux:hooks.go",
         "//session/namegen:go_sources",
         "//session/panereply:go_sources",
+        "//session/pipelinemode:go_sources",
         "//session/pricing:go_sources",
         "//session/procinfo:go_sources",
         "//session/projectstore:go_sources",

@@ -27,7 +27,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -35,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
@@ -86,7 +86,7 @@ func sanitizeTriageTitle(title, itemID string) string {
 
 // sddPlanArtifactsSubdirs are the project_plans/<name>/ subdirectories SDD
 // triage may have written plan.md into, tried in order. "implementation" is
-// what sddTriagePromptTemplate (session/pipeline_mode_seed.go) asks for; the
+// what sddTriagePromptTemplate (session/pipelinemode/pipeline_mode_seed.go) asks for; the
 // empty string (project_plans/<name>/ itself) covers the LLM skipping that
 // subdirectory — the next most common drift observed across this repo's own
 // project_plans/ history (13 of 257 real plan.md files land flat at the
@@ -543,7 +543,7 @@ func (s *BacklogService) TriggerTriage(
 		defer cancel()
 
 		// Run triage in a dedicated worktree, not itemRepoPath directly. SDD-mode
-		// triage prompts (session/pipeline_mode_seed.go's sddTriagePromptTemplate)
+		// triage prompts (session/pipelinemode/pipeline_mode_seed.go's sddTriagePromptTemplate)
 		// deliberately write project_plans/<name>/ relative to CWD rather than to
 		// artifactAbsPath above — by design, so those docs land in the target repo
 		// and travel with the eventual PR (see that file's design-rationale
@@ -794,7 +794,7 @@ func (s *BacklogService) TriggerTriage(
 		// setup failed) still runs SDD triage directly in itemRepoPath — via
 		// triageWorkDir == itemRepoPath — and still needs pap to find it there.
 		pap := artifactAbsPath
-		if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+		if item.PipelineMode == pipelinemode.DefaultSDDPipelineModeSlug {
 			pap = resolveSDDPlanArtifactsPath(triageWorkDir, sanitizedTitle)
 		}
 		approvalReset := false
@@ -829,7 +829,7 @@ func (s *BacklogService) TriggerTriage(
 		// than silently marking a nonexistent plan approved.
 		if _, statErr := os.Stat(pap); statErr == nil {
 			staleSnapshot := false
-			if item.PipelineMode == session.DefaultSDDPipelineModeSlug {
+			if item.PipelineMode == pipelinemode.DefaultSDDPipelineModeSlug {
 				snapDir := filepath.Join(artifactAbsPath, sddPlanSnapshotDirName)
 				if durable, snapErr := snapshotSDDPlanOutOfWorktree(pap, snapDir); snapErr == nil {
 					pap = durable
@@ -1027,7 +1027,7 @@ func applyTriageResultToUpdate(result *pipeline.HeadlessTriageResult, update *ba
 // 4-subagent wave showed no material waste, so it runs unbounded as before.
 func triageCallOptions(cfg *config.Config, pipelineMode, workDir, model string, onConversationID func(string)) headless.CallOptions {
 	opts := headless.CallOptions{WorkDir: workDir, Model: model, MaxCostUSD: cfg.HeadlessTriageMaxCostUSDOrDefault(), OnConversationID: onConversationID}
-	if pipelineMode == session.DefaultSDDPipelineModeSlug && cfg != nil {
+	if pipelineMode == pipelinemode.DefaultSDDPipelineModeSlug && cfg != nil {
 		opts.MaxTurns = cfg.HeadlessTriageMaxTurnsOrDefault()
 		opts.MaxSubagents = cfg.HeadlessTriageMaxSubagentsOrDefault()
 	}

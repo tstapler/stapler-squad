@@ -1,4 +1,4 @@
-package session
+package pipelinemode
 
 import (
 	"strings"

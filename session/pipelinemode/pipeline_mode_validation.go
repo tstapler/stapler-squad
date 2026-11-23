@@ -1,4 +1,4 @@
-package session
+package pipelinemode
 
 // pipeline_mode_validation.go — structural validation for PipelineMode's
 // slug and 9 content-template fields (Epic 2.3 of
@@ -201,7 +201,7 @@ func validateStageExecutors(executors map[stagecfg.StageRole]stagecfg.PipelineSt
 		if executor.Model == "" {
 			continue
 		}
-		if err := ValidateModel(executor.Model); err != nil {
+		if err := stagecfg.ValidateModel(executor.Model); err != nil {
 			return fmt.Errorf("stage_executors[%s].model: %w", role, err)
 		}
 		if err := validateKnownModel(executor.Model, forceUnknownModel); err != nil {

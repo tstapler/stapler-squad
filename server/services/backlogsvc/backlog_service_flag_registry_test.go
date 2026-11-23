@@ -9,7 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 func TestDefaultPipelineModeForNewItem_ShouldUseInjectedRegistryDefault(t *testing.T) {
@@ -23,7 +23,7 @@ func TestDefaultPipelineModeForNewItem_ShouldUseInjectedRegistryDefault(t *testi
 	s := &BacklogService{}
 	s.SetFlagRegistry(featureflags.NewRegistry(specs))
 
-	assert.Equal(t, session.DefaultSDDPipelineModeSlug, s.defaultPipelineModeForNewItem(nil), "injected default on")
+	assert.Equal(t, pipelinemode.DefaultSDDPipelineModeSlug, s.defaultPipelineModeForNewItem(nil), "injected default on")
 	assert.Same(t, s.flags, s.FlagRegistry())
 
 	def := &BacklogService{}

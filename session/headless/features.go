@@ -226,7 +226,7 @@ const CodebaseReadAllowedTools = "Read,Grep,Glob"
 // whatever text was last written and exits, discarding any subagent that reports
 // running "in the background" rather than actually blocking the call until done.
 // This paragraph is deliberately in the shared system prompt (not only the
-// sdd-mode-specific TriagePromptTemplate in pipeline_mode_seed.go) so the same
+// sdd-mode-specific TriagePromptTemplate in pipelinemode/pipeline_mode_seed.go) so the same
 // guard applies to every pipeline mode's triage content, not just "sdd" — see that
 // file's sddTriagePromptTemplate for the mode-specific reinforcement of the same
 // rule.
