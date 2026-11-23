@@ -1,0 +1,50 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "itemlink",
+    srcs = [
+        "background_outcome.go",
+        "item_link.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/itemlink",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":itemlink",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "itemlink_test",
+    srcs = [
+        "background_outcome_test.go",
+        "item_link_fake_test.go",
+    ],
+    embed = [":itemlink"],
+    deps = [
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

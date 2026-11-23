@@ -10,11 +10,11 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services/federation"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 )
 
 // hiddenVisibleInList applies include_hidden / hidden_only to one session. hidden_only
@@ -64,7 +64,7 @@ func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries
 		if row, ok := byUUID[e.uuid]; ok {
 			is = &row
 		}
-		e.proto.BackgroundOutcome = string(session.ComputeBackgroundOutcome(e.status, is))
+		e.proto.BackgroundOutcome = string(itemlink.ComputeBackgroundOutcome(e.status, is))
 	}
 }
 

@@ -108,6 +108,7 @@ go_test(
         "//session/hostclaim",
         "//session/instance",
         "//session/internal/sessiontest",
+        "//session/itemlink",
         "//session/markerstore",
         "//session/stagecfg",
         "//session/workflowengine",

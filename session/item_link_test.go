@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 )
 
 // newTestStorageForItemLink returns a *Storage backed by a fresh in-memory
@@ -41,7 +42,7 @@ func TestResolveItemLink_should_ReturnOK_When_CallerSessionOwnsItem(t *testing.T
 	})
 	require.NoError(t, err)
 
-	itemSession, linkErr := ResolveItemLink(ctx, storage, callerUUID, item.ID)
+	itemSession, linkErr := itemlink.ResolveItemLink(ctx, storage, callerUUID, item.ID)
 	require.Nil(t, linkErr)
 	assert.Equal(t, createdIS.ID, itemSession.ID)
 }
@@ -58,9 +59,9 @@ func TestResolveItemLink_should_ReturnPermissionDenied_When_CallerSessionNotLink
 	require.NoError(t, err)
 
 	callerUUID := uuid.New().String()
-	_, linkErr := ResolveItemLink(ctx, storage, callerUUID, item.ID)
+	_, linkErr := itemlink.ResolveItemLink(ctx, storage, callerUUID, item.ID)
 	require.NotNil(t, linkErr)
-	assert.Equal(t, ItemLinkPermissionDenied, linkErr.Code)
+	assert.Equal(t, itemlink.ItemLinkPermissionDenied, linkErr.Code)
 	assert.Contains(t, linkErr.Message, callerUUID)
 	assert.Contains(t, linkErr.Message, item.ID)
 	assert.Contains(t, linkErr.Remediation, "link_session_to_item")
@@ -74,10 +75,10 @@ func TestResolveItemLink_should_ReturnNotFound_When_ItemDoesNotExist(t *testing.
 	ctx := context.Background()
 
 	missingItemID := uuid.New().String()
-	_, linkErr := ResolveItemLink(ctx, storage, uuid.New().String(), missingItemID)
+	_, linkErr := itemlink.ResolveItemLink(ctx, storage, uuid.New().String(), missingItemID)
 	require.NotNil(t, linkErr)
-	assert.Equal(t, ItemLinkNotFound, linkErr.Code)
-	assert.Equal(t, ItemNotFoundRemediation, linkErr.Remediation)
+	assert.Equal(t, itemlink.ItemLinkNotFound, linkErr.Code)
+	assert.Equal(t, itemlink.ItemNotFoundRemediation, linkErr.Remediation)
 }
 
 // TestResolveItemLink_should_ProduceIdenticalErrorShape_When_CalledWithSameFixtureFromBothCallers
@@ -98,14 +99,14 @@ func TestResolveItemLink_should_ProduceIdenticalErrorShape_When_CalledWithSameFi
 		name     string
 		caller   string
 		itemID   string
-		wantCode ItemLinkErrorCode
+		wantCode itemlink.ItemLinkErrorCode
 	}{
-		{"not linked", unlinkedCaller, linkedItem.ID, ItemLinkPermissionDenied},
-		{"not found", uuid.New().String(), uuid.New().String(), ItemLinkNotFound},
+		{"not linked", unlinkedCaller, linkedItem.ID, itemlink.ItemLinkPermissionDenied},
+		{"not found", uuid.New().String(), uuid.New().String(), itemlink.ItemLinkNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, linkErr := ResolveItemLink(ctx, storage, tt.caller, tt.itemID)
+			_, linkErr := itemlink.ResolveItemLink(ctx, storage, tt.caller, tt.itemID)
 			require.NotNil(t, linkErr)
 			assert.Equal(t, tt.wantCode, linkErr.Code)
 			assert.NotEmpty(t, linkErr.Remediation)
