@@ -62,6 +62,9 @@ export const leafContainer = recipe({
     outline: "2px solid transparent",
     outlineOffset: "-2px",
     transition: "outline-color 120ms ease",
+    selectors: {
+      "&[data-drop-active='true']": { outline: `2px dashed ${vars.color.primary}`, background: vars.color.hoverBackground },
+    },
   },
   variants: {
     focused: {

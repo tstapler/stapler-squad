@@ -109,15 +109,39 @@ export const sheetClose = style({
 
 export const sheetList = style({ listStyle: "none", margin: 0, padding: 0, overflowY: "auto" });
 
+export const sheetItem = style({
+  display: "flex",
+  alignItems: "stretch",
+  borderBottom: `1px solid ${vars.color.borderSubtle}`,
+  background: vars.color.modalBackground,
+  selectors: {
+    "&[data-over='true']": { background: vars.color.hoverBackground, boxShadow: `inset 0 2px 0 ${vars.color.primary}` },
+    "&[data-dragging='true']": { opacity: 0.6, position: "relative", zIndex: zIndex.raised, boxShadow: "0 4px 12px rgba(0,0,0,0.35)" },
+  },
+});
+
+export const sheetHandle = style({
+  width: "44px",
+  flexShrink: 0,
+  border: "none",
+  background: "transparent",
+  color: vars.color.textMuted,
+  cursor: "grab",
+  // Without this the browser claims the touch for scrolling and the drag never starts.
+  touchAction: "none",
+  fontSize: "18px",
+  ":focus-visible": { outline: `2px solid ${vars.color.inputFocusBorder}`, outlineOffset: "-2px" },
+});
+
 export const sheetRow = style({
+  flex: 1,
+  minWidth: 0,
   display: "flex",
   flexDirection: "column",
   gap: "2px",
-  width: "100%",
   minHeight: "52px",
   padding: "8px 16px",
   border: "none",
-  borderBottom: `1px solid ${vars.color.borderSubtle}`,
   background: "transparent",
   color: vars.color.textPrimary,
   font: "inherit",

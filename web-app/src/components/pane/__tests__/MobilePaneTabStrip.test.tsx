@@ -79,4 +79,37 @@ describe("MobilePaneTabStrip", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add new pane" }));
     expect(onAddPane).toHaveBeenCalled();
   });
+
+  describe("reordering", () => {
+    const withReorder = () =>
+      render(
+        <MobilePaneTabStrip
+          leaves={[makeLeaf("p1", "s1"), makeLeaf("p2", "s2")]}
+          focusedPaneId="p1"
+          sessions={[makeSession("s1", "Session A"), makeSession("s2", "Session B")]}
+          onFocus={jest.fn()}
+          onReorder={jest.fn()}
+        />,
+      );
+
+    it("shows a drag handle per row when reordering is supported", () => {
+      withReorder();
+      fireEvent.click(screen.getByRole("button", { name: /Switch pane/ }));
+      expect(screen.getByRole("button", { name: "Drag to reorder Session A" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Drag to reorder Session B" })).toBeInTheDocument();
+    });
+
+    it("hides the handles while a filter is active", () => {
+      withReorder();
+      fireEvent.click(screen.getByRole("button", { name: /Switch pane/ }));
+      fireEvent.change(screen.getByLabelText("Filter panes"), { target: { value: "Session" } });
+      expect(screen.queryByRole("button", { name: /Drag to reorder/ })).not.toBeInTheDocument();
+    });
+
+    it("has no handles without an onReorder handler", () => {
+      twoPanes();
+      fireEvent.click(screen.getByRole("button", { name: /Switch pane/ }));
+      expect(screen.queryByRole("button", { name: /Drag to reorder/ })).not.toBeInTheDocument();
+    });
+  });
 });

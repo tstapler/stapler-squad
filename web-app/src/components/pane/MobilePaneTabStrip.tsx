@@ -1,13 +1,15 @@
 "use client";
 
 import { forwardRef, useMemo, useRef, useState } from "react";
+import { DndContext, PointerSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LeafPane, PaneId } from "@/lib/pane/paneTypes";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
 import {
   mobileTabStrip, mobileSwitcherButton, mobileSwitcherLabel, mobileSwitcherCount, mobileAddPaneButton,
-  sheetBackdrop, sheet, sheetHeader, sheetSearch, sheetClose, sheetList, sheetRow, sheetRowTitle, sheetRowMeta, sheetEmpty,
+  sheetBackdrop, sheet, sheetHeader, sheetSearch, sheetClose, sheetList, sheetItem, sheetHandle, sheetRow, sheetRowTitle, sheetRowMeta, sheetEmpty,
 } from "@/styles/pane/mobilePaneTabStrip.css";
 
 interface MobilePaneTabStripProps {
@@ -16,6 +18,8 @@ interface MobilePaneTabStripProps {
   sessions: Session[];
   onFocus: (paneId: PaneId) => void;
   onAddPane?: () => void;
+  /** Moves the pane `fromPaneId` to the position of `toPaneId`. Omit to hide the drag handles. */
+  onReorder?: (fromPaneId: PaneId, toPaneId: PaneId) => void;
 }
 
 interface PaneEntry {
@@ -35,8 +39,42 @@ function entryFor(leaf: LeafPane, sessions: Session[]): PaneEntry {
   return { id: leaf.id, label, meta };
 }
 
+function SortableRow({ entry, selected, canDrag, onPick }: { entry: PaneEntry; selected: boolean; canDrag: boolean; onPick: () => void }) {
+  const drag = useDraggable({ id: entry.id, disabled: !canDrag });
+  const drop = useDroppable({ id: entry.id });
+  return (
+    <li
+      ref={drop.setNodeRef}
+      role="presentation"
+      className={sheetItem}
+      data-over={drop.isOver && !drag.isDragging ? "true" : "false"}
+      data-dragging={drag.isDragging ? "true" : "false"}
+      style={{ transform: CSS.Translate.toString(drag.transform) }}
+    >
+      <button type="button" role="option" aria-selected={selected} className={sheetRow} onClick={onPick}>
+        {/* analytics-exempt */}
+        <span className={sheetRowTitle}>{entry.label}</span>
+        {entry.meta && <span className={sheetRowMeta}>{entry.meta}</span>}
+      </button>
+      {canDrag && (
+        <button
+          type="button"
+          ref={drag.setNodeRef}
+          className={sheetHandle}
+          aria-label={`Drag to reorder ${entry.label}`}
+          {...drag.attributes}
+          {...drag.listeners}
+        >
+          {/* analytics-exempt */}
+          ⠿
+        </button>
+      )}
+    </li>
+  );
+}
+
 export const MobilePaneTabStrip = forwardRef<HTMLDivElement, MobilePaneTabStripProps>(
-  function MobilePaneTabStrip({ leaves, focusedPaneId, sessions, onFocus, onAddPane }, ref) {
+  function MobilePaneTabStrip({ leaves, focusedPaneId, sessions, onFocus, onAddPane, onReorder }, ref) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const sheetRef = useRef<HTMLDivElement>(null);
@@ -45,6 +83,16 @@ export const MobilePaneTabStrip = forwardRef<HTMLDivElement, MobilePaneTabStripP
     const entries = useMemo(() => leaves.map((l) => entryFor(l, sessions)), [leaves, sessions]);
     const q = query.trim().toLowerCase();
     const visible = q ? entries.filter((e) => `${e.label} ${e.meta}`.toLowerCase().includes(q)) : entries;
+
+    const sensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+      useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 8 } }),
+    );
+    // Reordering a filtered subset would be ambiguous (where do hidden rows go?), so only the full list drags.
+    const canDrag = !!onReorder && !q;
+    const handleDragEnd = (e: DragEndEvent) => {
+      if (e.over && e.active.id !== e.over.id) onReorder?.(String(e.active.id), String(e.over.id));
+    };
 
     const close = () => { setOpen(false); setQuery(""); };
 
@@ -96,23 +144,19 @@ export const MobilePaneTabStrip = forwardRef<HTMLDivElement, MobilePaneTabStripP
               {visible.length === 0 ? (
                 <div className={sheetEmpty}>No panes match “{query}”</div>
               ) : (
-                <ul className={sheetList} role="listbox" aria-label="Panes">
-                  {visible.map((e) => (
-                    <li key={e.id} role="presentation">
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={e.id === focusedPaneId}
-                        className={sheetRow}
-                        onClick={() => { onFocus(e.id); close(); }}
-                      >
-                        {/* analytics-exempt */}
-                        <span className={sheetRowTitle}>{e.label}</span>
-                        {e.meta && <span className={sheetRowMeta}>{e.meta}</span>}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+                  <ul className={sheetList} role="listbox" aria-label="Panes">
+                    {visible.map((e) => (
+                      <SortableRow
+                        key={e.id}
+                        entry={e}
+                        selected={e.id === focusedPaneId}
+                        canDrag={canDrag}
+                        onPick={() => { onFocus(e.id); close(); }}
+                      />
+                    ))}
+                  </ul>
+                </DndContext>
               )}
             </div>
           </div>

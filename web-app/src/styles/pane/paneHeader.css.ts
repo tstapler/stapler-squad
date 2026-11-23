@@ -70,3 +70,16 @@ export const paneCloseButton = style([
     },
   },
 ]);
+
+export const paneDragHandle = style({
+  display: "inline-flex",
+  alignItems: "center",
+  alignSelf: "stretch",
+  padding: `0 ${vars.space["1"]}`,
+  color: vars.color.textMuted,
+  cursor: "grab",
+  selectors: {
+    "&:hover": { color: vars.color.textPrimary },
+    "&:active": { cursor: "grabbing" },
+  },
+});
