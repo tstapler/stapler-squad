@@ -43,11 +43,11 @@ session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/prpoller files=7 loc=2080 imports=8
-server/services files=267 loc=66645 imports=82
+server/services files=262 loc=65711 imports=82
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
-server/services/wsconn files=23 loc=9895 imports=25
+server/services/wsconn files=23 loc=9895 imports=26
 server/services/backlogsvc files=37 loc=15666 imports=35
 server/services/internal/svctest files=36 loc=1582 imports=23
 server/services/sessionbundle files=4 loc=862 imports=9
@@ -58,6 +58,7 @@ server/services/webhooktrigger files=7 loc=1504 imports=10
 server/services/sessionretention files=4 loc=778 imports=8
 server/services/unfinishedwork files=1 loc=715 imports=12
 server/services/importsvc files=1 loc=453 imports=8
+server/services/federation files=5 loc=938 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
 session/driver files=5 loc=1626 imports=7

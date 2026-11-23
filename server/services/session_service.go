@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -94,7 +95,7 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
-	federation        *FederatedSessions // nil unless host gossip is running
+	federation        *federation.FederatedSessions // nil unless host gossip is running
 
 	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
 	prRefs prRefsSeams
@@ -1343,4 +1344,4 @@ func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host strin
 }
 
 // Federation returns the federated-sessions view, nil unless host gossip is running.
-func (s *SessionService) Federation() *FederatedSessions { return s.federation }
+func (s *SessionService) Federation() *federation.FederatedSessions { return s.federation }

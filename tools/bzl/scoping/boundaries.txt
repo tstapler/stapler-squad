@@ -18,6 +18,7 @@ server/services/webhooktrigger !server/web
 server/services/sessionretention !server/web
 server/services/importsvc !server/web
 server/services/unfinishedwork !server/web
+server/services/federation !server/web
 session/ptyio !server
 session/hostclaim !server
 session/dialogpresence !server

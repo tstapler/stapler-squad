@@ -262,7 +262,7 @@ func (r *HostRegistry) Advertise(record AdvertisementRecord) (isNew bool, accept
 // "169.254.169.254:80", "localhost:1", "[::1]:80") -- the addresses a
 // misbehaving or compromised peer would advertise to redirect this
 // instance's own outbound liveness check (registryHostResolver.checkLiveness
-// in server/services/deep_link_resolver.go) at itself or at a cloud
+// in server/services/federation/deep_link_resolver.go) at itself or at a cloud
 // metadata endpoint reachable only from this instance's network position.
 // A TOFU-pinned identity is still trusted to say who it is; this only
 // bounds where "who it is" is allowed to claim to be reachable at. Address

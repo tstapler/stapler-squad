@@ -1,4 +1,4 @@
-package services
+package federation
 
 import (
 	"context"
@@ -87,12 +87,12 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 	return &registryHostResolver{
 		stateDir:        stateDir,
 		registryTTL:     ttl,
-		httpClient:      &http.Client{Transport: peerTLSTransport()},
+		httpClient:      &http.Client{Transport: PeerTLSTransport()},
 		livenessTimeout: defaultLivenessTimeout,
 	}
 }
 
-// peerTLSTransport returns an http.Transport for dialing another
+// PeerTLSTransport returns an http.Transport for dialing another
 // stapler-squad instance's --remote-port server (server/server.go's
 // StartRemote always calls ServeTLS -- there is no plaintext-HTTP remote
 // listener). Certificate verification is deliberately skipped: each
@@ -104,7 +104,7 @@ func NewRegistryHostResolver(stateDir string, ttl time.Duration) *registryHostRe
 // Ed25519 signature verifies against a TOFU-pinned public key
 // (session.HostRegistry.Advertise) -- TLS here provides transport
 // encryption only, not peer identity.
-func peerTLSTransport() *http.Transport {
+func PeerTLSTransport() *http.Transport {
 	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // #nosec G402 -- see doc comment: identity is verified at the application layer (Ed25519/TOFU), not via the TLS chain
 }
 

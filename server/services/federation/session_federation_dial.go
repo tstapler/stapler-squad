@@ -1,4 +1,4 @@
-package services
+package federation
 
 import (
 	"fmt"
@@ -39,9 +39,9 @@ func guardPeerDial(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// federationTransport is peerTLSTransport with the dial-layer SSRF guard.
+// federationTransport is PeerTLSTransport with the dial-layer SSRF guard.
 func federationTransport() *http.Transport {
-	t := peerTLSTransport()
+	t := PeerTLSTransport()
 	t.DialContext = (&net.Dialer{Timeout: peerFetchTimeout, Control: guardPeerDial}).DialContext
 	t.TLSHandshakeTimeout = peerFetchTimeout
 	t.Proxy = nil // a proxy would dial on our behalf and bypass the guard
