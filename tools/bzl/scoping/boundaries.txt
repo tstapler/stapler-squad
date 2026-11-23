@@ -73,4 +73,5 @@ session/diagnose !server
 session/tagpoller !server
 session/paneactivity !server
 session/registry !server
+session/pipelinemode !server
 session/claudehistory !server

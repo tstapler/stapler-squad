@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
@@ -112,7 +113,7 @@ func TestCreateBacklogItem_should_DefaultPipelineModeToSDD_When_FlagEnabledAndFi
 	}))
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg.Item.PipelineMode)
-	assert.Equal(t, session.DefaultSDDPipelineModeSlug, *resp.Msg.Item.PipelineMode)
+	assert.Equal(t, pipelinemode.DefaultSDDPipelineModeSlug, *resp.Msg.Item.PipelineMode)
 }
 
 // TestCreateBacklogItem_should_NotDefaultPipelineMode_When_FlagDisabled is the

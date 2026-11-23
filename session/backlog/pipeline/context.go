@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 // SanitizeForAgentContext strips HTML tags from s and truncates to maxLen,
@@ -57,16 +58,16 @@ func ClosingKeywordWithRepo(issueURL, prRemoteURL string) string {
 const maxPriorAttemptsWithFullEvidence = 3
 
 // taskProtocolBlock is the standard agent task protocol injected at the end of every prompt.
-var taskProtocolBlock = session.ForDefault("## Your Task Protocol\n" +
+var taskProtocolBlock = pipelinemode.ForDefault("## Your Task Protocol\n" +
 	"1. Read ALL acceptance criteria before starting any work.\n" +
-	"2. Work through criteria systematically. " + session.SecWorkDiscipline + "\n" +
+	"2. Work through criteria systematically. " + pipelinemode.SecWorkDiscipline + "\n" +
 	"3. When ALL criteria are done or waived, run ¦/backlog/review¦ with a 2–3 sentence summary of what you built, and pass each proving command with its output in verification_notes.\n" +
-	"4. " + session.SecBlockerRouting + "\n" +
-	"5. " + session.SecContextLost + "\n" +
-	"6. " + session.SecCommandsFail + "\n" +
-	"7. " + session.SecNeverEnd + "\n" +
-	"8. After ¦/backlog/review¦, " + session.SecAwaitVerdict + " " + session.SecOnPass + "\n" +
-	"9. " + session.OnFailSection())
+	"4. " + pipelinemode.SecBlockerRouting + "\n" +
+	"5. " + pipelinemode.SecContextLost + "\n" +
+	"6. " + pipelinemode.SecCommandsFail + "\n" +
+	"7. " + pipelinemode.SecNeverEnd + "\n" +
+	"8. After ¦/backlog/review¦, " + pipelinemode.SecAwaitVerdict + " " + pipelinemode.SecOnPass + "\n" +
+	"9. " + pipelinemode.OnFailSection())
 
 // reviewHadVerdictMostRecentFirst extracts, most-recent-first, one bool per
 // review-role session in priorSessions — true if that session ever wrote a
