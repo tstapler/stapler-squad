@@ -1243,22 +1243,15 @@ test.describe('Accessibility — multi-window (WCAG 2.1 AA)', () => {
     await expect.poll(() => leaves.count()).toBeGreaterThanOrEqual(2);
 
     // Narrow below the isMobile threshold (600px) so MobilePaneTabStrip
-    // (role="tablist" aria-label="Pane switcher") mounts alongside
+    // (a "Switch pane" button that opens a pane list sheet) mounts alongside
     // WindowTabStrip's always-rendered "Window switcher".
     await page.setViewportSize({ width: 390, height: 844 });
 
     const windowTablist = page.getByRole('tablist', { name: 'Window switcher' });
-    const paneTablist = page.getByRole('tablist', { name: 'Pane switcher' });
+    const paneSwitcher = page.getByRole('button', { name: /^Switch pane/ });
     await expect(windowTablist).toBeVisible();
-    await expect(paneTablist).toBeVisible();
-
-    const [windowLabel, paneLabel] = await Promise.all([
-      windowTablist.getAttribute('aria-label'),
-      paneTablist.getAttribute('aria-label'),
-    ]);
-    expect(windowLabel).toBe('Window switcher');
-    expect(paneLabel).toBe('Pane switcher');
-    expect(windowLabel).not.toBe(paneLabel);
+    await expect(paneSwitcher).toBeVisible();
+    expect(await windowTablist.getAttribute('aria-label')).toBe('Window switcher');
 
     const results = await new AxeBuilder({ page })
       .exclude('pre, [class*="terminal"], [class*="Terminal"]')
@@ -1270,7 +1263,7 @@ test.describe('Accessibility — multi-window (WCAG 2.1 AA)', () => {
       // fails color-contrast; BottomNav's mobile-viewport label contrast
       // also fails independently of anything here. Neither is
       // WindowTabStrip or a component this sweep touches.
-      .exclude('[aria-label="Pane switcher"]')
+      .exclude('[aria-label^="Switch pane"]')
       .exclude('[aria-label="Bottom navigation"]')
       // Each tab nests a real, focusable <button> ("×") inside its own
       // role="tab" element, which axe's nested-interactive rule flags.
