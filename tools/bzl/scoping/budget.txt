@@ -58,7 +58,7 @@ server/services/webhooktrigger files=7 loc=1504 imports=10
 server/services/sessionretention files=4 loc=778 imports=8
 server/services/unfinishedwork files=1 loc=715 imports=12
 server/services/importsvc files=1 loc=453 imports=8
-server/services/federation files=5 loc=938 imports=6
+server/services/federation files=6 loc=953 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
 session/driver files=5 loc=1626 imports=7
