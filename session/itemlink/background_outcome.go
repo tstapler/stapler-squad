@@ -1,4 +1,4 @@
-package session
+package itemlink
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"

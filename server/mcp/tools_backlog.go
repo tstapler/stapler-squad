@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 )
 
 // --- Session UUID context injection ---
@@ -663,7 +664,7 @@ func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdt
 // ItemSession on success. On failure it returns a ready-to-return
 // *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
 // doesn't exist) from PERMISSION_DENIED (the item exists but this session has
-// no link to it). A thin adapter over session.ResolveItemLink, which holds
+// no link to it). A thin adapter over itemlink.ResolveItemLink, which holds
 // the actual disambiguation logic — see that function's doc comment and
 // project_plans/backlog-link-error-consistency/research/stack.md. Extracted
 // (not reimplemented) so the ConnectRPC GuidanceRequestService's own
@@ -671,14 +672,14 @@ func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdt
 // independently-maintained copy (durable-guidance-request plan, Task
 // 2.1.2a-pre).
 func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
+	itemSession, linkErr := itemlink.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
 	switch linkErr.Code {
-	case session.ItemLinkNotFound:
+	case itemlink.ItemLinkNotFound:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
-	case session.ItemLinkPermissionDenied:
+	case itemlink.ItemLinkPermissionDenied:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")

@@ -170,3 +170,25 @@ func TestRankBlockedStacks_should_DropExactlyTheOverflowGoroutine_When_OneOverTh
 
 	assert.Equal(t, slowOpMaxGoroutines, strings.Count(out, "goroutine "))
 }
+
+func TestRecorder_should_ReportWhenAWatchedOpOutlivesTheThreshold(t *testing.T) {
+	t.Parallel()
+	reports := make(chan DumpReport, 1)
+	r := NewRecorder(5*time.Millisecond, func(rep DumpReport) { reports <- rep })
+
+	r.Watch("slow_op", "tmux")
+
+	select {
+	case rep := <-reports:
+		assert.Equal(t, "slow_op", rep.Op)
+		assert.Equal(t, "tmux", rep.Backend)
+	case <-time.After(10 * time.Second):
+		t.Fatal("a watched op outliving the threshold produced no report")
+	}
+}
+
+func TestDefaultSlowOpThreshold_should_BeTwoSeconds(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 2*time.Second, defaultSlowOpThreshold)
+	assert.Equal(t, 2*time.Second, thresholdFromMs(""))
+}

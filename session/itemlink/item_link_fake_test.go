@@ -1,4 +1,4 @@
-package session
+package itemlink
 
 import (
 	"context"
@@ -38,6 +38,12 @@ func (f *fakeItemLinkStore) GetBacklogItem(_ context.Context, id string) (*backl
 func (f *fakeItemLinkStore) GetItemSessionBySessionUUID(_ context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error) {
 	f.prior = append(f.prior, sessionUUID)
 	return f.priorRes, f.priorErr
+}
+
+func TestItemLinkError_should_ReturnMessage_When_UsedAsError(t *testing.T) {
+	t.Parallel()
+	var err error = &ItemLinkError{Code: ItemLinkInternalError, Message: "boom", Remediation: "ignored"}
+	assert.EqualError(t, err, "boom")
 }
 
 func TestResolveItemLink_should_ReturnLinkAndSkipDisambiguation_When_LinkLookupSucceeds(t *testing.T) {

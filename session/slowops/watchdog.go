@@ -12,7 +12,11 @@ import (
 // called within after. It never cancels or alters the watched operation; it
 // only makes a hang diagnosable (see ent schema create in NewEntRepository).
 func Watch(name string, after time.Duration) (stop func()) {
-	t := time.AfterFunc(after, func() { logGoroutineDump(name, after) })
+	return watch(name, after, logGoroutineDump)
+}
+
+func watch(name string, after time.Duration, dump func(string, time.Duration)) (stop func()) {
+	t := time.AfterFunc(after, func() { dump(name, after) })
 	return func() { t.Stop() }
 }
 

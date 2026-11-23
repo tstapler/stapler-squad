@@ -105,7 +105,7 @@ func assertOwnershipParity(t *testing.T, ctx context.Context, storage *session.S
 // ResolveItemLinkViaMCPAdapter doc comment and connectErrorForItemLink's doc
 // comment (guidance_request_service.go) both reference: it verifies the MCP
 // adapter's resolveItemLink and GuidanceRequestService's own
-// checkCreateGuidanceRequestOwnership — both wrapping session.ResolveItemLink
+// checkCreateGuidanceRequestOwnership — both wrapping itemlink.ResolveItemLink
 // — produce an identical (error code, remediation text) pair for the same
 // ownership fixture, guarding against the two adapters drifting apart.
 func TestGuidanceRequestOwnershipParity_should_ProduceMatchingCodeAndRemediation_When_MCPAndRPCPathsCheckSameFixture(t *testing.T) {
