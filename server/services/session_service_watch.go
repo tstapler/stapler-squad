@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -96,7 +97,7 @@ func (s *SessionService) WatchSessions(
 		peerCh, cancelPeers = s.federation.Watch().Subscribe()
 		defer cancelPeers()
 		if req.Msg.AfterSeq == 0 {
-			for _, ps := range s.federation.filteredByWatch(req.Msg) {
+			for _, ps := range s.federation.FilteredByWatch(req.Msg) {
 				if err := stream.Send(&sessionv1.SessionEvent{
 					Timestamp: timestamppb.Now(),
 					Event:     &sessionv1.SessionEvent_SessionCreated{SessionCreated: &sessionv1.SessionCreatedEvent{Session: ps}},
@@ -125,7 +126,7 @@ func (s *SessionService) WatchSessions(
 				peerCh = nil
 				continue
 			}
-			if !peerEventMatches(pe, req.Msg) {
+			if !federation.PeerEventMatches(pe, req.Msg) {
 				continue
 			}
 			if err := stream.Send(pe); err != nil {

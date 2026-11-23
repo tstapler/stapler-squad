@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -1576,11 +1577,11 @@ func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity ho
 	if sessionSvc == nil {
 		return
 	}
-	mux.HandleFunc("GET "+hostclaim.SessionFederationEndpointPath, services.SessionFederationHandler(registry, sessionSvc.LocalSessions))
-	mux.HandleFunc("GET "+hostclaim.SessionFederationTerminalPath, services.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
-	federated := services.NewFederatedSessions(identity, registry)
+	mux.HandleFunc("GET "+hostclaim.SessionFederationEndpointPath, federation.SessionFederationHandler(registry, sessionSvc.LocalSessions))
+	mux.HandleFunc("GET "+hostclaim.SessionFederationTerminalPath, federation.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
+	federated := federation.NewFederatedSessions(identity, registry)
 	sessionSvc.SetFederation(federated)
-	go federated.Run(ctx, services.DefaultFederationRefreshInterval)
+	go federated.Run(ctx, federation.DefaultFederationRefreshInterval)
 }
 
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey

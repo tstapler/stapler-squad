@@ -24,7 +24,7 @@ import (
 // on the box the link was clicked on (see
 // project_plans/backlog-deep-linking/design/ux.md's same-host case), not the
 // hostname embedded in the ssq:// link itself — that hostname only matters
-// to the cross-host resolver (server/services/deep_link_resolver.go).
+// to the cross-host resolver (server/services/federation/deep_link_resolver.go).
 const localWebAppBaseURL = "http://localhost:8543"
 
 // translateDeepLinkURL parses raw as an ssq:// deep link and returns the

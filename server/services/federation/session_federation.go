@@ -1,4 +1,4 @@
-package services
+package federation
 
 import (
 	"context"
@@ -250,9 +250,9 @@ func SessionFederationHandler(peers FederationPeers, list func(context.Context) 
 	}
 }
 
-// filtered applies the ListSessions request filters peers' sessions can be
+// Filtered applies the ListSessions request filters peers' sessions can be
 // checked against from the proto alone.
-func (f *FederatedSessions) filtered(req *sessionv1.ListSessionsRequest) []*sessionv1.Session {
+func (f *FederatedSessions) Filtered(req *sessionv1.ListSessionsRequest) []*sessionv1.Session {
 	var out []*sessionv1.Session
 	for _, s := range f.Sessions() {
 		if req.Status != nil && *req.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED && s.Status != *req.Status {
@@ -279,8 +279,8 @@ func (f *FederatedSessions) Session(id string) (*sessionv1.Session, bool) {
 	return nil, false
 }
 
-// filteredByWatch applies WatchSessions' category/status filters to the mirror.
-func (f *FederatedSessions) filteredByWatch(req *sessionv1.WatchSessionsRequest) []*sessionv1.Session {
+// FilteredByWatch applies WatchSessions' category/status filters to the mirror.
+func (f *FederatedSessions) FilteredByWatch(req *sessionv1.WatchSessionsRequest) []*sessionv1.Session {
 	var out []*sessionv1.Session
 	for _, s := range f.Sessions() {
 		if sessionMatchesWatch(s, req) {
@@ -303,9 +303,9 @@ func sessionMatchesWatch(s *sessionv1.Session, req *sessionv1.WatchSessionsReque
 	return true
 }
 
-// peerEventMatches filters a peer event; deletions always pass so a session that
+// PeerEventMatches filters a peer event; deletions always pass so a session that
 // stopped matching (or vanished) is removed client-side.
-func peerEventMatches(e *sessionv1.SessionEvent, req *sessionv1.WatchSessionsRequest) bool {
+func PeerEventMatches(e *sessionv1.SessionEvent, req *sessionv1.WatchSessionsRequest) bool {
 	switch ev := e.Event.(type) {
 	case *sessionv1.SessionEvent_SessionCreated:
 		return sessionMatchesWatch(ev.SessionCreated.Session, req)
