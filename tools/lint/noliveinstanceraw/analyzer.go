@@ -36,6 +36,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -54,8 +55,15 @@ var Analyzer = &analysis.Analyzer{
 
 // servicesPackagePath is the package that owns FindLiveInstance and the
 // approved findConfirmedLiveInstance wrapper. Not exempted wholesale — this
-// is the exact package a future raw call site would live in.
+// is the package a future raw call site would live in.
 const servicesPackagePath = "github.com/tstapler/stapler-squad/server/services"
+
+// inScope reports whether pkgPath is server/services or a leaf beneath it, so
+// moving a monitored method into a leaf does not silently switch the check off.
+// A move out of that tree is caught by tools/ci/guardpaths.
+func inScope(pkgPath string) bool {
+	return pkgPath == servicesPackagePath || strings.HasPrefix(pkgPath, servicesPackagePath+"/")
+}
 
 // monitoredFuncNames are the servicesPackagePath methods this analyzer
 // guards: each one previously contained (or, per the same bug class, is at
@@ -71,7 +79,7 @@ var monitoredFuncNames = map[string]bool{
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
-	if pass.Pkg.Path() != servicesPackagePath {
+	if !inScope(pass.Pkg.Path()) {
 		return nil, nil
 	}
 
@@ -157,7 +165,7 @@ func asFindLiveInstanceCall(expr ast.Expr, pass *analysis.Pass, scope ast.Node) 
 		return nil, false
 	}
 	fn, ok := obj.(*types.Func)
-	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != servicesPackagePath {
+	if !ok || fn.Pkg() == nil || !inScope(fn.Pkg().Path()) {
 		return nil, false
 	}
 	return call, true

@@ -1314,16 +1314,22 @@ quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens regi
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
 	@echo "✅ Pre-commit checks passed"
 
+# Hard-coded on purpose; the recipe fails when a listed file is missing (a move out of server/services must update this list).
+ACTOR_FIELD_GUARD_FILES := \
+	server/services/session_service.go \
+	server/services/workflow_service.go \
+	session/prpoller/pr_status_poller.go \
+	session/review_queue_poller.go \
+	session/autonomous/autonomous_driver.go \
+	daemon/daemon.go
+
 actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exist outside session/instance/ (incl. actor.go)
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
-	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
-	    server/services/session_service.go \
-	    server/services/workflow_service.go \
-	    session/prpoller/pr_status_poller.go \
-	    session/review_queue_poller.go \
-	    session/autonomous/autonomous_driver.go \
-	    daemon/daemon.go \
-	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	@for f in $(ACTOR_FIELD_GUARD_FILES); do \
+	    [ -f "$$f" ] || { echo "❌ actor-field-guard: listed file $$f no longer exists; it moved or was deleted, so the guard would silently skip it — update ACTOR_FIELD_GUARD_FILES in the Makefile"; exit 1; }; \
+	done
+	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' $(ACTOR_FIELD_GUARD_FILES) \
+	    | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
 	    echo "❌ actor-field-guard: direct Instance field writes found — route through actor setters (see IAC Epic 5)"; \
 	    exit 1; \
 	fi
