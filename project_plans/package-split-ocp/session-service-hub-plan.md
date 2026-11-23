@@ -5,10 +5,12 @@ Owner decision 2026-11-23: "every package under 10k" still applies to `server/se
 ## 0. Findings that change the plan
 
 1. **The hub is thin; the package is not the hub.** `*SessionService` has 407 methods (299 exported) and 98 fields, but only 7,718 lines of method code (V, section 1). 121 of its 181 RPC methods are short delegators (at most 12 lines) to 27 sub-service structs that already live in the same package. The 65.8k lines are mostly those sub-services, HTTP handlers, workers and helpers.
-2. **The "403 back-edge symbols" point downward.** Going file by file: the 31 core files (the ranking's CORE definition) use 397 symbols defined in 90 other files (V, graph). That edge is legal once the leaves are packages, because the hub imports them. The edge that blocks a move is the other direction: the rest of `server/services` needs **82 symbols** (63 package-level names and 19 methods) defined in hub files (V, graph). 82 of 82 are classified in section 3; none is genuine hub state except the `SessionService` receiver itself.
+2. **The "403 back-edge symbols" point downward.** Going file by file: the 31 core files (the ranking's CORE definition) use 397 symbols defined in 90 other files (V, graph). That edge is legal once the leaves are packages, because the hub imports them. The edge that blocks a move is the other direction: the rest of `server/services` needs **82 symbols** (63 package-level names and 19 methods) defined in hub files (V, graph). 82 of 82 are classified in section 3 (86 by the type-based review; 3.3 absorbs the extra classes); none is genuine hub state except the `SessionService` receiver itself.
 3. **One proto service, so the Remote Facade splits in Go, not in proto.** `SessionService` is a single proto service of 181 RPCs (V). Splitting it in proto would change every wire path (`/session.v1.SessionService/X`) that the web app, mobile app, MCP proxy and interceptors use. Go-level composition keeps the paths: a facade struct embeds one handler struct per RPC group, each in its own package. Section 2 shows that compiles, and that an uncovered or doubly-covered RPC is a compile error.
-4. **The 10k goal needs stages 1 to 5 plus two hub extractions**; the full OCP hub redesign (stage 6c) is not needed for the size goal (section 6).
-5. **The 10k decision is not gated anywhere.** `tools/bzl/scoping/t9.go:68` sets `LargestPkgLOCMax: 72000` (V). The plan ends with a gate change (stage 7).
+4. **The 10k goal needs stages 0 to 5 plus two hub extractions** (top level 8,645 after 6b); the full OCP hub redesign (stage 6c) is not needed for the size goal (section 6).
+5. **The 10k decision is not gated anywhere, and the gate is not a largest-package check.** `tools/bzl/scoping/t9.go:68` sets `LargestPkgLOCMax: 72000`, but T9d (`t9.go:90`) compares only `server/services` and `session` against it (V). Stage 7 splits the gate (section 6).
+6. **The "kernels" and the L1 layer were not DAGs in the first draft** (an independent type-based review found 77 kernel-to-leaf symbols and an L1 cycle; I reproduced the 77). Section 3.3 now lists the symbol cuts and file moves; the assignment is committed as `session-service-hub-assignment.csv`.
+7. **Seven other packages are over 10k today** (section 8a); the owner's scope for them is open question 5.
 
 ## 1. Evidence base
 
@@ -54,7 +56,7 @@ Inside the 181, 27 sub-service structs (`RulesService` 12 RPCs, `DefaultsService
 
 | `SessionService` RPC methods | Count | Method lines | Source |
 |---|---|---|---|
-| Pure delegates (at most 12 lines, at most one field, no receiver calls; heuristic, I) | 121 | 665 | Mostly in `session_service_delegates.go` (111 methods, 101 of them RPCs, 1,021-line file) and `files_delegates.go` |
+| Pure delegates (at most 12 lines, at most one service field, no receiver-method call; heuristic, I). The review counted 127 (727 lines) with the 12-line limit alone | 121 | 665 | Mostly in `session_service_delegates.go` (111 methods, 101 of them RPCs, 1,021-line file) and `files_delegates.go` |
 | Substantive | 60 | 3,896 | `StreamTerminal` 543, `CreateSession` 399, `UpdateSession` 242, `DeleteSession` 154, `WatchSessions` 148, `BatchCreateSessions` 123, escape analytics 289 in 3 RPCs, `RunOneShot` 111, ... |
 
 ### 2.2 Can the facade split into handler structs, one per concern?
@@ -112,7 +114,7 @@ The giant component is created by a few shared helpers, not by RPC logic. Receiv
 
 | Direction | Distinct symbols | Meaning |
 |---|---|---|
-| Core files (31 files, 12,726 lines, the ranking's definition) use symbols in 90 non-core files | 397 (207 method names, 115 exported, 75 unexported) | Hub to leaf. Legal after the split. I read the ranking's "403" as this edge (I: 397 now, and the graph predates the federation move; I did not recount the 403 itself). Largest targets: `defaults_service.go` 19, `github_user_nudge.go` 18, `rules_service.go` 17, `feature_flag_service.go` 16, `autonomous_orchestration_service.go` 16. |
+| Core files (31 files, 12,726 lines: `session_service*`, `session_streamer`, `terminal_access`, `terminal_service`, `workspace_service`, `external_*`, `tmux_input_send`, `human_activity`; I: that regex is my reconstruction of the ranking's list, which is not published) use symbols in 90 non-core files | 397 (207 method names, 115 exported, 75 unexported); I, not independently re-runnable without the ranking's list | Hub to leaf. Legal after the split. I read the ranking's "403" as this edge (I: 397 now, and the graph predates the federation move; I did not recount the 403 itself). Largest targets: `defaults_service.go` 19, `github_user_nudge.go` 18, `rules_service.go` 17, `feature_flag_service.go` 16, `autonomous_orchestration_service.go` 16. |
 | Non-hub files use symbols defined in the wider hub (54 files, 17,085 lines: every file with a `*SessionService` method plus the core) | 82 (63 package-level names, 19 methods) | Leaf to hub. This is what blocks a leaf. |
 
 ### 3.2 The 82 (V list; categories are my reading, I)
@@ -130,17 +132,59 @@ The giant component is created by a few shared helpers, not by RPC logic. Receiv
 
 So **no category is genuine hub state**. A shared `server/rpcutil` is not the unblocker: the shared pieces are domain kernels (access, steer, pane reply, action result, flags, fsops), not error mapping or auth extraction, which live in `server/adapters`, `server/interceptors` and `server/auth` already (I: none of the 82 is an error-mapping, DTO-conversion or event-bus helper; the one DTO helper is `vcsStatusToProto`).
 
-### 3.3 Cycles among the leaves (I, file-granularity simulation)
+### 3.3 Kernel leaks and L1 cycles, and the cut lists (revised 2026-11-23 after an independent type-based review)
 
-Assigning files to a first-pass, coarser partition than section 5 (12 families) and running SCC over the package graph without the hub gives one component holding all 12 families. The edges that keep it tied together (symbols in parentheses; V per file pair via the graph):
+The first draft called five packages "L0 kernels" and an L1 layer without cycles. Both were wrong. Under the first assignment, 77 distinct symbols in kernel files used files assigned to L1 or hub packages (V: the reviewer's count, reproduced by my re-run), and the L1 packages formed one strongly connected component (reviewer: {adminrpc, attention, guidance, notify, providers, rules, workflows} about 31.2k lines, plus {fileops, vcssearch}). The reviewer also found leaf-to-hub symbols my graph missed: 86 in total, not 82 (adds `file_metrics.go` using `mustInt64Counter`/`mustFloat64Histogram` from `session_creation_metrics.go`, the sweepers using creation metrics and `commitTerminalStatus`, and `guidance_request_hook_mirror.go` using `RedactSecrets`). I have not reproduced the 86 (I have no type information); I fold those three classes into the cuts below.
 
-| Edge | Symbols | Cut |
+**What I re-ran (I, file-level graph; assignment committed as [session-service-hub-assignment.csv](session-service-hub-assignment.csv), 268 rows, sums to 65,807).** The first-draft assignment reproduces the reviewer's 77 kernel-to-higher symbols exactly (V). After the file moves in 3.3.1 and the symbol cuts in 3.3.2 and 3.3.3, the kernel graph is acyclic and the L1 graph is a DAG.
+
+#### 3.3.1 File moves versus the first draft
+
+| Change | Why |
+|---|---|
+| `guards_flag`, `lease_flag`, `steer_authorization`, `session_service_guarded_steer` leave `access` for the hub (`sessionrpc`) | All four are `*SessionService` receiver files. Their value types (`SteerOutcome`, `Steer*`, `ErrSteerPaneOwnership`, `NudgeRecorder`, `steerRequestFacts`) are cut out as symbols into `access` (3.3.2). |
+| `tmux_input_send`, `external_pane_resize` join `access` | `terminal_access.go` needs `sendInputToTmuxWithRetry`, `ExternalPaneTarget`, `resizeExternalCapturePaneSession`. |
+| `hidden_reply_audit.go` becomes kernel `auditkit` | `flagsvc`, `access` and `notify` all use `AuditSink`/`AuditLine`/`ErrAuditFailed`/`flagOutcome*`. |
+| `approval_store.go` becomes kernel `approvalkit` | `ApprovalStore`/`PendingApproval` are used by `workflows`, `adminrpc`, `notify`, `attention`. |
+| `path_resolver.go` moves into `fsops` | The file backends use `ResolvedPath`, `WorktreeRoot`, `OpenWorktreeRoot`, `linkProber`. |
+| `secret_scanner.go` becomes kernel `secretscan` (94 lines) | `guidance_request_hook_mirror.go` uses `RedactSecrets`. |
+| `credentials.go`, `provider_limits.go` become kernel `credkit` | `anthropicwire` uses `Credential`, `CredentialChain`, `ProviderLimits`, `parseIntHeader`, `parseTimeHeader`. |
+| `notification_actions.go`, `notification_priority.go`, `rate_limiter.go` move to `notify` | They build and rate-limit notifications; `attention` and `autonomous` call them (one way). |
+| `domain_checker.go` moves to `attention`; `window_activator.go` to `adminrpc`; `guidance_ack_wiring.go`, `guidance_runtime_wiring.go` to the hub | Receiver or consumer-owned. |
+| `fileops` and `vcssearch` merge into `filesvc` (8,053 lines) | They call each other (7 and 4 symbols). Merge chosen over two port sets; the alternative is a consumer-side `FileOps`/`SearchHandler` port pair. |
+
+#### 3.3.2 Symbol cuts into the kernels (explicit list; sources are the first-draft assignment's defining files)
+
+| Kernel | Symbols to define inside it | Defined today in |
 |---|---|---|
-| `flags` and `attention` (feature_flags_notification_actions.go holds `flagReader` and the notification flag names) | 27 | `flagReader`, flag-name consts, `FlagRegistry` accessors into the `flagsvc` kernel (stage 1). |
-| `attention` and `approvals` | 24 | One package, or `ApprovalStore`/`PendingApproval` into the question kernel. |
-| `guidance` and `attention` (`PendingQuestionStore`, `GuidanceHookMirror`, `decodeGuidanceOptions`, `tabbedFromRow`) | 24 | `questionkit` kernel (`pending_question_store`, `askuserquestion_parser`, `guidance_request_hook_mirror`, ...). |
-| `attention` to `fileops` (`hidden_reply_audit.go` uses `fsOps` and `osFS`, 13 symbols) and `fileops` to `flags` (9), `gatestats` to `fileops` (8) | 30 | `fsops` kernel. |
-| `providers` to `rules` (`anthropic_limits_client.go` uses 6 symbols from `anthropic_client.go`) | 6 | `anthropicwire` kernel. |
+| `access` | `AuthModeRequired`, `ListenerLocal`, `ListenerRemote`, `RequestRecordFrom` | `capture_tap_service.go` (stays in `adminrpc` as the RPC adapter) |
+| `access` | `SteerOutcome` + 8 constants, `ErrSteerPaneOwnership`, `NudgeRecorder`, `steerRequestFacts`, `requestFactsOf`, `BacklogLinkResolver`, `BacklogReviewLink` | `session_service_guarded_steer.go`, `steer_authorization.go`, `hidden_review_steer.go` |
+| `flagsvc` | none from L1 once the 7 leaf-owned flag consts and their `Spec` rows (`hiddenSessionReplyFlagName`, `hiddenSessionReadonlyGuardsFlagName`, `terminalWriteLeaseFlagName`, `completionReviewerFlagName`, `githubIssueProgressCommentsFlagName`, `ChangelogFlagName`, `UpdateCheckFlagName`) move to the file that owns each (in-package pre-step, stage 0; the header of `feature_flag_specs.go` already prescribes this) | `feature_flag_specs.go`, `hidden_question_reply.go`, `completion_reviewer.go`, `backlog_github_progress_sync.go`, `update_check_service.go` |
+| `fsops` | `knownTextExtensions`, `readFull`, `truncateSize`, `internalIOError` | `file_service.go`, `file_ops.go` |
+| `fsops` | `mustInt64Counter`, `mustFloat64Histogram` (copy into the existing `server/services/internal/streammetrics`, which holds `watch_stream_metrics.go`; contents not read, I) | `session_creation_metrics.go` |
+| `fsops` | `WorkspaceProvider`, `.GetWorkspace` (consumer-side interface, defined where used) | `workspace_service.go` |
+| `fsops` | `expandTilde`, `parseJSONLogHeader`, `deployID`, `validateTargetDirectory` (used by `adminrpc` and `workflows`) | `path_completion_service.go`, `log_header_scan.go`, `deploy_id.go`, `workflow_service.go` |
+| `questionkit` | `ActionResult`, `applied`, `notWired`, `outcome`, `replyOutcomeResult`, `StaleReasonAnswerPartial`, `tabbedQuestions`, `itemSessionLookup`(+`GetItemSessionBySessionUUID`), `metaGuidanceRequestID`, `metaQuestionID`, `metaReplyUnavailable`, `sanitizeNotificationText`; consumer-side ports replacing `AnswerRouter`, `answerRows`, `deliverySink` (7 symbols) | `notification_action_service.go`, `pane_reply_core.go`, `question_answer_sequence.go`, `hidden_review_steer.go`, `approval_question.go`, `approval_handler.go`, `question_answer_router.go` |
+| `anthropicwire` | `RuleSpec` (lower to `session/domain`, as the DTO-lowering plans do for value types) | `rules_store.go` |
+
+#### 3.3.3 L1 cycle cuts (each edge below is a symbol set that becomes a kernel symbol, a move, or a consumer-side port)
+
+| Edge cut | Symbols | Cut |
+|---|---|---|
+| `notify` to `attention` | 8: `buildApprovalMessage`, `matchesIDData`, `stableIDForData`, `sanitizeNotificationText` (approval_handler.go), `meta*` (approval_question.go), `steerRequestFacts` | text builders move into `notify`; `meta*` to `questionkit`; `steerRequestFacts` to `access` |
+| `notify` to `adminrpc` | 3: capture-tap auth | `access` (3.3.2) |
+| `notify` to `workflows` | 1 | consumer-side port in `notify` (symbol not inspected, I) |
+| `workflows` to `attention` | 5: `ApprovalStore`(+1), `metaGuidanceRequestID`, `ActionResult`, `applied`, `notWired`, `outcome` | `approvalkit`, `questionkit` |
+| `workflows` to `guidance` | 3: `CancelPeerHelp`, `ErrNotPeerHelp`, `GuidanceRequestService` | port in `workflows` |
+| `adminrpc` to `workflows` | 2: `deployID`, `validateTargetDirectory` | `fsops` |
+| `adminrpc` to `filesvc` | 2: `expandTilde`, `parseJSONLogHeader` | `fsops` |
+| `rules` to `adminrpc` | 2: `ClaudeSettingsWatcher.Reload` | port in `rules` |
+| `attention` to `rules` | 3: `AnalyticsStore.RecordFromResult`, `riskLevelString` | port in `attention` |
+| `filesvc` to `adminrpc` (1), `filesvc`/`workflows` (1 each way) | 3 | ports (symbols not inspected, I) |
+
+Total cuts: 32 L1 symbols plus the kernel symbol lists in 3.3.2. Re-run result (I): **no kernel cycle** (order: `fsops`, `secretscan`, `credkit`, `access` < `auditkit`, `approvalkit` < `flagsvc` < `questionkit`, `anthropicwire`) and **L1 acyclic** after the cuts; the remaining one-way L1 edges are `attention` to `notify` (26), `attention` to `guidance` (4), `prs` to `backlogsync` (4), `notify` to `gatestats` (3), `attention` to `prs` (2) and singletons. `attention` therefore imports `notify` and `guidance`; neither imports it.
+
+Leaf-to-hub symbols still left after the moves: 94 (I, re-run). The big groups are `SessionService` receivers and methods (`sessionrpc`, `sessioncreate`, `sessionstream` to the facade 11, 11 and 8), `attention` to the hub 14 + 5, `providers` to the hub 12 (the `Steer*` set, which 3.3.2 moves to `access`), `filesvc` to the hub 5 (`WorkspaceProvider` and three conversion helpers, `vcsStatusToProto`, `listPRFilter`, `prRefFromProto`) and `workflows` to the hub 5 (`ReactiveQueueManager`, `ScrollbackSequencer`, defined where consumed). They are ports, kernel symbols or hub-adapter calls, as in 3.2.
 
 ## 4. Blocked families: why, and what unblocks them
 
@@ -158,71 +202,76 @@ Assigning files to a first-pass, coarser partition than section 5 (12 families) 
 
 ## 5. Target architecture
 
-### 5.1 Packages (V LOC from the file assignment; the assignment itself is a design, I)
+### 5.1 Packages (V: lines are `wc -l` sums of the committed assignment, which is a design, I)
 
-Sizes recount to 65,807 (sum of per-file `wc -l` over the assignment). Names reuse Part 3 where they match (`approvals`, `qareply`, `notifyactions`, `flags`, `guidance`, `autonomous`, `notify`, `fileops`, `rules`, `sessioncreate`).
+The per-file assignment is [session-service-hub-assignment.csv](session-service-hub-assignment.csv) (columns file, package, layer, stage, lines; 268 rows; sums to 65,807). It supersedes the first draft's table; the reviewer's per-package recounts differed from it because the first draft's partition was not published and the file moves in 3.3.1 had not been made. Package sizes below recount from the CSV with `awk -F, 'NR>1{p[$2]+=$5} END{for(k in p) print k,p[k]}'`.
 
-| Layer | Package under `server/services/` | Lines | Contents (file prefixes) |
+| Layer | Package under `server/services/` | Lines | Contents |
 |---|---|---|---|
-| L0 kernels (import only domain/config/`session`) | `access` | 1,544 | `terminal_access`, `human_activity`, `guards_flag`, `lease_flag`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, steer value types (`steer_authorization`, `session_service_guarded_steer`: 569 lines of these are `SessionService` receivers and move last) |
-| | `flagsvc` | 1,695 | `feature_flag_*`, `feature_flags_*` |
-| | `questionkit` | 1,716 | `pending_question_store`, `askuserquestion_parser`, `question_delivery_track`, `answer_listener`, `guidance_request_hook_mirror`, `guidance_request_mirror_proto`, `guidance_dialog_*`, `notification_quality_metrics`, `reply_idempotency` |
-| | `fsops` | 1,392 | `fsops`, `file_atomic`, `file_backend*`, `file_inode_*`, `file_codec`, `file_metrics`, `files_telemetry`, `dup_fd_*`, `exec_*`, `settings_file_atomic_write` |
-| | `anthropicwire` | 829 | `anthropic_client`, `anthropic_limits_client`, `gemini_limits_client`, `cli_ai_client`, `selecting_ai_client`, `ai_interfaces` |
-| L1 leaves (import L0 and `session*`, never the hub) | `attention` (split per Part 3 into `approvals` about 5.7k, `qareply` about 2.6k, `notifyactions` about 2.1k, not re-measured) | 9,148 | `approval_*`, `hook_*`, `question_*`, `pane_reply_*`, `notification_action*`, `hidden_*`, `pi_extension_*`, `claim_checker`, `mcp_proof` |
-| | `providers` | 6,901 | `github_*`, `credentials`, `capacity_*`, `quota_*`, `provider_limits`, `jules_*`, `callback_*`, `webhook_*`, `domain_checker`, `rate_limiter` |
-| | `adminrpc` (split by role at author time, about 2k to 3.5k each) | 5,790 | `database_service`, `defaults_service`, `config_service`, `utility_service`, `project_service`, `launcher_*`, `remote_service`, `claude_settings_*`, `slash_command`, `client_log`, `log_level`, `circuit_breaker`, `debug_snapshot`, `error_registry`, `diagnostic_service`, `tymux_rollout`, `stream_hub_rollout`, `tmux_version`, `tcc_enrichment`, `capture_tap` |
-| | `fileops` | 4,931 | `file_*`, `files_*`, `path_*`, `dir_cache`, `gitignore_cache`, `local_file_service`, uploads |
+| L0 kernels (import only domain, config, `session*`, and lower kernels) | `fsops` | 1,695 | `fsops`, `file_atomic`, `file_backend*`, `file_inode_*`, `file_codec`, `file_metrics`, `files_telemetry`, `dup_fd_*`, `exec_*`, `settings_file_atomic_write`, `path_resolver` |
+| | `secretscan` | 94 | `secret_scanner` |
+| | `credkit` | 589 | `credentials`, `provider_limits` |
+| | `access` | 1,128 | `terminal_access`, `human_activity`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, `tmux_input_send`, `external_pane_resize`, plus the symbols in 3.3.2 |
+| | `auditkit` | 467 | `hidden_reply_audit` (imports `fsops`) |
+| | `approvalkit` | 460 | `approval_store` |
+| | `flagsvc` | 1,695 | `feature_flag_*`, `feature_flags_*` (imports `auditkit`, `access`) |
+| | `questionkit` | 1,716 | `pending_question_store`, `askuserquestion_parser`, `question_delivery_track`, `answer_listener`, `guidance_request_hook_mirror`, `guidance_request_mirror_proto`, `guidance_dialog_*`, `notification_quality_metrics`, `reply_idempotency` (imports `flagsvc`, `secretscan`) |
+| | `anthropicwire` | 829 | `anthropic_client`, `anthropic_limits_client`, `gemini_limits_client`, `cli_ai_client`, `selecting_ai_client`, `ai_interfaces` (imports `credkit`) |
+| L1 leaves (import kernels and `session*`, never the hub; the L1 graph is a DAG after 3.3.3) | `filesvc` | 8,053 | merge of the old `fileops` and `vcssearch` (82% of the cap) |
+| | `attention` (ships split per Part 3 into `approvals`, `qareply`, `notifyactions`; not re-measured) | 7,908 | `approval_*` (not the store), `hook_*`, `question_*`, `pane_reply_*`, `notification_action*`, `hidden_question_reply`, `hidden_review_steer`, `pi_extension_*`, `claim_checker`, `mcp_proof`, `domain_checker` |
+| | `providers` | 6,014 | `github_*`, `capacity_*`, `quota_*`, `jules_*`, `callback_*`, `webhook_*`, `update_check`, `trigger_rate_limiter` |
+| | `adminrpc` (split by role at author time) | 5,888 | `database_service`, `defaults_service`, `config_service`, `utility_service`, `project_service`, `launcher_*`, `remote_service`, `claude_settings_*`, `slash_command`, `client_log`, `log_level`, `circuit_breaker`, `debug_snapshot`, `error_registry`, `diagnostic_service`, `tymux_rollout`, `stream_hub_rollout`, `tmux_version`, `tcc_enrichment`, `capture_tap`, `window_activator` |
 | | `rules` | 4,536 | `rules_*`, `analytics_*`, `tagging_*`, `escape_code_handler` |
-| | `vcssearch` | 3,617 | `vcs_*`, `content_search*`, `search_*`, `session_service_artifact_*` |
+| | `notify` | 2,569 | `notification_*`, `slack_*`, `backlog_notifier`, `stale_session_notifier`, `memory_pressure_notifier`, `rate_limiter` |
 | | `backlogsync` | 2,524 | `backlog_*`, `completion_reviewer*`, summaries, `headless`, `llm_backend` |
 | | `workflows` | 2,053 | `workflow_*`, `review_queue_service`, `checkpoint`, `wake_trigger_*` |
-| | `notify` | 1,958 | `notification_*`, `slack_*`, `backlog_notifier`, `stale_session_notifier`, `memory_pressure_notifier` |
 | | `autonomous` | 1,956 | `autonomous_*`, `lease_wedge` |
-| | `guidance` | 1,474 | `guidance_*` (non-kernel) |
+| | `guidance` | 1,248 | `guidance_*` outside the kernel and the hub wiring |
 | | `prs` | 626 | `pr_*`, `session_pr_holds`, `active_pr_status` |
 | | `gatestats` | 608 | `gatestats_*` |
-| L2 hub handlers (import L0 and L1) | `sessionrpc` | 4,903 | lifecycle, crud, update, shells, PR refs, liveness, workspace |
+| L2 hub handlers | `sessionrpc` | 5,698 | lifecycle, crud, update, shells, PR refs, liveness, workspace, the four steer/guard receiver files, the two guidance wiring files |
 | | `sessioncreate` | 2,112 | create, `session_creation_*`, sweepers |
-| | `sessionstream` | 2,372 | stream, watch, events, diagnose, terminal service, external streamers |
-| L3 facade (the only package `server`, `backlogsvc` and `wsconn` import) | `server/services` | 2,947 + 175 unassigned (`external_*`) | `session_service.go` struct, embeds, wiring; target after delegator removal and constructors moving to the root: about 2k (I) |
+| | `sessionstream` | 2,394 | stream, watch, events, diagnose, terminal service, external websocket |
+| L3 facade | `server/services` | 2,947 | `session_service.go` struct, embeds, wiring, delegators; about 2k after delegator removal and constructors moving to the root (I) |
 
-Largest package is `attention` at 9,148 (92% of the cap, over Part 3's own 8k stop rule), so it ships already split. `sessionkit` (the ten shared helpers, about 200 lines) sits beside `access` at L0. The rows above sum to 65,807 including `external_*`.
-
-`backlogsvc` (15,641 lines, `wc` over `server/services/backlogsvc/*.go` non-test) and `wsconn` (9,767) are also near or over 10k. They are out of scope here; `backlogsvc-ocp-plan.md` and Part 3 (BS-1 to BS-6) cover backlogsvc. **V** (`ls`/`cat | wc -l`).
+Largest package is `filesvc` at 8,053, then `attention` before its split at 7,908 (the first draft's 9,148 included files that moved to kernels and `notify`). `sessionkit` (the ten shared helpers, about 200 lines) is carved out of the hub files in stage 6a and is not a separate row. `backlogsvc` (15,641) and `wsconn` (9,767) are in section 8a.
 
 ### 5.2 Dependency rule and wiring
 
-- Leaves never import the hub. The hub imports leaves and kernels. Kernels import neither. A leaf imported by a sibling leaf needs an `isolate_<leaf>` depguard row that lists it (`.claude/rules/leaf-packages.md` rule 4).
-- Ports are consumer-side (`rules/leaf-packages.md` rule 3); `LiveInstanceFinder`, `SessionDeleter`-style interfaces already exist (`sessionretention` precedent: `package-layout.md:47`).
-- `server/dependencies*.go` builds every handler and the `Deps` of each; the 54 `Set*` setters become `Deps` fields. This overlaps backend-di-refactor Story 1.3 (owner Q4, 2026-11-20): stage 6c waits for or builds on it.
-- Open-closed: a new RPC group is one new package with a `Handler`, one embed line in `services.SessionService`, one constructor call in the root. Forgetting the embed is a compile error (2.2). A new proto service is one package and one `connect` registration in `server.go`, as today.
+- Leaves never import the hub. The hub imports leaves and kernels. A leaf imported by a sibling needs an `isolate_<leaf>` depguard row listing it (`.claude/rules/leaf-packages.md` rule 4).
+- Ports are consumer-side (rule 3). `LiveInstanceFinder` and `SessionDeleter` already exist (`sessionretention` precedent: `package-layout.md:47`).
+- **The facade declares no RPC method itself.** A method declared on `SessionService` silently wins over an ambiguous embed and would hide a duplicate, so every one of the 181 RPCs must come from an embedded handler and `var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)` (`session_service.go:56`) stays. The reviewer verified: two embeds of 90 and 91 methods satisfy the 181-RPC interface; overlap fails only through the interface assertion; a missing embed fails; interceptors are unaffected. (VERIFIED by the reviewer with real type information.)
+- **`Set*` setters.** `server/dependencies*.go` builds each handler's `Deps`. The 54 setters cannot all become plain `Deps` fields: the ones that run after construction (the Jules and keyring swaps, `SetSlackNotifier`, `SetStatusDetailProvider`, `SetWorkflowService`, and similar) need getter closures (`func() T`) per `.claude/rules/leaf-packages.md` rule 3 (as `AfterLinkHook` and `DbPath` do). This overlaps backend-di-refactor Story 1.3 (owner Q4, 2026-11-20); stage 6c waits for or builds on it.
+- **Hub group calls (I, committed assignment re-run).** `sessionrpc` to `sessionstream` 6, `sessionstream` to `sessionrpc` 3, `sessionrpc` to `sessioncreate` 4, `sessioncreate` to `sessionrpc` 4, `sessioncreate` to `sessionstream` 2, and each handler to the facade (`SessionService` receiver methods) 8 to 11; the reviewer's type-based counts differ (rpc to stream 10, rpc to create 2, create to rpc 4, create to stream 3 including `ArchiveSession`, stream to rpc 3, facade and stream 11/6 for the `wire*Callback` family). Both say the same thing: the hub groups call each other, so these must be `sessionkit` members (`FindLiveInstance`, `findInstance`, `loadInstancesWithWiring`, `wireCallbacks` and the `wire*Callback` family, `removeFromAllPollers`, `ArchiveSession` entry) or consumer-side ports; none can be a package import.
+- Open-closed: a new RPC group is one new package with a `Handler`, one embed line in `services.SessionService`, one constructor call in the root; forgetting the embed is a compile error. A new proto service is one package and one registration in `server.go`.
 
 ## 6. Staged PR sequence
 
-Cost classes: **S** = one author wave plus CI; **M** = author plus two review lenses, port design; **L** = characterization tests first, multi-wave; sizes are agent work, not time. "After" is the top-level non-test line count of `server/services` by `wc` on my assignment (V arithmetic, I for the assignment): 65,807 start.
+Cost classes: **S** = one author wave plus CI; **M** = author plus two review lenses, port design; **L** = characterization tests first, multi-wave. Sizes are agent work, not time. "After" is the top-level non-test line count of `server/services` (`wc -l`), computed from the `stage` column of the committed CSV: 65,807 at the start (V arithmetic; assignment I). The CSV's `stage` column is the single source for which file moves when.
 
 | Stage | PRs | Content | Moves out | Top level after | Ports and risk | Test plan | Rollback |
 |---|---|---|---|---|---|---|---|
-| 0 | 2 S | Guard hardening before any move (section 7): `noliveinstanceraw` multi-package; analyzer path-existence test; make `TestMain`/`svctest.Main` mandatory for new packages; sinkguard discovery already auto. Per-stage `budget.txt` ratchet rows. | 0 | 65,807 | none | `make ready`, analyzer tests | revert PR |
-| 1 | 5 M | Kernels: `access` (receiver-free files), `flagsvc`, `questionkit`, `fsops`, `anthropicwire`. Move the 82-symbol definitions to their owners. | 6,607 | 59,200 | Exported names become the API; `flagReader`, `fsOps` need exported forms. No new interfaces except `WorkspaceProvider` moved to consumer. Risk: 363 test files; 57 build `SessionService`. | `go test ./server/...`, `make test-delivery-guards`, mutation check per moved branch | `git revert` per PR; no alias left to unwind |
-| 2 | 11 S | READY clusters from the ranking (uploads, remote, claude settings, misc handlers, summaries, hook receivers, completion reviewer, forward sync with 1 port, search, 2 singles). Federation is done. | 6,715 | 52,485 | `search` is at the SC1 cap (10); `backlog_debug_mutate_handler.go` is path-keyed in 3 places (section 7) | per-cluster; mutation checks | revert |
-| 3 | 6 M | NEEDS-PORTS small: webhooks, quota core, gatestats (needs `fsops`), tagging rules, rollouts, sweepers' non-receiver files | 4,374 | 48,111 | 10 test files share approval fixtures (ranking); 1 to 4 hub methods per cluster (ranking) | as above | revert |
-| 4 | 5 L/M | Attention cluster, after stage 1: `approvals`, `qareply`, `notifyactions` (3 L), `guidance` (M), `notify` (M). 9 receiver-bearing files convert from `(s *SessionService)` to a struct over ports. | 11,535 | 36,576 | Highest port count: 51 symbols from `attention` to the hub today; most become kernel imports. Risk: AskUserQuestion routing (ADR-005 `docs/explanation/askuserquestion-answer-routing.md`) and the `noarchivedrevival` file `question_answer_router.go`. | per-package characterization tests of the router before the move | revert; the router has a guard test |
-| 5 | 14 M | Remaining L1: providers (2), rules (2), `adminrpc` (3), `fileops` + `vcssearch` (3), `workflows`/`backlogsync`/`autonomous`/`prs`/`access` receivers (4). 12 receiver-bearing files. | 24,067 | 12,509 | `providers` needs the steer kernel (15 symbols) | whole-tree golangci, `make test-delivery-guards` | revert |
-| 6a | 1 L | `sessionkit` (10 shared helpers) + `sessionstream` handler. 51 receiver methods; `StreamTerminal` is 543 lines in one method. | 2,372 | 10,137 | `terminal_input_sites_scan_test.go` globs the top level only (section 7) | stream integration tests, e2e terminal specs | revert |
-| 6b | 1 L | `sessioncreate` handler: `CreateSession` closure is 38 fields. | 2,112 | **8,025** | Highest cycle risk: `sessioncreate` and `sessionrpc` call each other 4 and 4 times; `sessionstream` and `sessionrpc` 6 and 3 | `session_service_create_test.go` and 57 constructor tests; `make test-race` | revert |
-| 6c | 3 L | `sessionrpc` handler, facade becomes embeds only, delegators and constructors removed, `Set*` setters to `Deps`. Optional for size. | 4,903 and delegator removal | about 2.1k (I) | `noliveinstanceraw` monitored funcs move (section 7); Story 1.3 overlap | full suite | revert in 3 steps |
-| 7 | 1 S | Set `LargestPkgLOCMax` to 10000 in `t9.go`, update docs (`package-layout.md`, `CLAUDE.md` Status line), final budget ratchet. | 0 | 8,025 or less | none | `go run ./tools/bzl/scoping t9` | revert |
+| 0 | 2 S + 1 M | (a) Guard hardening (section 7): `noliveinstanceraw` multi-package, analyzer and Makefile path-existence checks, `terminal_input_sites_scan_test` walking subdirectories, `TestMain` requirement. (b) Per-stage `budget.txt` rows. (c) In-place pre-step: the 7 leaf-owned flag consts and `Spec` rows move to their owning files, composition root appends (M). | 0 | 65,807 | none | `make ready`, analyzer tests | revert |
+| 1 | 4 S + 3 M + 2 L | Kernels, in layer order: `fsops`, `secretscan`, `credkit`, `access` (M), `auditkit`, `approvalkit` (S each), `anthropicwire` (M), `flagsvc` (L), `questionkit` (L). The symbol cuts of 3.3.2 are part of these PRs (about 26 relocated symbols, 14 of them into `questionkit`). | 8,673 | 57,134 | Highest symbol-relocation count per PR; exported names become API. Stage 1 was S/M with 6,607 lines in the first draft; it is now 9 PRs and 8,673 lines because the kernels had to absorb their dependencies. | `go test ./server/...`, `make test-delivery-guards`, mutation check per moved branch | revert per PR, no alias to unwind |
+| 2 | 11 S | READY clusters from the ranking (uploads, remote, claude settings, misc handlers, summaries, hook receivers, completion reviewer, forward sync with 1 port, search, 2 singles); federation is done. | 6,715 | 50,419 | `search` at the SC1 cap; `backlog_debug_mutate_handler.go` is path-keyed in 3 places (section 7) | per cluster, mutation checks | revert |
+| 3 | 6 M | Small NEEDS-PORTS: webhooks, quota core, gatestats, tagging rules, rollouts, sweepers' non-receiver files. | 4,258 | 46,161 | 10 test files share approval fixtures; 1 to 4 hub methods per cluster (ranking) | as above | revert |
+| 4 | 4 L + 1 M | Attention cluster after kernels: `approvals`, `qareply`, `notifyactions`, `notify` (L each, `notify` takes the text builders and descriptor files), `guidance` (M). 9 receiver files convert. Stage total is 10,457: `attention` 6,996 + `notify` 2,213 + `guidance` 1,248; the first draft's 12,580 for these three packages included 1,045 lines that stage 2 (689) and stage 3 (356) now take. | 10,457 | 35,704 | The 32 L1 cuts of 3.3.3 land here and in stage 5. AskUserQuestion routing (`docs/explanation/askuserquestion-answer-routing.md`) and the `noarchivedrevival` file `question_answer_router.go`. The attention split is not re-measured. | router characterization tests before moving; `make test-delivery-guards` | revert; router has a guard test |
+| 5 | 11 M + 3 L | Remaining L1: `providers` (2 M), `rules` (2 M), `adminrpc` (3 M), `filesvc` (3 L, merge of two old packages), `workflows`/`backlogsync`/`autonomous`/`prs` (4 M). 12 receiver files. By package: `filesvc` 6,041, `adminrpc` 4,052, `rules` 3,786, `providers` 3,588, `workflows` 2,053, `autonomous` 1,956, `prs` 626, `backlogsync` 451. | 22,553 | 13,151 | `providers` needs the `access` steer symbols; the ports of 3.3.3 for `rules`, `workflows`, `filesvc`, `adminrpc` | whole-tree golangci, `make test-delivery-guards` | revert |
+| 6a | 1 L | `sessionkit` plus `sessionstream`. 51 receiver methods; `StreamTerminal` is 543 lines in one method. | 2,394 | 10,757 | `terminal_input_sites_scan_test.go` globs the top level only | stream integration tests, e2e terminal specs | revert |
+| 6b | 1 L | `sessioncreate`: the `CreateSession` closure is 38 fields. | 2,112 | **8,645** | `sessioncreate` and `sessionrpc` call each other (5.2) | `session_service_create_test.go`, the 57 constructor tests, `make test-race` | revert |
+| 6c | 3 L | `sessionrpc` handler, facade becomes embeds only, delegators and constructors removed, `Set*` setters to `Deps` plus getter closures. Optional for the size goal. | 5,698 and delegator removal | 2,947, about 2k (I) after trimming | `noliveinstanceraw` monitored methods move; Story 1.3 overlap | full suite | revert in 3 steps |
+| 7 | 1 S | Gate (rewritten, below). | 0 | 8,645 | see below | `go run ./tools/bzl/scoping t9` | revert |
 
-PR count 2+5+11+6+5+14+1+1+3+1 = **49**, against Part 3's 41 for the same area (Part 3 counts 35 packages, this plan 21 plus the split of `attention` and `adminrpc`).
+PR count 3+9+11+6+5+14+1+1+3+1 = **54** (S 18, M 22, L 14), against Part 3's 41 for the same area (the two counts are not reconciled per PR).
 
-**Minimum path to every package under 10k:** stages 0, 1, 2, 3, 4, 5, 6a and 6b (stage 0's gate is hygiene). Stage 5 ends at 12,509; subtracting `sessionstream` gives 10,137 (still over); subtracting `sessioncreate` as well gives 8,025. Stage 6c is for the open-closed property and the thin facade, not for the size cap.
+**Minimum path to `server/services` under 10k:** stages 0 to 5, 6a and 6b: 13,151 after stage 5, 10,757 after 6a (still over), **8,645** after 6b. Stage 6c is for the open-closed property and the thin facade, not the size cap.
+
+**Stage 7, the gate (rewritten).** The first draft said to lower `LargestPkgLOCMax` (`tools/bzl/scoping/t9.go:68`, 72,000) to 10,000. That is wrong. T9d (`t9.go:90`, `main.go:130`) checks only `LOC["server/services"]` and `LOC["session"]`, both against the one `LargestPkgLOCMax`; it does not look at the largest package. Setting 10,000 would fail `session` (13,981, V) and would say nothing about `backlogsvc`, which T9d does not measure (my earlier "fails `backlogsvc`" was false). So stage 7 is: add a separate `T9dServicesLOCMax` (10,000) next to the session cap, set it in the PR that lands stage 6b, and leave the session cap to the session split (the owner-approved tmux and process-backend plan, PR #1770 per the review; I did not read it). A repo-wide "no package over 10k" gate would be a new check over `go list` rows (I), only possible after section 8a is decided.
 
 ### 6.1 Estimation and wall-clock blockers
 
-- **Agent cost:** Stage 2 and stage 3 are the cheap, parallel-friendly waves (the federation PR, `94acd8ec7`, was 37 files and 231 added lines and is the template). Stages 4 and 6 hold the L-class work (8 L PRs, each needing a characterization wave before the move and a review wave after). Totals by class: 14 S, 27 M, 8 L, no XL (stage 4's three L and stage 6's five L).
-- **Wall-clock blockers (named, not hours of agent work):** CI restarts on every push and the make-only run takes about 2 hours (`.claude/rules/leaf-packages.md`, "Verify before you push"); at most 3 open split PRs (`roadmap.md` "Rules for executing", ADR-010 decision 4) and shared rows (`budget.txt`, `boundaries.txt`, `.golangci.yml`, `tools/bzl/scandata/BUILD.bazel`) force serial rebases, so the 49 PRs need at least 17 serial CI rounds; every PR that shares a row must be rebased after the previous merges. Owner answers to Q1-Q5 below gate stages 4, 5 and 6c. Disk: btrfs metadata and Go cache regrowth (`feedback_clean_worktrees_as_we_go`) need `df` and `btrfs filesystem usage` checks before each wave. (Memory notes; not re-verified today beyond today's `df`: 142 GB free, metadata 84%.)
+- **Agent cost:** stages 2 and 3 are the cheap parallel waves (federation `94acd8ec7`: 37 files, 231 added lines). Stages 1, 4, 5 (3 L) and 6 hold the L work (14 L PRs; each needs a characterization wave before the move and a review wave after). Totals by class: 18 S, 22 M, 14 L, no XL.
+- **Wall-clock blockers (named, not hours of agent work):** CI restarts on every push and the make-only run takes about 2 hours (`.claude/rules/leaf-packages.md`); at most 3 open split PRs (`roadmap.md` "Rules for executing", ADR-010 decision 4) and shared rows (`budget.txt`, `boundaries.txt`, `.golangci.yml`, `tools/bzl/scandata/BUILD.bazel`) force serial rebases, so 54 PRs need at least 18 serial CI rounds. Owner answers to Q1 to Q8 gate stages 1, 4, 5 and 6c. Disk: btrfs metadata and Go cache regrowth need `df` and `btrfs filesystem usage` before each wave (today: 133 GB free, metadata 84%).
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
@@ -238,10 +287,13 @@ Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes whi
 | 6 | Path-keyed registries | `workflow_bypass_inventory_test.go` (6 `server/services/*.go` rows: `backlog_debug_mutate_handler.go` x3, `autonomous_orchestration_service.go` x2, `notification_action_backlog.go`); `session/domain/transition_callers.go:104,109`; `session/legacy_item_pr_readers_test.go` (3 hits) | file path | Loud (ghost/stale checks, constants) | Re-key in the same PR. |
 | 7 | Feature registry | `docs/registry/features/backend/*.json`: 130 `handlerFile` values under top-level `server/services` (and 74 under `backlogsvc`, 6 `insights`, 4 `importsvc`, 3 `devtools`, 2 `sessionbundle`, 2 `server/mcp`, 1 `federation`) | file path | Loud (registry-diff CI) | `make registry-generate`; commit the changed entries (up to 130 for top-level files). |
 | 8 | `.golangci.yml` | `:604-660` (`no_ent_in_services` exclusions by path: `session_service.go`, `session_service_wiring.go`, `workflow_service.go`, `analytics_escape_service.go`, `error_registry.go`, `session_summary_service.go`, `handoff_summary_service.go` and test files), `:776-794` (forbidigo `LoadInstances` exclusions by regex), `:107-112` (`push_no_services`), `:396` (`isolate_featureflags`) | path globs | Loud, but only in whole-tree CI lint (`.claude/rules/leaf-packages.md`) | Move exclusions with the file; add `isolate_<leaf>` row per new leaf; run `golangci-lint --enable-only=depguard,unused` whole-tree locally. |
-| 9 | Scoping | `tools/bzl/scoping/budget.txt:46` (services row), `boundaries.txt` (12 `server/services/*` rows), `t9.go:68` cap 72,000 | package | Loud for budget/boundaries; **T9d never fails for 10k** | New rows per package, ratchet the services row each stage, change the cap in stage 7. |
+| 9 | Scoping | `tools/bzl/scoping/budget.txt:46` (services row), `boundaries.txt` (12 `server/services/*` rows), `t9.go:68,90` | package | Loud for budget/boundaries; **T9d never fails for 10k** and checks only `server/services` and `session` | New rows per package, ratchet the services row each stage, split the gate in stage 7. |
 | 10 | Bazel | `server/services/BUILD.bazel:773-792` (`data` globs of `go_sources`), `tools/bzl/scandata`, root and `server/BUILD.bazel` | generated | Loud (`bazel build --nobuild //...` is blocking) | `make gazelle`, `go run ./tools/bzl/scandata -fix .`; the federation PR touched `BUILD.bazel`, `server/BUILD.bazel`, `tools/bzl/scandata/BUILD.bazel` plus per-leaf BUILD. |
 | 11 | Interceptors and WebSocket bridge | `server/server.go:600-603` (`NewScopedFeatureFlagInterceptor`, `services.ProgramCLIFlagProbeGatedMethod`), `:617-619` | procedure name | Not affected by Go-level facade (one `NewSessionServiceHandler`, `:608`). The constant's import path changes if `ProgramCLIFlagProbeGatedMethod` moves: loud | None beyond the import. |
 | 12 | `svctest` driver-leak check | `server/services/internal/svctest/main.go:19` (`Main`), `driver_leak.go` (matches goroutine stacks containing `/session/driver.StartSessionDriver.func`) | stack text, package independent | Silent per package: only `server/services/backlogsvc/testmain_test.go` and the top-level `testmain_test.go` call `svctest.Main` (`ls server/services/*/testmain_test.go`). A new package that starts drivers without it leaks unseen. | Stage 0: every new package gets `testmain_test.go`; a guard test lists packages importing `session/driver`. |
+| 14 | `make actor-field-guard` | `Makefile:1317-1328`: a hard-coded file list including `server/services/session_service.go` and `server/services/workflow_service.go`, `grep ... 2>/dev/null` (V) | file path | **Silent**: a moved or deleted file is dropped by `2>/dev/null` and the guard passes | Replace the list with a directory walk or add the path-existence check (stage 0). |
+| 15 | Bazel test sizing | `tools/bzl/go_test.bzl:5-14`: `server/services` is (`enormous`, 4 shards) and `exec-host-binary`; new packages get defaults (V) | package | Silent: timeouts or host-dependent cached results (review: approval `socat` relay tests) | A row per new package in the same PR (open question 9). |
+| 16 | `compare-affected` | `tools/ci/compare-affected/compare.go:94,221` (V): `sel.hasTargetIn("//server/mcp", "//server/services")` | Bazel target | Silent: whether sub-package targets count is not verified (I); a change moved to a new target may not select the mcp-integration job | Add the new targets or confirm prefix matching (stage 0). |
 | 13 | `server/mcp` import set | `server/mcp/import_set_guard_test.go` (exact equality) | import path | Loud if `server/mcp` imports a new kernel | Adjust only if a kernel is used there. |
 
 ## 8. Reconciliation with the earlier Part 3 ledger
@@ -251,21 +303,40 @@ Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes whi
 - Part 3's `sessionlife`/`terminal` packages correspond to `sessionrpc`/`sessionstream` here. The stage order differs: this plan moves all leaves before the hub so that hub handlers import finished leaves.
 - Part 3's cross-part gap (`DerivePriority`, `SessionStopper`, `SessionSteerer`, claim types, `Steer*` consts, `ReasonName*`) is partly closed here: the `Steer*` constants and `NudgeRecorder` go to the steer kernel (stage 1); `DerivePriority` goes to `notify`; the rest are unresolved.
 
+## 8a. Every package over 10k today (V: `ls <dir>/*.go | grep -v _test.go | xargs cat | wc -l`, run 2026-11-23; matches the reviewer's table)
+
+| Package | Non-test lines | Plan |
+|---|---|---|
+| `session/instance` | 23,485 | `budget.txt:5` carries an INTERIM owner-approved cap exception; decomposition is a later track (`session-hub-redesign-plan.md`). |
+| `server/services` (top level) | 65,807 | This plan. |
+| `server/services/backlogsvc` | 15,641 | `backlogsvc-ocp-plan.md` and Part 3 (BS-1 to BS-6). |
+| `session` | 13,981 | Session-tree plans; the tmux and process-backend split is PR #1770 (per review, not read by me). |
+| `server/mcp` | 13,322 | ADR-010 rejected splitting it (SC2/SC4); `mcp-single-root-plan.md` shrinks its edges, not its size. No plan reaches 10k. |
+| `server` | 10,476 | Root `server` package; `roadmap.md` calls it already a leaf (no size plan). |
+| `session/tmux` | 10,272 | tmux/process-backend plan. |
+| `session/unfinished` | 10,186 | No plan found by me. |
+
+`server/services/wsconn` (9,767) stays under. Whether "every package under 10k" covers the other seven is open question 5; the cost per package is rough: `session/unfinished` and `server` are within 5% of the cap (S to M each, I); `server/mcp` needs a design that ADR-010 rejected (L); `session`, `session/tmux`, `session/instance` and `backlogsvc` have plans.
+
 ## 9. Open questions that need the owner
 
-1. **Go-level facade or proto split?** This plan keeps one proto `SessionService` and splits in Go. A proto split would change wire paths for the web app, mobile app and MCP proxy. Confirm.
-2. **Is stage 6c in scope, or is the size goal enough?** Stages 0 to 6b reach 8,025; 6c only makes the facade thin.
+1. **Go-level facade or proto split?** This plan keeps one proto `SessionService` and splits in Go (verified by the reviewer). A proto split would change wire paths for the web app, mobile app and MCP proxy. Confirm.
+2. **Is stage 6c in scope, or is the size goal enough?** Stages 0 to 6b reach 8,645; 6c only makes the facade thin.
 3. **Kernel packages exported or `internal`?** `server`, `server/mcp` and `wsconn` need `access` and `flagsvc` types, so `internal/` would block them. Default here: exported.
-4. **`attention` at 9,148.** Ship as three packages (`approvals`, `qareply`, `notifyactions`) per Part 3, or accept one package at 92% of the cap? Default here: three.
-5. **The 10k gate.** Change `LargestPkgLOCMax` to 10,000 in stage 7 (this also fails `backlogsvc` at 15.6k until its plan lands), or ratchet per package through `budget.txt` only?
-6. **Part 3 budget basis.** Which base is authoritative: `wc` (65,807), the budget row (65,715), or t9? Earlier Part 3 asked the same; I used `wc`.
+4. **`attention` split.** Three packages per Part 3 (default) or one at 7,908? The split is not re-measured.
+5. **Scope of "every package under 10k".** The owner said it applies to `server/services`. Does it also cover `session`, `session/instance`, `backlogsvc`, `server/mcp`, `server`, `session/tmux`, `session/unfinished` (section 8a)? This decides whether stage 7 is a services-only threshold or a repo-wide check, and whether `server/mcp` (rejected by ADR-010) and `server` need new plans.
+6. **Budget basis.** Which base is authoritative: `wc` (65,807), the `budget.txt` row (65,715, GOOS-tagged files excluded), or t9?
 7. **Does Story 1.3 (backend-di) land before 6c?** Both rewrite the 54 `Set*` calls.
+8. **Who owns cutting the L1 cycles (3.3.3) and the kernel symbol relocations (3.3.2)?** They are the riskiest part of stages 1, 4 and 5; the plan assumes one author wave per PR with a review wave, but a decision on one owner per kernel avoids two PRs relocating the same symbol.
+9. **Per-package Bazel test settings.** `tools/bzl/go_test.bzl:5-14` gives only `server/services` and `session` a size and shard count (`enormous`, 4) and a host-coupled tag (`exec-host-binary`). New leaf packages get defaults, so approval and hook tests that need `socat` relays or the host may time out or cache host-dependent results. Add one `_SIZES`/`_HOST_COUPLED` row per new package in the same PR, or accept defaults?
+10. **Mechanical path checks.** Stage 0 adds existence checks for the `Makefile` `actor-field-guard` file list, `compare-affected` target keys, and the analyzer path lists. Approve adding them to `make ready`?
 
 ## 10. Self-review and limits
 
 - Not run: `go build`, `go vet`, `go test`, golangci, Bazel, `scoping criteria`, any move. `gen/` and `session/ent` were not generated in this worktree, so no type information was used. My own measurements are syntax-level (go/parser plus regex): field use via `s.<field>` selectors, so a field passed through a helper or an embedded call is missed (the method-call closure covers receiver helpers only).
 - The file graph is the ranking's go/types artifact, not regenerated; it predates the federation move. 82 vs 397 depend on it.
-- The package assignment (section 5) is a regex partition over file names. It balances LOC and keeps the cycle edges named in 3.3, but it was not run through `scoping move --dry-run`. Per-package sizes can shift by a few hundred lines when symbols are cut inside files (`capture_tap_service`, `workspace_service`, `notification_action_service`, `hidden_review_steer`, `steer_authorization`).
+- The package assignment (section 5, committed CSV) is a regex partition over file names plus the file moves of 3.3.1. It balances LOC and keeps the cycle edges named in 3.3, but it was not run through `scoping move --dry-run`. Per-package sizes can shift by a few hundred lines when symbols are cut inside files (`capture_tap_service`, `workspace_service`, `notification_action_service`, `hidden_review_steer`, `steer_authorization`).
 - The "pure delegate" count (121) is a size-and-shape heuristic (at most 12 lines, one service field, no receiver call). The stage 6c delegator removal depends on it; the compile-time assertion in 2.2 is the real check.
-- Receiver-bearing files outside the hub packages: 21 files, 77 methods, 1,409 lines (V, go/parser over the receiver methods): attention 7 files, guidance 2, access 4, adminrpc 3, rules 2, fileops 1, autonomous 1, backlogsync 1. They convert in stages 4 and 5 and are the main source of per-stage port work.
-- Citing the previous ranking: the READY and NEEDS-PORTS cluster lists in stages 2 and 3 are from `leaf-candidates.md` (2026-11-22, scratch artifact, not in the repo); only their line counts were re-added (6,715 and 4,374).
+- Receiver-bearing files outside the hub packages under the first-draft assignment (the revised one moves 6 of them into the hub): 21 files, 77 methods, 1,409 lines (V, go/parser over the receiver methods): attention 7 files, guidance 2, access 4, adminrpc 3, rules 2, fileops 1, autonomous 1, backlogsync 1. They convert in stages 4 and 5 and are the main source of per-stage port work.
+- Citing the previous ranking: the READY and NEEDS-PORTS cluster lists in stages 2 and 3 are from `leaf-candidates.md` (2026-11-22, scratch artifact, not in the repo); only their line counts were re-added (6,715 and 4,258, from the `stage` column of the CSV).
+- Revision 2026-11-23: the independent review verified (type-based, by the reviewer) the embedding design, the hub counts and the stage arithmetic; its three MAJOR findings (kernels not leaf-level, L1 not a DAG, wrong gate) are addressed in 3.3, 5 and 6. The 3.3 re-run is a file-level graph analysis (I); the symbol cuts are not compiled, so the first kernel PR may find more (the review's 86 vs my 82 shows the graph undercounts). Symbols marked "not inspected" in 3.3.3 are counts only.
