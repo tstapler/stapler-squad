@@ -40,6 +40,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
@@ -368,7 +369,7 @@ type SessionService struct {
 
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
-	registry *session.Registry
+	registry *registry.Registry
 
 	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
 	// goroutines so Shutdown can await them instead of letting them outlive the

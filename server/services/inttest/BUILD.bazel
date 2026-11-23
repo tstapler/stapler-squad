@@ -23,6 +23,7 @@ go_test(
         "//session/importer",
         "//session/instance",
         "//session/prpoller",
+        "//session/registry",
         "//session/scrollback",
         "//testutil",
         "//testutil/wait",

@@ -11,7 +11,7 @@ import (
 // fakeRegistryInstanceChecker records whether/how WithInstance was called, so
 // tests can prove newSessionLivenessChecker's registry fallback fires only when
 // no live instance is tracked — never for a session findLive already resolves.
-// A real *session.Registry would otherwise reconstruct-and-Start() a throwaway
+// A real *registry.Registry would otherwise reconstruct-and-Start() a throwaway
 // Instance on every call (see newSessionLivenessChecker's doc comment in
 // dependencies.go for the full incident this regression test guards against).
 type fakeRegistryInstanceChecker struct {

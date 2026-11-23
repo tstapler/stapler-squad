@@ -1,4 +1,4 @@
-package session
+package registry
 
 import (
 	"context"
@@ -31,6 +31,16 @@ var ErrSessionNotFound = errors.New("session: not found in storage")
 // ID is already present in the registry (duplicate-ID collision guard).
 var ErrSessionAlreadyRegistered = errors.New("session: already registered")
 
+// Store is the persistence surface the Registry reads; *session.Storage implements it.
+type Store interface {
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
+	ListInstanceIDs() ([]string, error)
+	HydrateSessionPRs(ctx context.Context, rows []domain.InstanceData)
+	ShellRepository() instance.ShellRepository
+	InitialPromptRepository() instance.InitialPromptRepository
+	instance.PrSetPersister
+}
+
 type registryEntry struct {
 	instance *instance.LiveInstance
 	refcount int
@@ -41,7 +51,7 @@ type registryEntry struct {
 // Its mutex guards map membership only — not per-field Instance state.
 // Construct with NewRegistry; the zero value is not usable.
 type Registry struct {
-	storage *Storage
+	storage Store
 	mu      sync.Mutex
 	entries map[string]*registryEntry
 	// onConstruct, if non-nil, is invoked exactly once per genuinely-new LiveInstance —
@@ -55,7 +65,7 @@ type Registry struct {
 // NewRegistry constructs a Registry. onConstruct may be nil (e.g. daemon.go's own
 // Registry, which has no SessionService to wire callbacks for); Acquire nil-checks
 // before calling it.
-func NewRegistry(storage *Storage, onConstruct func(*instance.LiveInstance)) *Registry {
+func NewRegistry(storage Store, onConstruct func(*instance.LiveInstance)) *Registry {
 	return &Registry{
 		storage:     storage,
 		entries:     make(map[string]*registryEntry),
@@ -265,10 +275,6 @@ func (r *Registry) Shutdown() {
 	}
 }
 
-// Storage returns the Registry's backing storage. Used by callers (e.g. daemon.go)
-// that need access to storage through a Registry reference.
-func (r *Registry) Storage() *Storage { return r.storage }
-
 // WithInstance is the preferred entry point for synchronous, single-call-stack callers
 // (RPC handlers, one-shot lookups) where forgetting release() is the common failure mode.
 // Reserve raw Acquire/release() for genuinely long-lived holders (WebSocket streams,
@@ -323,16 +329,16 @@ var _ RegistryInspector = (*Registry)(nil)
 // newLiveInstance is the internal construction path used by Registry.Acquire.
 // It calls FromInstanceData to reconstruct the *Instance from storage data
 // (including Start() for Active sessions), then wraps it in a LiveInstance.
-func newLiveInstance(data domain.InstanceData, storage *Storage) (*instance.LiveInstance, error) {
+func newLiveInstance(data domain.InstanceData, storage Store) (*instance.LiveInstance, error) {
 	rows := []domain.InstanceData{data}
-	storage.hydrateSessionPRs(context.Background(), rows) // single-session read; LoadInstances does the bulk one
+	storage.HydrateSessionPRs(context.Background(), rows) // single-session read; LoadInstances does the bulk one
 	inst, err := instance.FromInstanceData(rows[0])
 	if err != nil {
 		return nil, err
 	}
 	// Inject shell repository so shell operations can persist to the DB.
-	inst.SetShellRepository(storage.Repo)
-	inst.SetInitialPromptRepository(storage.Repo)
+	inst.SetShellRepository(storage.ShellRepository())
+	inst.SetInitialPromptRepository(storage.InitialPromptRepository())
 	inst.SetPRPersister(storage)
 	return instance.NewLiveInstance(inst), nil
 }

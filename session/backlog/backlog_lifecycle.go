@@ -217,7 +217,7 @@ type BacklogLifecycleListener struct {
 	sessionLivenessCheckerMu sync.RWMutex
 	// sessionLivenessChecker reports whether the tmux/CLI process backing a
 	// session UUID is still alive. Injected via SetSessionLivenessChecker;
-	// wired in production to session.Registry (Instance.TmuxSessionExists) —
+	// wired in production to registry.Registry (Instance.TmuxSessionExists) —
 	// reused, not reinvented, per pre-mortem F3 / Task 2.1.3d. Nil-safe: when
 	// unset, the zombie-session detector treats liveness as unknown and does
 	// not flag (conservative default for tests that don't wire this).

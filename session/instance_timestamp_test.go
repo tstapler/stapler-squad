@@ -213,7 +213,7 @@ func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
 // deliberate no-op fallback for single-goroutine construction/test paths, not
 // a thread-safety guarantee for concurrent callers. Wrap in a LiveInstance so
 // this test actually exercises the actor's serialization, matching how every
-// production instance is wired (session.Registry.Register/Acquire).
+// production instance is wired (registry.Registry.Register/Acquire).
 func TestInstance_TimestampConcurrency(t *testing.T) {
 	t.Parallel()
 	opts := instance.InstanceOptions{
