@@ -149,6 +149,7 @@ go_library(
         "//session/memory",
         "//session/prpoller",
         "//session/queue",
+        "//session/registry",
         "//session/scanqueue",
         "//session/scanstate",
         "//session/scrollback",

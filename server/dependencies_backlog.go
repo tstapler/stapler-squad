@@ -437,7 +437,7 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	sessionService.SetAutonomousStuckRespawner(backlogSvc)
 	backlogSvc.SetStaleWorkInspector(sessionService.StaleWorkInspector())
 	// Wire the zombie-session liveness checker (pre-mortem F3, Task 2.1.3d):
-	// reuses the existing session.Registry + Instance.TmuxSessionExists rather
+	// reuses the existing registry.Registry + Instance.TmuxSessionExists rather
 	// than inventing a new liveness mechanism. Acquire failure (session not
 	// tracked live) is treated as "not alive" — the whole point of this check
 	// is to catch sessions whose DB row looks active but whose process is gone.

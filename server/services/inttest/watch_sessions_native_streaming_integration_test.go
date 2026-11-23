@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -86,8 +87,8 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 
 	prStatusPoller := prpoller.NewPRStatusPoller(storage)
 
-	registry := session.NewRegistry(storage, sessionService.WireInstanceCallbacks)
-	sessionService.SetRegistry(registry)
+	reg := registry.NewRegistry(storage, sessionService.WireInstanceCallbacks)
+	sessionService.SetRegistry(reg)
 
 	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
 
@@ -120,7 +121,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 		ExternalApprovalMonitor: externalApprovalMonitor,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           errorRegistry,
-		Registry:                registry,
+		Registry:                reg,
 		BacklogEnabledCheck:     func() bool { return false },
 	}
 }

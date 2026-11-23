@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -46,7 +47,7 @@ func newRetryTestInstance(t *testing.T, svc *SessionService, storage *session.St
 	// newCancelTestInstance's wrapLive parameter documents for Cancel's own
 	// race test.
 	if svc.registry == nil {
-		svc.SetRegistry(session.NewRegistry(storage, nil))
+		svc.SetRegistry(registry.NewRegistry(storage, nil))
 	}
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:   title,
