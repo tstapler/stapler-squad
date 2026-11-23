@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=80 loc=14772 imports=52
+session files=78 loc=14455 imports=52
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/historyadapters files=10 loc=1863 imports=6
@@ -34,7 +34,7 @@ session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
 session/importer files=13 loc=2173 imports=9
 session/itemsources files=8 loc=1731 imports=7
-session/backlog files=13 loc=8148 imports=21
+session/backlog files=13 loc=8148 imports=22
 session/backlog/chains files=3 loc=733 imports=9
 session/backlog/reviewgate files=3 loc=990 imports=10
 session/backlog/pipeline files=8 loc=2565 imports=16
@@ -43,7 +43,7 @@ session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/prpoller files=7 loc=2080 imports=8
-server/services files=262 loc=65714 imports=84
+server/services files=262 loc=65714 imports=85
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
@@ -71,4 +71,6 @@ session/paneactivity files=1 loc=222 imports=3
 session/registry files=1 loc=344 imports=3
 session/pipelinemode files=3 loc=768 imports=4
 session/claudehistory files=1 loc=408 imports=1
+session/steertext files=1 loc=146 imports=0
+session/conflictretry files=1 loc=171 imports=0
 session/nudgeoutcomes files=1 loc=224 imports=3

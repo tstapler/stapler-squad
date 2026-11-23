@@ -160,6 +160,7 @@ go_library(
         "//session/sessionpr",
         "//session/sshremote",
         "//session/stagecfg",
+        "//session/steertext",
         "//session/streamhub",
         "//session/summaries",
         "//session/sweeper",
