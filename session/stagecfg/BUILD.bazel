@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "stagecfg",
@@ -8,6 +9,7 @@ go_library(
         "ent_stage_config_repository.go",
         "ent_workflow_repository.go",
         "gate_satisfaction_repository.go",
+        "model_validation.go",
         "pipeline_mode_executor.go",
         "pipeline_mode_repository.go",
         "stage_config_repository.go",
@@ -45,4 +47,11 @@ filegroup(
         "//server/services:__pkg__",
         "//session:__pkg__",
     ],
+)
+
+go_test(
+    name = "stagecfg_test",
+    srcs = ["model_validation_test.go"],
+    embed = [":stagecfg"],
+    deps = ["@com_github_stretchr_testify//assert"],
 )

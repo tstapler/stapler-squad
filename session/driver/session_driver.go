@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -420,7 +421,7 @@ func markInitialPromptIfAlreadySent(ctx context.Context, inst *instance.Instance
 		attempt.sentInitial = true
 		attempt.initialPromptSentAt = time.Now()
 		inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
-	} else if _, err := session.FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
+	} else if _, err := claudehistory.FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
 		attempt.sentInitial = true
 		attempt.initialPromptSentAt = time.Now()
 		inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
@@ -665,7 +666,7 @@ func sendInitialPromptTick(ctx context.Context, inst *instance.Instance, initial
 		return
 	}
 
-	if _, convErr := session.FindConversationFilePath(ctx, inst.GetStableID()); convErr == nil {
+	if _, convErr := claudehistory.FindConversationFilePath(ctx, inst.GetStableID()); convErr == nil {
 		log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
 			"session", inst.Title,
 		)

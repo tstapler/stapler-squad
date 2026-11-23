@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
 
@@ -224,7 +225,7 @@ func writeReviewScope(sb *strings.Builder, item *backlogdto.BacklogItemData) {
 	if item.PlanArtifactsPath != "" {
 		fmt.Fprintf(sb, "Plan artifacts for this item live in %s; files there count as evidence you may read and cite.\n", item.PlanArtifactsPath)
 	}
-	sb.WriteString(session.ForDefault(session.SecReviewScope) + "\n\n")
+	sb.WriteString(pipelinemode.ForDefault(pipelinemode.SecReviewScope) + "\n\n")
 }
 
 func writeReviewContextExtras(sb *strings.Builder, extras ReviewContextExtras) {
@@ -307,7 +308,7 @@ func BuildReviewPrompt(item *backlogdto.BacklogItemData, acSnapshot []domain.AcC
 	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence, failure_class?, proposed_waiver?}, ...] for each criterion\n")
 	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
 	sb.WriteString("  - evidence: direct quote or reference from the diff\n")
-	sb.WriteString("  - " + session.ForDefault(session.SecReviewFailureClass) + "\n\n")
+	sb.WriteString("  - " + pipelinemode.ForDefault(pipelinemode.SecReviewFailureClass) + "\n\n")
 	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID)
 	sb.WriteString("\nEnd your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck in review.\n")
 
@@ -384,7 +385,7 @@ func BuildHeadlessReviewPrompt(item *backlogdto.BacklogItemData, acSnapshot []do
 	} else {
 		sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
 	}
-	sb.WriteString("\nOptional per-verdict fields failure_class and proposed_waiver: " + session.ForDefault(session.SecReviewFailureClass) + "\n")
+	sb.WriteString("\nOptional per-verdict fields failure_class and proposed_waiver: " + pipelinemode.ForDefault(pipelinemode.SecReviewFailureClass) + "\n")
 	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
