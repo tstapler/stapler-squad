@@ -877,6 +877,7 @@ go_test(
         "//session/sendkeysguard:go_sources",
         "//session/sessionpr:go_sources",
         "//session/shellstore:go_sources",
+        "//session/slowops:go_sources",
         "//session/sshremote:approval_relay.go",
         "//session/sshremote:go_sources",
         "//session/stagecfg:go_sources",

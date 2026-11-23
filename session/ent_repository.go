@@ -24,11 +24,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/rulestore"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/shellstore"
+	"github.com/tstapler/stapler-squad/session/slowops"
 	"github.com/tstapler/stapler-squad/session/wakestore"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// entSchemaCreateSlowAfter is far above any legitimate schema create (tens of
+// milliseconds on an in-memory or small on-disk database).
+const entSchemaCreateSlowAfter = 2 * time.Minute
 
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
@@ -204,7 +209,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
 	// package-level state that races under `go test -parallel` when many
 	// NewEntRepository calls run schema creation concurrently.
-	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
+	stopSlowWatch := slowops.Watch("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
 	dbpool.EntSchemaCreateMu.Lock()
 	err := client.Schema.Create(context.Background())
 	dbpool.EntSchemaCreateMu.Unlock()

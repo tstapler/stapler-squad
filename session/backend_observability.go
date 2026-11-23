@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/slowops"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -70,11 +71,11 @@ type timedBackendOp struct {
 	attrs   metric.MeasurementOption
 	op      string
 	backend backendLabel
-	who     sessionNamer // asked for its id only when a call is slow
+	who     slowops.SessionNamer // asked for its id only when a call is slow
 }
 
 // with returns the timer bound to who, so a slow call can be attributed to a session.
-func (o timedBackendOp) with(who sessionNamer) timedBackendOp {
+func (o timedBackendOp) with(who slowops.SessionNamer) timedBackendOp {
 	o.who = who
 	return o
 }
@@ -90,25 +91,18 @@ func newTimedBackendOp(backend backendLabel, op string) timedBackendOp {
 // function records the duration and ends the watch.
 func (o timedBackendOp) begin(ctx context.Context) func() {
 	start := time.Now()
-	stopWatch := terminalSlowOps.watch(o.op, o.backend)
+	stopWatch := slowops.WatchTerminalOp(o.op, string(o.backend))
 	return func() {
 		stopWatch()
 		o.observe(start)
-		o.reportIfSlow(ctx, start, time.Since(start), slowCallThreshold, slowCallReporter)
+		o.reportIfSlow(ctx, start, time.Since(start), slowops.CallThreshold(), slowops.ReportCall)
 	}
 }
 
 // reportIfSlow passes the call to report when d reaches threshold; both are parameters so tests
 // need neither the process-global threshold nor a real sleep.
-func (o timedBackendOp) reportIfSlow(ctx context.Context, start time.Time, d, threshold time.Duration, report func(context.Context, slowCallReport)) {
-	if d < threshold {
-		return
-	}
-	id := ""
-	if o.who != nil {
-		id = o.who.GetSessionIdentifier()
-	}
-	report(ctx, slowCallReport{op: o.op, backend: o.backend, sessionID: id, start: start, duration: d})
+func (o timedBackendOp) reportIfSlow(ctx context.Context, start time.Time, d, threshold time.Duration, report func(context.Context, slowops.CallReport)) {
+	slowops.ReportIfSlow(ctx, o.who, o.op, string(o.backend), start, d, threshold, report)
 }
 
 func (o timedBackendOp) observe(start time.Time) {

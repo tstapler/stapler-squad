@@ -1,4 +1,7 @@
-package session
+// Package slowops records slow terminal backend operations: a still-running goroutine dump
+// (Recorder), a per-session slow-call counter and span (ReportIfSlow), and a hang watchdog (Watch).
+// It imports no session code; callers pass the backend as a plain string.
+package slowops
 
 import (
 	"bytes"
@@ -34,49 +37,50 @@ const (
 	slowOpMaxStackBytes    = 2048
 )
 
-// slowOpReport is what a firing watch hands its sink.
-type slowOpReport struct {
+// DumpReport is what a firing watch hands its sink.
+type DumpReport struct {
 	Op      string
 	Backend string
 	Stacks  string
 }
 
-// slowOpRecorder arms a timer per watched operation; the timer's cost on a healthy call is one
+// Recorder arms a timer per watched operation; the timer's cost on a healthy call is one
 // allocation and a Stop.
-type slowOpRecorder struct {
+type Recorder struct {
 	threshold time.Duration
 	now       func() time.Time
-	sink      func(slowOpReport)
+	sink      func(DumpReport)
 	lastNs    atomic.Int64
 	counter   metric.Int64Counter
 	once      sync.Once
 }
 
-func newSlowOpRecorder(threshold time.Duration, sink func(slowOpReport)) *slowOpRecorder {
-	return &slowOpRecorder{threshold: threshold, now: time.Now, sink: sink}
+// NewRecorder returns a Recorder that hands at most one DumpReport per rate-limit window to sink.
+func NewRecorder(threshold time.Duration, sink func(DumpReport)) *Recorder {
+	return &Recorder{threshold: threshold, now: time.Now, sink: sink}
 }
 
-// watch starts watching one operation and returns the function that ends the watch.
-func (r *slowOpRecorder) watch(op string, backend backendLabel) (stop func()) {
+// Watch starts watching one operation and returns the function that ends the watch.
+func (r *Recorder) Watch(op, backend string) (stop func()) {
 	t := time.AfterFunc(r.threshold, func() { r.fire(op, backend) })
 	return func() { t.Stop() }
 }
 
-func (r *slowOpRecorder) fire(op string, backend backendLabel) {
+func (r *Recorder) fire(op, backend string) {
 	r.once.Do(func() {
 		r.counter, _ = telemetry.GetMeter().Int64Counter("terminal_slow_op_total",
 			metric.WithDescription("Terminal backend operations still running after the slow-op threshold, by operation and backend"))
 	})
 	if r.counter != nil {
 		r.counter.Add(context.Background(), 1, metric.WithAttributes(
-			attribute.String("operation", op), attribute.String("backend", string(backend))))
+			attribute.String("operation", op), attribute.String("backend", backend)))
 	}
 	nowNs := r.now().UnixNano()
 	last := r.lastNs.Load()
 	if last != 0 && nowNs-last < int64(slowOpReportEvery) || !r.lastNs.CompareAndSwap(last, nowNs) {
 		return
 	}
-	r.sink(slowOpReport{Op: op, Backend: string(backend), Stacks: blockedStacks()})
+	r.sink(DumpReport{Op: op, Backend: backend, Stacks: blockedStacks()})
 }
 
 // blockedStacks returns the goroutines running this module's code, minus the recorder itself,
@@ -102,7 +106,7 @@ func rankBlockedStacks(dump string) string {
 	}
 	var gs []ranked
 	for _, g := range strings.Split(dump, "\n\n") {
-		if !strings.Contains(g, "stapler-squad/") || strings.Contains(g, "slowOpRecorder") {
+		if !strings.Contains(g, "stapler-squad/") || strings.Contains(g, "slowops.(*Recorder)") {
 			continue
 		}
 		r := ranked{stack: g, wait: goroutineWaitMinutes(g)}
@@ -144,17 +148,23 @@ func goroutineWaitMinutes(g string) int {
 	return n
 }
 
-func logSlowOp(r slowOpReport) {
+func logSlowOp(r DumpReport) {
 	log.Warn("terminal backend operation still running past the slow-op threshold; goroutines in this module follow",
 		"operation", r.Op, "backend", r.Backend, "stacks", r.Stacks)
 }
 
-func slowOpThresholdFromEnv() time.Duration {
-	if ms, err := strconv.Atoi(os.Getenv(EnvSlowOpMs)); err == nil && ms > 0 {
+func slowOpThresholdFromEnv() time.Duration { return thresholdFromMs(os.Getenv(EnvSlowOpMs)) }
+
+func thresholdFromMs(v string) time.Duration {
+	if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
 		return time.Duration(ms) * time.Millisecond
 	}
 	return defaultSlowOpThreshold
 }
 
-// terminalSlowOps is the process-wide recorder used by timedBackendOp.
-var terminalSlowOps = newSlowOpRecorder(slowOpThresholdFromEnv(), logSlowOp) //nolint:gochecknoglobals // singleton rate limit across all backends
+// terminalSlowOps is the process-wide recorder behind WatchTerminalOp.
+var terminalSlowOps = NewRecorder(slowOpThresholdFromEnv(), logSlowOp) //nolint:gochecknoglobals // singleton rate limit across all backends
+
+// WatchTerminalOp watches one terminal backend operation on the process-wide recorder and
+// returns the function that ends the watch.
+func WatchTerminalOp(op, backend string) (stop func()) { return terminalSlowOps.Watch(op, backend) }
