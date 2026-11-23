@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/external"
@@ -99,7 +100,7 @@ func (d *DiagnosticService) AssembleDiagnosticBundle(
 		ItemId:          item.ID,
 		Prompt:          prompt,
 		Compacted:       bundle.Compacted,
-		EstimatedTokens: int32(session.EstimateTokens(prompt)), //#nosec G115 -- estimate, bounded by maxDiagnosticBundleBytes
+		EstimatedTokens: int32(diagnose.EstimateTokens(prompt)), //#nosec G115 -- estimate, bounded by maxDiagnosticBundleBytes
 	}), nil
 }
 
@@ -186,7 +187,7 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 // action space right now (AC2/AC4 — action-space narrowing is enforced here
 // in the prompt as well as by the diagnose_nudge_session tool itself
 // refusing a disallowed nudge, defense in depth).
-func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuckReason string, nudgeAllowed bool, nudgeDisallowedReason string) string {
+func buildDiagnosePrompt(bundle diagnose.DiagnosticBundle, nudgeTargetUUID, stuckReason string, nudgeAllowed bool, nudgeDisallowedReason string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a diagnostic agent investigating a backlog item. You have been given a context bundle below.\n\n")
 	sb.WriteString("For stuck reasons, remediation attempts and live CI state beyond this bundle, call get_backlog_stuck_report with the item id before concluding.\n\n")
@@ -207,9 +208,9 @@ func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuck
 }
 
 // buildBundle gathers item/AC/history/verdicts/linked-session/git data and
-// hands it to session.BuildDiagnosticBundle (the pure assembly/compaction
-// logic — see session/diagnose_bundle.go).
-func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.BacklogItemData) (session.DiagnosticBundle, error) {
+// hands it to diagnose.BuildDiagnosticBundle (the pure assembly/compaction
+// logic — see session/diagnose/diagnose_bundle.go).
+func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.BacklogItemData) (diagnose.DiagnosticBundle, error) {
 	acCriteria, acErr := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if acErr != nil {
 		log.Warn("[DiagnosticService] ParseAcCriteria failed", "item", item.ID, "err", acErr)
@@ -224,14 +225,14 @@ func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.Ba
 	if err != nil {
 		log.Warn("[DiagnosticService] GetRecentReviewVerdictSummaries failed", "item", item.ID, "err", err)
 	}
-	verdicts := make([]session.DiagnosticReviewVerdict, 0, len(verdictSummaries))
+	verdicts := make([]diagnose.DiagnosticReviewVerdict, 0, len(verdictSummaries))
 	for _, v := range verdictSummaries {
-		verdicts = append(verdicts, session.DiagnosticReviewVerdict{Outcome: v.OverallOutcome, Summary: v.Summary, CreatedAt: v.CreatedAt})
+		verdicts = append(verdicts, diagnose.DiagnosticReviewVerdict{Outcome: v.OverallOutcome, Summary: v.Summary, CreatedAt: v.CreatedAt})
 	}
 
 	linked, gitDiff, gitDiffTruncated, gitLog := d.buildLinkedSessions(ctx, item.ID)
 
-	in := session.DiagnosticBundleInput{
+	in := diagnose.DiagnosticBundleInput{
 		ItemID:           item.ID,
 		ItemTitle:        item.Title,
 		ItemDescription:  item.Description,
@@ -244,7 +245,7 @@ func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.Ba
 		GitDiffTruncated: gitDiffTruncated,
 		GitLog:           gitLog,
 	}
-	return session.BuildDiagnosticBundle(in), nil
+	return diagnose.BuildDiagnosticBundle(in), nil
 }
 
 // buildLinkedSessions resolves each of item's ItemSessions to a
@@ -253,14 +254,14 @@ func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.Ba
 // first session with a resolvable worktree to source the bundle's git
 // diff/log from — extracted from buildBundle purely to stay under the
 // funlen gate; this is not independently reusable.
-func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID string) (linked []session.DiagnosticLinkedSession, gitDiff string, gitDiffTruncated bool, gitLog string) {
+func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID string) (linked []diagnose.DiagnosticLinkedSession, gitDiff string, gitDiffTruncated bool, gitLog string) {
 	itemSessions, err := d.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.Warn("[DiagnosticService] ListItemSessions failed", "item", itemID, "err", err)
 	}
-	linked = make([]session.DiagnosticLinkedSession, 0, len(itemSessions))
+	linked = make([]diagnose.DiagnosticLinkedSession, 0, len(itemSessions))
 	for _, is := range itemSessions {
-		ls := session.DiagnosticLinkedSession{SessionUUID: is.SessionUUID, Role: is.Role, LastActivity: lastActivityFor(is)}
+		ls := diagnose.DiagnosticLinkedSession{SessionUUID: is.SessionUUID, Role: is.Role, LastActivity: lastActivityFor(is)}
 		if inst := d.findInstance(is.SessionUUID); inst != nil {
 			if ctrl := inst.GetController(); ctrl != nil {
 				status, _ := ctrl.GetCurrentStatus() // second value is a description string, not an error

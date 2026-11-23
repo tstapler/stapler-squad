@@ -69,5 +69,6 @@ session/driver !server
 session/external !server
 session/sweeper !server
 session/autonomous !server
+session/diagnose !server
 session/tagpoller !server
 session/registry !server

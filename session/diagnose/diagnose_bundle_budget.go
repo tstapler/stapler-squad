@@ -1,4 +1,4 @@
-package session
+package diagnose
 
 // DiagnosticBundleTokenBudget is the approximate token ceiling for a
 // diagnostic context bundle (Diagnose & Nudge, AC1). session/tokens is a
