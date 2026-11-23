@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=71 loc=13871 imports=52
+session files=70 loc=13781 imports=52
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/historyadapters files=10 loc=1863 imports=6
@@ -32,7 +32,7 @@ session/cmdexec files=4 loc=1418 imports=4
 session/gitwt files=5 loc=913 imports=9
 session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
-session/importer files=13 loc=2173 imports=9
+session/importer files=13 loc=2173 imports=10
 session/itemsources files=8 loc=1731 imports=7
 session/backlog files=13 loc=8148 imports=22
 session/backlog/chains files=3 loc=733 imports=9
@@ -57,11 +57,11 @@ server/services/backlogflow files=4 loc=748 imports=8
 server/services/webhooktrigger files=7 loc=1504 imports=10
 server/services/sessionretention files=4 loc=778 imports=8
 server/services/unfinishedwork files=1 loc=715 imports=12
-server/services/importsvc files=1 loc=453 imports=8
+server/services/importsvc files=1 loc=454 imports=9
 server/services/federation files=6 loc=955 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
-session/driver files=5 loc=1627 imports=8
+session/driver files=5 loc=1628 imports=9
 session/external files=3 loc=1220 imports=8
 session/sweeper files=3 loc=892 imports=7
 session/autonomous files=9 loc=2101 imports=11

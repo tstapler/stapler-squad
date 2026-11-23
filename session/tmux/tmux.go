@@ -643,7 +643,7 @@ func (s Socket) String() string { return string(s) }
 // caller intentionally targeting a specific server, is always honored). An empty
 // socket -- historically "the real shared default socket" everywhere in this
 // package, including in code that enumerates or kills ALL sessions on it
-// (ReconcileOrphanedTmuxSessions, batchPaneActivity, health checks) -- resolves to
+// (ReconcileOrphanedTmuxSessions, BatchWindowActivity, health checks) -- resolves to
 // a per-process isolated socket inside a `go test` binary instead.
 //
 // Before this existed, "empty string" meant the real default socket unconditionally,

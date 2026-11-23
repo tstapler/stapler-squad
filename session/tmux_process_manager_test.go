@@ -75,7 +75,7 @@ func TestTmuxProcessManager_CapturePaneContentContext_RefetchesAfterTTLExpires(t
 	// Backdate the cache timestamp instead of sleeping CapturePaneCacheTTL (1s) — same
 	// effect, deterministic, and doesn't slow the suite down.
 	tm.mu.Lock()
-	tm.captureContentAt = time.Now().Add(-2 * CapturePaneCacheTTL)
+	tm.captureContentAt = time.Now().Add(-2 * tmux.CapturePaneCacheTTL)
 	tm.mu.Unlock()
 
 	second, err := tm.CapturePaneContentContext(context.Background())

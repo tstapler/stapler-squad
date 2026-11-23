@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testCaptureCacheTTL mirrors session.CapturePaneCacheTTL.
+// testCaptureCacheTTL mirrors tmux.CapturePaneCacheTTL.
 const testCaptureCacheTTL = time.Second
 
 // paneTestClock is a manually advanced clock; no real time passes in these tests.

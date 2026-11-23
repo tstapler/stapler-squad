@@ -35,7 +35,7 @@ func good1() {
 
 // GOOD2: args built by referencing an already-resolved variable inside an
 // append -- safety propagates through the identifier reference, matching
-// the batchPaneActivity pattern in session/pty_discovery.go.
+// the BatchWindowActivity pattern in session/tmux/window_activity.go.
 func good2() {
 	ctx := context.Background()
 	socket := tmux.ResolveSocket("")

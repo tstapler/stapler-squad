@@ -29,6 +29,7 @@ go_library(
         "//session/mux",
         "//session/registry",
         "//session/scanqueue",
+        "//session/tmux",
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_gofrs_flock//:flock",
         "@com_github_linkdata_deadlock//:deadlock",

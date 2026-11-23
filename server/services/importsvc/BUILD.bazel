@@ -15,6 +15,7 @@ go_library(
         "//session/instance",
         "//session/procinfo",
         "//session/registry",
+        "//session/tmux",
         "@com_connectrpc_connect//:connect",
     ],
 )
