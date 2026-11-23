@@ -76,5 +76,7 @@ session/paneactivity !server
 session/registry !server
 session/pipelinemode !server
 session/claudehistory !server
+session/steertext !server
+session/conflictretry !server
 session/nudgeoutcomes !server
 session/itemlink !server

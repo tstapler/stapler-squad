@@ -518,7 +518,7 @@ var statusANSISeq = regexp.MustCompile(`\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(
 
 // sanitizeStatusText strips escape sequences and control characters,
 // collapses whitespace and cuts to max runes. prwatch may not import session,
-// so this mirrors session.SanitizeUntrusted for the operator surface.
+// so this mirrors steertext.SanitizeUntrusted for the operator surface.
 func sanitizeStatusText(s string, max int) string {
 	s = strings.ToValidUTF8(s, "")
 	s = statusANSISeq.ReplaceAllString(s, "")

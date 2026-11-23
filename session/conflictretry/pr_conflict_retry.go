@@ -1,4 +1,4 @@
-package session
+package conflictretry
 
 import (
 	"fmt"
