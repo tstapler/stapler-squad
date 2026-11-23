@@ -43,7 +43,7 @@ session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/prpoller files=7 loc=2080 imports=8
-server/services files=262 loc=65715 imports=86
+server/services files=261 loc=65624 imports=87
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
@@ -61,6 +61,7 @@ server/services/importsvc files=1 loc=454 imports=9
 server/services/federation files=6 loc=955 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
+server/services/secretscan files=2 loc=94 imports=0
 session/driver files=5 loc=1628 imports=9
 session/external files=3 loc=1220 imports=8
 session/sweeper files=3 loc=892 imports=7
