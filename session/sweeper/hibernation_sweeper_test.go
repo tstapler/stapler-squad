@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory/memorytest"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // --- sessionMemoryCache tests ---
@@ -87,10 +88,10 @@ func createTestStorage(t *testing.T) (*session.Storage, func()) {
 	return storage, func() {}
 }
 
-// mockTmuxManager supplies only GetTmuxSessionName; any other TmuxManager
+// mockTmuxManager supplies only GetTmuxSessionName; any other tmux.TmuxManager
 // method panics on the nil embed so an unexpected call fails visibly.
 type mockTmuxManager struct {
-	session.TmuxManager
+	tmux.TmuxManager
 	tmuxSessionName string
 }
 

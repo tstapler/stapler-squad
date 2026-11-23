@@ -15,12 +15,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// mockTmuxManager is a test double for TmuxManager.
-// Embeds TmuxManager so only the methods under test need explicit implementations.
+// mockTmuxManager is a test double for tmux.TmuxManager.
+// Embeds tmux.TmuxManager so only the methods under test need explicit implementations.
 // All other methods use the zero-value embed (nil interface method calls would panic
 // but that's intentional — if a test hits an unexpected method, it fails visibly).
 type mockTmuxManager struct {
-	TmuxManager
+	tmux.TmuxManager
 
 	// IsAlive
 	isAliveReturn bool
@@ -701,5 +701,5 @@ func TestTmuxBackend_SendKeys_PropagatesError(t *testing.T) {
 	assert.Zero(t, n)
 }
 
-// compile-time check: mockTmuxManager satisfies TmuxManager (catches missed method stubs).
-var _ TmuxManager = (*mockTmuxManager)(nil)
+// compile-time check: mockTmuxManager satisfies tmux.TmuxManager (catches missed method stubs).
+var _ tmux.TmuxManager = (*mockTmuxManager)(nil)
