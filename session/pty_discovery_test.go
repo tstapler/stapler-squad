@@ -621,7 +621,7 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy(t *testing.T) {
 func TestBatchPaneActivity_UsesIsolatedSocketWhenCalledWithoutOne(t *testing.T) {
 	logPath := installFakeTmuxBinary(t)
 
-	batchPaneActivity("")
+	tmux.BatchWindowActivity("")
 
 	assertInvocationsUseIsolatedSocket(t, logPath, "list-panes")
 }

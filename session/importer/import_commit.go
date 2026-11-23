@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // commitMu serializes the collision-check-then-create critical section in
@@ -60,7 +61,7 @@ type CommitImportParams struct {
 	Linker       *HistoryLinker
 	Suspended    *SuspendedProcessStore
 	AliveChecker AliveChecker
-	TmuxQuerier  session.TmuxSocketQuerier
+	TmuxQuerier  tmux.SocketQuerier
 
 	Candidate            ExternalSessionCandidate
 	ExpectedCorrelation  CorrelationResult

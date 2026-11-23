@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/procinfo"
 	"github.com/tstapler/stapler-squad/session/registry"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // Compile-time check: ImportService must implement ImportServiceHandler.
@@ -49,7 +50,7 @@ type ImportService struct {
 	registry     *registry.Registry
 	linker       *importer.HistoryLinker
 	suspended    *importer.SuspendedProcessStore
-	tmuxQuerier  session.TmuxSocketQuerier
+	tmuxQuerier  tmux.SocketQuerier
 
 	// instanceLocks serializes ConfirmKillExternalSession and
 	// CancelPendingKill calls for the same instance ID -- without it, a
@@ -107,7 +108,7 @@ func NewImportServiceWithRealInspector(
 		registry:     reg,
 		linker:       linker,
 		suspended:    suspended,
-		tmuxQuerier:  session.NewRealTmuxSocketQuerier(),
+		tmuxQuerier:  tmux.NewRealSocketQuerier(),
 	}
 }
 

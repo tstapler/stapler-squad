@@ -17,7 +17,7 @@ import (
 // SessionHealthChecker manages session health validation and recovery
 type SessionHealthChecker struct {
 	storage    *session.Storage
-	tmuxSocket session.TmuxSocketQuerier // Tmux server-socket queries for CheckAllSessions; fakeable in tests
+	tmuxSocket tmux.SocketQuerier // Tmux server-socket queries for CheckAllSessions; fakeable in tests
 
 	// failureCounts tracks consecutive health-check failures per session title.
 	// Recovery is only attempted after failureThreshold consecutive failures,
@@ -90,7 +90,7 @@ func markStartFailed(instance *instance.Instance, err error) {
 func NewSessionHealthChecker(storage *session.Storage, opts ...HealthCheckerOption) *SessionHealthChecker {
 	h := &SessionHealthChecker{
 		storage:       storage,
-		tmuxSocket:    session.NewRealTmuxSocketQuerier(),
+		tmuxSocket:    tmux.NewRealSocketQuerier(),
 		failureCounts: make(map[string]int),
 		startedAt:     time.Now(),
 	}
@@ -121,7 +121,7 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 
 // checkInstances runs a health check on the given instances, split out from
 // CheckAllSessions so the socket-scoping logic below is unit-testable with a plain
-// []*Instance and a fake TmuxSocketQuerier, without real Storage/DB wiring.
+// []*Instance and a fake tmux.SocketQuerier, without real Storage/DB wiring.
 //
 // Instances can be spread across multiple tmux server sockets (the default socket
 // for ordinary sessions, isolated sockets for some worktree/test scenarios).

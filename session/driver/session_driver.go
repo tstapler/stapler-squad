@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/paneactivity"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // spinnerTimeRe matches the time/token suffix of an active Claude Code spinner,
@@ -301,7 +302,7 @@ func runSessionDriverWithPrompt(inst *instance.Instance, allowedPath string, ini
 
 	// Skips the per-tick capture-pane while the pane is provably unchanged (session/paneactivity).
 	// Local tmux only: the snapshot is the local server's list-panes.
-	preview := paneactivity.NewDriverPreview(inst, session.CapturePaneCacheTTL)
+	preview := paneactivity.NewDriverPreview(inst, tmux.CapturePaneCacheTTL)
 
 	// PR URLs from terminal output that the scan has already handled.
 	scannedURLs := scannedPRURLs{}

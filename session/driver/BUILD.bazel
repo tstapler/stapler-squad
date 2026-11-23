@@ -21,6 +21,7 @@ go_library(
         "//session/domain",
         "//session/instance",
         "//session/paneactivity",
+        "//session/tmux",
         "@com_github_spaolacci_murmur3//:murmur3",
     ],
 )
