@@ -28,8 +28,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/interceptors"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/paneactivity"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -830,7 +830,7 @@ func TestFlagDefaults_ConfigConstantsEqualRegistryAndReaders(t *testing.T) {
 		{config.DiagnoseNudgeFeatureFlag, config.DiagnoseNudgeDefault, config.EffectiveDiagnoseNudgeEnabled},
 		{config.AutonomousStallNudgeFeatureFlag, config.AutonomousStallNudgeDefault, config.EffectiveAutonomousStallNudgeEnabled},
 		{config.HiddenSessionGateFeatureFlag, config.HiddenSessionGateDefault, nil},
-		{session.FeatureFlagDriverPaneActivityGate, config.DriverPaneActivityGateDefault, func(*config.Config) bool { return session.DriverPaneActivityGateSetting() }},
+		{paneactivity.FeatureFlagDriverPaneActivityGate, config.DriverPaneActivityGateDefault, func(*config.Config) bool { return paneactivity.DriverPaneActivityGateSetting() }},
 		{config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineShadowDefault, config.EffectiveWorkflowEngineShadow},
 		{config.WorkflowEngineEnforceFeatureFlag, config.WorkflowEngineEnforceDefault, config.EffectiveWorkflowEngineEnforce},
 		{config.WorkflowEngineEnforceAgentFeatureFlag, config.WorkflowEngineEnforceAgentDefault, config.EffectiveWorkflowEngineEnforceAgent},

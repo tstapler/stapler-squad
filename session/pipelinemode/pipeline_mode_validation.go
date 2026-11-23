@@ -177,7 +177,7 @@ var headlessOnlyPrograms = map[string]bool{
 //  2. A non-empty Program on StageRoleTriage/StageRoleReview must be
 //     "claude" or "gemini" (ADR-002); StageRoleWork has no such allow-list.
 //  3. A non-empty Model must pass the shared character-class guard
-//     (ValidateModel, shared with server/workflows to catch
+//     (stagecfg.ValidateModel, shared with server/workflows to catch
 //     shell-metacharacter/whitespace injection) and, unless
 //     forceUnknownModel is set, must resolve to a known pricing-table entry
 //     when it is not a "family:"-prefixed alias — catching a BUG-062-style

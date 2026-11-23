@@ -1,4 +1,4 @@
-package session
+package paneactivity
 
 import (
 	"context"
@@ -13,6 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testCaptureCacheTTL mirrors session.CapturePaneCacheTTL.
+const testCaptureCacheTTL = time.Second
 
 // paneTestClock is a manually advanced clock; no real time passes in these tests.
 type paneTestClock struct{ t time.Time }
@@ -46,7 +49,7 @@ func newTestPane() (*fakePane, *paneTestClock) {
 }
 
 func gateFor(p *fakePane, snap func() map[string]time.Time) *paneActivityGate {
-	return newPaneActivityGate(snap, p.clock.now, func() bool { return true })
+	return newPaneActivityGate(snap, p.clock.now, func() bool { return true }, testCaptureCacheTTL)
 }
 
 func freshSnapshot(p *fakePane, name string) func() map[string]time.Time {
@@ -77,7 +80,7 @@ func TestPaneActivityGate_ParityWithAlwaysCapture(t *testing.T) {
 	assert.Less(t, p.captures, ticks, "an idle pane must not be captured every tick")
 }
 
-// ttlPane is a fakePane whose capture is served from a capturePaneCacheTTL-old cache, like
+// ttlPane is a fakePane whose capture is served from a testCaptureCacheTTL-old cache, like
 // TmuxProcessManager.CapturePaneContentContext.
 type ttlPane struct {
 	*fakePane
@@ -88,7 +91,7 @@ type ttlPane struct {
 }
 
 func (p *ttlPane) capture(ctx context.Context) (string, error) {
-	if !p.hasCache || p.clock.now().Sub(p.cachedAt) >= capturePaneCacheTTL {
+	if !p.hasCache || p.clock.now().Sub(p.cachedAt) >= testCaptureCacheTTL {
 		p.cached, p.cachedAt, p.hasCache = p.content, p.clock.now().Add(p.latency), true
 		p.captures++
 	}
@@ -258,7 +261,7 @@ func TestPaneActivityGate_CaptureErrorIsReturnedAndNotCached(t *testing.T) {
 func TestPaneActivityGate_DisabledAlwaysCaptures(t *testing.T) {
 	t.Parallel()
 	p, clock := newTestPane()
-	g := newPaneActivityGate(freshSnapshot(p, "s"), p.clock.now, func() bool { return false })
+	g := newPaneActivityGate(freshSnapshot(p, "s"), p.clock.now, func() bool { return false }, testCaptureCacheTTL)
 	clock.advance(5 * time.Second)
 	for i := 0; i < 4; i++ {
 		_, _ = g.preview(context.Background(), "s", p.capture)
@@ -294,4 +297,37 @@ func TestParseWindowActivity(t *testing.T) {
 		"a": time.Unix(200, 0), // the active pane's line wins over an earlier inactive one
 		"b": time.Unix(300, 0), // no active pane: first line kept
 	}, got)
+}
+
+func TestPaneActivityGate_ResetForcesRecapture(t *testing.T) {
+	t.Parallel()
+	p, clock := newTestPane()
+	g := gateFor(p, freshSnapshot(p, "s"))
+	clock.advance(5 * time.Second)
+
+	for i := 0; i < 2; i++ {
+		_, err := g.preview(context.Background(), "s", p.capture)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, p.captures, "second preview is served from the gate")
+
+	g.reset()
+	_, err := g.preview(context.Background(), "s", p.capture)
+	require.NoError(t, err)
+	assert.Equal(t, 2, p.captures, "reset drops the cached capture")
+}
+
+// A longer capture-cache TTL widens the staleness bound: the capture is then too close to the
+// activity second to be trusted, so the gate never reuses it.
+func TestPaneActivityGate_CaptureCacheTTLWidensStalenessBound(t *testing.T) {
+	t.Parallel()
+	p, clock := newTestPane()
+	clock.advance(5 * time.Second)
+	g := newPaneActivityGate(freshSnapshot(p, "s"), clock.now, func() bool { return true }, 10*time.Second)
+
+	for i := 0; i < 2; i++ {
+		_, err := g.preview(context.Background(), "s", p.capture)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, p.captures)
 }

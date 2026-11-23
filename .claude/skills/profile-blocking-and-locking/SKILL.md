@@ -92,7 +92,7 @@ Known repo-specific hang shapes: `sync.Once` reentrancy (a `Close` that re-enter
 
 | # | Fix | When | Repo example |
 |---|---|---|---|
-| 1 | Shrink the critical section: read/copy under the lock, do I/O and exec outside | lock held across exec, SQL, file or network | `HistoryLinker.correlateMu` held over `GetPanePID` + `Detect` (`session/history_linker.go:306`, open PR #1287); `paneActivityCache.get` fetches (tmux exec) under its mutex (`session/pane_activity_gate.go:46-51`; deliberate coalescing, a stall source only because waiters cannot honor ctx and a hung fetch stalls all) |
+| 1 | Shrink the critical section: read/copy under the lock, do I/O and exec outside | lock held across exec, SQL, file or network | `HistoryLinker.correlateMu` held over `GetPanePID` + `Detect` (`session/history_linker.go:306`, open PR #1287); `paneActivityCache.get` fetches (tmux exec) under its mutex (`session/paneactivity/gate.go:48-51`; deliberate coalescing, a stall source only because waiters cannot honor ctx and a hung fetch stalls all) |
 | 2 | Immutable snapshot + `atomic.Pointer` publish (value immutable after `Store`; read-modify-write needs CAS or one writer; large structs pay copy cost per write) | read-mostly state | `InstanceSnapshot` (`session/instance_snapshot.go`, rule `instance-lock-free-reads.md`); notification store (#1306) |
 | 3 | Atomic for single values; `RWMutex` only when reads dominate a non-trivial section | counters, flags, timestamps | `/go:optimize` pattern A |
 | 4 | `singleflight` / coalescing so N callers share one run | identical expensive calls | `vcsFlights` (`server/services/vcs_status_flight.go`), scan coalescer, startup scan queue (#1334, open) |

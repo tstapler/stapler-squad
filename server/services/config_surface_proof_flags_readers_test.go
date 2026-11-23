@@ -21,9 +21,9 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/paneactivity"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -162,7 +162,7 @@ func TestConfigSurfaceProof_WorktreeChangeDetection_ChangesWorktreeSetup(t *test
 func TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting(t *testing.T) {
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(session.FeatureFlagDriverPaneActivityGate, setting.(bool))
-		return session.DriverPaneActivityGateSetting()
+		set(paneactivity.FeatureFlagDriverPaneActivityGate, setting.(bool))
+		return paneactivity.DriverPaneActivityGateSetting()
 	}, false, true)
 }
