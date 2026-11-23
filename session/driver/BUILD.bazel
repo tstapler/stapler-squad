@@ -40,6 +40,7 @@ go_test(
         "helpers_test.go",
         "instance_write_lease_driver_test.go",
         "instance_write_lease_pty_test.go",
+        "pane_gate_wiring_test.go",
         "retry_state_test.go",
         "session_driver_attempt_test.go",
         "session_driver_continuation_test.go",
