@@ -9,20 +9,20 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// TmuxBackend implements ProcessManager by delegating to TmuxManager.
+// TmuxBackend implements ProcessManager by delegating to tmux.TmuxManager.
 // It is the default backend used when process_manager_backend = "tmux" (or empty).
 type TmuxBackend struct {
-	mgr TmuxManager
+	mgr tmux.TmuxManager
 }
 
-// NewTmuxBackend creates a TmuxBackend wrapping the given TmuxManager.
-func NewTmuxBackend(mgr TmuxManager) *TmuxBackend {
+// NewTmuxBackend creates a TmuxBackend wrapping the given tmux.TmuxManager.
+func NewTmuxBackend(mgr tmux.TmuxManager) *TmuxBackend {
 	return &TmuxBackend{mgr: mgr}
 }
 
-// TmuxManager returns the underlying TmuxManager for type assertions in
+// TmuxManager returns the underlying tmux.TmuxManager for type assertions in
 // reconciliation paths that need tmux-specific operations (e.g. Session(), SetSession()).
-func (b *TmuxBackend) TmuxManager() TmuxManager { return b.mgr }
+func (b *TmuxBackend) TmuxManager() tmux.TmuxManager { return b.mgr }
 
 // WireLaunch builds the tmux session for spec.Program and installs it on the manager.
 func (b *TmuxBackend) WireLaunch(spec instance.LaunchSpec) {

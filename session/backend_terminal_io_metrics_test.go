@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -17,7 +18,7 @@ var errIOFake = errors.New("io fake failure")
 // (the embedded nil manager panics on anything else, as in this package's
 // other fakes).
 type ioTmuxManager struct {
-	TmuxManager
+	tmux.TmuxManager
 	err error
 }
 
