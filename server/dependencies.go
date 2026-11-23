@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/registry"
@@ -828,7 +829,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// The selector must exist, with its shadow recorder, before NewBacklogService
 	// and the BacklogController's SyncLoop take their engine.
 	workflowEngine := newWorkflowEngineWiring(defaultWorkflowEngine, engines.stageConfigEngine, storage.GetEntClient(), config.LoadConfig)
-	session.InitNudgeOutcomes()
+	nudgeoutcomes.InitNudgeOutcomes()
 
 	llm := buildHeadlessLLM(sessionService)
 

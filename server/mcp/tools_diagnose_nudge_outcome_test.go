@@ -11,11 +11,12 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
 func TestNudgeSession_should_CountSkippedCap_When_NudgeCapAlreadyReached(t *testing.T) {
-	rec := session.NewNudgeOutcomeRecorder("", nil)
-	defer session.SwapNudgeOutcomeRecorder(rec)()
+	rec := nudgeoutcomes.NewNudgeOutcomeRecorder("", nil)
+	defer nudgeoutcomes.SwapNudgeOutcomeRecorder(rec)()
 	envtest.NewIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.DiagnoseNudgeFeatureFlag, true))
 	repo := session.NewTestEntRepository(t)
@@ -39,7 +40,7 @@ func TestNudgeSession_should_CountSkippedCap_When_NudgeCapAlreadyReached(t *test
 
 	totals := rec.Snapshot().Totals
 	require.Len(t, totals, 1)
-	assert.Equal(t, session.NudgeKindDiagnose, totals[0].Kind)
-	assert.Equal(t, session.NudgeOutcomeSkippedCap, totals[0].Outcome)
+	assert.Equal(t, nudgeoutcomes.NudgeKindDiagnose, totals[0].Kind)
+	assert.Equal(t, nudgeoutcomes.NudgeOutcomeSkippedCap, totals[0].Outcome)
 	assert.Equal(t, int64(1), totals[0].Value)
 }
