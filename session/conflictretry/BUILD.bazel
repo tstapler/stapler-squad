@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "conflictretry",
+    srcs = ["pr_conflict_retry.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/conflictretry",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":conflictretry",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "conflictretry_test",
+    srcs = ["pr_conflict_retry_test.go"],
+    embed = [":conflictretry"],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)
