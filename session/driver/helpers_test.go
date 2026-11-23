@@ -23,12 +23,12 @@ import (
 // Test doubles and fixtures the driver tests share. They are copies of the unexported helpers
 // that stay in package session's tests, which a leaf cannot import.
 
-// mockTmuxManager is a test double for TmuxManager.
-// Embeds TmuxManager so only the methods under test need explicit implementations.
+// mockTmuxManager is a test double for tmux.TmuxManager.
+// Embeds tmux.TmuxManager so only the methods under test need explicit implementations.
 // All other methods use the zero-value embed (nil interface method calls would panic
 // but that's intentional — if a test hits an unexpected method, it fails visibly).
 type mockTmuxManager struct {
-	session.TmuxManager
+	tmux.TmuxManager
 
 	// IsAlive
 	isAliveReturn bool
@@ -459,4 +459,4 @@ func checkPTYAvailable(t *testing.T) {
 	_ = cmd.Wait()
 }
 
-var _ session.TmuxManager = (*mockTmuxManager)(nil)
+var _ tmux.TmuxManager = (*mockTmuxManager)(nil)

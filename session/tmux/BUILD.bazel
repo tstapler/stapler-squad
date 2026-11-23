@@ -18,6 +18,7 @@ go_library(
         "fork_metrics.go",
         "leaked_control_mode_sweeper.go",
         "list_all_panes.go",
+        "manager_interface.go",
         "program_kind.go",
         "pty.go",
         "registry_port.go",
