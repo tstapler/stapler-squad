@@ -5,7 +5,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -130,8 +130,8 @@ func isAutomationSession(sessionID string, instances []*instance.Instance) bool 
 // of filterAutomationSessions, sharing the same isAutomationSession
 // predicate. The returned slice aliases entries' backing array (entries[:0]
 // idiom) — callers must not use entries after this call.
-func filterHistoryEntriesByAutomation(entries []session.ClaudeHistoryEntry, instances []*instance.Instance) []session.ClaudeHistoryEntry {
-	return filterInPlace(entries, func(e session.ClaudeHistoryEntry) bool {
+func filterHistoryEntriesByAutomation(entries []claudehistory.ClaudeHistoryEntry, instances []*instance.Instance) []claudehistory.ClaudeHistoryEntry {
+	return filterInPlace(entries, func(e claudehistory.ClaudeHistoryEntry) bool {
 		return isAutomationSession(e.ID, instances)
 	})
 }
@@ -192,7 +192,7 @@ func filterByProject(results []*sessionv1.SearchResult, project string, instance
 func (ss *SearchService) applyResultPostProcessing(
 	protoResults []*sessionv1.SearchResult,
 	req *sessionv1.SearchClaudeHistoryRequest,
-	hist *session.ClaudeSessionHistory,
+	hist *claudehistory.ClaudeSessionHistory,
 	requestedLimit int,
 	needsPostProcessing bool,
 ) []*sessionv1.SearchResult {
@@ -234,7 +234,7 @@ func (ss *SearchService) applyResultPostProcessing(
 // full-file parse), so a serial loop would multiply per-request latency by
 // len(results). Each goroutine writes only to its own *SearchResult, so no
 // synchronization beyond the WaitGroup is needed.
-func enrichWithContext(results []*sessionv1.SearchResult, hist *session.ClaudeSessionHistory) {
+func enrichWithContext(results []*sessionv1.SearchResult, hist *claudehistory.ClaudeSessionHistory) {
 	var wg sync.WaitGroup
 	for _, r := range results {
 		wg.Add(1)
