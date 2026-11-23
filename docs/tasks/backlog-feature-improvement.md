@@ -2611,3 +2611,35 @@ pipeline picks the item up); that is a judgement, not a per-caller verification 
 **Fix:** `resolveReviewTarget` (server/services/session_service_diagnose.go) runs the review in the work worktree when it exists, otherwise in the repo path with a preamble forbidding `HEAD` and naming `<base>..<branch>`.
 
 **Recurring shape (new):** "automated spawn takes its working directory from `item.RepoPath`, whose HEAD is arbitrary." Enforcement level: unit test of the resolver plus an AST guard (`TestSpawnReviewSession_ShouldNotPassItemRepoPathToCreateDirectorySession`) so the review spawn cannot pass `item.RepoPath` straight through. `SpawnDiagnosticSession` also uses `item.RepoPath` but is not branch-scoped by design.
+
+## Update — 2026-11-13: 3 of 18 items stuck, all three with finished work; guards fail closed but have no resolution path
+
+Phase 1/1b pass (live RPCs; `sessions.db` stale since 2026-10-20, skipped). One worktree agent per item; no code
+changed, no mutating RPCs. Claims below are the agents' reports, spot-checked by none of the main session
+unless marked VERIFIED there. Item-level recovery is NOT yet performed.
+
+| Item | State | Root cause | Work actually done? |
+|---|---|---|---|
+| `853746a0` Operation catalog v1 | `review` since 11-02 | **A.** `SpawnReviewSession` → `CreateDirectorySession(item.RepoPath)` (`server/services/session_service_diagnose.go:58-70`) runs the reviewer in the shared repo checkout, which sat on unrelated branch `sdd/test-effectiveness-critique`; prompt (`session/backlog/pipeline/review.go:233-310`) never names the work branch. Reviews 1-3 PARTIAL, 4/6/7/8 FAIL (ran `git diff master...HEAD` in cwd) = the "likely_flaky" flip-flop. **B.** Merged PR (kibitzer #160, squash) attached only to sessions (`PrNumber`=0): `reconcileOrphanedAgentPRs` skips it (live session r3 + non-`open` PR), `reconcileBouncingItems` falls back to `IsCommitOnMain(..., "main")` (`session/backlog_shared.go:220`) but kibitzer's default is `master`, and a squash merge defeats ancestry anyway. | Yes — merged 2026-11-04, 9/9 ACs done |
+| `1e3771db` Feature-envy FPs | `review` since 11-05 | AC 2 (FP ≤ 30%) honestly failed (72–81% measured). The AC gate has no "attempted and failed" outcome, so pass/in_progress loops; `reportBlocked` escalates to `review` after 3 cycles (`server/mcp/tools_backlog.go:1720-1722`) writing only a note + log, no notification. | ACs 0,1,3,4 done, unmerged on `backlog/kibitzer-item-1e3771db`, no PR |
+| `a0fb3466` rare `-race` flake | `pr_pending` since 11-10 | PR #1540 merged from foreign head `fix/rate-limit-callback-title-race`, override-attached via `report_pr_created` (`server/mcp/tools_backlog_pr.go:370-440`) which stores no head ref/SHA; `ReconcilePRPending`'s stricter ownership check (`session/backlog/backlog_lifecycle_pr.go:2264,2305-2307`) can never pass; newest work sessions also lack base/tip SHA. | Yes — merged 11-10 |
+
+### Findings by bucket
+
+**1. Reconciliation bugs**
+- R1 (new class): reviewer spawned in shared `repoPath` checkout, not the work worktree → verdicts judge whatever branch is checked out. Fix: review in the work worktree or name branch/worktree in the prompt.
+- R2: merged PR with `PrNumber`=0 and a live/idle work session has no reconciler path to `done` (`backlog_lifecycle_pr.go:275-340`, `backlog_lifecycle.go:1840-1890`).
+- R3: hard-coded `BounceMainBranch = "main"` (also `reviewgate/gate.go:535`, `backlog_lifecycle_pr.go:416,2457`) on `master` repos; resolve per repo via `git.CandidateDefaultBranches`. Care: `closeIfSupersededByMain` and the `prFixMainBranch` sites would newly activate on master repos.
+- R4: override-attached PR records no ownership evidence, so attach-time and reconcile-time checks disagree. Needs a storage write (no `UpdateItemSessionBranch` today) — not a small fix.
+- R5: `GetGitHeadSHA` failure at spawn ignored with `_ =` (`server/services/backlogsvc/backlog_service_triage.go:1284-1287`); cause of missing base SHA unconfirmed.
+- R6: blocked-cycle escalation to `review` publishes no notification; candidate: WARNING event like `notifyWaitCapReached` (event type/priority/dedupe key undecided).
+
+**2. Manual gates**
+- AC-completeness gate lacks an "attempted, target not met" outcome; honest failure becomes a rejection loop needing a human to edit the AC.
+- `merged_pr_unverified` and escalated-`review` items need a manual `done`; nothing alerts for the latter.
+
+**3. Non-configurable pipeline steps:** not re-audited this pass (Phase 2/3 not run); prior conclusion from 2026-08-03 stands.
+
+**Recurring shapes:** "swallowed status-transition" (2026-07-27, 2026-08-03, 2026-10-09) recurs in R2, R4, R6 — the 2026-10-09 `merged_pr_unverified` fix gave the refusal a durable surface but no resolution path, so it did not close the class. "`hasActiveWorkSession` blocks silently" (2026-08-05) recurs in R2. "Two writers, literal equality" recurs in R3 (`main` vs `master`) and R4. R1 matches no existing shape.
+
+**Item recovery (owner action, pending):** `853746a0` and `a0fb3466` → `done` via the gated user-driven transition (stop/archive r3 first for the former; `a0fb3466` may need `report_progress` evidence for ACs 0-3). `1e3771db` → owner decides: relax AC 2 to the measured result or file the request/args follow-up; open the kibitzer PR for the unmerged commits. Do not respawn work or review sessions on any of them.
