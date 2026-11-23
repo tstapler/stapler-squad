@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,41 +30,14 @@ func stubEnsureDaemonRunning(fn func(context.Context, tymux.DaemonConfig) (tymux
 	return func() { ensureDaemonRunningFn = orig }
 }
 
-// fakeTymuxManagerForStartRestore is a minimal tymux.TymuxManager fake for
-// Story 2.1.3's Start/RestoreWithWorkDir tests: it embeds the interface (so
-// any unused method panics if called — none should be for these tests) and
-// overrides only Start/RestoreWithWorkDir, with optional hooks so a test can
-// observe call order relative to the injected ensureDaemonRunningFn.
-type fakeTymuxManagerForStartRestore struct {
-	tymux.TymuxManager // deliberately nil; unused methods must not be called
-	startErr           error
-	restoreErr         error
-	onStart            func(dir string)
-	onRestore          func(workDir string)
-}
-
-func (f *fakeTymuxManagerForStartRestore) Start(dir string) error {
-	if f.onStart != nil {
-		f.onStart(dir)
-	}
-	return f.startErr
-}
-
-func (f *fakeTymuxManagerForStartRestore) RestoreWithWorkDir(w string) error {
-	if f.onRestore != nil {
-		f.onRestore(w)
-	}
-	return f.restoreErr
-}
-
 // TestTymuxBackendStart_should_CallEnsureDaemonRunning_BeforeDelegatingToManager
 // is Task 2.1.3b: Start must call tymux.EnsureDaemonRunning (via its
 // injection seam) before delegating to the wrapped TymuxManager's Start —
 // the whole point of Story 2.1.3's lazy call-before-use wiring.
 func TestTymuxBackendStart_should_CallEnsureDaemonRunning_BeforeDelegatingToManager(t *testing.T) {
 	var order []string
-	fake := &fakeTymuxManagerForStartRestore{
-		onStart: func(dir string) { order = append(order, "start:"+dir) },
+	fake := &procbackendtest.FakeTymuxManagerForStartRestore{
+		OnStart: func(dir string) { order = append(order, "start:"+dir) },
 	}
 	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		order = append(order, "ensure")
@@ -82,8 +56,8 @@ func TestTymuxBackendStart_should_CallEnsureDaemonRunning_BeforeDelegatingToMana
 // mirrors the Start test above for the restore path.
 func TestTymuxBackendRestoreWithWorkDir_should_CallEnsureDaemonRunning_BeforeDelegatingToManager(t *testing.T) {
 	var order []string
-	fake := &fakeTymuxManagerForStartRestore{
-		onRestore: func(w string) { order = append(order, "restore:"+w) },
+	fake := &procbackendtest.FakeTymuxManagerForStartRestore{
+		OnRestore: func(w string) { order = append(order, "restore:"+w) },
 	}
 	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		order = append(order, "ensure")
@@ -106,8 +80,8 @@ func TestTymuxBackendRestoreWithWorkDir_should_CallEnsureDaemonRunning_BeforeDel
 func TestTymuxBackendStart_should_ReturnWrappedError_When_DaemonUnavailable(t *testing.T) {
 	sentinelErr := errors.New("boom: tymuxd did not become healthy")
 	startCalled := false
-	fake := &fakeTymuxManagerForStartRestore{
-		onStart: func(string) { startCalled = true },
+	fake := &procbackendtest.FakeTymuxManagerForStartRestore{
+		OnStart: func(string) { startCalled = true },
 	}
 	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		return tymux.TymuxdReady{}, sentinelErr
@@ -120,21 +94,6 @@ func TestTymuxBackendStart_should_ReturnWrappedError_When_DaemonUnavailable(t *t
 	assert.ErrorIs(t, err, sentinelErr)
 	assert.Contains(t, err.Error(), "tymux backend requested but daemon unavailable")
 	assert.False(t, startCalled, "the wrapped manager's Start must not be called when the daemon is unavailable")
-}
-
-// fakeTymuxManagerForBackendRestarted is a minimal tymux.TymuxManager fake
-// used only to prove BackendRestarted() is reachable through the interface
-// (Phase 5 spec-compliance sweep, Story 2.5.3 gap): it embeds the interface
-// (so any unused method panics if called — none should be for this test)
-// and overrides only BackendRestarted with a canned value.
-type fakeTymuxManagerForBackendRestarted struct {
-	tymux.TymuxManager // deliberately nil; unused methods must not be called
-	restarted          bool
-	since              time.Time
-}
-
-func (f *fakeTymuxManagerForBackendRestarted) BackendRestarted() (bool, time.Time) {
-	return f.restarted, f.since
 }
 
 // TestTymuxBackend_BackendRestarted_ObservableThroughTymuxManagerInterface
@@ -150,7 +109,7 @@ func (f *fakeTymuxManagerForBackendRestarted) BackendRestarted() (bool, time.Tim
 // state.
 func TestTymuxBackend_BackendRestarted_ObservableThroughTymuxManagerInterface(t *testing.T) {
 	since := time.Now()
-	fake := &fakeTymuxManagerForBackendRestarted{restarted: true, since: since}
+	fake := &procbackendtest.FakeTymuxManagerForBackendRestarted{Restarted: true, Since: since}
 
 	// mgr is typed as the interface, not *tymuxGRPCSession — the whole
 	// point of the fix.
@@ -259,71 +218,21 @@ func initializeBaselineForRestartTest(i *instance.Instance) error {
 	return nil
 }
 
-// fakeTymuxManagerForSetCommand is a minimal tymux.TymuxManager fake that
-// records SetCommand's argument and otherwise no-ops Start/HasSession, used
-// both to test newTymuxBackendFromOpts's wiring and Restart's in-place
-// tymux-respawn SetCommand branch.
-type fakeTymuxManagerForSetCommand struct {
-	tymux.TymuxManager        // deliberately nil; unused methods must not be called
-	gotCommand         string // gotLaunch rendered as shell text
-	gotLaunch          launchcmd.LaunchCommand
-	startErr           error
-	gotEnv             []string
-	gotLabel           string
-	gotStoredID        string
-	sessionID          string
-	startCalls         int
-	restoreCalls       int
-}
-
-func (f *fakeTymuxManagerForSetCommand) SetStoredSessionID(id string) { f.gotStoredID = id }
-
-func (f *fakeTymuxManagerForSetCommand) GetSessionIdentifier() string { return f.sessionID }
-
-func (f *fakeTymuxManagerForSetCommand) AppendEnv(env ...string) {
-	f.gotEnv = append(f.gotEnv, env...)
-}
-
-func (f *fakeTymuxManagerForSetCommand) SetCommand(command launchcmd.LaunchCommand) {
-	f.gotLaunch = command
-	f.gotCommand = instance.ShellString(command)
-}
-
-func (f *fakeTymuxManagerForSetCommand) SetSessionLabel(label string) {
-	f.gotLabel = label
-}
-
-func (f *fakeTymuxManagerForSetCommand) PersistedSessionID() string { return f.sessionID }
-
-func (f *fakeTymuxManagerForSetCommand) RestoreWithWorkDir(string) error {
-	f.restoreCalls++
-	return nil
-}
-
-func (f *fakeTymuxManagerForSetCommand) Start(string) error {
-	f.startCalls++
-	return f.startErr
-}
-
-func (f *fakeTymuxManagerForSetCommand) HasSession() bool {
-	return false
-}
-
 // TestNewTymuxBackendFromOpts_AppliesProgramViaSetCommand closes the gap
 // where newTymuxBackendFromOpts's opts.Program->SetCommand wiring had no
 // test coverage and, before the newTymuxSessionFn seam existed, no way to
 // get any either.
 func TestNewTymuxBackendFromOpts_AppliesProgramViaSetCommand(t *testing.T) {
-	fake := &fakeTymuxManagerForSetCommand{}
+	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	orig := newTymuxSessionFn
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	defer func() { newTymuxSessionFn = orig }()
 
 	newTymuxBackendFromOpts(instance.ProcessManagerOptions{Program: "claude --resume abc"})
 
-	assert.Equal(t, "claude --resume abc", fake.gotCommand)
-	exec, ok := fake.gotLaunch.(launchcmd.ExecCommand)
-	require.True(t, ok, "a plain program must reach the backend as argv, got %T", fake.gotLaunch)
+	assert.Equal(t, "claude --resume abc", fake.GotCommand)
+	exec, ok := fake.GotLaunch.(launchcmd.ExecCommand)
+	require.True(t, ok, "a plain program must reach the backend as argv, got %T", fake.GotLaunch)
 	args, err := exec.Args(nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"--resume", "abc"}, args)
@@ -338,7 +247,7 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		return tymux.TymuxdReady{}, nil
 	})()
-	fake := &fakeTymuxManagerForSetCommand{}
+	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	inst := &instance.Instance{
 		Title:   "already-tymux-test",
 		Path:    t.TempDir(),
@@ -352,16 +261,16 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 	require.NoError(t, inst.Restart(false, ""))
 
 	assert.Equal(t, domain.BackendTymux, inst.Backend)
-	assert.NotEmpty(t, fake.gotCommand, "SetCommand must be called with the rebuilt launch command on an in-place tymux respawn")
+	assert.NotEmpty(t, fake.GotCommand, "SetCommand must be called with the rebuilt launch command on an in-place tymux respawn")
 }
 
 func TestNewTymuxBackendFromOpts_AppliesSessionNameAsLabel(t *testing.T) {
-	fake := &fakeTymuxManagerForSetCommand{}
+	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	orig := newTymuxSessionFn
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	defer func() { newTymuxSessionFn = orig }()
 
 	newTymuxBackendFromOpts(instance.ProcessManagerOptions{SessionName: "stapler-squad-2"})
 
-	assert.Equal(t, "stapler-squad-2", fake.gotLabel)
+	assert.Equal(t, "stapler-squad-2", fake.GotLabel)
 }

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 )
 
 func TestTymuxBackend_AppendLaunchEnv_ForwardsToManager(t *testing.T) {
@@ -17,9 +18,9 @@ func TestTymuxBackend_AppendLaunchEnv_ForwardsToManager(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeTymuxManagerForSetCommand{}
+			fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 			NewTymuxBackend(fake).AppendLaunchEnv(tc.env...)
-			assert.Equal(t, tc.env, fake.gotEnv)
+			assert.Equal(t, tc.env, fake.GotEnv)
 		})
 	}
 }

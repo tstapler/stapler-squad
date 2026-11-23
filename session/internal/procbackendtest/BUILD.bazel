@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "procbackendtest",
+    testonly = True,
+    srcs = [
+        "assertions.go",
+        "fake_liveness_process_manager.go",
+        "fake_send_keys_process_manager.go",
+        "fake_tymux_managers.go",
+        "mock_tmux_manager.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/internal/procbackendtest",
+    visibility = ["//session:__subpackages__"],
+    deps = [
+        "//session/instance",
+        "//session/launchcmd",
+        "//session/tmux",
+        "//session/tymux",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":procbackendtest",
+    visibility = ["//session:__subpackages__"],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

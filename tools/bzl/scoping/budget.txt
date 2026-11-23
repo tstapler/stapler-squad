@@ -42,6 +42,7 @@ session/backlog/liveness files=7 loc=912 imports=8
 session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
+session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
 server/services files=262 loc=65715 imports=86
 server/services/insights files=6 loc=1861 imports=9

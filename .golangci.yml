@@ -104,6 +104,15 @@ linters:
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/itemsources"
               desc: "session core must not import tracker plugins; the composition root injects them"
+        # Shared test doubles: only _test.go files may import them (the package is testonly in Bazel).
+        procbackendtest_test_only:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/session/internal/procbackendtest/**"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+              desc: "session/internal/procbackendtest holds test doubles; import it from _test.go files only"
         push_no_services:
           files:
             - "**/server/push/**"
