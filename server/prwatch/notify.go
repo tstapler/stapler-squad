@@ -127,7 +127,7 @@ type Notifications struct {
 }
 
 // NewNotifications wires the builders. sanitize may be nil (a built-in
-// sanitizer is used); the server passes session.SanitizeUntrusted.
+// sanitizer is used); the server passes steertext.SanitizeUntrusted.
 func NewNotifications(n Notifier, clock Clock, s Settings, sanitize func(string, int) string) *Notifications {
 	if sanitize == nil {
 		sanitize = sanitizeReason

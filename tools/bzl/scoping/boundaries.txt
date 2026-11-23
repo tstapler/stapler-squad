@@ -18,6 +18,7 @@ server/services/webhooktrigger !server/web
 server/services/sessionretention !server/web
 server/services/importsvc !server/web
 server/services/unfinishedwork !server/web
+server/services/federation !server/web
 session/ptyio !server
 session/hostclaim !server
 session/dialogpresence !server
@@ -75,3 +76,8 @@ session/paneactivity !server
 session/registry !server
 session/pipelinemode !server
 session/claudehistory !server
+session/steertext !server
+session/conflictretry !server
+session/nudgeoutcomes !server
+session/slowops !server
+session/itemlink !server

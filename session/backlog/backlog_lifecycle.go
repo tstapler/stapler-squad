@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
+	"github.com/tstapler/stapler-squad/session/conflictretry"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -154,7 +155,7 @@ type BacklogLifecycleListener struct {
 	ciReruns   ciRerunLedger
 
 	// conflictRetries throttles conflict-only PR fixes (see remediatePRFixWithBackoffGate).
-	conflictRetries    session.ConflictRetryLedger
+	conflictRetries    conflictretry.ConflictRetryLedger
 	conflictRetryClock func() time.Time // nil: time.Now
 
 	// terminalSettled lets the 60s done/archived safety-net sweeps skip items they

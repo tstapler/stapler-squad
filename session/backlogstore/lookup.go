@@ -34,7 +34,7 @@ import (
 // entity types, not BacklogItem, so they're correctly left on the legacy
 // path. Every consumer of a BacklogItem id string -- MCP tools
 // (server/mcp/tools_backlog.go), the deep-link resolver
-// (server/services/deep_link_resolver.go's resolveLocal), and the review/
+// (server/services/federation/deep_link_resolver.go's resolveLocal), and the review/
 // triage/lifecycle update paths -- funnels through Storage.GetBacklogItem or
 // another EntRepository method that already calls ResolveBacklogItemLookup,
 // so no other call site needs its own dual-ID branch.

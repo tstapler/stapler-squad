@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -49,7 +50,7 @@ type ClaimDisputeResolver interface {
 }
 
 // defaultClaimLookupTimeout bounds the whole peer fan-out of one CheckClaim,
-// matching deep_link_resolver.go's per-peer liveness timeout.
+// matching federation/deep_link_resolver.go's per-peer liveness timeout.
 const defaultClaimLookupTimeout = 2 * time.Second
 
 // claimPeerLister is the slice of *session.HostRegistry the checker needs.
@@ -83,7 +84,7 @@ func NewLocalClaimChecker(index *hostclaim.ClaimIndex, selfID hostclaim.HostID, 
 		selfID: selfID,
 		peers:  peers,
 		client: &http.Client{
-			Transport: peerTLSTransport(),
+			Transport: federation.PeerTLSTransport(),
 			// A peer must not bounce a signed lookup to an internal address.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},

@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
@@ -1308,13 +1309,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// (every cross-host lookup reports "not-registered") only if configDir
 	// couldn't be determined.
 	if deps.Storage != nil {
-		var hostResolver services.HostResolver
+		var hostResolver federation.HostResolver
 		if configErr == nil {
-			hostResolver = services.NewRegistryHostResolver(configDir, hostclaim.DefaultHostRegistryTTL)
+			hostResolver = federation.NewRegistryHostResolver(configDir, hostclaim.DefaultHostRegistryTTL)
 		} else {
 			log.Warn("Deep-link resolver falling back to unimplemented host resolver: config dir unavailable", "err", configErr)
 		}
-		deepLinkResolver := services.NewDeepLinkResolver(deps.Storage, hostResolver)
+		deepLinkResolver := federation.NewDeepLinkResolver(deps.Storage, hostResolver)
 		deepLinkResolver.RegisterRoutes(srv.mux)
 		log.Info("Registered deep-link resolver at /api/deep-link/resolve")
 	}

@@ -17,7 +17,7 @@ import (
 // ConnectRPC GuidanceRequestService's own backlog-item ownership check
 // produces an identical (error code, remediation text) pair to this one for
 // the same fixture — guarding against the MCP and RPC adapters drifting
-// apart from the session.ResolveItemLink helper they both wrap.
+// apart from the itemlink.ResolveItemLink helper they both wrap.
 func ResolveItemLinkViaMCPAdapter(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
 	h := &backlogHandlers{storage: storage}
 	return h.resolveItemLink(ctx, callerUUID, itemID)
