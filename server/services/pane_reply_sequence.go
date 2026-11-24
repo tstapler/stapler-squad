@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -73,9 +74,9 @@ func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in
 	return out
 }
 
-func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Instance, facts steerRequestFacts) AuditLine {
-	return AuditLine{
-		Kind: auditKindReply, ChangeID: uuid.NewString(),
+func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Instance, facts steerRequestFacts) auditkit.AuditLine {
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: in.sessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: in.questionID, ReplyID: in.replyID, OptionLabel: truncateRunes(in.summary, 80),
 		QuestionToken: QuestionToken(in.question),

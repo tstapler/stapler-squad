@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -120,7 +121,7 @@ func readbackScope(t *testing.T, svc *FeatureFlagService, scope string) bool {
 func TestSessionMultiPRAudit_ShouldLetRefresherOffPersistWithFallback_WhenSinkIsDownButRefuseReaderScopes(t *testing.T) {
 	e := newAuditEnv(t)
 	e.svc.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
-	e.mfs.setFailWrite(errDiskFull)
+	e.mfs.SetFailWrite(errDiskFull)
 
 	err := smprMutate(e.svc, config.SessionMultiPRScopePoller, sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED)
 	require.Error(t, err, "opening a reader stays refused while the sink is down")
@@ -129,5 +130,5 @@ func TestSessionMultiPRAudit_ShouldLetRefresherOffPersistWithFallback_WhenSinkIs
 	require.NoError(t, smprMutate(e.svc, config.SessionMultiPRScopeRefresherOff, sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED),
 		"the kill switch is the escape hatch for a sink fault")
 	assert.False(t, config.LoadConfig().SessionMultiPRRefresher())
-	assert.GreaterOrEqual(t, e.degradedCount(auditModeFallbackLog), 1)
+	assert.GreaterOrEqual(t, e.degradedCount(auditkit.AuditModeFallbackLog), 1)
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -91,19 +92,19 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	require.NoError(t, flipErr)
 	svc.Shutdown() // joins the audit drain goroutine
 
-	raw, err := os.ReadFile(filepath.Join(dir, "audit", auditFileName))
+	raw, err := os.ReadFile(filepath.Join(dir, "audit", auditkit.AuditFileName))
 	require.NoError(t, err)
 	ls := lines(raw)
 	require.Len(t, ls, 3, "one result line per tightening-path flip")
 	prevs := make([]bool, 0, len(ls))
 	for i, l := range ls {
-		var al AuditLine
+		var al auditkit.AuditLine
 		require.NoError(t, json.Unmarshal(l, &al))
-		assert.Equal(t, auditKindFlagChg, al.Kind)
+		assert.Equal(t, auditkit.AuditKindFlagChg, al.Kind)
 		assert.Equal(t, config.HiddenSessionGateFeatureFlag, al.Flag)
 		assert.Equal(t, "global", al.Scope)
-		assert.Equal(t, auditPhaseResult, al.Phase)
-		assert.Equal(t, flagOutcomeApplied, al.Outcome)
+		assert.Equal(t, auditkit.AuditPhaseResult, al.Phase)
+		assert.Equal(t, auditkit.FlagOutcomeApplied, al.Outcome)
 		assert.Equal(t, int64(i+1), al.Seq)
 		assert.Equal(t, ListenerLocal, al.Listener)
 		assert.Equal(t, "localhost:8543", al.Host)

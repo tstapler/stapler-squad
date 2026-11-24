@@ -113,6 +113,22 @@ linters:
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/internal/procbackendtest"
               desc: "session/internal/procbackendtest holds test doubles; import it from _test.go files only"
+        memfs_test_only:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/server/services/fsops/memfs/**"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server/services/fsops/memfs"
+              desc: "server/services/fsops/memfs holds test doubles; import it from _test.go files only"
+        fsopstest_test_only:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/server/services/fsops/fsopstest/**"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
+              desc: "server/services/fsops/fsopstest holds test fixtures; import it from _test.go files only"
         push_no_services:
           files:
             - "**/server/push/**"

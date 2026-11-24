@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -219,7 +220,7 @@ func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *instance.H
 type PaneReplyCore struct {
 	store            *PendingQuestionStore
 	limiters         *replyLimiters
-	auditSink        func() *AuditSink
+	auditSink        func() *auditkit.AuditSink
 	count            func(label string)
 	after            func(time.Duration) <-chan time.Time
 	controllerActive func(*instance.Instance) bool
@@ -364,15 +365,15 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 
 // ---- audit and metrics ----
 
-func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) AuditLine {
+func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) auditkit.AuditLine {
 	q := claim.Question()
 	idx := int(in.digit - '0')
 	label := ""
 	if idx >= 1 && idx <= len(q.Dialog.Labels) {
 		label = truncateRunes(q.Dialog.Labels[idx-1], 80)
 	}
-	return AuditLine{
-		Kind: auditKindReply, ChangeID: uuid.NewString(),
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: q.SessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: q.QuestionID, ReplyID: in.replyID, OptionIndex: idx, OptionLabel: label, QuestionToken: q.Token,
 		Listener: facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
@@ -390,19 +391,19 @@ func truncateRunes(s string, n int) string {
 }
 
 // appendRequest is the durable pre-write line: no audit, no write.
-func (c *PaneReplyCore) appendRequest(ctx context.Context, line AuditLine) error {
-	line.Phase = auditPhaseRequest
+func (c *PaneReplyCore) appendRequest(ctx context.Context, line auditkit.AuditLine) error {
+	line.Phase = auditkit.AuditPhaseRequest
 	sink := c.auditSink()
 	if sink == nil {
-		return ErrAuditFailed
+		return auditkit.ErrAuditFailed
 	}
 	return sink.AppendBounded(ctx, line)
 }
 
 // appendResult records the outcome after the write; a fault here cannot
 // undo anything, so it logs.
-func (c *PaneReplyCore) appendResult(line AuditLine, res replyOutcomeResult, stage string) {
-	line.Phase, line.Outcome, line.Stage = auditPhaseResult, replyOutcomeLabel(res.Outcome), stage
+func (c *PaneReplyCore) appendResult(line auditkit.AuditLine, res replyOutcomeResult, stage string) {
+	line.Phase, line.Outcome, line.Stage = auditkit.AuditPhaseResult, replyOutcomeLabel(res.Outcome), stage
 	sink := c.auditSink()
 	if sink == nil {
 		return
