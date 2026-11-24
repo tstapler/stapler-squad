@@ -41,6 +41,7 @@ go_library(
         "project_data.go",
         "review_state.go",
         "rule_data.go",
+        "rule_spec.go",
         "session_roles.go",
         "session_type.go",
         "status.go",

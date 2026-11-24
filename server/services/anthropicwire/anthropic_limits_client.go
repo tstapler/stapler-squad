@@ -1,4 +1,4 @@
-package services
+package anthropicwire
 
 import (
 	"bytes"
@@ -68,7 +68,7 @@ func (c *AnthropicLimitsClient) QueryLimits(ctx context.Context) (credkit.Provid
 		return c.cached, fmt.Errorf("anthropic limits: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicAPIURL, bytes.NewReader(bodyBytes))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, AnthropicAPIURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return c.cached, fmt.Errorf("anthropic limits: create request: %w", err)
 	}

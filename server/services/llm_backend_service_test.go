@@ -2,16 +2,12 @@ package services
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/credkit"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -62,49 +58,6 @@ func TestLLMBackendServiceUpdateIsLiveAndValidated(t *testing.T) {
 	}
 }
 
-func TestAnthropicHTTPClientBaseURLConfigurableButProbeIsNot(t *testing.T) {
-	isolateLLMConfig(t)
-	var hits []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits = append(hits, r.URL.Path)
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"hi"}]}`)
-	}))
-	defer srv.Close()
-
-	if err := config.UpdateLLMBackends(config.LLMBackendsConfig{AnthropicBaseURL: srv.URL + "/"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := anthropicMessagesURL(); got != srv.URL+"/v1/messages" {
-		t.Fatalf("anthropicMessagesURL = %q", got)
-	}
-	c, err := NewAnthropicAIClientFromKey("k")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out, err := c.Complete(context.Background(), "s", "u"); err != nil || out != "hi" {
-		t.Fatalf("out=%q err=%v", out, err)
-	}
-	if len(hits) != 1 || hits[0] != "/v1/messages" {
-		t.Errorf("hits = %v", hits)
-	}
-
-	// Capacity monitor probe must keep targeting the real Anthropic endpoint
-	// no matter what backend settings say: record where it actually sends.
-	var probedURL string
-	probe := NewAnthropicLimitsClient(credkit.NewChain(staticAnthropicSource{}), "")
-	probe.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		probedURL = r.URL.String()
-		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
-	})}
-	_, _ = probe.QueryLimits(context.Background())
-	if probedURL != anthropicAPIURL {
-		t.Errorf("capacity probe hit %q, want fixed %q (backend base URL is %q)", probedURL, anthropicAPIURL, srv.URL)
-	}
-	if !strings.HasPrefix(anthropicAPIURL, "https://api.anthropic.com/") {
-		t.Errorf("anthropicAPIURL = %q", anthropicAPIURL)
-	}
-}
-
 type stubAIClient struct{ called bool }
 
 func (s *stubAIClient) Complete(context.Context, string, string) (string, error) {
@@ -116,8 +69,8 @@ func TestRulesAIClientRoutesByFeatureSetting(t *testing.T) {
 	isolateLLMConfig(t)
 	t.Cleanup(func() { headless.SetDefaultSelector(nil) })
 	fb := &stubAIClient{}
-	c := WrapRulesAIClient(fb)
-	if WrapRulesAIClient(nil) != nil {
+	c := anthropicwire.WrapRulesAIClient(fb)
+	if anthropicwire.WrapRulesAIClient(nil) != nil {
 		t.Fatal("nil fallback must stay nil")
 	}
 
@@ -141,17 +94,6 @@ func TestRulesAIClientRoutesByFeatureSetting(t *testing.T) {
 	if fb.called || err == nil {
 		t.Fatalf("overridden feature must go through selector (no backends registered -> ErrNoBackend); called=%v err=%v", fb.called, err)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-type staticAnthropicSource struct{}
-
-func (staticAnthropicSource) Name() string { return "static-test" }
-func (staticAnthropicSource) Resolve(context.Context, string) (credkit.Credential, bool, error) {
-	return credkit.Credential{APIKey: "k"}, true, nil
 }
 
 func TestLLMBackendServiceGetReturnsDefaults(t *testing.T) {

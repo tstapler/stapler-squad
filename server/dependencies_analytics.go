@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -260,7 +261,7 @@ func startTokenStores(svc *ServiceDeps, cfg *config.Config, historyLinker *impor
 		// consumes TokenStore's notifications on its own goroutine.
 		if entClient := storage.GetEntClient(); entClient != nil {
 			ctxHistoryStore = contexthistory.NewStore(entClient)
-			go contexthistory.NewRecorder(ctxHistoryStore, services.AnthropicContextWindow, 0).
+			go contexthistory.NewRecorder(ctxHistoryStore, anthropicwire.AnthropicContextWindow, 0).
 				Run(context.Background(), tokenStore)
 		}
 	} else {
