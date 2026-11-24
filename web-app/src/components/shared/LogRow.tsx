@@ -76,6 +76,7 @@ export const LogRow = React.memo(function LogRow({
             className={levelBadge({ level })}
             aria-label={`Filter by ${level}`}
             data-testid={`log-level-badge-${index}`}
+            // analytics-exempt: local filter toggle, not a navigation or mutation
             onClick={(e) => {
               e.stopPropagation();
               onFilterByLevel(level);
