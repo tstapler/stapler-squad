@@ -55,6 +55,7 @@ type PendingApproval struct {
 // Decisions returns the channel that receives the one user decision for this approval.
 // Nil for orphaned approvals and for approvals not yet passed to ApprovalStore.Create;
 // receiving from a nil channel blocks forever, as the unexported field did.
+// Call it only after Create returned, from the creating goroutine: the read is unlocked.
 func (a *PendingApproval) Decisions() <-chan ApprovalDecision {
 	return a.decisionCh
 }

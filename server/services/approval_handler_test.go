@@ -165,7 +165,7 @@ func commandsContainNewerThan(groups []HookMatcherGroup, staleAddr string) bool 
 // ─── Escalation reason regression tests (escalation-reasoning Epic 5.1, Story 5.1.1) ──
 
 // waitForFirstApprovalThenResolve polls the store until an approval appears, captures a
-// copy of its escalation fields (immutable post-construction per approval_store.go's
+// copy of its escalation fields (immutable post-construction per approvalkit/approval_store.go's
 // contract), then resolves it so the blocked HandlePermissionRequest call returns. Runs
 // in the caller's goroutine -- callers should invoke it via `go` before firing the
 // blocking POST.

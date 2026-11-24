@@ -164,7 +164,7 @@ func remoteRelayTestClientConfig(t *testing.T, hostKey ssh.PublicKey) ssh.Client
 // autoAllowClassifier is a fake classifier.Classifier that always returns
 // AutoAllow -- "configured to auto-classify predictably for the test" per
 // this feature's design brief, avoiding any need to wait on (or fake) a
-// human decision through ApprovalStore/decisionCh for this end-to-end proof.
+// human decision through ApprovalStore/Decisions() for this end-to-end proof.
 type autoAllowClassifier struct{}
 
 func (autoAllowClassifier) BuildContext(cwd string) classifier.ClassificationContext {
