@@ -195,6 +195,23 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/ptydiscovery backs only the `test-pty` debug command (main.go); it never imports
+        # session, github or server.
+        isolate_ptydiscovery:
+          list-mode: strict
+          files:
+            - "**/session/ptydiscovery/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/linkdata/deadlock
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/internal/syncutil
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/claudectl
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/tmux
         # session/shellstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_shellstore:

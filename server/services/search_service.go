@@ -95,6 +95,13 @@ type SearchService struct {
 
 	branchCache    sync.Map // map[string]*historyBranchEntry  keyed by projectPath
 	branchCacheTTL time.Duration
+
+	// Background index sync (see search_service_sync.go).
+	syncInterval  time.Duration
+	unarySyncWait time.Duration // how long unary search waits for the first sync
+	syncedOnce    sync.Once
+	loopStarted   atomic.Bool
+	syncedCh      chan struct{} // closed after the first successful sync
 }
 
 // SetResolveConversationUUID wires the tmux-UUID → Claude-UUID resolver.
@@ -113,6 +120,8 @@ func NewSearchService(
 		snippetGenerator: snippetGenerator,
 		historyCacheTTL:  historyCacheTTL,
 		branchCacheTTL:   60 * time.Second,
+		syncedCh:         make(chan struct{}),
+		unarySyncWait:    unarySyncWait,
 	}
 }
 
@@ -508,10 +517,28 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 }
 
 // SearchClaudeHistory performs full-text search across Claude conversation history.
+//
+// The search index is kept fresh by the background sync loop (see
+// StartSyncLoop), so this never syncs on the request path; before the first
+// sync completes it returns CodeUnavailable.
 func (ss *SearchService) SearchClaudeHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SearchClaudeHistoryRequest],
 ) (*connect.Response[sessionv1.SearchClaudeHistoryResponse], error) {
+	resp, err := ss.searchClaudeHistory(ctx, req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// searchClaudeHistory is the shared search pipeline behind the unary and
+// streaming RPCs.
+func (ss *SearchService) searchClaudeHistory(
+	ctx context.Context,
+	msg *sessionv1.SearchClaudeHistoryRequest,
+) (*sessionv1.SearchClaudeHistoryResponse, error) {
+	req := connect.NewRequest(msg)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String(telemetry.AttrSearchQuery, req.Msg.Query),
@@ -537,32 +564,13 @@ func (ss *SearchService) SearchClaudeHistory(
 			fmt.Errorf("offset is not supported together with group_by_session, exclude_automation_sessions, or project"))
 	}
 
+	if err := ss.requireIndexSynced(ctx); err != nil {
+		return nil, err
+	}
+
 	hist, err := ss.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
-	}
-
-	_, syncSpan := telemetry.StartSpan(ctx, "SearchEngine.IncrementalSync")
-	syncStart := time.Now()
-	syncResult, err := ss.searchEngine.IncrementalSync(hist)
-	syncDuration := time.Since(syncStart)
-	if err != nil {
-		// IncrementalSync returns a nil result on a failed full rebuild.
-		syncSpan.RecordError(err)
-		syncSpan.End()
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
-	}
-	syncSpan.SetAttributes(
-		attribute.Int64("sync.duration_ms", syncDuration.Milliseconds()),
-		attribute.Bool("sync.was_full_rebuild", syncResult.WasFullRebuild),
-		attribute.Int("sync.sessions_added", syncResult.SessionsAdded),
-		attribute.Int("sync.sessions_updated", syncResult.SessionsUpdated),
-		attribute.Int("sync.sessions_removed", syncResult.SessionsRemoved),
-	)
-	syncSpan.End()
-
-	if syncResult.HasChanges() || syncResult.WasFullRebuild {
-		log.Info("search index sync", "result", syncResult.String())
 	}
 
 	requestedLimit := int(req.Msg.Limit)
@@ -682,12 +690,12 @@ func (ss *SearchService) SearchClaudeHistory(
 
 	protoResults = ss.applyResultPostProcessing(protoResults, req.Msg, hist, requestedLimit, needsPostProcessing)
 
-	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{
+	return &sessionv1.SearchClaudeHistoryResponse{
 		Results: protoResults,
 		// #nosec G115 -- TotalMatches is the number of search hits across local
 		// Claude history, far below int32 range.
 		TotalMatches: int32(searchResults.TotalMatches),
 		QueryTimeMs:  searchResults.QueryTime.Milliseconds(),
 		HasMore:      searchResults.TotalMatches > offset+len(protoResults),
-	}), nil
+	}, nil
 }

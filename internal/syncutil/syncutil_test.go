@@ -9,7 +9,7 @@ import (
 // Backlog item 81e82fee-9528-4dc9-a513-1040b4dee2ec, AC3: the join must be
 // bounded by a timeout, not a bare Wait(). These cases were previously
 // duplicated (byte-for-byte) across server/server_test.go and
-// session/pty_discovery_test.go, one per copy of the waitGroupWithTimeout
+// session/ptydiscovery/pty_discovery_test.go, one per copy of the waitGroupWithTimeout
 // helper they now share via WaitWithTimeout.
 
 // Test_WaitWithTimeout_should_ReturnTrue_When_WaitGroupReachesZeroBeforeTimeout
@@ -62,7 +62,7 @@ func Test_WaitWithTimeout_should_ReturnFalse_When_WaitGroupNeverReachesZero(t *t
 }
 
 // TestWaitWithTimeout_TableDriven mirrors the sibling table-driven coverage
-// that lived in session/pty_discovery_test.go (TestWaitGroupWithTimeout),
+// that lived in session/ptydiscovery/pty_discovery_test.go (TestWaitGroupWithTimeout),
 // pinning both branches directly.
 func TestWaitWithTimeout_TableDriven(t *testing.T) {
 	t.Run("returns true when the group finishes in time", func(t *testing.T) {

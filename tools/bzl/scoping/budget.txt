@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=61 loc=11510 imports=51
+session files=60 loc=10657 imports=50
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/procbackend files=9 loc=2214 imports=10
@@ -33,6 +33,7 @@ session/cmdexec files=4 loc=1418 imports=4
 session/gitwt files=5 loc=913 imports=9
 session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
+session/ptydiscovery files=1 loc=853 imports=7
 session/importer files=13 loc=2173 imports=10
 session/itemsources files=8 loc=1731 imports=7
 session/backlog files=13 loc=8148 imports=22
@@ -45,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=261 loc=65624 imports=87
+server/services files=263 loc=65857 imports=87
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
