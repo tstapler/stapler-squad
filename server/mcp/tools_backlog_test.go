@@ -6019,7 +6019,7 @@ func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
 // TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
 // is the Story 2.1.3 (Task 2.1.3d) regression test for buildMatchedWaitResult's
 // switch to terminalstate.IsTerminalStatus: a custom stage marked IsTerminal via
-// session.SetTerminalStatusChecker must report IsTerminal true, matching
+// terminalstate.SetTerminalStatusChecker must report IsTerminal true, matching
 // plan.md's AC example verbatim (a "legal-review" custom terminal stage).
 func TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
 	const customTerminal = domain.BacklogStatus("legal-review")
