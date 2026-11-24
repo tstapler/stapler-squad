@@ -47,6 +47,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetClaudeHistoryDetail":    "history:get-detail",
 	"GetClaudeHistoryMessages":  "history:get-messages",
 	"SearchClaudeHistory":       "history:search",
+	"StreamSearchClaudeHistory": "history:search",
 	"GetPRInfo":                 "pr:get-info",
 	"GetPRComments":             "pr:get-comments",
 	"PostPRComment":             "pr:post-comment",
