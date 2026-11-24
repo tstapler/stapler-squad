@@ -55,9 +55,12 @@ func NewHumanActivity(now func() time.Time) *HumanActivity {
 	return &HumanActivity{now: now, last: map[string]time.Time{}}
 }
 
-// DefaultHumanActivity is shared by every web-terminal stream, which each build
+// defaultHumanActivity is shared by every web-terminal stream, which each build
 // their own paneWriter, and by the answer router's guard.
-var DefaultHumanActivity = NewHumanActivity(nil)
+var defaultHumanActivity = NewHumanActivity(nil)
+
+// DefaultHumanActivity returns the process-wide activity tracker (read-only access to the shared var).
+func DefaultHumanActivity() *HumanActivity { return defaultHumanActivity }
 
 // Record notes input to tmuxSession now.
 func (h *HumanActivity) Record(tmuxSession string) {

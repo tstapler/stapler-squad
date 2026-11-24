@@ -696,6 +696,7 @@ go_test(
         "terminal_write_pins_test.go",
         "terminal_write_rpcs_test.go",
         "terminal_write_ui_exceptions_test.go",
+        "terminal_writer_constructors_test.go",
         "testhelpers_test.go",
         "testmain_test.go",
         "tmux_version_status_service_test.go",

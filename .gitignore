@@ -170,3 +170,6 @@ user.bazelrc
 web-app/.next/
 web-app/playwright-report/
 docs-coverage-trend.json
+
+# The access kernel golden is the one tracked .gz
+!server/services/access/testdata/*.gz

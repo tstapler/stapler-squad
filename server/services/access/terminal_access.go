@@ -80,7 +80,7 @@ func (a TerminalAccess) Writer(sender TmuxInputSender) (TerminalWriter, error) {
 	if sender == nil {
 		sender = realTmuxInputSender{}
 	}
-	return &paneWriter{sender: sender, activity: DefaultHumanActivity}, nil
+	return &paneWriter{sender: sender, activity: defaultHumanActivity}, nil
 }
 
 // controlModeInput is what a control-mode attach exposes for keystrokes;
