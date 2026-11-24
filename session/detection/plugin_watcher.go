@@ -36,7 +36,22 @@ type PluginWatcher struct {
 	dir     string
 	watcher *fsnotify.Watcher // nil when fsnotify is unavailable (periodic-rescan-only mode)
 	stopped chan struct{}
+
+	// Test seams; zero values select the real fsnotify channel and a real timer.
+	events      <-chan fsnotify.Event
+	newDebounce func() debounceTimer
 }
+
+// debounceTimer is the subset of *time.Timer that watchLoop's debounce uses.
+type debounceTimer interface {
+	C() <-chan time.Time
+	Stop() bool
+	Reset(d time.Duration) bool
+}
+
+type realDebounceTimer struct{ *time.Timer }
+
+func (t realDebounceTimer) C() <-chan time.Time { return t.Timer.C }
 
 // Stopped returns a channel that is closed once the watcher's goroutine has
 // exited (context cancellation or a closed Events channel).
@@ -129,9 +144,15 @@ func (w *PluginWatcher) watchLoop(ctx context.Context) {
 	// "create a timer that doesn't fire until first use" — a nil timer would
 	// need its own nil-guard in the select below, same as w.watcher's
 	// channels do via the nil `events`/`errs` variables.
-	debounce := time.NewTimer(pluginReloadDebounce)
-	if !debounce.Stop() {
-		<-debounce.C
+	var debounce debounceTimer
+	if w.newDebounce != nil {
+		debounce = w.newDebounce()
+	} else {
+		t := time.NewTimer(pluginReloadDebounce)
+		if !t.Stop() {
+			<-t.C
+		}
+		debounce = realDebounceTimer{t}
 	}
 	defer debounce.Stop()
 
@@ -146,6 +167,9 @@ func (w *PluginWatcher) watchLoop(ctx context.Context) {
 	if w.watcher != nil {
 		events = w.watcher.Events
 		errs = w.watcher.Errors
+	}
+	if w.events != nil {
+		events = w.events
 	}
 
 	// lastFingerprint tracks the plugin directory's *.toml listing as of the
@@ -174,7 +198,7 @@ func (w *PluginWatcher) watchLoop(ctx context.Context) {
 			}
 			if !debounce.Stop() {
 				select {
-				case <-debounce.C:
+				case <-debounce.C():
 				default:
 				}
 			}
@@ -187,7 +211,7 @@ func (w *PluginWatcher) watchLoop(ctx context.Context) {
 			}
 			log.Warn("detector plugin watcher: fsnotify error", "err", err)
 
-		case <-debounce.C:
+		case <-debounce.C():
 			_ = rebuildSnapshot(ctx, w.dir)
 			lastFingerprint, _ = pluginDirFingerprint(w.dir)
 
