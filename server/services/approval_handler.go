@@ -21,6 +21,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -359,8 +360,8 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
 	// Runs on the full command text (before any truncation) so it catches long secrets.
 	if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
-		if hit := ScanForSecrets(cmd); hit.Found {
-			msg := FormatSecretDenyMessage(hit.PatternName)
+		if hit := secretscan.ScanForSecrets(cmd); hit.Found {
+			msg := secretscan.FormatSecretDenyMessage(hit.PatternName)
 			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied — plaintext secret detected", "tool", payload.ToolName, "pattern", hit.PatternName)
 			if h.analyticsStore != nil {
 				// Before recording to analytics, replace the command so the secret is not persisted.
@@ -817,7 +818,7 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 			message = truncateString(prompt, maxNotificationMessageLen)
 		}
 	}
-	message, _ = RedactSecrets(message)
+	message, _ = secretscan.RedactSecrets(message)
 	meta := h.registerQuestion(sessionID, qa, asked, payload.ToolUseID)
 	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
 

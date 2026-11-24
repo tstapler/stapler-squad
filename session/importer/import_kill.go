@@ -2,7 +2,6 @@ package importer
 
 import (
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -60,7 +59,7 @@ func KillExternalOriginalProcess(checker AliveChecker, pid int32, createTimeMs i
 	// running again before the kill signal can take effect. Ignore errors --
 	// if the process already exited or was never actually stopped, the kill
 	// below will simply be a no-op / fail on its own terms.
-	_ = session.ResumeOriginalProcess(pid)
+	_ = ResumeOriginalProcess(pid)
 
 	throwaway := &instance.Instance{
 		InstanceType: domain.InstanceTypeExternal,

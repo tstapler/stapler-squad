@@ -7,380 +7,80 @@ package session
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
-
-// mockTmuxManager is a test double for tmux.TmuxManager.
-// Embeds tmux.TmuxManager so only the methods under test need explicit implementations.
-// All other methods use the zero-value embed (nil interface method calls would panic
-// but that's intentional — if a test hits an unexpected method, it fails visibly).
-type mockTmuxManager struct {
-	tmux.TmuxManager
-
-	// IsAlive
-	isAliveReturn bool
-	isAliveCalls  int
-
-	// DoesSessionExistNoCache — deliberately independent of isAliveReturn
-	// (not just an alias for it) so tests can prove a caller reaches for
-	// the no-cache check specifically, e.g. a stale cached "alive" that a
-	// fresh check would report dead.
-	existsNoCacheReturn bool
-
-	// HasSession
-	hasSessionReturn bool
-
-	// GetTmuxSessionName
-	tmuxSessionName     string
-	getSessionNameCalls int
-
-	// Start / Close / RestoreWithWorkDir / DetachSafely
-	startReturn   error
-	closeReturn   error
-	restoreReturn error
-	detachReturn  error
-	startCalls    int
-	closeCalls    int
-	restoreCalls  int
-	detachCalls   int
-
-	// GetPTY
-	getPTYFile   *os.File
-	getPTYReturn error
-
-	// SendKeys
-	sendKeysInput  string
-	sendKeysN      int
-	sendKeysReturn error
-
-	// TapEnter
-	tapEnterReturn error
-	tapEnterCalls  int
-
-	// SendPromptWithEnter
-	sendPromptInput  string
-	sendPromptReturn error
-
-	// SendInputViaControlMode
-	sendInputData   []byte
-	sendInputReturn error
-
-	// CapturePaneContent
-	capturePaneReturn string
-	capturePaneErr    error
-
-	// CapturePaneContentRaw
-	capturePaneRawReturn string
-	capturePaneRawErr    error
-
-	// CapturePaneContentWithOptions
-	captureWithOptsStart  string
-	captureWithOptsEnd    string
-	captureWithOptsReturn string
-	captureWithOptsErr    error
-
-	// CaptureViewport
-	captureViewportLines  int
-	captureViewportReturn string
-	captureViewportErr    error
-
-	// GetCursorPosition
-	cursorX   int
-	cursorY   int
-	cursorErr error
-
-	// GetPaneDimensions
-	paneWidth  int
-	paneHeight int
-	paneDimErr error
-
-	// SetWindowSize
-	setWindowCols int
-	setWindowRows int
-	setWindowErr  error
-
-	// SetDetachedSize
-	setDetachedW      int
-	setDetachedH      int
-	setDetachedTitle  string
-	setDetachedReturn error
-
-	// RefreshClient
-	refreshReturn error
-	refreshCalls  int
-
-	// GetPanePID
-	panePIDReturn int32
-	panePIDErr    error
-
-	// HasUpdated
-	hasUpdatedUpdated   bool
-	hasUpdatedHasPrompt bool
-	hasUpdatedContent   string
-
-	// FilterBanners
-	filterBannersInput  string
-	filterBannersResult string
-	filterBannersCount  int
-
-	// HasMeaningfulContent
-	hasMeaningfulInput  string
-	hasMeaningfulReturn bool
-
-	// StartControlMode / StopControlMode
-	startCtrlReturn error
-	stopCtrlReturn  error
-
-	// SubscribeToControlModeUpdates
-	subscribeID string
-	subscribeCh chan []byte
-
-	// UnsubscribeFromControlModeUpdates
-	unsubscribeID string
-
-	// Attach
-	attachCh  chan struct{}
-	attachErr error
-
-	// SetOnExitCallback
-	exitCallback func(string)
-
-	// ResetExitOnce
-	resetExitCalls int
-
-	// PaneExitStatus
-	paneExitCode        int
-	paneExitSignal      string
-	paneExitDead        bool
-	paneExitStatusCalls int
-}
-
-func (m *mockTmuxManager) IsAlive() bool {
-	m.isAliveCalls++
-	return m.isAliveReturn
-}
-
-func (m *mockTmuxManager) HasSession() bool { return m.hasSessionReturn }
-
-func (m *mockTmuxManager) GetTmuxSessionName() string {
-	m.getSessionNameCalls++
-	return m.tmuxSessionName
-}
-
-func (m *mockTmuxManager) Start(dir string) error {
-	m.startCalls++
-	return m.startReturn
-}
-
-func (m *mockTmuxManager) Close() error {
-	m.closeCalls++
-	return m.closeReturn
-}
-
-func (m *mockTmuxManager) RestoreWithWorkDir(w string) error {
-	m.restoreCalls++
-	return m.restoreReturn
-}
-
-func (m *mockTmuxManager) DetachSafely() error {
-	m.detachCalls++
-	return m.detachReturn
-}
-
-func (m *mockTmuxManager) GetPTY() (*os.File, error) {
-	return m.getPTYFile, m.getPTYReturn
-}
-
-func (m *mockTmuxManager) SendKeys(keys string) (int, error) {
-	m.sendKeysInput = keys
-	return m.sendKeysN, m.sendKeysReturn
-}
-
-func (m *mockTmuxManager) TapEnter() error {
-	m.tapEnterCalls++
-	return m.tapEnterReturn
-}
-
-func (m *mockTmuxManager) SendPromptWithEnter(p string) error {
-	m.sendPromptInput = p
-	return m.sendPromptReturn
-}
-
-func (m *mockTmuxManager) SendInputViaControlMode(_ context.Context, data []byte) error {
-	m.sendInputData = data
-	return m.sendInputReturn
-}
-
-func (m *mockTmuxManager) CapturePaneContent() (string, error) {
-	return m.capturePaneReturn, m.capturePaneErr
-}
-
-func (m *mockTmuxManager) CapturePaneContentRaw() (string, error) {
-	return m.capturePaneRawReturn, m.capturePaneRawErr
-}
-
-func (m *mockTmuxManager) CapturePaneContentWithOptions(start, end string) (string, error) {
-	m.captureWithOptsStart = start
-	m.captureWithOptsEnd = end
-	return m.captureWithOptsReturn, m.captureWithOptsErr
-}
-
-func (m *mockTmuxManager) CaptureViewport(lines int) (string, error) {
-	m.captureViewportLines = lines
-	return m.captureViewportReturn, m.captureViewportErr
-}
-
-func (m *mockTmuxManager) GetCursorPosition() (int, int, error) {
-	return m.cursorX, m.cursorY, m.cursorErr
-}
-
-func (m *mockTmuxManager) GetPaneDimensions() (int, int, error) {
-	return m.paneWidth, m.paneHeight, m.paneDimErr
-}
-
-func (m *mockTmuxManager) SetWindowSize(cols, rows int) error {
-	m.setWindowCols = cols
-	m.setWindowRows = rows
-	return m.setWindowErr
-}
-
-func (m *mockTmuxManager) SetDetachedSize(w, h int, title string) error {
-	m.setDetachedW = w
-	m.setDetachedH = h
-	m.setDetachedTitle = title
-	return m.setDetachedReturn
-}
-
-func (m *mockTmuxManager) RefreshClient() error {
-	m.refreshCalls++
-	return m.refreshReturn
-}
-
-func (m *mockTmuxManager) GetPanePID() (int32, error) {
-	return m.panePIDReturn, m.panePIDErr
-}
-
-func (m *mockTmuxManager) HasUpdated() (bool, bool, string) {
-	return m.hasUpdatedUpdated, m.hasUpdatedHasPrompt, m.hasUpdatedContent
-}
-
-func (m *mockTmuxManager) FilterBanners(content string) (string, int) {
-	m.filterBannersInput = content
-	return m.filterBannersResult, m.filterBannersCount
-}
-
-func (m *mockTmuxManager) HasMeaningfulContent(content string) bool {
-	m.hasMeaningfulInput = content
-	return m.hasMeaningfulReturn
-}
-
-func (m *mockTmuxManager) StartControlMode() error { return m.startCtrlReturn }
-func (m *mockTmuxManager) StopControlMode() error  { return m.stopCtrlReturn }
-
-func (m *mockTmuxManager) SubscribeToControlModeUpdates() (string, chan []byte) {
-	return m.subscribeID, m.subscribeCh
-}
-
-func (m *mockTmuxManager) UnsubscribeFromControlModeUpdates(id string) {
-	m.unsubscribeID = id
-}
-
-func (m *mockTmuxManager) Attach() (chan struct{}, error) {
-	return m.attachCh, m.attachErr
-}
-
-func (m *mockTmuxManager) SetOnExitCallback(fn func(string)) {
-	m.exitCallback = fn
-}
-
-func (m *mockTmuxManager) ResetExitOnce() {
-	m.resetExitCalls++
-}
-
-// Provide a no-op Session/SetSession so tests embedding mockTmuxManager
-// that go through code paths accessing tb.Session() don't panic.
-func (m *mockTmuxManager) Session() *tmux.TmuxSession     { return nil }
-func (m *mockTmuxManager) SetSession(_ *tmux.TmuxSession) {}
-func (m *mockTmuxManager) DoesSessionExist() bool         { return m.isAliveReturn }
-func (m *mockTmuxManager) DoesSessionExistNoCache() bool  { return m.existsNoCacheReturn }
-
-// PaneExitStatus
-func (m *mockTmuxManager) PaneExitStatus() (code int, signal string, dead bool) {
-	m.paneExitStatusCalls++
-	return m.paneExitCode, m.paneExitSignal, m.paneExitDead
-}
 
 // --- T-UNIT-1: GetSessionIdentifier value correctness ---
 
 func TestTmuxBackend_GetSessionIdentifier_MatchesTmuxSessionName(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{tmuxSessionName: "staplersquad_my-session"}
+	mock := &procbackendtest.MockTmuxManager{TmuxSessionName: "staplersquad_my-session"}
 	b := NewTmuxBackend(mock)
 	assert.Equal(t, "staplersquad_my-session", b.GetSessionIdentifier())
-	assert.Equal(t, 1, mock.getSessionNameCalls, "must delegate to GetTmuxSessionName")
+	assert.Equal(t, 1, mock.GetSessionNameCalls, "must delegate to GetTmuxSessionName")
 }
 
 // --- T-UNIT-2: Delegation coverage for all ProcessManager methods ---
 
 func TestTmuxBackend_DelegatesIsAlive(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{isAliveReturn: true}
+	mock := &procbackendtest.MockTmuxManager{IsAliveReturn: true}
 	b := NewTmuxBackend(mock)
 	assert.True(t, b.IsAlive())
-	assert.Equal(t, 1, mock.isAliveCalls, "must delegate to mgr.IsAlive()")
+	assert.Equal(t, 1, mock.IsAliveCalls, "must delegate to mgr.IsAlive()")
 }
 
 func TestTmuxBackend_DelegatesHasSession(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{hasSessionReturn: true}
+	mock := &procbackendtest.MockTmuxManager{HasSessionReturn: true}
 	b := NewTmuxBackend(mock)
 	assert.True(t, b.HasSession())
 }
 
 func TestTmuxBackend_DelegatesStart(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.Start("/tmp")
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.startCalls)
+	assert.Equal(t, 1, mock.StartCalls)
 }
 
 func TestTmuxBackend_DelegatesClose(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.Close()
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.closeCalls)
+	assert.Equal(t, 1, mock.CloseCalls)
 }
 
 func TestTmuxBackend_DelegatesRestoreWithWorkDir(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.RestoreWithWorkDir("/home/user/project")
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.restoreCalls)
+	assert.Equal(t, 1, mock.RestoreCalls)
 }
 
 func TestTmuxBackend_DelegatesDetachSafely(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.DetachSafely()
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.detachCalls)
+	assert.Equal(t, 1, mock.DetachCalls)
 }
 
 func TestTmuxBackend_DelegatesGetPTY(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{getPTYFile: nil, getPTYReturn: nil}
+	mock := &procbackendtest.MockTmuxManager{GetPTYFile: nil, GetPTYReturn: nil}
 	b := NewTmuxBackend(mock)
 	f, err := b.GetPTY()
 	require.NoError(t, err)
@@ -389,45 +89,45 @@ func TestTmuxBackend_DelegatesGetPTY(t *testing.T) {
 
 func TestTmuxBackend_DelegatesSendKeys(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{sendKeysN: 5}
+	mock := &procbackendtest.MockTmuxManager{SendKeysN: 5}
 	b := NewTmuxBackend(mock)
 	n, err := b.SendKeys("hello")
 	require.NoError(t, err)
 	assert.Equal(t, 5, n)
-	assert.Equal(t, "hello", mock.sendKeysInput)
+	assert.Equal(t, "hello", mock.SendKeysInput)
 }
 
 func TestTmuxBackend_DelegatesTapEnter(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.TapEnter()
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.tapEnterCalls)
+	assert.Equal(t, 1, mock.TapEnterCalls)
 }
 
 func TestTmuxBackend_DelegatesSendPromptWithEnter(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.SendPromptWithEnter("test prompt")
 	require.NoError(t, err)
-	assert.Equal(t, "test prompt", mock.sendPromptInput)
+	assert.Equal(t, "test prompt", mock.SendPromptInput)
 }
 
 func TestTmuxBackend_DelegatesSendInputViaControlMode(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	data := []byte("ctrl-c")
 	err := b.SendInputViaControlMode(context.Background(), data)
 	require.NoError(t, err)
-	assert.Equal(t, data, mock.sendInputData)
+	assert.Equal(t, data, mock.SendInputData)
 }
 
 func TestTmuxBackend_DelegatesCapturePaneContent(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{capturePaneReturn: "terminal output"}
+	mock := &procbackendtest.MockTmuxManager{CapturePaneReturn: "terminal output"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContent()
 	require.NoError(t, err)
@@ -436,7 +136,7 @@ func TestTmuxBackend_DelegatesCapturePaneContent(t *testing.T) {
 
 func TestTmuxBackend_DelegatesCapturePaneContentRaw(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{capturePaneRawReturn: "raw\033[0m"}
+	mock := &procbackendtest.MockTmuxManager{CapturePaneRawReturn: "raw\033[0m"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContentRaw()
 	require.NoError(t, err)
@@ -445,28 +145,28 @@ func TestTmuxBackend_DelegatesCapturePaneContentRaw(t *testing.T) {
 
 func TestTmuxBackend_DelegatesCapturePaneContentWithOptions(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{captureWithOptsReturn: "scrollback"}
+	mock := &procbackendtest.MockTmuxManager{CaptureWithOptsReturn: "scrollback"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContentWithOptions("-100", "-")
 	require.NoError(t, err)
 	assert.Equal(t, "scrollback", content)
-	assert.Equal(t, "-100", mock.captureWithOptsStart)
-	assert.Equal(t, "-", mock.captureWithOptsEnd)
+	assert.Equal(t, "-100", mock.CaptureWithOptsStart)
+	assert.Equal(t, "-", mock.CaptureWithOptsEnd)
 }
 
 func TestTmuxBackend_DelegatesCaptureViewport(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{captureViewportReturn: "viewport content"}
+	mock := &procbackendtest.MockTmuxManager{CaptureViewportReturn: "viewport content"}
 	b := NewTmuxBackend(mock)
 	content, err := b.CaptureViewport(50)
 	require.NoError(t, err)
 	assert.Equal(t, "viewport content", content)
-	assert.Equal(t, 50, mock.captureViewportLines)
+	assert.Equal(t, 50, mock.CaptureViewportLines)
 }
 
 func TestTmuxBackend_DelegatesGetCursorPosition(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{cursorX: 10, cursorY: 5}
+	mock := &procbackendtest.MockTmuxManager{CursorX: 10, CursorY: 5}
 	b := NewTmuxBackend(mock)
 	x, y, err := b.GetCursorPosition()
 	require.NoError(t, err)
@@ -476,7 +176,7 @@ func TestTmuxBackend_DelegatesGetCursorPosition(t *testing.T) {
 
 func TestTmuxBackend_DelegatesGetPaneDimensions(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{paneWidth: 220, paneHeight: 50}
+	mock := &procbackendtest.MockTmuxManager{PaneWidth: 220, PaneHeight: 50}
 	b := NewTmuxBackend(mock)
 	w, h, err := b.GetPaneDimensions()
 	require.NoError(t, err)
@@ -486,37 +186,37 @@ func TestTmuxBackend_DelegatesGetPaneDimensions(t *testing.T) {
 
 func TestTmuxBackend_DelegatesSetWindowSize(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.SetWindowSize(200, 40)
 	require.NoError(t, err)
-	assert.Equal(t, 200, mock.setWindowCols)
-	assert.Equal(t, 40, mock.setWindowRows)
+	assert.Equal(t, 200, mock.SetWindowCols)
+	assert.Equal(t, 40, mock.SetWindowRows)
 }
 
 func TestTmuxBackend_DelegatesSetDetachedSize(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.SetDetachedSize(150, 35, "my-session")
 	require.NoError(t, err)
-	assert.Equal(t, 150, mock.setDetachedW)
-	assert.Equal(t, 35, mock.setDetachedH)
-	assert.Equal(t, "my-session", mock.setDetachedTitle)
+	assert.Equal(t, 150, mock.SetDetachedW)
+	assert.Equal(t, 35, mock.SetDetachedH)
+	assert.Equal(t, "my-session", mock.SetDetachedTitle)
 }
 
 func TestTmuxBackend_DelegatesRefreshClient(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.RefreshClient()
 	require.NoError(t, err)
-	assert.Equal(t, 1, mock.refreshCalls)
+	assert.Equal(t, 1, mock.RefreshCalls)
 }
 
 func TestTmuxBackend_DelegatesGetPanePID(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{panePIDReturn: 42}
+	mock := &procbackendtest.MockTmuxManager{PanePIDReturn: 42}
 	b := NewTmuxBackend(mock)
 	pid, err := b.GetPanePID()
 	require.NoError(t, err)
@@ -525,10 +225,10 @@ func TestTmuxBackend_DelegatesGetPanePID(t *testing.T) {
 
 func TestTmuxBackend_DelegatesHasUpdated(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{
-		hasUpdatedUpdated:   true,
-		hasUpdatedHasPrompt: true,
-		hasUpdatedContent:   "output",
+	mock := &procbackendtest.MockTmuxManager{
+		HasUpdatedUpdated:   true,
+		HasUpdatedHasPrompt: true,
+		HasUpdatedContent:   "output",
 	}
 	b := NewTmuxBackend(mock)
 	updated, hasPrompt, content := b.HasUpdated()
@@ -539,25 +239,25 @@ func TestTmuxBackend_DelegatesHasUpdated(t *testing.T) {
 
 func TestTmuxBackend_DelegatesFilterBanners(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{filterBannersResult: "clean", filterBannersCount: 2}
+	mock := &procbackendtest.MockTmuxManager{FilterBannersResult: "clean", FilterBannersCount: 2}
 	b := NewTmuxBackend(mock)
 	result, count := b.FilterBanners("banner content")
 	assert.Equal(t, "clean", result)
 	assert.Equal(t, 2, count)
-	assert.Equal(t, "banner content", mock.filterBannersInput)
+	assert.Equal(t, "banner content", mock.FilterBannersInput)
 }
 
 func TestTmuxBackend_DelegatesHasMeaningfulContent(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{hasMeaningfulReturn: true}
+	mock := &procbackendtest.MockTmuxManager{HasMeaningfulReturn: true}
 	b := NewTmuxBackend(mock)
 	assert.True(t, b.HasMeaningfulContent("some output"))
-	assert.Equal(t, "some output", mock.hasMeaningfulInput)
+	assert.Equal(t, "some output", mock.HasMeaningfulInput)
 }
 
 func TestTmuxBackend_DelegatesStartControlMode(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.StartControlMode()
 	require.NoError(t, err)
@@ -565,7 +265,7 @@ func TestTmuxBackend_DelegatesStartControlMode(t *testing.T) {
 
 func TestTmuxBackend_DelegatesStopControlMode(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	err := b.StopControlMode()
 	require.NoError(t, err)
@@ -574,7 +274,7 @@ func TestTmuxBackend_DelegatesStopControlMode(t *testing.T) {
 func TestTmuxBackend_DelegatesSubscribeToControlModeUpdates(t *testing.T) {
 	t.Parallel()
 	ch := make(chan []byte, 1)
-	mock := &mockTmuxManager{subscribeID: "sub-123", subscribeCh: ch}
+	mock := &procbackendtest.MockTmuxManager{SubscribeID: "sub-123", SubscribeCh: ch}
 	b := NewTmuxBackend(mock)
 	id, got := b.SubscribeToControlModeUpdates()
 	assert.Equal(t, "sub-123", id)
@@ -583,16 +283,16 @@ func TestTmuxBackend_DelegatesSubscribeToControlModeUpdates(t *testing.T) {
 
 func TestTmuxBackend_DelegatesUnsubscribeFromControlModeUpdates(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	b.UnsubscribeFromControlModeUpdates("sub-456")
-	assert.Equal(t, "sub-456", mock.unsubscribeID)
+	assert.Equal(t, "sub-456", mock.UnsubscribeID)
 }
 
 func TestTmuxBackend_DelegatesAttach(t *testing.T) {
 	t.Parallel()
 	done := make(chan struct{})
-	mock := &mockTmuxManager{attachCh: done}
+	mock := &procbackendtest.MockTmuxManager{AttachCh: done}
 	b := NewTmuxBackend(mock)
 	ch, err := b.Attach()
 	require.NoError(t, err)
@@ -601,29 +301,29 @@ func TestTmuxBackend_DelegatesAttach(t *testing.T) {
 
 func TestTmuxBackend_DelegatesSetOnExitCallback(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	called := false
 	fn := func(_ string) { called = true }
 	b.SetOnExitCallback(fn)
-	assert.NotNil(t, mock.exitCallback)
-	mock.exitCallback("test")
+	assert.NotNil(t, mock.ExitCallback)
+	mock.ExitCallback("test")
 	assert.True(t, called)
 }
 
 func TestTmuxBackend_DelegatesResetExitOnce(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	b.ResetExitOnce()
-	assert.Equal(t, 1, mock.resetExitCalls)
+	assert.Equal(t, 1, mock.ResetExitCalls)
 }
 
 // GetCurrentWorkingDirectory delegates via *TmuxProcessManager type assertion.
-// For a non-TmuxProcessManager manager (mockTmuxManager), it returns ("", nil).
+// For a non-TmuxProcessManager manager (procbackendtest.MockTmuxManager), it returns ("", nil).
 func TestTmuxBackend_DelegatesGetCurrentWorkingDirectory_MockReturnsEmpty(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{}
+	mock := &procbackendtest.MockTmuxManager{}
 	b := NewTmuxBackend(mock)
 	cwd, err := b.GetCurrentWorkingDirectory()
 	require.NoError(t, err)
@@ -635,27 +335,27 @@ func TestTmuxBackend_DelegatesGetCurrentWorkingDirectory_MockReturnsEmpty(t *tes
 func TestTmuxBackend_Start_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: session launch failed")
-	mock := &mockTmuxManager{startReturn: want}
+	mock := &procbackendtest.MockTmuxManager{StartReturn: want}
 	b := NewTmuxBackend(mock)
 	err := b.Start("/tmp")
 	assert.ErrorIs(t, err, want)
-	assert.Equal(t, 1, mock.startCalls)
+	assert.Equal(t, 1, mock.StartCalls)
 }
 
 func TestTmuxBackend_Close_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: kill-session failed")
-	mock := &mockTmuxManager{closeReturn: want}
+	mock := &procbackendtest.MockTmuxManager{CloseReturn: want}
 	b := NewTmuxBackend(mock)
 	err := b.Close()
 	assert.ErrorIs(t, err, want)
-	assert.Equal(t, 1, mock.closeCalls)
+	assert.Equal(t, 1, mock.CloseCalls)
 }
 
 func TestTmuxBackend_GetPTY_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: no PTY available")
-	mock := &mockTmuxManager{getPTYReturn: want}
+	mock := &procbackendtest.MockTmuxManager{GetPTYReturn: want}
 	b := NewTmuxBackend(mock)
 	f, err := b.GetPTY()
 	assert.ErrorIs(t, err, want)
@@ -665,7 +365,7 @@ func TestTmuxBackend_GetPTY_PropagatesError(t *testing.T) {
 func TestTmuxBackend_CapturePaneContent_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: capture-pane failed")
-	mock := &mockTmuxManager{capturePaneErr: want}
+	mock := &procbackendtest.MockTmuxManager{CapturePaneErr: want}
 	b := NewTmuxBackend(mock)
 	content, err := b.CapturePaneContent()
 	assert.ErrorIs(t, err, want)
@@ -675,7 +375,7 @@ func TestTmuxBackend_CapturePaneContent_PropagatesError(t *testing.T) {
 func TestTmuxBackend_Attach_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: attach-session failed")
-	mock := &mockTmuxManager{attachErr: want}
+	mock := &procbackendtest.MockTmuxManager{AttachErr: want}
 	b := NewTmuxBackend(mock)
 	ch, err := b.Attach()
 	assert.ErrorIs(t, err, want)
@@ -685,7 +385,7 @@ func TestTmuxBackend_Attach_PropagatesError(t *testing.T) {
 func TestTmuxBackend_SetWindowSize_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: resize-window failed")
-	mock := &mockTmuxManager{setWindowErr: want}
+	mock := &procbackendtest.MockTmuxManager{SetWindowErr: want}
 	b := NewTmuxBackend(mock)
 	err := b.SetWindowSize(80, 24)
 	assert.ErrorIs(t, err, want)
@@ -694,12 +394,12 @@ func TestTmuxBackend_SetWindowSize_PropagatesError(t *testing.T) {
 func TestTmuxBackend_SendKeys_PropagatesError(t *testing.T) {
 	t.Parallel()
 	want := errors.New("tmux: send-keys failed")
-	mock := &mockTmuxManager{sendKeysReturn: want}
+	mock := &procbackendtest.MockTmuxManager{SendKeysReturn: want}
 	b := NewTmuxBackend(mock)
 	n, err := b.SendKeys("hello")
 	assert.ErrorIs(t, err, want)
 	assert.Zero(t, n)
 }
 
-// compile-time check: mockTmuxManager satisfies tmux.TmuxManager (catches missed method stubs).
-var _ tmux.TmuxManager = (*mockTmuxManager)(nil)
+// compile-time check: procbackendtest.MockTmuxManager satisfies tmux.TmuxManager (catches missed method stubs).
+var _ tmux.TmuxManager = (*procbackendtest.MockTmuxManager)(nil)

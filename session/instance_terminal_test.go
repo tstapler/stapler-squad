@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -21,7 +22,7 @@ import (
 // "current output" without re-implementing terminal emulation; tmux already does this.
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{capturePaneReturn: "tmux rendered screen"}
+	mock := &procbackendtest.MockTmuxManager{CapturePaneReturn: "tmux rendered screen"}
 	inst := (&instance.Instance{Title: "tmux-preview-session", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
 	inst.MarkStarted()
 
@@ -49,7 +50,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 // in-memory PTY buffer rather than surfacing an error or returning stale/empty content.
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
 	t.Parallel()
-	mock := &mockTmuxManager{capturePaneErr: fmt.Errorf("no such tmux session")}
+	mock := &procbackendtest.MockTmuxManager{CapturePaneErr: fmt.Errorf("no such tmux session")}
 	inst := (&instance.Instance{Title: "tmux-preview-fallback", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
 	inst.MarkStarted()
 
@@ -74,7 +75,7 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 // newInstanceWithRealTmuxProcessManager builds an *Instance backed by a real
 // *TmuxProcessManager wrapping a real *tmux.TmuxSession whose subprocess calls are mocked
 // via tmux.MockCmdExec's OutputFunc. PreviewContext type-asserts the concrete
-// *TmuxProcessManager (not the tmux.TmuxManager interface), so mockTmuxManager (used by the
+// *TmuxProcessManager (not the tmux.TmuxManager interface), so procbackendtest.MockTmuxManager (used by the
 // Preview() tests above) can't exercise it — this real-session construction is required
 // instead, mirroring the technique in tmux_process_manager_test.go.
 func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *exec.Cmd) ([]byte, error)) *instance.Instance {

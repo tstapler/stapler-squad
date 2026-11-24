@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -20,7 +21,7 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 	orig := newTymuxSessionFn
 	defer func() { newTymuxSessionFn = orig }()
 
-	live := &fakeTymuxManagerForSetCommand{sessionID: "daemon-session-42"}
+	live := &procbackendtest.FakeTymuxManagerForSetCommand{SessionID: "daemon-session-42"}
 	inst := &instance.Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
 	inst.SetProcessManagerForTest(NewTymuxBackend(live))
 	require.NoError(t, inst.Rename("after-rename"))
@@ -29,12 +30,12 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 	assert.Equal(t, "daemon-session-42", data.TymuxSessionID)
 	assert.Equal(t, "after-rename", data.Title)
 
-	restored := &fakeTymuxManagerForSetCommand{}
+	restored := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
 	_, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
-	assert.Equal(t, "daemon-session-42", restored.gotStoredID)
-	assert.Equal(t, "after-rename", restored.gotLabel)
+	assert.Equal(t, "daemon-session-42", restored.GotStoredID)
+	assert.Equal(t, "after-rename", restored.GotLabel)
 }
 
 // Records saved before the id was persisted carry none; restore must not hand
@@ -43,13 +44,13 @@ func TestTymuxSessionID_OldRecordWithoutIDRestoresWithEmptyStoredID(t *testing.T
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	orig := newTymuxSessionFn
 	defer func() { newTymuxSessionFn = orig }()
-	restored := &fakeTymuxManagerForSetCommand{}
+	restored := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
 
 	data := domain.InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
 	_, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
-	assert.Empty(t, restored.gotStoredID)
+	assert.Empty(t, restored.GotStoredID)
 }
 
 func TestEntRepository_PersistsTymuxSessionID(t *testing.T) {
@@ -102,9 +103,9 @@ func TestFromInstanceDataDeferred_NeverTouchesDaemonSession(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	orig := newTymuxSessionFn
 	defer func() { newTymuxSessionFn = orig }()
-	var fakes []*fakeTymuxManagerForSetCommand
+	var fakes []*procbackendtest.FakeTymuxManagerForSetCommand
 	newTymuxSessionFn = func() tymux.TymuxManager {
-		f := &fakeTymuxManagerForSetCommand{}
+		f := &procbackendtest.FakeTymuxManagerForSetCommand{}
 		fakes = append(fakes, f)
 		return f
 	}
@@ -117,7 +118,7 @@ func TestFromInstanceDataDeferred_NeverTouchesDaemonSession(t *testing.T) {
 
 	require.Len(t, fakes, 2)
 	for _, f := range fakes {
-		assert.Zero(t, f.startCalls+f.restoreCalls, "deferred construction must not start or restore")
-		assert.Equal(t, "daemon-7", f.gotStoredID, "the real restore later adopts the same id")
+		assert.Zero(t, f.StartCalls+f.RestoreCalls, "deferred construction must not start or restore")
+		assert.Equal(t, "daemon-7", f.GotStoredID, "the real restore later adopts the same id")
 	}
 }

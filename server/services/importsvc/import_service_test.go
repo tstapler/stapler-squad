@@ -19,7 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -349,7 +348,7 @@ func TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordEx
 
 	cmd := spawnSleeperForTest(t)
 	pid := int32(cmd.Process.Pid)
-	require.NoError(t, session.SuspendOriginalProcess(pid))
+	require.NoError(t, importer.SuspendOriginalProcess(pid))
 
 	require.NoError(t, suspended.Add(importer.SuspendedProcessRecord{
 		PID:        pid,

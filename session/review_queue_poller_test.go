@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -1062,13 +1063,13 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t 
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	mock := &mockTmuxManager{
-		tmuxSessionName:  "session-dead-pane",
-		isAliveReturn:    true,
-		hasSessionReturn: true,
-		paneExitDead:     true, // remain-on-exit placeholder: wrapped program already exited
-		paneExitCode:     1,
-		paneExitSignal:   "",
+	mock := &procbackendtest.MockTmuxManager{
+		TmuxSessionName:  "session-dead-pane",
+		IsAliveReturn:    true,
+		HasSessionReturn: true,
+		PaneExitDead:     true, // remain-on-exit placeholder: wrapped program already exited
+		PaneExitCode:     1,
+		PaneExitSignal:   "",
 	}
 	inst := &instance.Instance{
 		Title:            "dead-pane-session",
@@ -1099,11 +1100,11 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	mock := &mockTmuxManager{
-		tmuxSessionName:  "session-live-pane",
-		isAliveReturn:    true,
-		hasSessionReturn: true,
-		paneExitDead:     false, // wrapped program still running
+	mock := &procbackendtest.MockTmuxManager{
+		TmuxSessionName:  "session-live-pane",
+		IsAliveReturn:    true,
+		HasSessionReturn: true,
+		PaneExitDead:     false, // wrapped program still running
 	}
 	inst := &instance.Instance{
 		Title:            "live-pane-session",
@@ -1516,11 +1517,11 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysSt
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	mock := &mockTmuxManager{
-		tmuxSessionName:  "session-archived-live-pane",
-		isAliveReturn:    true,
-		hasSessionReturn: true,
-		paneExitDead:     false, // wrapped program still running — the incident's shape
+	mock := &procbackendtest.MockTmuxManager{
+		TmuxSessionName:  "session-archived-live-pane",
+		IsAliveReturn:    true,
+		HasSessionReturn: true,
+		PaneExitDead:     false, // wrapped program still running — the incident's shape
 	}
 	archivedAt := time.Now()
 	inst := &instance.Instance{
@@ -1576,11 +1577,11 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	mock := &mockTmuxManager{
-		tmuxSessionName:  "session-archived-warn-once",
-		isAliveReturn:    true,
-		hasSessionReturn: true,
-		paneExitDead:     false,
+	mock := &procbackendtest.MockTmuxManager{
+		TmuxSessionName:  "session-archived-warn-once",
+		IsAliveReturn:    true,
+		HasSessionReturn: true,
+		PaneExitDead:     false,
 	}
 	archivedAt := time.Now()
 	inst := &instance.Instance{
@@ -1597,8 +1598,8 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 	poller.reconcileSessions()
 	poller.reconcileSessions()
 
-	if mock.paneExitStatusCalls != 1 {
-		t.Errorf("got %d PaneExitStatus() probes across two ticks, want 1 (the warning is throttled per process)", mock.paneExitStatusCalls)
+	if mock.PaneExitStatusCalls != 1 {
+		t.Errorf("got %d PaneExitStatus() probes across two ticks, want 1 (the warning is throttled per process)", mock.PaneExitStatusCalls)
 	}
 
 	// RemoveInstance prunes the entry, so a re-added session warns again.
@@ -1606,8 +1607,8 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 	poller.SetInstances([]*instance.Instance{inst})
 	poller.reconcileSessions()
 
-	if mock.paneExitStatusCalls != 2 {
-		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.paneExitStatusCalls)
+	if mock.PaneExitStatusCalls != 2 {
+		t.Errorf("got %d PaneExitStatus() probes after RemoveInstance, want 2 (removal must prune the throttle entry)", mock.PaneExitStatusCalls)
 	}
 }
 

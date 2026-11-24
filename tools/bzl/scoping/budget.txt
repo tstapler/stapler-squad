@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=70 loc=13729 imports=52
+session files=69 loc=13706 imports=52
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/historyadapters files=10 loc=1863 imports=6
@@ -42,8 +42,9 @@ session/backlog/liveness files=7 loc=912 imports=8
 session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
+session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=262 loc=65715 imports=86
+server/services files=261 loc=65624 imports=87
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
@@ -61,6 +62,7 @@ server/services/importsvc files=1 loc=454 imports=9
 server/services/federation files=6 loc=955 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
+server/services/secretscan files=2 loc=94 imports=0
 session/driver files=5 loc=1628 imports=9
 session/external files=3 loc=1220 imports=8
 session/sweeper files=3 loc=892 imports=7
