@@ -48,6 +48,9 @@ func (ss *SearchService) SyncNow(ctx context.Context) error {
 // StartSyncLoop syncs once immediately and then every sync interval until ctx
 // ends. It returns at once; the loop runs in its own goroutine.
 func (ss *SearchService) StartSyncLoop(ctx context.Context) {
+	if !ss.loopStarted.CompareAndSwap(false, true) {
+		return
+	}
 	interval := ss.syncInterval
 	if interval <= 0 {
 		interval = defaultSearchSyncInterval
