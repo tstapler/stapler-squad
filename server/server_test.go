@@ -208,7 +208,7 @@ func Test_Start_should_ReturnListenError_When_RequestedPortIsAlreadyBound(t *tes
 // bounded by a timeout, not a bare Wait(). Coverage of the underlying
 // timeout-bounded join primitive itself now lives in
 // internal/syncutil/syncutil_test.go (WaitWithTimeout), shared with
-// session/pty_discovery.go instead of duplicated here.
+// session/ptydiscovery/pty_discovery.go instead of duplicated here.
 
 // Test_Shutdown_should_BlockUntilBackgroundTasksExit_When_BackgroundTaskIsRunning
 // is the integration-level proof for AC0-AC2: a test-only goroutine registered
