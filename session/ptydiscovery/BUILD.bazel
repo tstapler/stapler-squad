@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "ptydiscovery",
+    srcs = ["pty_discovery.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/ptydiscovery",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//internal/syncutil",
+        "//log",
+        "//session/claudectl",
+        "//session/domain",
+        "//session/instance",
+        "//session/tmux",
+        "@com_github_linkdata_deadlock//:deadlock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ptydiscovery",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ptydiscovery_test",
+    srcs = [
+        "pty_discovery_process_test.go",
+        "pty_discovery_test.go",
+    ],
+    embed = [":ptydiscovery"],
+    deps = [
+        "//executor/safeexec",
+        "//session/domain",
+        "//session/instance",
+        "//session/tmux",
+        "//testutil/wait",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

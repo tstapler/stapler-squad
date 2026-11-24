@@ -42,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/ptydiscovery"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -733,7 +734,7 @@ var (
 
 			// Test PTY discovery
 			fmt.Println("=== PTY Discovery Test ===")
-			discovery := session.NewPTYDiscovery()
+			discovery := ptydiscovery.NewPTYDiscovery()
 			discovery.SetSessions(instances)
 			err = discovery.Refresh()
 			if err != nil {
