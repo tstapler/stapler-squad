@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/claudehistory"
 )
@@ -86,6 +87,29 @@ func TestIncrementalSyncContext_should_ReturnContextError_When_AlreadyCancelled(
 }
 
 // Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
+// With an up-to-date index there is no per-session loop to notice the cancel,
+// so only the up-front check can return the error.
+func TestIncrementalSyncContext_should_ReturnContextError_When_AlreadyCancelledAndNothingChanged(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hist := writeHistory(t, 3)
+	engine := NewSearchEngine()
+	if _, err := engine.IncrementalSync(hist); err != nil {
+		t.Fatal(err)
+	}
+	// An empty HOME indexes nothing, so mark every session as up to date by hand.
+	md := engine.GetSyncMetadata()
+	for _, entry := range hist.GetAll() {
+		md.Sessions[entry.ID] = &SessionIndexMetadata{SessionID: entry.ID, UpdatedAt: entry.UpdatedAt, MessageCount: entry.MessageCount}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := engine.IncrementalSyncContext(ctx, hist); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
 func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_CancelledMidIncrementalPass(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hist := writeHistory(t, 5)
@@ -100,6 +124,7 @@ func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_Canc
 		md.Sessions[id] = &SessionIndexMetadata{SessionID: id, DocCount: 2}
 	}
 	md.TotalSessions, md.TotalDocuments = 3, 6
+	md.LastIncrementalSync = time.Time{}
 
 	_, err := engine.IncrementalSyncContext(newCancelAfterCtx(1), hist)
 
@@ -113,6 +138,9 @@ func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_Canc
 	if got.TotalSessions != len(got.Sessions) || got.TotalDocuments != 0 {
 		t.Errorf("TotalSessions=%d TotalDocuments=%d with %d tracked sessions: totals must match the removals already applied",
 			got.TotalSessions, got.TotalDocuments, len(got.Sessions))
+	}
+	if got.LastIncrementalSync.IsZero() {
+		t.Error("a cancelled incremental pass that applied removals must stamp LastIncrementalSync")
 	}
 	res, err := engine.IncrementalSync(hist)
 	if err != nil {
