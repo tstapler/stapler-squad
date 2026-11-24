@@ -538,6 +538,39 @@ func (ss *SearchService) searchClaudeHistory(
 	ctx context.Context,
 	msg *sessionv1.SearchClaudeHistoryRequest,
 ) (*sessionv1.SearchClaudeHistoryResponse, error) {
+	raw, err := ss.runRawSearch(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	protoResults := ss.buildProtoResults(raw.results.Results, msg.Query, raw.hist)
+	protoResults = ss.applyResultPostProcessing(protoResults, msg, raw.hist, raw.requestedLimit, raw.needsPostProcessing)
+
+	return &sessionv1.SearchClaudeHistoryResponse{
+		Results: protoResults,
+		// #nosec G115 -- TotalMatches is the number of search hits across local
+		// Claude history, far below int32 range.
+		TotalMatches: int32(raw.results.TotalMatches),
+		QueryTimeMs:  raw.results.QueryTime.Milliseconds(),
+		HasMore:      raw.results.TotalMatches > raw.offset+len(protoResults),
+	}, nil
+}
+
+// rawSearch is the scored, not-yet-enriched outcome of the engine query.
+type rawSearch struct {
+	hist                *claudehistory.ClaudeSessionHistory
+	results             *search.SearchResults
+	offset              int
+	requestedLimit      int
+	needsPostProcessing bool
+}
+
+// runRawSearch validates the request, guards on the index being synced and
+// runs the BM25 query. Snippet/metadata enrichment is left to buildProtoResults
+// so the streaming RPC can enrich one batch at a time.
+func (ss *SearchService) runRawSearch(
+	ctx context.Context,
+	msg *sessionv1.SearchClaudeHistoryRequest,
+) (*rawSearch, error) {
 	req := connect.NewRequest(msg)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
@@ -630,11 +663,26 @@ func (ss *SearchService) searchClaudeHistory(
 	)
 	searchSpan.End()
 
-	tokenizer := ss.searchEngine.GetTokenizer()
-	queryTokens := tokenizer.Tokenize(req.Msg.Query)
+	return &rawSearch{
+		hist:                hist,
+		results:             searchResults,
+		offset:              offset,
+		requestedLimit:      requestedLimit,
+		needsPostProcessing: needsPostProcessing,
+	}, nil
+}
 
-	protoResults := make([]*sessionv1.SearchResult, 0, len(searchResults.Results))
-	for _, result := range searchResults.Results {
+// buildProtoResults enriches engine hits with snippets and session metadata.
+func (ss *SearchService) buildProtoResults(
+	results []search.SearchResult,
+	query string,
+	hist *claudehistory.ClaudeSessionHistory,
+) []*sessionv1.SearchResult {
+	tokenizer := ss.searchEngine.GetTokenizer()
+	queryTokens := tokenizer.Tokenize(query)
+
+	protoResults := make([]*sessionv1.SearchResult, 0, len(results))
+	for _, result := range results {
 		entry, _ := hist.GetByID(result.SessionID)
 
 		doc := ss.searchEngine.GetDocument(result.DocID)
@@ -688,14 +736,5 @@ func (ss *SearchService) searchClaudeHistory(
 		})
 	}
 
-	protoResults = ss.applyResultPostProcessing(protoResults, req.Msg, hist, requestedLimit, needsPostProcessing)
-
-	return &sessionv1.SearchClaudeHistoryResponse{
-		Results: protoResults,
-		// #nosec G115 -- TotalMatches is the number of search hits across local
-		// Claude history, far below int32 range.
-		TotalMatches: int32(searchResults.TotalMatches),
-		QueryTimeMs:  searchResults.QueryTime.Milliseconds(),
-		HasMore:      searchResults.TotalMatches > offset+len(protoResults),
-	}, nil
+	return protoResults
 }
