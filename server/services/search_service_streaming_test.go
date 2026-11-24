@@ -148,3 +148,34 @@ func TestSearchClaudeHistory_should_WaitForFirstSync_When_SyncCompletesWithinGra
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Results, 1)
 }
+
+func TestStreamSearchClaudeHistory_should_FilterLikeUnary_When_PostProcessingRequested(t *testing.T) {
+	seedManySessions(t, 3)
+	ss := setupSyncedSearchService(t)
+	client := newStreamClient(t, ss)
+
+	st, err := client.StreamSearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
+		Query: "widget", Limit: 50, Project: ptr("/nonexistent-project"),
+	}))
+	require.NoError(t, err)
+	var msgs []*sessionv1.SearchClaudeHistoryStreamResponse
+	for st.Receive() {
+		msgs = append(msgs, st.Msg())
+	}
+	require.NoError(t, st.Err())
+
+	require.Len(t, msgs, 1)
+	require.True(t, msgs[0].IsFinal)
+	require.Empty(t, msgs[0].Results, "project filter drops everything; must not fall back to unfiltered hits")
+}
+
+func TestSearchService_should_UseEnvSyncInterval_When_Valid(t *testing.T) {
+	t.Setenv(SearchSyncIntervalEnv, "7s")
+	require.Equal(t, 7*time.Second, searchSyncIntervalFromEnv())
+	t.Setenv(SearchSyncIntervalEnv, "garbage")
+	require.Zero(t, searchSyncIntervalFromEnv())
+	t.Setenv(SearchSyncIntervalEnv, "-1s")
+	require.Zero(t, searchSyncIntervalFromEnv())
+}
+
+func ptr[T any](v T) *T { return &v }
