@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -34,7 +35,7 @@ func newQuestionHarness(t *testing.T) *questionHarness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ch, _ := bus.Subscribe(ctx)
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	proofs, err := NewHookProofs(t.TempDir())
 	require.NoError(t, err)
 	q := &questionHarness{t: t, h: h, store: NewPendingQuestionStore(nil), proofs: proofs, events: ch}

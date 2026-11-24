@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/registry"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
 	connect "connectrpc.com/connect"
@@ -3700,7 +3701,7 @@ func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
 
 	// Register a pending approval for this session
 	approvalStore := svc.GetApprovalStore()
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:        "approval-001",
 		SessionID: sessionUUID,
 		ToolName:  "Bash",

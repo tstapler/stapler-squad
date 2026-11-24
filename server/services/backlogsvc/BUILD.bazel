@@ -196,6 +196,7 @@ go_test(
         "//server/middleware",
         "//server/services",
         "//server/services/access",
+        "//server/services/approvalkit",
         "//server/services/featureflags",
         "//server/services/internal/svctest",
         "//server/workflows",
