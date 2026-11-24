@@ -52,7 +52,7 @@ func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *backl
 		return false
 	}
 	responses := []string{ownerChoiceFixed, ownerChoiceLeave}
-	question := fmt.Sprintf("Reviewer says criterion %d cannot be fixed by more rework (%s). %s", v.CriterionIndex, classLabel(v), truncateForNotification2(v.Evidence))
+	question := fmt.Sprintf("Reviewer says criterion %d cannot be fixed by more rework (%s). %s", v.CriterionIndex, classLabel(v), v.Evidence)
 	if v.ProposedWaiver || v.FailureClass == domain.FailureClassUnattainable || v.FailureClass == domain.FailureClassUnrelatedFailure {
 		responses = append([]string{domain.OwnerActionWaiveResponse}, responses...)
 		question = domain.FormatOwnerActionWaiver(v.CriterionIndex) + question
@@ -105,15 +105,6 @@ func classLabel(v domain.CriterionVerdict) string {
 		return "proposed waiver"
 	}
 	return strings.ToLower(strings.ReplaceAll(string(v.FailureClass), "_", " "))
-}
-
-func truncateForNotification2(s string) string {
-	const maxEvidence = 300
-	r := []rune(s)
-	if len(r) <= maxEvidence {
-		return s
-	}
-	return string(r[:maxEvidence]) + "..."
 }
 
 func mustJSON(v []string) string {

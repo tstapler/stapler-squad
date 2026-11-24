@@ -41,7 +41,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "check-contrast": "npx --yes tsx scripts/check-theme-contrast.ts",
-    "lint:duplicates": "jscpd src",
+    "lint:duplicates": "NODE_PATH=./node_modules/.bun/node_modules jscpd src",
     "report:component-usage": "node scripts/component-usage-report.mjs --md",
     "audit:css-tokens": "ts-node scripts/audit-css-tokens.ts",
     "validate-catalog": "ts-node --project tsconfig.node.json src/lib/features/validate.ts"
