@@ -2,12 +2,15 @@ package ptydiscovery
 
 import (
 	"context"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 func TestParseProcessState(t *testing.T) {
@@ -55,17 +58,15 @@ func TestBatchProcessStates_LiveAndMissingPID(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	// A reaped child's PID is the "missing" PID: ps omits it, so it must map to PTYError.
-	gone := safeexec.CommandContext(context.Background(), "true")
-	if err := gone.Run(); err != nil {
-		t.Skipf("cannot run short-lived child: %v", err)
-	}
-	gonePID := gone.Process.Pid
+	// Above any kernel pid_max, so no process can ever own it: ps omits it.
+	gonePID := math.MaxInt32
 
-	got := batchProcessStates([]int{pid, gonePID})
-	if st := got[pid]; st != PTYReady {
-		t.Errorf("sleeping child state = %v, want Ready", st)
-	}
+	// A just-forked child is briefly runnable (Busy) before it blocks in sleep.
+	var got map[int]PTYStatus
+	wait.RequireEventually(t, func() bool {
+		got = batchProcessStates([]int{pid, gonePID})
+		return got[pid] == PTYReady
+	}, 5*time.Second, 10*time.Millisecond, "sleeping child never reported as Ready")
 	if st := got[gonePID]; st != PTYError {
 		t.Errorf("exited pid state = %v, want Error", st)
 	}
@@ -94,11 +95,15 @@ func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 		return cmd.Process.Pid
 	}
 	claudePID := start("claude")
+	mixedPID := start("Claude")
+	upperPID := start("CLAUDE")
 	wrapperPID := start("claude-code")
 
-	got := batchIsClaudeProcess([]int{claudePID, wrapperPID})
-	if !got[claudePID] {
-		t.Errorf("pid %d running ./claude should be detected", claudePID)
+	got := batchIsClaudeProcess([]int{claudePID, mixedPID, upperPID, wrapperPID})
+	for _, pid := range []int{claudePID, mixedPID, upperPID} {
+		if !got[pid] {
+			t.Errorf("pid %d running a claude-named binary (any case) should be detected", pid)
+		}
 	}
 	if got[wrapperPID] {
 		t.Errorf("pid %d running claude-code must not match (exact basename)", wrapperPID)

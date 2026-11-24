@@ -28,6 +28,7 @@ go_test(
     name = "ptydiscovery_test",
     srcs = [
         "pty_discovery_process_test.go",
+        "pty_discovery_stopped_unix_test.go",
         "pty_discovery_test.go",
     ],
     embed = [":ptydiscovery"],
