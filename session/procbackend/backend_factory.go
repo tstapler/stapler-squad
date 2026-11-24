@@ -1,4 +1,4 @@
-package session
+package procbackend
 
 import (
 	"context"
@@ -110,4 +110,11 @@ func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) 
 	tb.Cleanup(func() { newTymuxSessionFn = orig })
 }
 
-func init() { instance.ProcessManagerFactoryHook = NewProcessManager }
+// SetEnsureDaemonRunningForTest makes tymux backends built until tb ends call fn instead of
+// tymux.EnsureDaemonRunning. Not safe alongside parallel tests that build tymux backends.
+func SetEnsureDaemonRunningForTest(tb testing.TB, fn func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error)) {
+	tb.Helper()
+	orig := ensureDaemonRunningFn
+	ensureDaemonRunningFn = fn
+	tb.Cleanup(func() { ensureDaemonRunningFn = orig })
+}

@@ -1982,7 +1982,7 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 // the note on TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition
 // above), so this drives a real Instance.Resume() with the package-level
 // backend switched to the native PTY backend — the same real-subprocess
-// approach session/native_process_manager_test.go uses — rather than a
+// approach session/procbackend/native_process_manager_test.go uses — rather than a
 // fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
 // SendKeys call actually succeeds.
 func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {

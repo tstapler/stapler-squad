@@ -19,7 +19,7 @@ const scrollForwardBlockedReasonLabelNA = "n/a"
 // scrollForwardAttemptsTotal and scrollForwardCaptureDurationMS are the two
 // instruments named in plan.md's Observability Plan for Epic 1.5, registered
 // once package-level via telemetry.GetMeter() -- the same idiom
-// session/backend_observability.go's backendOperationDurationMS and
+// session/procbackend/backend_observability.go's backendOperationDurationMS and
 // server/services/session_creation_metrics.go's sessionCreationOutcome
 // already use (safe to call before telemetry.Initialize: a no-op-safe
 // delegating meter until a real MeterProvider is installed).

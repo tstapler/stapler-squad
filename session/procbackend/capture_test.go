@@ -1,4 +1,4 @@
-package session
+package procbackend
 
 import (
 	"os/exec"

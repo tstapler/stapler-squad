@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -198,7 +198,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 		Status: domain.Active,
 	}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	// First failure: below threshold, no recovery attempted yet.
 	result1 := checker.checkSingleSession(inst, nil)
@@ -249,7 +249,7 @@ func TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive(t *testing.
 		Status: domain.Active,
 	}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	// Non-nil, non-empty batch map that does not contain this instance's tmux
 	// session name -- simulates a batch fetch that succeeded for other
@@ -283,7 +283,7 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 		Status: domain.Active,
 	}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	batch := map[string]tmux.PaneDeadStatus{
 		"batch-hit-session": {Dead: true, Code: 137, Signal: "SIGKILL"},
@@ -322,7 +322,7 @@ func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *tes
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &instance.Instance{Title: "crashed-test", Status: domain.Active}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -367,7 +367,7 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testi
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &instance.Instance{Title: "crashed-test-respawn-fails", Status: domain.Active}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -408,7 +408,7 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &instance.Instance{Title: "normal-exit-test", Status: domain.Active}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -457,7 +457,7 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 		CreatedAt: time.Now(), // created after (>=) checker.startedAt
 	}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -499,7 +499,7 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 		CreatedAt: time.Now().Add(-1 * time.Hour), // created well before the checker started
 	}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -534,7 +534,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 	mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() would be false
 	inst := &instance.Instance{Title: "permanently-failed-test", Status: domain.PermanentlyFailed}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	// Call past the debounce threshold -- if the skip didn't fire, the second
 	// call would reach the recovery path and invoke Start().
@@ -591,7 +591,7 @@ func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testi
 	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
 	inst := &instance.Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: domain.BackendTymux}
 	inst.MarkStarted()
-	inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	// Call past the debounce threshold -- if the skip didn't fire, the second
 	// call would reach recoverMissingSession and invoke Start().
@@ -709,7 +709,7 @@ func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testi
 				inst.ArchivedAt = &archivedAt
 			}
 			inst.MarkStarted()
-			inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+			inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 			// Two calls: the first is below the failure debounce threshold, the
 			// second reaches recoverMissingSession's Start(false).

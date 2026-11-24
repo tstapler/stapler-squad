@@ -13,6 +13,7 @@ server/services/sessionbundle !server/web
 server/services/devtools !server/web
 server/services/backlogsvc !server/web
 session/importer !server
+session/procbackend !server
 server/services/wsconn !server/web
 server/services/backlogflow !server/web
 server/services/webhooktrigger !server/web

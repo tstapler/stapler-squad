@@ -907,7 +907,7 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	// returns non-nil below — otherwise streamViaControlMode's "session
 	// missing, restore" branch never runs at all (a nil GetTmuxSession()
 	// skips straight to a no-op StartControlMode success, per
-	// session/tmux_process_manager.go's StartControlMode returning nil when
+	// session/procbackend/tmux_process_manager.go's StartControlMode returning nil when
 	// no session is set). NewTmuxSessionWithDeps (rather than
 	// NewTmuxSessionWithPrefix) is what makes the fake executor — and thus
 	// the call-counted exists/doesn't-exist answers — take effect; it also
