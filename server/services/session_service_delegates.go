@@ -100,6 +100,12 @@ func (s *SessionService) StartSearchIndexSync(ctx context.Context) {
 	s.searchSvc.StartSyncLoop(ctx)
 }
 
+// WaitSearchIndexSync blocks until the background sync loop has exited; a
+// shutdown hook, run after the loop's context is cancelled.
+func (s *SessionService) WaitSearchIndexSync() {
+	s.searchSvc.WaitSyncLoop()
+}
+
 // SyncSearchIndexNow runs one search-index sync synchronously.
 func (s *SessionService) SyncSearchIndexNow(ctx context.Context) error {
 	return s.searchSvc.SyncNow(ctx)

@@ -195,6 +195,23 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/ptydiscovery backs only the `test-pty` debug command (main.go); it never imports
+        # session, github or server.
+        isolate_ptydiscovery:
+          list-mode: strict
+          files:
+            - "**/session/ptydiscovery/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/linkdata/deadlock
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/internal/syncutil
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/claudectl
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/tmux
         # session/shellstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_shellstore:
@@ -378,6 +395,29 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent
             - github.com/tstapler/stapler-squad/session/hostclaim
             - github.com/tstapler/stapler-squad/session/stagecfg
+        # session/procbackend holds the tmux, tymux and native process backends: it never imports
+        # session or server (session/backend_wiring.go registers it, not the reverse).
+        isolate_procbackend:
+          list-mode: strict
+          files:
+            - "**/session/procbackend/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/creack/pty
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/codes
+            - go.opentelemetry.io/otel/metric
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/internal/qos
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/procinfo
+            - github.com/tstapler/stapler-squad/session/slowops
+            - github.com/tstapler/stapler-squad/session/tmux
+            - github.com/tstapler/stapler-squad/session/tymux
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and flowstore.Reader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.

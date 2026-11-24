@@ -39,7 +39,7 @@ const (
 )
 
 // ResolveDaemonConfig is the single choke point for producing a DaemonConfig,
-// called both from main.go (startup) and from session.TymuxBackend wiring.
+// called both from main.go (startup) and from procbackend.TymuxBackend wiring.
 // It must be exported for that cross-package use.
 //
 // Addr resolution mirrors tymuxdAddr()'s existing TYMUXD_ADDR-or-default

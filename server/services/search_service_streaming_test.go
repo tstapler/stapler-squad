@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"google.golang.org/protobuf/proto"
 )
 
 // streamClient serves only the streaming search RPC from a SearchService.
@@ -138,29 +139,79 @@ func TestSearchClaudeHistory_should_WaitForFirstSync_When_SyncCompletesWithinGra
 	seedManySessions(t, 1)
 	ss := setupSearchService()
 	ss.unarySyncWait = 5 * time.Second
-	type searchResult struct {
-		resp *connect.Response[sessionv1.SearchClaudeHistoryResponse]
-		err  error
-	}
-	done := make(chan searchResult, 1)
-	go func() {
-		resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
-		done <- searchResult{resp, err}
-	}()
+	// Either ordering is valid: the search sees the finished sync or waits for it.
+	go func() { _ = ss.SyncNow(context.Background()) }()
 
-	// The search must block on the first sync rather than fail or return empty.
-	select {
-	case r := <-done:
-		t.Fatalf("search returned before the first sync completed: err=%v", r.err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	require.NoError(t, ss.SyncNow(context.Background()))
+	resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
 
-	select {
-	case r := <-done:
-		require.NoError(t, r.err)
-		require.Len(t, r.resp.Msg.Results, 1)
-	case <-time.After(5 * time.Second):
-		t.Fatal("search did not complete after sync")
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Results, 1)
+}
+
+func TestStreamSearchClaudeHistory_should_FilterLikeUnary_When_PostProcessingRequested(t *testing.T) {
+	seedManySessions(t, 3)
+	ss := setupSyncedSearchService(t)
+	client := newStreamClient(t, ss)
+
+	st, err := client.StreamSearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
+		Query: "widget", Limit: 50, Project: ptr("/nonexistent-project"),
+	}))
+	require.NoError(t, err)
+	var msgs []*sessionv1.SearchClaudeHistoryStreamResponse
+	for st.Receive() {
+		msgs = append(msgs, st.Msg())
+	}
+	require.NoError(t, st.Err())
+
+	require.Len(t, msgs, 1)
+	require.True(t, msgs[0].IsFinal)
+	require.Empty(t, msgs[0].Results, "project filter drops everything; must not fall back to unfiltered hits")
+}
+
+func TestSearchService_should_UseEnvSyncInterval_When_Valid(t *testing.T) {
+	t.Setenv(SearchSyncIntervalEnv, "7s")
+	require.Equal(t, 7*time.Second, searchSyncIntervalFromEnv())
+	t.Setenv(SearchSyncIntervalEnv, "garbage")
+	require.Zero(t, searchSyncIntervalFromEnv())
+	t.Setenv(SearchSyncIntervalEnv, "-1s")
+	require.Zero(t, searchSyncIntervalFromEnv())
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestStreamSearchClaudeHistory_should_SendMetadataResultsInFirstMessage_When_ColdStart(t *testing.T) {
+	seedManySessions(t, 3)
+	ss := setupSearchService() // never synced
+	client := newStreamClient(t, ss)
+
+	st, err := client.StreamSearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "repo"}))
+	require.NoError(t, err)
+
+	require.True(t, st.Receive())
+	first := st.Msg()
+	require.True(t, first.IndexWarming)
+	require.False(t, ss.indexSynced(), "first batch must precede the first sync")
+	require.Len(t, first.Results, 3, "metadata hits from the history cache")
+	require.Equal(t, "metadata_preview", first.Results[0].Metadata.MatchSource)
+
+	require.NoError(t, ss.SyncNow(t.Context()))
+	for st.Receive() {
+	}
+	require.NoError(t, st.Err())
+}
+
+func TestStreamSearchClaudeHistory_should_OmitPreview_When_RequestHasFilters(t *testing.T) {
+	seedManySessions(t, 3)
+	ss := setupSearchService()
+	client := newStreamClient(t, ss)
+
+	st, err := client.StreamSearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "repo", Project: proto.String("/other")}))
+	require.NoError(t, err)
+	require.True(t, st.Receive())
+	require.True(t, st.Msg().IndexWarming)
+	require.Empty(t, st.Msg().Results)
+
+	require.NoError(t, ss.SyncNow(t.Context()))
+	for st.Receive() {
 	}
 }

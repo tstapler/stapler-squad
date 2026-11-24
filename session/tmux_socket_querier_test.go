@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -93,6 +94,6 @@ func makeSocketTestInstance(title, tmuxSessionName, socket string, status domain
 		IsManaged:        true,
 		TmuxServerSocket: socket,
 	}
-	inst.SetProcessManagerForTest(NewTmuxBackend(&procbackendtest.MockTmuxManager{TmuxSessionName: tmuxSessionName}))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(&procbackendtest.MockTmuxManager{TmuxSessionName: tmuxSessionName}))
 	return inst
 }

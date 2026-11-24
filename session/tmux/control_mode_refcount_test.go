@@ -329,7 +329,7 @@ func waitForSlowSendResolved(t *testing.T, sess *TmuxSession, subscriberID strin
 // update silently dropped, which can strip partial escape sequences (cursor positioning,
 // erase-line, SGR resets) from the exact byte stream rendered in the browser terminal,
 // producing corrupted/overlapping rendering. The correct behavior — mirroring
-// NativeProcessManager.fanOut in session/native_process_manager.go — is to close and remove
+// NativeProcessManager.fanOut in session/procbackend/native_process_manager.go — is to close and remove
 // the slow subscriber instead, so the consumer observes end-of-stream rather than silently
 // missing bytes mid-stream.
 func TestBroadcastControlModeUpdate_ClosesSlowSubscriber_When_ChannelFull(t *testing.T) {

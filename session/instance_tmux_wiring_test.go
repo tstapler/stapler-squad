@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 )
 
 // TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive is the
@@ -30,7 +31,7 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Creating,
-	}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	// started deliberately left false: TmuxAlive() would report false here,
 	// but IsBackendProcessAlive() must not gate on it.
 
@@ -55,7 +56,7 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Creating,
-	}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	if inst.IsBackendProcessAlive() {
 		t.Error("IsBackendProcessAlive() = true, want false when HasSession() is false (no backend session object exists yet)")
@@ -82,7 +83,7 @@ func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T)
 		Title:         "t",
 		Program:       "claude",
 		LaunchCommand: "claude", // stale command baked in before the crash, with no --resume
-	}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: uuid})
 
 	inst.InitTmuxSessionForTest()
@@ -98,7 +99,7 @@ func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T)
 // GetTmuxSession().RestoreWithWorkDir().
 func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
 	mock := &procbackendtest.MockTmuxManager{RestoreReturn: errRestoreFailedForTest}
-	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 	err := inst.RestoreProcess("/some/dir")
 
@@ -143,7 +144,7 @@ func TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed(t *testing.T) {
 				Title:         "t",
 				Program:       "some-other-program",
 				LaunchCommand: sentinel,
-			}).WithProcessManagerForTest(NewTmuxBackend(mock))
+			}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 			inst.InitTmuxSessionForTest()
 
@@ -157,8 +158,8 @@ func TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed(t *testing.T) {
 }
 
 func TestInstance_CanFallBackToTmuxSendKeys_OnlyForATmuxBackend(t *testing.T) {
-	tmuxInst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(NewTmuxBackend(&TmuxProcessManager{}))
-	tymuxInst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(NewTymuxBackend(nil))
+	tmuxInst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(procbackend.NewTmuxBackend(&procbackend.TmuxProcessManager{}))
+	tymuxInst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(procbackend.NewTymuxBackend(nil))
 
 	assert.True(t, tmuxInst.CanFallBackToTmuxSendKeys())
 	assert.False(t, tymuxInst.CanFallBackToTmuxSendKeys())

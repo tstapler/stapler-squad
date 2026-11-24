@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -57,7 +58,7 @@ func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
 
 func redrawInstance(mgr tymux.TymuxManager, status domain.Status) *instance.Instance {
 	inst := &instance.Instance{Title: "redraw", UUID: "uuid-redraw", Status: status}
-	inst.SetProcessManagerForTest(NewTymuxBackend(mgr))
+	inst.SetProcessManagerForTest(procbackend.NewTymuxBackend(mgr))
 	inst.MarkStarted()
 	return inst
 }
@@ -73,7 +74,7 @@ func TestTymuxBackend_CapturePaneRedraw_should_PassThroughEveryResult(t *testing
 		mgr := mgr
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			data, alt, ok, err := NewTymuxBackend(mgr).CapturePaneRedraw(context.Background())
+			data, alt, ok, err := procbackend.NewTymuxBackend(mgr).CapturePaneRedraw(context.Background())
 			assert.Equal(t, mgr.data, data)
 			assert.Equal(t, mgr.altScreen, alt)
 			assert.Equal(t, mgr.ok, ok)
@@ -135,7 +136,7 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 			_, ok, err := inst.CapturePaneRedraw(context.Background())
 			assert.ErrorIs(t, err, streamhub.ErrSessionNotStarted)
 			assert.False(t, ok)
-			assert.Equal(t, 0, inst.ProcessManagerForTest().(*TymuxBackend).mgr.(*redrawManager).calls)
+			assert.Equal(t, 0, inst.ProcessManagerForTest().(*procbackend.TymuxBackend).TymuxManager().(*redrawManager).calls)
 		})
 	}
 }

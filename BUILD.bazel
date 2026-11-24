@@ -114,6 +114,7 @@ go_library(
         "//session/git",
         "//session/hostclaim",
         "//session/instance",
+        "//session/ptydiscovery",
         "//session/tmux",
         "//session/tymux",
         "//telemetry",

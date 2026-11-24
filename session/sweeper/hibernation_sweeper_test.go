@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory/memorytest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -333,9 +334,9 @@ func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *tes
 	// otherwise every session collapses onto the same "" cache key and this
 	// test can't tell a correct name->UUID mapping from a broken one.
 	instA := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
-	instA.SetProcessManagerForTest(session.NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"}))
+	instA.SetProcessManagerForTest(procbackend.NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"}))
 	instB := makeIdleInstance(t, "uuid-b", "session-b", time.Minute)
-	instB.SetProcessManagerForTest(session.NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"}))
+	instB.SetProcessManagerForTest(procbackend.NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"}))
 	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
 	instC.Status = domain.Paused // inactive — should be excluded from the batch
 

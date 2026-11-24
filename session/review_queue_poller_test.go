@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -1077,7 +1078,7 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t 
 		IsManaged:        true,
 		TmuxServerSocket: "",
 	}
-	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.MarkStarted()
 	poller.SetInstances([]*instance.Instance{inst})
 
@@ -1112,7 +1113,7 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive
 		IsManaged:        true,
 		TmuxServerSocket: "",
 	}
-	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.MarkStarted()
 	poller.SetInstances([]*instance.Instance{inst})
 
@@ -1530,7 +1531,7 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysSt
 		IsManaged:  true,
 		ArchivedAt: &archivedAt,
 	}
-	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.MarkStarted()
 	poller.SetInstances([]*instance.Instance{inst})
 
@@ -1590,7 +1591,7 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 		IsManaged:  true,
 		ArchivedAt: &archivedAt,
 	}
-	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.MarkStarted()
 	poller.SetInstances([]*instance.Instance{inst})
 	querier.setLiveSessions("", "session-archived-warn-once")
