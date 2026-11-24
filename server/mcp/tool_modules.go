@@ -164,7 +164,7 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 		newClaimModule(d.backlogSvc, d.backlogEnabled),
 		toolModuleFunc(func(s *mcpserver.MCPServer) {
 			// d.storage is non-nil here (early return above), so the interface is never a boxed nil.
-			registerGoalTools(s, &goalHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, enabledCheck: d.backlogEnabled})
+			registerGoalTools(s, &goalHandlers{storage: d.storage, peers: d.cfg.peers, store: d.store, eventBus: d.eventBus, enabledCheck: d.backlogEnabled})
 		}),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerGuidanceTools(s, h) }),
 		newFlowModule(d.cfg.flowSvc, d.backlogEnabled),

@@ -85,4 +85,7 @@ session/conflictretry !server
 session/nudgeoutcomes !server
 session/slowops !server
 session/itemlink !server
+session/jsonmigrate !server
+session/jsonmigrate !github
+session/workspacepeers !server
 session/backlogaux !server

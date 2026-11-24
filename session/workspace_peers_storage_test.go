@@ -2,14 +2,15 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 func addTestInstance(t *testing.T, storage *Storage, inst *instance.Instance) {
@@ -80,7 +81,7 @@ func TestListWorkspacePeers_excludesCallerAndDifferentRepos(t *testing.T) {
 	addTestInstance(t, storage, samePeer)
 	addTestInstance(t, storage, otherRepo)
 
-	peers, err := storage.ListWorkspacePeers(context.Background(), caller.WorkspaceKey(), caller.UUID)
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(context.Background(), caller.WorkspaceKey(), caller.UUID)
 	require.NoError(t, err)
 	require.Len(t, peers, 1)
 	assert.Equal(t, "peer-uuid", peers[0].SessionUUID)
@@ -98,7 +99,7 @@ func TestListWorkspacePeers_includesDifferentBranchesAndWorktreesOfSameRepo(t *t
 	addTestInstance(t, storage, caller)
 	addTestInstance(t, storage, worktreePeer)
 
-	peers, err := storage.ListWorkspacePeers(context.Background(), caller.WorkspaceKey(), caller.UUID)
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(context.Background(), caller.WorkspaceKey(), caller.UUID)
 	require.NoError(t, err)
 	require.Len(t, peers, 1)
 	assert.Equal(t, "feature-peer", peers[0].Title)
@@ -110,7 +111,7 @@ func TestListWorkspacePeers_emptyWorkspaceKeyReturnsNoPeers(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	peers, err := storage.ListWorkspacePeers(context.Background(), "", "caller-uuid")
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(context.Background(), "", "caller-uuid")
 	require.NoError(t, err)
 	assert.Empty(t, peers)
 }
@@ -125,14 +126,83 @@ func TestListWorkspacePeers_crashedSessionGoalStillVisible(t *testing.T) {
 	addTestInstance(t, storage, crashed)
 	_, err := storage.SetSessionGoal(context.Background(), "crashed-uuid", "finish the migration", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
-	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "crashed-uuid", crashed.WorkspaceKey()))
+	require.NoError(t, workspacepeers.New(storage).SetSessionGoalWorkspaceKey(context.Background(), "crashed-uuid", crashed.WorkspaceKey()))
 
-	peers, err := storage.ListWorkspacePeers(context.Background(), crashed.WorkspaceKey(), "fresh-caller-uuid")
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(context.Background(), crashed.WorkspaceKey(), "fresh-caller-uuid")
 	require.NoError(t, err)
 	require.Len(t, peers, 1)
 	require.NotNil(t, peers[0].Goal)
 	assert.Equal(t, "finish the migration", peers[0].Goal.Goal)
 	assert.False(t, peers[0].InstanceLive, "a Stopped instance should not be reported as live")
+}
+
+func TestListWorkspacePeers_staleGoalFlagsLivePeersOnly(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		uuid   string
+		status domain.Status
+		want   bool
+	}{
+		{"live-stale", domain.Active, true},
+		{"stopped-stale", domain.Stopped, false},
+	} {
+		inst := &instance.Instance{Title: tc.uuid, UUID: tc.uuid, Path: "/repos/widgets", Status: tc.status, Program: "claude",
+			GitHubOwner: "acme", GitHubRepo: "widgets"}
+		addTestInstance(t, storage, inst)
+		_, err := storage.SetSessionGoal(ctx, tc.uuid, "old goal", instance.GoalStatusWorking, nil, "", "")
+		require.NoError(t, err)
+		_, err = storage.GetEntClient().SessionGoal.Update().Where(sessiongoal.SessionUUID(tc.uuid)).SetUpdatedAt(time.Now().Add(-time.Hour)).Save(ctx)
+		require.NoError(t, err)
+	}
+
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(ctx, domain.WorkspaceKey("acme", "widgets", "", ""), "")
+	require.NoError(t, err)
+	require.Len(t, peers, 2)
+	for _, p := range peers {
+		require.NotNil(t, p.Goal, p.SessionUUID)
+		assert.Equal(t, p.SessionUUID == "live-stale", p.StaleGoal, p.SessionUUID)
+	}
+}
+
+func TestSetSessionGoalWorkspaceKey_stampsGoalRow(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	_, err := storage.SetSessionGoal(ctx, "stamp-uuid", "goal", instance.GoalStatusWorking, nil, "", "")
+	require.NoError(t, err)
+
+	require.NoError(t, workspacepeers.New(storage).SetSessionGoalWorkspaceKey(ctx, "stamp-uuid", "path:/repos/widgets"))
+
+	row, err := storage.GetEntClient().SessionGoal.Query().Where(sessiongoal.SessionUUID("stamp-uuid")).Only(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "path:/repos/widgets", row.WorkspaceKey)
+}
+
+func TestListWorkspacePeers_undecodableTasksYieldEmptyTaskList(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	inst := &instance.Instance{Title: "bad-tasks", UUID: "bad-tasks-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
+		GitHubOwner: "acme", GitHubRepo: "widgets"}
+	addTestInstance(t, storage, inst)
+	_, err := storage.SetSessionGoal(ctx, "bad-tasks-uuid", "goal", instance.GoalStatusWorking, nil, "", "")
+	require.NoError(t, err)
+	_, err = storage.GetEntClient().SessionGoal.Update().Where(sessiongoal.SessionUUID("bad-tasks-uuid")).SetTasks("{not json").Save(ctx)
+	require.NoError(t, err)
+
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(ctx, inst.WorkspaceKey(), "")
+
+	require.NoError(t, err)
+	require.Len(t, peers, 1)
+	require.NotNil(t, peers[0].Goal)
+	assert.NotNil(t, peers[0].Goal.Tasks, "a decode failure must degrade to an empty, non-nil task list")
+	assert.Empty(t, peers[0].Goal.Tasks)
 }
 
 func TestListWorkspacePeers_scopedToOwnStorageInstance(t *testing.T) {
@@ -152,7 +222,7 @@ func TestListWorkspacePeers_scopedToOwnStorageInstance(t *testing.T) {
 	addTestInstance(t, storageA, instA)
 	addTestInstance(t, storageB, instB)
 
-	peersFromA, err := storageA.ListWorkspacePeers(context.Background(), instA.WorkspaceKey(), "")
+	peersFromA, err := workspacepeers.New(storageA).ListWorkspacePeers(context.Background(), instA.WorkspaceKey(), "")
 	require.NoError(t, err)
 	for _, p := range peersFromA {
 		assert.NotEqual(t, "b-uuid", p.SessionUUID, "storage A must not see storage B's session")
@@ -169,13 +239,13 @@ func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
 	addTestInstance(t, storage, inst)
 	_, err := storage.SetSessionGoal(context.Background(), "skewed-uuid", "goal", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
-	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "skewed-uuid", inst.WorkspaceKey()))
+	require.NoError(t, workspacepeers.New(storage).SetSessionGoalWorkspaceKey(context.Background(), "skewed-uuid", inst.WorkspaceKey()))
 
 	caller := &instance.Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, caller)
 
-	peers, err := storage.ListWorkspacePeers(context.Background(), inst.WorkspaceKey(), "caller-uuid")
+	peers, err := workspacepeers.New(storage).ListWorkspacePeers(context.Background(), inst.WorkspaceKey(), "caller-uuid")
 	require.NoError(t, err)
 	require.Len(t, peers, 1)
 	// UpdatedAt is set by the ent default to "now" — not actually in the future — but this
@@ -183,135 +253,4 @@ func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
 	assert.False(t, peers[0].StaleGoal)
 }
 
-// ─── Lifecycle: two independent signals (AC6) ─────────────────────────────────
-
-func TestWorkspacePeer_Lifecycle_distinguishesDeadFromStuck(t *testing.T) {
-	t.Parallel()
-	dead := WorkspacePeer{InstanceLive: false, StaleGoal: true}
-	assert.Equal(t, "gone", dead.Lifecycle())
-
-	stuck := WorkspacePeer{InstanceLive: true, StaleGoal: true}
-	assert.Equal(t, "stuck", stuck.Lifecycle())
-
-	active := WorkspacePeer{InstanceLive: true, StaleGoal: false}
-	assert.Equal(t, "active", active.Lifecycle())
-}
-
-func TestApplyTmuxLiveness_confirmsDeathEvenWhenStatusSaysActive(t *testing.T) {
-	t.Parallel()
-	peers := []WorkspacePeer{
-		{SessionUUID: "live-uuid", InstanceLive: true, Goal: &instance.SessionGoalData{UpdatedAt: time.Now().Add(-time.Hour)}},
-		{SessionUUID: "crashed-uuid", InstanceLive: true}, // Status said Active, but tmux disagrees
-	}
-	ApplyTmuxLiveness(peers, map[string]struct{}{"live-uuid": {}})
-
-	assert.True(t, peers[0].InstanceLive)
-	assert.True(t, peers[0].StaleGoal, "goal is an hour old, should be stale")
-	assert.False(t, peers[1].InstanceLive, "not in the live set — confirmed dead")
-	assert.False(t, peers[1].StaleGoal, "dead sessions aren't 'stuck', they're 'gone'")
-}
-
-func TestApplyTmuxLiveness_staleGoalBoundaryIsExclusive(t *testing.T) {
-	t.Parallel()
-	// A 1s margin on each side of the threshold, not an exact boundary hit: time.Since is
-	// evaluated inside ApplyTmuxLiveness, strictly later than time.Now() here, so testing
-	// "elapsed == goalStaleThreshold exactly" is inherently racy against the wall clock.
-	const margin = time.Second
-	peers := []WorkspacePeer{
-		{SessionUUID: "just-under-threshold", InstanceLive: true, Goal: &instance.SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold + margin)}},
-		{SessionUUID: "just-over-threshold", InstanceLive: true, Goal: &instance.SessionGoalData{UpdatedAt: time.Now().Add(-goalStaleThreshold - margin)}},
-	}
-	live := map[string]struct{}{"just-under-threshold": {}, "just-over-threshold": {}}
-	ApplyTmuxLiveness(peers, live)
-
-	assert.False(t, peers[0].StaleGoal, "elapsed just under the threshold is not yet stale")
-	assert.True(t, peers[1].StaleGoal, "elapsed just past the threshold is stale")
-}
-
-func TestApplyTmuxLiveness_leavesStaleGoalUnchangedForLivePeerWithNoGoal(t *testing.T) {
-	t.Parallel()
-	peers := []WorkspacePeer{
-		{SessionUUID: "live-no-goal", InstanceLive: false, StaleGoal: true, Goal: nil},
-	}
-	ApplyTmuxLiveness(peers, map[string]struct{}{"live-no-goal": {}})
-
-	assert.True(t, peers[0].InstanceLive)
-	assert.Nil(t, peers[0].Goal)
-	assert.True(t, peers[0].StaleGoal, "no Goal to recompute staleness from — prior value is left untouched")
-}
-
-// ─── BuildWorkspacePeersBlock (AC5) ────────────────────────────────────────────
-
-func TestBuildWorkspacePeersBlock_emptyWhenNoPeers(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "", BuildWorkspacePeersBlock(nil))
-}
-
-func TestBuildWorkspacePeersBlock_includesTitleAndGoal(t *testing.T) {
-	t.Parallel()
-	peers := []WorkspacePeer{
-		{Title: "other-session", Branch: "feature-x", InstanceLive: true, Goal: &instance.SessionGoalData{Goal: "fix the bug"}},
-	}
-	block := BuildWorkspacePeersBlock(peers)
-	assert.Contains(t, block, "other-session")
-	assert.Contains(t, block, "feature-x")
-	assert.Contains(t, block, "fix the bug")
-	assert.Contains(t, block, "list_workspace_peers")
-}
-
-func TestBuildWorkspacePeersBlock_capsAtMaxPeers(t *testing.T) {
-	t.Parallel()
-	var peers []WorkspacePeer
-	for i := 0; i < 15; i++ {
-		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("peer-%d", i), InstanceLive: true})
-	}
-	block := BuildWorkspacePeersBlock(peers)
-	for i := 0; i < maxPeersInInitialPrompt; i++ {
-		assert.Contains(t, block, fmt.Sprintf("peer-%d", i))
-	}
-	assert.Contains(t, block, "10 more")
-}
-
-func TestBuildWorkspacePeersBlock_livePeersSortBeforeGoneUnderCap(t *testing.T) {
-	t.Parallel()
-	// 6 gone peers followed by 1 live peer: a raw-order cap would drop the live peer
-	// entirely. It must survive the cap since live/stuck peers sort before gone ones.
-	var peers []WorkspacePeer
-	for i := 0; i < 6; i++ {
-		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("gone-%d", i), InstanceLive: false})
-	}
-	peers = append(peers, WorkspacePeer{Title: "live-peer", InstanceLive: true})
-
-	block := BuildWorkspacePeersBlock(peers)
-	assert.Contains(t, block, "live-peer")
-	assert.Contains(t, block, "2 more")
-}
-
-func TestBuildWorkspacePeersBlock_stuckPeersSortBeforeGoneUnderCap(t *testing.T) {
-	t.Parallel()
-	// Same as the live-peer case above, but for the "stuck" lifecycle (live with a stale
-	// goal) — the sort predicate groups both "active" and "stuck" ahead of "gone", so this
-	// exercises the branch the live-only case above can't reach.
-	var peers []WorkspacePeer
-	for i := 0; i < 6; i++ {
-		peers = append(peers, WorkspacePeer{Title: fmt.Sprintf("gone-%d", i), InstanceLive: false})
-	}
-	peers = append(peers, WorkspacePeer{Title: "stuck-peer", InstanceLive: true, StaleGoal: true})
-
-	block := BuildWorkspacePeersBlock(peers)
-	assert.Contains(t, block, "stuck-peer (stuck)")
-	assert.Contains(t, block, "2 more")
-}
-
-func TestBuildWorkspacePeersBlock_blankBranchOmitsDanglingField(t *testing.T) {
-	t.Parallel()
-	peers := []WorkspacePeer{
-		{Title: "gone-peer", Branch: "", InstanceLive: false},
-		{Title: "live-peer", Branch: "", InstanceLive: true},
-	}
-	block := BuildWorkspacePeersBlock(peers)
-	assert.NotContains(t, block, "(, gone)")
-	assert.NotContains(t, block, "(, active)")
-	assert.Contains(t, block, "gone-peer (gone)")
-	assert.Contains(t, block, "live-peer (active)")
-}
+var _ workspacepeers.Store = (*Storage)(nil)

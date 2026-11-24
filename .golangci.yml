@@ -195,6 +195,35 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/jsonmigrate is the one-shot JSON-to-Ent import behind the migrate_data and
+        # migrate_global scripts: it reaches the database through an injected opener and never
+        # imports session, github or server.
+        isolate_jsonmigrate:
+          list-mode: strict
+          files:
+            - "**/session/jsonmigrate/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+        # session/workspacepeers answers list_workspace_peers and the session-start peer nudge over a
+        # consumer-side Store port: it never imports session or server, and no github directly
+        # (session/instance reaches it, so boundaries.txt has no !github row).
+        isolate_workspacepeers:
+          list-mode: strict
+          files:
+            - "**/session/workspacepeers/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/sessiongoal
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/tmux
         # session/ptydiscovery backs only the `test-pty` debug command (main.go); it never imports
         # session, github or server.
         isolate_ptydiscovery:
@@ -497,6 +526,7 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/itemlink
             - github.com/tstapler/stapler-squad/session/nudgeoutcomes
+            - github.com/tstapler/stapler-squad/session/workspacepeers
           # Belt and braces: this row's allow matching is order-dependent (verified, mechanism not read),
           # so the exact import set in server/mcp/import_set_guard_test.go is the dependable control.
           deny:

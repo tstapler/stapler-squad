@@ -1,4 +1,7 @@
-package session
+// Package jsonmigrate is the one-shot JSON-to-Ent session import behind the migrate_data and
+// migrate_global admin commands. It reaches the database through OpenRepository, so it never
+// imports session.
+package jsonmigrate
 
 import (
 	"context"
@@ -11,6 +14,16 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
+
+// Repository is the slice of session.EntRepository the migration calls.
+type Repository interface {
+	Create(ctx context.Context, data domain.InstanceData) error
+	List(ctx context.Context) ([]domain.InstanceData, error)
+	Close() error
+}
+
+// OpenRepository opens (creating if absent) the Ent database at dbPath.
+type OpenRepository func(dbPath string) (Repository, error)
 
 // MigrationOptions configures the migration from JSON to SQLite
 type MigrationOptions struct {
@@ -43,7 +56,7 @@ type MigrationResult struct {
 }
 
 // MigrateJSONToEnt migrates session data from JSON to Ent ORM storage.
-func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
+func MigrateJSONToEnt(opts MigrationOptions, open OpenRepository) (*MigrationResult, error) {
 	startTime := time.Now()
 	result := &MigrationResult{
 		SQLiteDatabasePath: opts.SQLitePath,
@@ -123,7 +136,7 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 
-		repo, err := NewEntRepository(WithDatabasePath(opts.SQLitePath))
+		repo, err := open(opts.SQLitePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize Ent repository: %w", err)
 		}
@@ -173,7 +186,7 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 }
 
 // ValidateEntMigration verifies that all sessions from JSON were successfully migrated to Ent
-func ValidateEntMigration(jsonPath, entDBPath string) error {
+func ValidateEntMigration(jsonPath, entDBPath string, open OpenRepository) error {
 	log.Info("validating Ent migration", "json_path", jsonPath, "db_path", entDBPath)
 
 	// Load JSON data
@@ -188,7 +201,7 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 	}
 
 	// Load Ent data
-	repo, err := NewEntRepository(WithDatabasePath(entDBPath))
+	repo, err := open(entDBPath)
 	if err != nil {
 		return fmt.Errorf("failed to open Ent database: %w", err)
 	}

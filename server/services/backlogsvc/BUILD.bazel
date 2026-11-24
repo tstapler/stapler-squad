@@ -215,6 +215,7 @@ go_test(
         "//session/stagecfg",
         "//session/tmux",
         "//session/workflowengine",
+        "//session/workspacepeers",
         "//testutil/wait",
         "//tools/bzl/ent",
         "@com_connectrpc_connect//:connect",

@@ -57,7 +57,7 @@ func (a stdioAssembly) run(ctx context.Context, backlogEnabled func() bool) erro
 // the HTTP builder, so both transports wire identical options; the flow
 // service is built from storage alone and keeps its own aggregator cache.
 func stdioMCPOptions(storage *session.Storage) []servermcp.CoreOption {
-	return mcpCoreOptions(&ServerDependencies{BacklogFlowService: backlogflow.NewFlowServiceFromStorage(storage)})
+	return mcpCoreOptions(&ServerDependencies{BacklogFlowService: backlogflow.NewFlowServiceFromStorage(storage), Storage: storage})
 }
 
 // runStdioMCP hands the stdio option set to run (servermcp.RunServer with the

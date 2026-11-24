@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // newTestGoalStorage creates a temporary Storage for goal tool tests.
@@ -33,6 +34,7 @@ func makeGoalHandlers(t *testing.T, store session.InstanceStore) (*goalHandlers,
 	bus := events.NewEventBus(10)
 	return &goalHandlers{
 		storage:  storage,
+		peers:    workspacepeers.New(storage),
 		store:    store,
 		eventBus: bus,
 	}, bus
