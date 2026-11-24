@@ -85,7 +85,7 @@ func (s *SessionService) SearchClaudeHistory(
 }
 
 // StreamSearchClaudeHistory streams full-text search results in batches.
-// +api: history:search
+// +api: history:stream-search
 func (s *SessionService) StreamSearchClaudeHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SearchClaudeHistoryRequest],
