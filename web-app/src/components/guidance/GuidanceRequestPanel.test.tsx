@@ -141,7 +141,9 @@ describe("GuidanceRequestPanel", () => {
       expect(toggle).toHaveTextContent("Show more");
       expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(toggle).toHaveAttribute("aria-label", "Show more question text");
+      expect(screen.getByTestId("guidance-question-text")).toHaveAttribute("data-expanded", "false");
       fireEvent.click(toggle);
+      expect(screen.getByTestId("guidance-question-text")).toHaveAttribute("data-expanded", "true");
       expect(toggle).toHaveTextContent("Show less");
       expect(toggle).toHaveAttribute("aria-expanded", "true");
       fireEvent.click(toggle);
@@ -160,6 +162,12 @@ describe("GuidanceRequestPanel", () => {
       fireEvent.click(screen.getByTestId("guidance-answer-toggle"));
       expect(screen.getByTestId("guidance-answer-toggle")).toHaveAttribute("aria-expanded", "true");
       expect(screen.getByTestId("guidance-question-toggle")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("renders no toggle for a short answer", () => {
+      mockRequests = [row({ status: "answered", answer: "a".repeat(300) })];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      expect(screen.queryByTestId("guidance-answer-toggle")).not.toBeInTheDocument();
     });
 
     it("keeps expand state per item", () => {

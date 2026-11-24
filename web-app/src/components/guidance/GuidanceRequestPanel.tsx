@@ -125,7 +125,7 @@ function ExpandableQuestion({ text }: { text: string }) {
   const q = useExpandable(text);
   return (
     <div className={styles.questionWrapper}>
-      <p className={q.expanded ? styles.questionExpanded : styles.questionClamped} data-testid="guidance-question-text">
+      <p className={q.expanded ? styles.questionExpanded : styles.questionClamped} data-testid="guidance-question-text" data-expanded={q.expanded}>
         {text}
       </p>
       {q.isLong && <ExpandToggle expanded={q.expanded} onToggle={q.toggle} subject="question" testId="guidance-question-toggle" />}
@@ -166,7 +166,7 @@ function GuidanceRequestItem({
         <LegacyAnswerForm request={request} busy={busy} onSubmit={onSubmit} />
       ) : (
         <>
-          <p className={a.expanded ? styles.answerExpanded : styles.answerClamped} data-testid="guidance-answer-text">
+          <p className={a.expanded ? styles.answerExpanded : styles.answerClamped} data-testid="guidance-answer-text" data-expanded={a.expanded}>
             Answer: {answerStr}
           </p>
           {a.isLong && <ExpandToggle expanded={a.expanded} onToggle={a.toggle} subject="answer" testId="guidance-answer-toggle" />}
