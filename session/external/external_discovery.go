@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/mux"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -180,7 +180,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	// inst.Backend value here means genuinely corrupted/unexpected data —
 	// log it loudly and skip wrapping this discovered session rather than
 	// registering an Instance with no process manager.
-	pm, err := session.NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: inst.Backend})
+	pm, err := procbackend.NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: inst.Backend})
 	if err != nil {
 		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
 		return

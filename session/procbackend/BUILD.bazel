@@ -1,0 +1,221 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "procbackend",
+    srcs = [
+        "backend_factory.go",
+        "backend_observability.go",
+        "backend_registry.go",
+        "backend_tymux.go",
+        "native_process_manager.go",
+        "native_process_manager_windows.go",
+        "process_terminate.go",
+        "process_terminate_windows.go",
+        "pty_subscriber.go",
+        "tmux_backend.go",
+        "tmux_process_manager.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/procbackend",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/qos",
+        "//log",
+        "//session/domain",
+        "//session/instance",
+        "//session/procinfo",
+        "//session/slowops",
+        "//session/tmux",
+        "//session/tymux",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:android": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:js": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":procbackend",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "procbackend_test",
+    srcs = [
+        "backend_config_selection_test.go",
+        "backend_factory_test.go",
+        "backend_observability_test.go",
+        "backend_registry_test.go",
+        "backend_slow_call_test.go",
+        "backend_terminal_io_metrics_test.go",
+        "backend_tymux_env_test.go",
+        "backend_tymux_test.go",
+        "capture_test.go",
+        "instance_serialization_wiring_test.go",
+        "instance_timestamp_test.go",
+        "main_test.go",
+        "native_process_manager_test.go",
+        "process_terminate_test.go",
+        "pty_subscriber_test.go",
+        "socket_test.go",
+        "tmux_backend_test.go",
+        "tmux_process_manager_test.go",
+    ],
+    embed = [":procbackend"],
+    deps = [
+        "//config",
+        "//session/domain",
+        "//session/instance",
+        "//session/internal/fixturetest",
+        "//session/internal/procbackendtest",
+        "//session/internal/sessiontest",
+        "//session/launchcmd",
+        "//session/slowops",
+        "//session/tmux",
+        "//session/tymux",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:android": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:js": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//executor/safeexec",
+            "@com_github_creack_pty//:pty",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

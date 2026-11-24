@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -29,7 +30,7 @@ func TestFromInstanceData_EmptyBackend_HonorsTymuxSessionOverride(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTymux, inst.Backend)
-	_, isTymux := inst.ProcessManagerForTest().(*TymuxBackend)
+	_, isTymux := inst.ProcessManagerForTest().(*procbackend.TymuxBackend)
 	assert.True(t, isTymux, "process manager must be a TymuxBackend, got %T", inst.ProcessManagerForTest())
 }
 
@@ -40,7 +41,7 @@ func TestFromInstanceData_EmptyBackend_NoOverride_StaysOnDefault(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, inst.Backend, "no override means the backend stays unpinned")
-	_, isTmux := inst.ProcessManagerForTest().(*TmuxBackend)
+	_, isTmux := inst.ProcessManagerForTest().(*procbackend.TmuxBackend)
 	assert.True(t, isTmux)
 }
 
@@ -49,9 +50,7 @@ func TestFromInstanceData_EmptyBackend_NoOverride_StaysOnDefault(t *testing.T) {
 func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
-	defer func() { newTymuxSessionFn = orig }()
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return fake })
 	data := restoredPausedData(t, "tymux-restore")
 	data.Backend = domain.BackendTymux
 
@@ -67,7 +66,7 @@ func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	inst := &instance.Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux}
-	inst.SetProcessManagerForTest(NewTymuxBackend(fake))
+	inst.SetProcessManagerForTest(procbackend.NewTymuxBackend(fake))
 
 	inst.WireTmuxSessionForTest(instance.ShellLaunch("claude --resume abc"))
 
@@ -76,9 +75,9 @@ func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 
 func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	mgr := &TmuxProcessManager{}
+	mgr := &procbackend.TmuxProcessManager{}
 	inst := &instance.Instance{Title: "wire-tmux", Path: t.TempDir(), Program: "claude"}
-	inst.SetProcessManagerForTest(NewTmuxBackend(mgr))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mgr))
 
 	inst.WireTmuxSessionForTest(instance.ShellLaunch("claude"))
 
@@ -99,9 +98,7 @@ func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 			fake := &deadTymuxManager{}
-			orig := newTymuxSessionFn
-			newTymuxSessionFn = func() tymux.TymuxManager { return fake }
-			defer func() { newTymuxSessionFn = orig }()
+			procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return fake })
 			data := restoredPausedData(t, "branch-"+status.String())
 			data.Status = status
 			data.Backend = domain.BackendTymux
@@ -125,7 +122,7 @@ func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTmux, inst.Backend, "legacy sessions are pinned to tmux")
-	_, isTmux := inst.ProcessManagerForTest().(*TmuxBackend)
+	_, isTmux := inst.ProcessManagerForTest().(*procbackend.TmuxBackend)
 	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.ProcessManagerForTest())
 }
 
@@ -140,6 +137,6 @@ func TestFromInstanceData_EmptyBackend_GlobalNative_StaysTmux(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTmux, inst.Backend)
-	_, isTmux := inst.ProcessManagerForTest().(*TmuxBackend)
+	_, isTmux := inst.ProcessManagerForTest().(*procbackend.TmuxBackend)
 	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.ProcessManagerForTest())
 }

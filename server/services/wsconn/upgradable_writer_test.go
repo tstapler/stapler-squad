@@ -11,15 +11,15 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
 func newTymuxInstanceWithStatus(t *testing.T, status domain.Status) *instance.Instance {
 	t.Helper()
-	inst := instance.NewStartedInstanceForTest(t, "upgrade", session.NewTymuxBackend(retainedPaintManager{}))
+	inst := instance.NewStartedInstanceForTest(t, "upgrade", procbackend.NewTymuxBackend(retainedPaintManager{}))
 	inst.Backend = domain.BackendTymux
 	instance.SetStatusForTest(t, inst, status, nil)
 	return inst

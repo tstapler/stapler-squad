@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -68,7 +68,7 @@ func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := instance.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
+			inst := instance.NewStartedInstanceForTest(t, "paint", procbackend.NewTymuxBackend(retainedPaintManager{}))
 			inst.Status = status
 			inst.Backend = domain.BackendTymux
 			frame, ok := fullStateFrame(context.Background(), inst)

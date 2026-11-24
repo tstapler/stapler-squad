@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -23,7 +24,7 @@ import (
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	t.Parallel()
 	mock := &procbackendtest.MockTmuxManager{CapturePaneReturn: "tmux rendered screen"}
-	inst := (&instance.Instance{Title: "tmux-preview-session", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst := (&instance.Instance{Title: "tmux-preview-session", Status: domain.Active}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.MarkStarted()
 
 	// Even if a stale claudectl.ClaudeController buffer exists, capture-pane must win.
@@ -51,7 +52,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
 	t.Parallel()
 	mock := &procbackendtest.MockTmuxManager{CapturePaneErr: fmt.Errorf("no such tmux session")}
-	inst := (&instance.Instance{Title: "tmux-preview-fallback", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst := (&instance.Instance{Title: "tmux-preview-fallback", Status: domain.Active}).WithProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 	inst.MarkStarted()
 
 	buf := ptyio.NewCircularBuffer(1024)
@@ -96,10 +97,10 @@ func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *ex
 	}
 	ts := tmux.NewTmuxSessionWithDeps(t.Name(), "echo", tmux.MakePtyFactory(), cmdExec)
 	sessionExists = ts.GetSanitizedName()
-	tpm := &TmuxProcessManager{}
+	tpm := &procbackend.TmuxProcessManager{}
 	tpm.SetSession(ts)
 
-	inst := (&instance.Instance{Title: t.Name(), Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(tpm))
+	inst := (&instance.Instance{Title: t.Name(), Status: domain.Active}).WithProcessManagerForTest(procbackend.NewTmuxBackend(tpm))
 	inst.MarkStarted()
 	return inst
 }

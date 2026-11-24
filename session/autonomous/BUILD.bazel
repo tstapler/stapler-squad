@@ -67,6 +67,7 @@ go_test(
         "//session/instance",
         "//session/internal/fixturetest",
         "//session/internal/sessiontest",
+        "//session/procbackend",
         "//session/scrollback",
         "//session/tmux",
         "@com_github_google_uuid//:uuid",

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -18,12 +19,10 @@ import (
 // title-derived label (which changed) is not consulted.
 func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	orig := newTymuxSessionFn
-	defer func() { newTymuxSessionFn = orig }()
 
 	live := &procbackendtest.FakeTymuxManagerForSetCommand{SessionID: "daemon-session-42"}
 	inst := &instance.Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
-	inst.SetProcessManagerForTest(NewTymuxBackend(live))
+	inst.SetProcessManagerForTest(procbackend.NewTymuxBackend(live))
 	require.NoError(t, inst.Rename("after-rename"))
 
 	data := inst.ToInstanceData()
@@ -31,7 +30,7 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 	assert.Equal(t, "after-rename", data.Title)
 
 	restored := &procbackendtest.FakeTymuxManagerForSetCommand{}
-	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return restored })
 	_, err := instance.FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	assert.Equal(t, "daemon-session-42", restored.GotStoredID)
@@ -42,10 +41,8 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 // the backend a bogus id.
 func TestTymuxSessionID_OldRecordWithoutIDRestoresWithEmptyStoredID(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	orig := newTymuxSessionFn
-	defer func() { newTymuxSessionFn = orig }()
 	restored := &procbackendtest.FakeTymuxManagerForSetCommand{}
-	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return restored })
 
 	data := domain.InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
 	_, err := instance.FromInstanceDataDeferred(data)
@@ -92,7 +89,7 @@ func TestEntRepository_ClearsTymuxSessionID(t *testing.T) {
 func TestToInstanceData_TmuxSwitchedInstanceDropsTymuxSessionID(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	inst := &instance.Instance{Title: "switched", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTmux}
-	inst.SetProcessManagerForTest(newTmuxBackendFromOpts(instance.ProcessManagerOptions{}))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(&procbackend.TmuxProcessManager{}))
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
 }
 
@@ -101,14 +98,12 @@ func TestToInstanceData_TmuxSwitchedInstanceDropsTymuxSessionID(t *testing.T) {
 // in the process-wide registry and strand it if the shadow is dropped.
 func TestFromInstanceDataDeferred_NeverTouchesDaemonSession(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	orig := newTymuxSessionFn
-	defer func() { newTymuxSessionFn = orig }()
 	var fakes []*procbackendtest.FakeTymuxManagerForSetCommand
-	newTymuxSessionFn = func() tymux.TymuxManager {
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager {
 		f := &procbackendtest.FakeTymuxManagerForSetCommand{}
 		fakes = append(fakes, f)
 		return f
-	}
+	})
 	data := domain.InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: domain.Active, Backend: domain.BackendTymux, TymuxSessionID: "daemon-7"}
 
 	_, err := instance.FromInstanceDataDeferred(data)
