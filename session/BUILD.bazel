@@ -43,8 +43,6 @@ go_library(
         "pr_live_work_metrics.go",
         "pr_live_work_probe.go",
         "pr_provenance.go",
-        "process_suspend.go",
-        "process_suspend_windows.go",
         "process_terminate.go",
         "process_terminate_windows.go",
         "pty_discovery.go",

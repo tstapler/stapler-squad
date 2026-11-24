@@ -261,7 +261,7 @@ func startAndSuspend(_ context.Context, params CommitImportParams, instance *ins
 		}
 	}
 
-	if err := session.SuspendOriginalProcess(params.OriginalPID); err != nil {
+	if err := SuspendOriginalProcess(params.OriginalPID); err != nil {
 		if params.Suspended != nil {
 			_ = params.Suspended.Remove(instance.Title)
 		}
