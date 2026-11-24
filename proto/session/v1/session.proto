@@ -99,6 +99,12 @@ service SessionService {
   // Returns ranked results with contextual snippets showing where query terms appear.
   rpc SearchClaudeHistory(SearchClaudeHistoryRequest) returns (SearchClaudeHistoryResponse) {}
 
+  // StreamSearchClaudeHistory runs the same search as SearchClaudeHistory but
+  // flushes results in batches; the last message has is_final = true. On a cold
+  // start (index not yet synced) the first message is an empty batch with
+  // index_warming = true, sent before the index finishes its first sync.
+  rpc StreamSearchClaudeHistory(SearchClaudeHistoryRequest) returns (stream SearchClaudeHistoryStreamResponse) {}
+
   // PR Info and management RPCs
   rpc GetPRInfo(GetPRInfoRequest) returns (GetPRInfoResponse) {}
   rpc GetPRComments(GetPRCommentsRequest) returns (GetPRCommentsResponse) {}
@@ -1484,6 +1490,21 @@ message SearchClaudeHistoryResponse {
   int64 query_time_ms = 3;
   // Indicates if there are more results available.
   bool has_more = 4;
+}
+
+message SearchClaudeHistoryStreamResponse {
+  // Results in this batch, ranked by relevance; batches arrive in rank order.
+  repeated SearchResult results = 1;
+  // Total number of matching documents (before pagination).
+  int32 total_matches = 2;
+  // Query execution time in milliseconds.
+  int64 query_time_ms = 3;
+  // Indicates if there are more results beyond this stream (offset pagination).
+  bool has_more = 4;
+  // True on the last message of the stream.
+  bool is_final = 5;
+  // True on the cold-start message sent while the index is still doing its first sync.
+  bool index_warming = 6;
 }
 
 message SearchResult {

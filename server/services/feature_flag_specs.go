@@ -159,6 +159,10 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
+		Name:        "history_search_streaming",
+		Description: "History page full-text search uses the server-streaming StreamSearchClaudeHistory RPC and renders result batches as they arrive, instead of one unary SearchClaudeHistory call. Kill switch: turn off to fall back to the unary call. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
 		Name:        "diagnose-session-panel",
 		Description: "Show the rich Diagnose & Nudge view on the backlog item detail page: a structured result panel for each diagnose session and dismissible workflow-suggestion cards. Read by the web client. Default: off.",
 	},

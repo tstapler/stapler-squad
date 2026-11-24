@@ -84,6 +84,27 @@ func (s *SessionService) SearchClaudeHistory(
 	return s.searchSvc.SearchClaudeHistory(ctx, req)
 }
 
+// StreamSearchClaudeHistory streams full-text search results in batches.
+// +api: history:search
+func (s *SessionService) StreamSearchClaudeHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SearchClaudeHistoryRequest],
+	stream *connect.ServerStream[sessionv1.SearchClaudeHistoryStreamResponse],
+) error {
+	return s.searchSvc.StreamSearchClaudeHistory(ctx, req, stream)
+}
+
+// StartSearchIndexSync starts the background search-index sync loop (initial
+// sync plus every interval) until ctx ends.
+func (s *SessionService) StartSearchIndexSync(ctx context.Context) {
+	s.searchSvc.StartSyncLoop(ctx)
+}
+
+// SyncSearchIndexNow runs one search-index sync synchronously.
+func (s *SessionService) SyncSearchIndexNow(ctx context.Context) error {
+	return s.searchSvc.SyncNow(ctx)
+}
+
 // GetPRInfo retrieves the latest PR information for a session.
 func (s *SessionService) GetPRInfo(
 	ctx context.Context,

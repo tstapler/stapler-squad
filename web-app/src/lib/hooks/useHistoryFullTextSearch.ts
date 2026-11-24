@@ -12,6 +12,10 @@ import {
 import { timestampFromDate, timestampDate } from "@bufbuild/protobuf/wkt";
 import { getConnectTransport } from "@/lib/api/transport";
 import { useDebounce } from "./useDebounce";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
+
+/** Feature flag gating the server-streaming search RPC (falls back to unary). */
+export const HISTORY_SEARCH_STREAMING_FLAG = "history_search_streaming";
 
 export interface SearchOptions {
   /** Search query (required) */
@@ -97,6 +101,8 @@ export interface SearchState {
   hasMore: boolean;
   /** Loading state */
   loading: boolean;
+  /** True while the server's search index is doing its first sync (streaming path only) */
+  indexWarming: boolean;
   /** Error state */
   error: Error | null;
 }
@@ -125,8 +131,10 @@ export function useHistoryFullTextSearch(
     queryTimeMs: 0,
     hasMore: false,
     loading: false,
+    indexWarming: false,
     error: null,
   });
+  const streamingEnabled = useFeatureFlag(HISTORY_SEARCH_STREAMING_FLAG);
 
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounce(query, debounceMs);
@@ -185,12 +193,14 @@ export function useHistoryFullTextSearch(
     async (searchOptions: SearchOptions): Promise<void> => {
       if (!clientRef.current) return;
       if (!searchOptions.query.trim()) {
+        abortControllerRef.current?.abort();
         setState((prev) => ({
           ...prev,
           results: [],
           totalMatches: 0,
           hasMore: false,
           loading: false,
+          indexWarming: false,
           error: null,
         }));
         return;
@@ -205,7 +215,7 @@ export function useHistoryFullTextSearch(
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
       try {
-        const response = await clientRef.current.searchClaudeHistory({
+        const request = {
           query: searchOptions.query,
           limit: searchOptions.limit ?? 20,
           offset: searchOptions.offset ?? 0,
@@ -216,9 +226,37 @@ export function useHistoryFullTextSearch(
           groupBySession: searchOptions.groupBySession ?? false,
           includeContext: searchOptions.includeContext ?? false,
           excludeAutomationSessions: searchOptions.excludeAutomationSessions ?? false,
-        }, {
-          signal: abortControllerRef.current.signal,
-        });
+        };
+        const signal = abortControllerRef.current.signal;
+
+        if (streamingEnabled) {
+          // Batches arrive in rank order: append each one as it lands rather
+          // than clearing the list, so the top hits show immediately.
+          let first = !searchOptions.append;
+          for await (const msg of clientRef.current.streamSearchClaudeHistory(request, { signal })) {
+            if (signal.aborted) return;
+            const batch = msg.results.map(convertResult);
+            const replace = first && !msg.indexWarming;
+            if (!msg.indexWarming) first = false;
+            setState((prev) => ({
+              results: replace ? batch : [...prev.results, ...batch],
+              totalMatches: msg.indexWarming ? prev.totalMatches : msg.totalMatches,
+              queryTimeMs: msg.indexWarming ? prev.queryTimeMs : Number(msg.queryTimeMs),
+              hasMore: msg.indexWarming ? prev.hasMore : msg.hasMore,
+              loading: !msg.isFinal,
+              indexWarming: msg.indexWarming,
+              error: null,
+            }));
+            if (msg.isFinal) break;
+          }
+          // A stream cut before is_final must not leave the spinner on forever.
+          if (!signal.aborted) {
+            setState((prev) => (prev.loading || prev.indexWarming ? { ...prev, loading: false, indexWarming: false } : prev));
+          }
+          return;
+        }
+
+        const response = await clientRef.current.searchClaudeHistory(request, { signal });
 
         const newResults = response.results.map(convertResult);
 
@@ -229,6 +267,7 @@ export function useHistoryFullTextSearch(
           queryTimeMs: Number(response.queryTimeMs),
           hasMore: response.hasMore,
           loading: false,
+          indexWarming: false,
           error: null,
         }));
       } catch (err) {
@@ -258,11 +297,12 @@ export function useHistoryFullTextSearch(
         setState((prev) => ({
           ...prev,
           loading: false,
+          indexWarming: false,
           error,
         }));
       }
     },
-    [convertResult]
+    [convertResult, streamingEnabled]
   );
 
   // Load more results (pagination)
@@ -285,6 +325,7 @@ export function useHistoryFullTextSearch(
       queryTimeMs: 0,
       hasMore: false,
       loading: false,
+      indexWarming: false,
       error: null,
     });
   }, []);
@@ -299,6 +340,7 @@ export function useHistoryFullTextSearch(
         results: [],
         totalMatches: 0,
         hasMore: false,
+        indexWarming: false,
       }));
     }
   }, [autoSearch, debouncedQuery, search]);

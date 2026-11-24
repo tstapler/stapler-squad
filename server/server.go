@@ -476,6 +476,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
 	}
 	srv.startLeaseWedgeWatcher(serverCtx, deps)
+	deps.SessionService.StartSearchIndexSync(serverCtx)
 
 	// Initialize push notification service.
 	if configErr == nil {
