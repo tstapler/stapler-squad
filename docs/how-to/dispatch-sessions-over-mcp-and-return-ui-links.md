@@ -17,7 +17,13 @@ Let an agent on the same machine start sessions through the stapler-squad MCP se
 
    Use a name other than `stapler-squad`: sessions that stapler-squad launches get a per-session entry with that name and a credential header.
 
-2. Set `STAPLER_SQUAD_PUBLIC_URL` to the URL your browser uses for the UI, then restart the service. For a systemd user unit, use a drop-in at `~/.config/systemd/user/stapler-squad.service.d/public-url.conf`:
+2. Set `STAPLER_SQUAD_PUBLIC_URL` to the URL your browser uses for the UI. The durable place is a line in `~/.stapler-squad/service.env`, which `scripts/install-service.sh` folds into the unit on every install, so re-run `make install-service` afterwards:
+
+   ```
+   STAPLER_SQUAD_PUBLIC_URL=https://ssq.example.com
+   ```
+
+   To apply it without a reinstall on Linux, use a systemd drop-in at `~/.config/systemd/user/stapler-squad.service.d/public-url.conf` (the installer does not touch drop-ins):
 
    ```ini
    [Service]
@@ -34,5 +40,6 @@ Let an agent on the same machine start sessions through the stapler-squad MCP se
 - A path prefix in the variable is kept: `https://gw.example.com/ssq` gives `https://gw.example.com/ssq/?session=<id>`. Query and fragment are dropped.
 - The link carries the session's stable ID, which the UI resolves first. The variable is read once at startup.
 - `create_session` and `create_session_for_pr` return the link, including when the session is still being created (`still_creating`).
-- `create_session` over `localhost` needs no credential, so any agent on that machine can start sessions. Treat the rest of the tool surface as equally open unless a tool documents an identity check. Do not expose `/mcp` beyond loopback.
+- By default the local listener (`localhost:8543`) is unauthenticated, so any process on that machine can call `create_session`. With `require_local_auth` enabled, callers must send the local API token (`<config dir>/auth/local-api-token`). Only the tools in `identityGatedTools` (`server/mcp/caller_identity_gate.go`) verify the calling session; the rest trust the claimed session UUID.
+- Do not forward or proxy `localhost:8543` to other hosts. Reach `/mcp` remotely only through the authenticated `--remote-access` HTTPS listener.
 - The link is only as private as the URL you configure. If it sits behind a login, only people who can sign in can open it.

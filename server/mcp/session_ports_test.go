@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -388,6 +389,18 @@ func TestCreateSessionForPR_should_ReturnUIURL_When_PublicURLConfigured(t *testi
 			assert.Equal(t, want, parseResult(t, res)["ui_url"])
 		})
 	}
+}
+
+func TestCreateSessionForPR_should_LinkTheExistingSessionByStableID_When_PRAlreadyHasOne(t *testing.T) {
+	t.Parallel()
+	existing := &instance.Instance{Title: "pr-existing", UUID: "existing-uuid", Path: t.TempDir(), Status: domain.Active}
+	cache := &fakeUserPRSource{prs: []githubpkg.UserPR{{Owner: "tstapler", Repo: "stapler-squad", Number: 16, SessionIDs: []string{"pr-existing"}}}}
+	gh := &githubHandlers{cache: cache, store: &stubStore{instances: []*instance.Instance{existing}}, svc: newRecordingSessionRPC(), publicURL: "https://workspace.example.com"}
+
+	res, err := gh.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "pr-existing", 16, nil)))
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://workspace.example.com/?session=existing-uuid", parseResult(t, res)["ui_url"])
 }
 
 func TestCreateSessionForPR_should_OmitUIURL_When_PublicURLUnset(t *testing.T) {
