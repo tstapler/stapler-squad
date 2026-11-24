@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=241 loc=62425 imports=93
+server/services files=240 loc=61978 imports=94
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -67,6 +67,7 @@ server/services/featureflags files=5 loc=196 imports=2
 server/services/secretscan files=2 loc=107 imports=0
 server/services/credkit files=2 loc=589 imports=3
 server/services/anthropicwire files=6 loc=824 imports=7
+server/services/approvalkit files=1 loc=468 imports=2
 session/driver files=5 loc=1628 imports=9
 session/external files=3 loc=1220 imports=8
 session/sweeper files=3 loc=892 imports=7

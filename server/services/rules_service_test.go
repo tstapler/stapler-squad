@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -1804,7 +1805,7 @@ func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t
 type fakeReconciliationResolver struct {
 	mu sync.Mutex
 
-	items []*PendingApproval
+	items []*approvalkit.PendingApproval
 
 	// resolveErr maps approval ID -> error ResolveApprovalReconciled should return for it.
 	// A missing entry means "succeed" (nil error).
@@ -1819,10 +1820,10 @@ type fakeReconciliationResolver struct {
 	resolvedCalls []string // approval IDs for which ResolveApprovalReconciled returned nil
 }
 
-func (f *fakeReconciliationResolver) ListPendingApprovalsInternal() []*PendingApproval {
+func (f *fakeReconciliationResolver) ListPendingApprovalsInternal() []*approvalkit.PendingApproval {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]*PendingApproval, len(f.items))
+	out := make([]*approvalkit.PendingApproval, len(f.items))
 	copy(out, f.items)
 	return out
 }
@@ -1874,8 +1875,8 @@ func (f *fakeReconciliationResolver) wasCalled(id string) bool {
 }
 
 // bashApproval builds a minimal pending Bash approval for reconciliation tests.
-func bashApproval(id, sessionID, command string, createdAt time.Time) *PendingApproval {
-	return &PendingApproval{
+func bashApproval(id, sessionID, command string, createdAt time.Time) *approvalkit.PendingApproval {
+	return &approvalkit.PendingApproval{
 		ID:        id,
 		SessionID: sessionID,
 		ToolName:  "Bash",
@@ -1929,7 +1930,7 @@ func upsertAllowRule(t *testing.T, svc *RulesService, id, name, commandPattern s
 // the real ApprovalStore/ApprovalService/NotificationHistoryStore chain, with the
 // notification record stamped reconciled: "true".
 func TestReconcilePendingApprovals_AutoAllowResolves(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
 	approvalSvc := NewApprovalService(store)
 	approvalSvc.SetNotificationStore(notifStore)
@@ -1985,7 +1986,7 @@ func upsertDenyRule(t *testing.T, svc *RulesService, id, name, commandPattern st
 // branch (rules_service.go's `decision := "deny"` fallback) completely uncovered. Parallels
 // TestReconcilePendingApprovals_AutoAllowResolves's structure with an AutoDeny rule instead.
 func TestReconcilePendingApprovals_AutoDenyResolves(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
 	approvalSvc := NewApprovalService(store)
 	approvalSvc.SetNotificationStore(notifStore)
@@ -2025,7 +2026,7 @@ func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
 	rulesSvc := newRulesService(t)
 
 	fake := &fakeReconciliationResolver{
-		items: []*PendingApproval{bashApproval("appr-4d5e6f", "sess-x", "rm -rf /tmp/scratch", time.Now())},
+		items: []*approvalkit.PendingApproval{bashApproval("appr-4d5e6f", "sess-x", "rm -rf /tmp/scratch", time.Now())},
 	}
 	rulesSvc.approvalSvc = fake
 
@@ -2046,7 +2047,7 @@ func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
 // unbuffered channel send/close/receive — never time.Sleep — so the interleaving is
 // deterministic on every run.
 func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	approvalSvc := NewApprovalService(store)
 	rulesSvc := newRulesService(t)
 	rulesSvc.SetApprovalService(approvalSvc)
@@ -2066,7 +2067,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 		store.MarkHumanResolving("appr-race")
 		close(humanClaimed) // happens-before: reconciliation's IsHumanResolving check
 		<-releaseHuman
-		_ = store.Resolve("appr-race", ApprovalDecision{Behavior: "deny", Message: "blocking this"})
+		_ = store.Resolve("appr-race", approvalkit.ApprovalDecision{Behavior: "deny", Message: "blocking this"})
 		store.ClearHumanResolving("appr-race")
 	}()
 
@@ -2090,7 +2091,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 
 	// Ground-truth assertion: read the delivered decision directly off the approval's own
 	// channel, not inferred from error codes or store absence alone.
-	decision := <-pendingApproval.decisionCh
+	decision := <-pendingApproval.Decisions()
 	assert.Equal(t, "deny", decision.Behavior)
 	assert.Equal(t, "blocking this", decision.Message)
 
@@ -2116,7 +2117,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 		store.MarkHumanResolving("appr-race-2")
 		close(humanClaimed2)
 		<-releaseHuman2
-		_ = store.Resolve("appr-race-2", ApprovalDecision{Behavior: "deny", Message: "blocking this too"})
+		_ = store.Resolve("appr-race-2", approvalkit.ApprovalDecision{Behavior: "deny", Message: "blocking this too"})
 		store.ClearHumanResolving("appr-race-2")
 	}()
 	<-humanClaimed2
@@ -2140,7 +2141,7 @@ func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
 
 	const total = maxReconcileAutoResolvesPerPass + 5
 	base := time.Now()
-	items := make([]*PendingApproval, total)
+	items := make([]*approvalkit.PendingApproval, total)
 	for i := 0; i < total; i++ {
 		// Deliberately out-of-construction-order CreatedAt: index 0 gets the newest
 		// timestamp, index total-1 the oldest, so a correct implementation must actually
@@ -2184,7 +2185,7 @@ func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
 	// Second pass: simulate the next rebuild seeing only what pass one left behind, and
 	// assert it resolves exactly the remainder — pinning that repeated capped passes are
 	// monotonic instead of touching an arbitrary subset each time.
-	remaining := make([]*PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
+	remaining := make([]*approvalkit.PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
 	for _, idx := range sortedIdx[maxReconcileAutoResolvesPerPass:] {
 		remaining = append(remaining, items[idx])
 	}
@@ -2213,7 +2214,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 	panicItem := bashApproval("item3-panic", "s3", "echo 3", base.Add(3*time.Second))
 
 	fake := &fakeReconciliationResolver{
-		items:    []*PendingApproval{item1, item2, panicItem},
+		items:    []*approvalkit.PendingApproval{item1, item2, panicItem},
 		panicIDs: map[string]bool{"item3-panic": true},
 	}
 	rulesSvc.approvalSvc = fake
@@ -2243,7 +2244,7 @@ func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	approvalSvc := NewApprovalService(store)
 	approvalSvc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("sess-ci-guard")})
 
@@ -2277,7 +2278,7 @@ func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIG
 
 	item := bashApproval("appr-lost-race", "sess-lost-race", "git status", time.Now())
 	fake := &fakeReconciliationResolver{
-		items: []*PendingApproval{item},
+		items: []*approvalkit.PendingApproval{item},
 		resolveErr: map[string]error{
 			"appr-lost-race": connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("already auto-resolved by rule %q while you were reviewing it", "some-other-rule")),
@@ -2303,7 +2304,7 @@ func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIG
 // reaches the server-cwd-only ClaudeSettingsWatcher) never triggers reconciliation, so a
 // pending item it would now cover is left untouched.
 func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	approvalSvc := NewApprovalService(store)
 	rulesSvc := newRulesService(t)
 	rulesSvc.SetApprovalService(approvalSvc)

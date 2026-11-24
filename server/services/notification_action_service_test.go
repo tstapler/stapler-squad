@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -400,7 +401,7 @@ func TestActionIdempotency_ShouldEvictOldestKey_WhenOverCapacity(t *testing.T) {
 func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBlocksApproval(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &instance.Instance{
 		Title: "session-X", UUID: "session-X", GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure,
@@ -491,7 +492,7 @@ func TestApprovalResolver_ShouldCarryTheStampedDecision_WhenAlreadyResolved(t *t
 		ID: "appr-1", SessionID: "session-X", NotificationType: 1, CreatedAt: time.Now(),
 		Metadata: map[string]string{"approval_id": "appr-1"},
 	}))
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetNotificationStore(history)
 	require.NoError(t, store.Create(newTestPendingApproval("appr-1", "session-X", "Bash")))
