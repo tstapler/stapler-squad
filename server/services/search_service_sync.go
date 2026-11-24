@@ -63,7 +63,9 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 	if interval <= 0 {
 		interval = defaultSearchSyncInterval
 	}
+	ss.loopDone = make(chan struct{})
 	go func() {
+		defer close(ss.loopDone)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -77,6 +79,15 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// WaitSyncLoop blocks until the loop goroutine has exited, i.e. after the
+// context given to StartSyncLoop ends and any in-flight sync finishes. It
+// returns at once if the loop was never started.
+func (ss *SearchService) WaitSyncLoop() {
+	if ss.loopStarted.Load() && ss.loopDone != nil {
+		<-ss.loopDone
+	}
 }
 
 // markSynced records that the index has been synced at least once and wakes

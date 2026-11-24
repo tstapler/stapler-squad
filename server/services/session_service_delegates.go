@@ -85,7 +85,7 @@ func (s *SessionService) SearchClaudeHistory(
 }
 
 // StreamSearchClaudeHistory streams full-text search results in batches.
-// +api: history:search
+// +api: history:stream-search
 func (s *SessionService) StreamSearchClaudeHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SearchClaudeHistoryRequest],
@@ -98,6 +98,12 @@ func (s *SessionService) StreamSearchClaudeHistory(
 // sync plus every interval) until ctx ends.
 func (s *SessionService) StartSearchIndexSync(ctx context.Context) {
 	s.searchSvc.StartSyncLoop(ctx)
+}
+
+// WaitSearchIndexSync blocks until the background sync loop has exited; a
+// shutdown hook, run after the loop's context is cancelled.
+func (s *SessionService) WaitSearchIndexSync() {
+	s.searchSvc.WaitSyncLoop()
 }
 
 // SyncSearchIndexNow runs one search-index sync synchronously.

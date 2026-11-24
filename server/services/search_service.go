@@ -101,6 +101,7 @@ type SearchService struct {
 	unarySyncWait time.Duration // how long unary search waits for the first sync
 	syncedOnce    sync.Once
 	loopStarted   atomic.Bool
+	loopDone      chan struct{} // closed when the sync loop goroutine exits; nil until started
 	syncedCh      chan struct{} // closed after the first successful sync
 }
 
@@ -519,7 +520,7 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 // SearchClaudeHistory performs full-text search across Claude conversation history.
 //
 // The search index is kept fresh by the background sync loop (see
-// startSyncLoop), so this never syncs on the request path; before the first
+// StartSyncLoop), so this never syncs on the request path; before the first
 // sync completes it returns CodeUnavailable.
 func (ss *SearchService) SearchClaudeHistory(
 	ctx context.Context,
