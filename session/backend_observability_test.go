@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,13 +168,13 @@ func TestWithBackendOperationSpan_RecordsDurationHistogram_LabeledByBackendAndOp
 // withBackendOperationSpan in isolation) are actually wired up with the
 // correct backend label -- the easy mistake this class of change invites is
 // copy-pasting one backend's constant into the other's wrapper. Both reuse
-// this package's existing fakes (mockTmuxManager, tmux_backend_test.go;
-// fakeTymuxManagerForStartRestore, backend_tymux_test.go) rather than adding
+// this package's existing fakes (procbackendtest.MockTmuxManager, tmux_backend_test.go;
+// procbackendtest.FakeTymuxManagerForStartRestore, backend_tymux_test.go) rather than adding
 // new ones.
 func TestTmuxBackend_Start_RecordsSpanWithTmuxBackendLabel(t *testing.T) {
 	recorder := installBackendSpanRecorder(t)
 
-	b := NewTmuxBackend(&mockTmuxManager{})
+	b := NewTmuxBackend(&procbackendtest.MockTmuxManager{})
 	require.NoError(t, b.Start("/tmp"))
 
 	ended := recorder.Ended()
@@ -190,8 +191,8 @@ func TestTmuxBackend_Start_RecordsSpanWithTmuxBackendLabel(t *testing.T) {
 // wrapper types, not to whatever ProcessManagerBackend string an Instance's
 // (possibly stale/empty) Backend field happens to hold.
 func TestProcessManagerBackendLabel_MatchesConcreteType(t *testing.T) {
-	assert.Equal(t, domain.BackendTmux, instance.ProcessManagerBackendKey(NewTmuxBackend(&mockTmuxManager{})))
-	assert.Equal(t, domain.BackendTymux, instance.ProcessManagerBackendKey(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
+	assert.Equal(t, domain.BackendTmux, instance.ProcessManagerBackendKey(NewTmuxBackend(&procbackendtest.MockTmuxManager{})))
+	assert.Equal(t, domain.BackendTymux, instance.ProcessManagerBackendKey(NewTymuxBackend(&procbackendtest.FakeTymuxManagerForStartRestore{})))
 	assert.Equal(t, domain.BackendNative, instance.ProcessManagerBackendKey(NewNativeProcessManager(instance.ProcessManagerOptions{})))
 	assert.Equal(t, domain.ProcessManagerBackend(""), instance.ProcessManagerBackendKey(nil))
 }
@@ -202,7 +203,7 @@ func TestTymuxBackend_Start_RecordsSpanWithTymuxBackendLabel(t *testing.T) {
 		return tymux.TymuxdReady{}, nil
 	})()
 
-	b := NewTymuxBackend(&fakeTymuxManagerForStartRestore{})
+	b := NewTymuxBackend(&procbackendtest.FakeTymuxManagerForStartRestore{})
 	require.NoError(t, b.Start("/tmp"))
 
 	ended := recorder.Ended()

@@ -842,6 +842,7 @@ go_test(
         "//session/internal/fixturetest:go_sources",
         "//session/internal/gatefixturetest:go_sources",
         "//session/internal/peeraddr:go_sources",
+        "//session/internal/procbackendtest:go_sources",
         "//session/internal/sessiontest:go_sources",
         "//session/itemlink:go_sources",
         "//session/itemsources:go_sources",

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 )
 
 // TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive is the
@@ -25,7 +26,7 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 	// alive — a stale-cache-vs-fresh-check divergence. If
 	// IsBackendProcessAlive() used the cached path, it would wrongly
 	// report false here.
-	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false, existsNoCacheReturn: true}
+	mock := &procbackendtest.MockTmuxManager{HasSessionReturn: true, IsAliveReturn: false, ExistsNoCacheReturn: true}
 	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Creating,
@@ -44,13 +45,13 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 // TestIsBackendProcessAlive_ColdStart_HasSessionFalse covers the other half
 // of IsBackendProcessAlive's short-circuit (HasSession() && HasLiveSessionNoCache()):
 // a freshly created instance whose backend has never had a session attached
-// at all (hasSessionReturn: false, the cold-start case — e.g. before the
+// at all (HasSessionReturn: false, the cold-start case — e.g. before the
 // first Start()/RestoreProcess() call ever runs). IsBackendProcessAlive must
 // report false via the HasSession() short-circuit alone, without even
 // reaching HasLiveSessionNoCache() — the caller's own tmux-alive check must
 // never need a live session to answer this safely.
 func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
-	mock := &mockTmuxManager{hasSessionReturn: false, existsNoCacheReturn: true}
+	mock := &procbackendtest.MockTmuxManager{HasSessionReturn: false, ExistsNoCacheReturn: true}
 	inst := (&instance.Instance{
 		Title:  "t",
 		Status: domain.Creating,
@@ -76,7 +77,7 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 // initTmuxSession() also requires IsAlive().
 func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T) {
 	const uuid = "550e8400-e29b-41d4-a716-446655440000"
-	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false}
+	mock := &procbackendtest.MockTmuxManager{HasSessionReturn: true, IsAliveReturn: false}
 	inst := (&instance.Instance{
 		Title:         "t",
 		Program:       "claude",
@@ -96,13 +97,13 @@ func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T)
 // the replacement for reaching into a concrete *tmux.TmuxSession via
 // GetTmuxSession().RestoreWithWorkDir().
 func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
-	mock := &mockTmuxManager{restoreReturn: errRestoreFailedForTest}
+	mock := &procbackendtest.MockTmuxManager{RestoreReturn: errRestoreFailedForTest}
 	inst := (&instance.Instance{Title: "t"}).WithProcessManagerForTest(NewTmuxBackend(mock))
 
 	err := inst.RestoreProcess("/some/dir")
 
-	if mock.restoreCalls != 1 {
-		t.Errorf("RestoreWithWorkDir calls = %d, want 1", mock.restoreCalls)
+	if mock.RestoreCalls != 1 {
+		t.Errorf("RestoreWithWorkDir calls = %d, want 1", mock.RestoreCalls)
 	}
 	if !errors.Is(err, errRestoreFailedForTest) {
 		t.Errorf("RestoreProcess() error = %v, want the ProcessManager's own error propagated", err)
@@ -137,7 +138,7 @@ func TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			mock := &mockTmuxManager{hasSessionReturn: tc.hasSession, isAliveReturn: tc.isAlive}
+			mock := &procbackendtest.MockTmuxManager{HasSessionReturn: tc.hasSession, IsAliveReturn: tc.isAlive}
 			inst := (&instance.Instance{
 				Title:         "t",
 				Program:       "some-other-program",

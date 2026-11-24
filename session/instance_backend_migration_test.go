@@ -9,11 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 type migrationLaunchManager struct {
-	fakeTymuxManagerForSetCommand
+	procbackendtest.FakeTymuxManagerForSetCommand
 	callback        func(string)
 	resetCalls      int
 	callbackAtStart bool
@@ -84,6 +85,6 @@ func TestMigrationToTymux_RegistersExitCallbackAndEnvironmentBeforeStart(t *test
 	require.ErrorContains(t, err, "stop before controller startup")
 	assert.True(t, fake.callbackAtStart, "push-only liveness needs a callback before the new manager starts")
 	assert.Equal(t, 1, fake.resetCalls)
-	assert.Contains(t, fake.gotEnv, "STAPLER_SESSION_UUID=migration-proof")
-	assert.Contains(t, fake.gotEnv, "MIGRATION_CUSTOM=present")
+	assert.Contains(t, fake.GotEnv, "STAPLER_SESSION_UUID=migration-proof")
+	assert.Contains(t, fake.GotEnv, "MIGRATION_CUSTOM=present")
 }

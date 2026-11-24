@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -47,7 +48,7 @@ func TestFromInstanceData_EmptyBackend_NoOverride_StaysOnDefault(t *testing.T) {
 // Start, which must carry the program rather than let tymuxd spawn a bare $SHELL.
 func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	fake := &fakeTymuxManagerForSetCommand{}
+	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	orig := newTymuxSessionFn
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	defer func() { newTymuxSessionFn = orig }()
@@ -57,20 +58,20 @@ func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 	_, err := instance.FromInstanceDataDeferred(data)
 
 	require.NoError(t, err)
-	assert.Equal(t, "claude", fake.gotCommand)
+	assert.Equal(t, "claude", fake.GotCommand)
 }
 
 // wireTmuxSession must reach every backend through ProcessManager.WireLaunch; before it
 // did, Resume skipped non-tmux backends and tymux relaunched without --resume.
 func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	fake := &fakeTymuxManagerForSetCommand{}
+	fake := &procbackendtest.FakeTymuxManagerForSetCommand{}
 	inst := &instance.Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux}
 	inst.SetProcessManagerForTest(NewTymuxBackend(fake))
 
 	inst.WireTmuxSessionForTest(instance.ShellLaunch("claude --resume abc"))
 
-	assert.Equal(t, "claude --resume abc", fake.gotCommand)
+	assert.Equal(t, "claude --resume abc", fake.GotCommand)
 }
 
 func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
@@ -85,7 +86,9 @@ func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
 }
 
 // deadTymuxManager reports no live session so restore branches that probe liveness don't panic.
-type deadTymuxManager struct{ fakeTymuxManagerForSetCommand }
+type deadTymuxManager struct {
+	procbackendtest.FakeTymuxManagerForSetCommand
+}
 
 func (*deadTymuxManager) IsAlive() bool { return false }
 
@@ -106,7 +109,7 @@ func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
 			_, err := instance.FromInstanceDataDeferred(data)
 
 			require.NoError(t, err)
-			assert.Equal(t, "claude", fake.gotCommand)
+			assert.Equal(t, "claude", fake.GotCommand)
 		})
 	}
 }

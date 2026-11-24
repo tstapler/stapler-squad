@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -142,7 +143,7 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingPane_When_BackendHasNoCapability(t *testing.T) {
 	t.Parallel()
 	inst := &instance.Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Active}
-	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
+	inst.SetProcessManagerForTest(&procbackendtest.FakeSendKeysProcessManager{})
 	inst.MarkStarted()
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
