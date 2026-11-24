@@ -1,4 +1,4 @@
-package session
+package procbackend
 
 // tmux_backend_test.go: Tests for TmuxBackend ProcessManager delegation.
 // T-UNIT-1: GetSessionIdentifier() value correctness

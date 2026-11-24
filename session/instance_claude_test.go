@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 )
 
 // TestInstance_SetHistoryInfo_FiresCallback_When_UUIDChanges guards the fix
@@ -80,7 +81,7 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 		archivedAt := time.Now()
 		mock := &procbackendtest.MockTmuxManager{}
 		inst := &instance.Instance{Title: "archived-stale-resume", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 		inst.RecoverFromStaleResumeForTest()
 
@@ -92,7 +93,7 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 		t.Parallel()
 		mock := &procbackendtest.MockTmuxManager{}
 		inst := &instance.Instance{Title: "live-stale-resume", Status: domain.Stopped}
-		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 		inst.RecoverFromStaleResumeForTest()
 

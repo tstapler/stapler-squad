@@ -1,5 +1,5 @@
 // Package tymux contains the TymuxBackend implementation of session.ProcessManager
-// (session/backend_tymux.go), which delegates to a tymuxd instance over gRPC via the
+// (session/procbackend/backend_tymux.go), which delegates to a tymuxd instance over gRPC via the
 // generated Connect-Go client in github.com/tstapler/tymux/clients/go.
 package tymux
 
@@ -13,9 +13,9 @@ import (
 
 // TymuxManager is the interface satisfied by the concrete tymux gRPC session
 // implementation (tymuxGRPCSession, session.go). It mirrors session.ProcessManager's
-// exact method set so TymuxBackend (session/backend_tymux.go) can forward every call
+// exact method set so TymuxBackend (session/procbackend/backend_tymux.go) can forward every call
 // one-to-one, the same shape TmuxBackend/TmuxManager use for the tmux backend
-// (session/tmux_backend.go, session/tmux_process_manager.go).
+// (session/procbackend/tmux_backend.go, session/procbackend/tmux_process_manager.go).
 //
 // Defined as its own interface here (rather than the session package's ProcessManager
 // directly) because session/tymux is imported BY the session package — depending on

@@ -128,7 +128,7 @@ code; items marked (name) were classified from the file name and constant only.
 | Telemetry: `server/analytics/escape_event_batch_writer.go:47` (500 ms), `profiling/profiling.go:201`, `log/service_log_rotation.go:34`, `server/auth/session.go:233`, `scrollback/manager.go:53`, `workflow_engine_shadow.go:622`, `gitwiring/soak.go:83`, `tmux/fork_metrics.go:197`, `server/server_gatestats.go:22` | 500 ms to 10 m | Flush and metrics | n/a | Cheap-enough |
 
 Not ticker-based but polling by sleep or timer: `session/instance_scroll_forward.go:238`,
-`session/pane_submit.go:248`, `session/tmux_process_manager.go:560`, `session/tmux/server_registry.go:633`,
+`session/pane_submit.go:248`, `session/procbackend/tmux_process_manager.go:561`, `session/tmux/server_registry.go:633`,
 `session/cdp/manager.go:476` (all bounded waits).
 
 ## Caveats

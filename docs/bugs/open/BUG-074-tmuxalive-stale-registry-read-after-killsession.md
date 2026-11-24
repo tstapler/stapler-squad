@@ -6,9 +6,9 @@
 
 ## Problem Description
 
-`Instance.KillSession()` (`session/instance_tmux.go:399-406`) calls `i.pm().Close()`, which for the tmux backend resolves to `TmuxProcessManager.Close()` (`session/tmux_process_manager.go:102-111`) → `TmuxSession.Close()` (`session/tmux/tmux.go:1891-1945`). `Close()` synchronously runs `kill-session` and then calls `t.invalidateExistsCache()` (`session/tmux/tmux.go:1922`) before returning `nil` to the caller.
+`Instance.KillSession()` (`session/instance_tmux.go:399-406`) calls `i.pm().Close()`, which for the tmux backend resolves to `TmuxProcessManager.Close()` (`session/procbackend/tmux_process_manager.go:102-111`) → `TmuxSession.Close()` (`session/tmux/tmux.go:1891-1945`). `Close()` synchronously runs `kill-session` and then calls `t.invalidateExistsCache()` (`session/tmux/tmux.go:1922`) before returning `nil` to the caller.
 
-`invalidateExistsCache()` (`session/tmux/tmux.go:2152-2155`) only resets `t.existsCache` — the local TTL cache. It does **not** touch `t.registry`, the push-based `TmuxServerRegistry` fed by tmux control-mode `%session-closed` notifications (`session/tmux/server_registry.go`). `TmuxAlive()` (`session/instance_tmux.go:530-535`) calls `pm().IsAlive()` → `TmuxProcessManager.IsAlive()` (`session/tmux_process_manager.go:81-87`) → `TmuxSession.DoesSessionExist()` (`session/tmux/tmux.go:2091-2135`), whose **first** check is:
+`invalidateExistsCache()` (`session/tmux/tmux.go:2152-2155`) only resets `t.existsCache` — the local TTL cache. It does **not** touch `t.registry`, the push-based `TmuxServerRegistry` fed by tmux control-mode `%session-closed` notifications (`session/tmux/server_registry.go`). `TmuxAlive()` (`session/instance_tmux.go:530-535`) calls `pm().IsAlive()` → `TmuxProcessManager.IsAlive()` (`session/procbackend/tmux_process_manager.go:81-87`) → `TmuxSession.DoesSessionExist()` (`session/tmux/tmux.go:2091-2135`), whose **first** check is:
 
 ```go
 if t.registry != nil && t.registry.IsHealthy() {
