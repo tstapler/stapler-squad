@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -74,11 +73,22 @@ func TestBatchProcessStates_LiveAndMissingPID(t *testing.T) {
 	}
 }
 
+const helperEnv = "PTYDISCOVERY_TEST_HELPER"
+
+// TestHelperProcess_BlockForever is not a test: the claude-basename test re-executes this
+// binary under a claude-like name and parks it here. It does nothing in a normal run.
+func TestHelperProcess_BlockForever(t *testing.T) {
+	if os.Getenv(helperEnv) != "1" {
+		return
+	}
+	select {}
+}
+
 func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 	t.Parallel()
-	sleepBin, err := exec.LookPath("sleep")
+	self, err := os.Executable()
 	if err != nil {
-		t.Skip("sleep not on PATH")
+		t.Skipf("cannot resolve test binary: %v", err)
 	}
 	// ps truncates "command" to the terminal width when COLUMNS is set, and Bazel's
 	// TEST_TMPDIR is long enough to cut the basename off, so keep the path short.
@@ -87,12 +97,15 @@ func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 		t.Skipf("cannot create short temp dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// The children re-exec this Go test binary, which ignores argv[0]. A symlink to a
+	// multicall coreutils `sleep` would dispatch on the claude-like name and exit at once.
 	start := func(name string) int {
 		link := filepath.Join(dir, name)
-		if err := os.Symlink(sleepBin, link); err != nil {
+		if err := os.Symlink(self, link); err != nil {
 			t.Skipf("cannot symlink: %v", err)
 		}
-		cmd := safeexec.CommandContext(context.Background(), link, "30")
+		cmd := safeexec.CommandContext(context.Background(), link, "-test.run=^TestHelperProcess_BlockForever$")
+		cmd.Env = append(os.Environ(), helperEnv+"=1")
 		if err := cmd.Start(); err != nil {
 			t.Skipf("cannot start %s: %v", name, err)
 		}
@@ -106,8 +119,18 @@ func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 	mixedPID := start("Claude")
 	upperPID := start("CLAUDE")
 	wrapperPID := start("claude-code")
-
 	pids := []int{claudePID, mixedPID, upperPID, wrapperPID}
+
+	// An exited child shows up as "[name] <defunct>" with no path; wait until all are alive.
+	wait.RequireEventually(t, func() bool {
+		for _, st := range batchProcessStates(pids) {
+			if st == PTYError {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "helper children never became live (exited or zombie)")
+
 	got := batchIsClaudeProcess(pids)
 	if t.Failed() || !got[claudePID] {
 		raw, _ := safeexec.CommandContext(context.Background(), "ps", "-p", joinPIDs(pids), "-o", "pid=,command=").CombinedOutput()
