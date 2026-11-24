@@ -26,6 +26,8 @@ import { usePaneContext } from "./PaneContext";
 import { PaneHeader } from "./PaneHeader";
 import { ResizeHandle } from "./ResizeHandle";
 import { MobilePaneTabStrip } from "./MobilePaneTabStrip";
+import { SessionPickerDialog } from "./SessionPickerDialog";
+import { emptyPaneButton } from "@/styles/pane/sessionPickerDialog.css";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { containsPaneId, hasVerticalSplit, planLeafMove } from "@/lib/pane/paneUtils";
 import { useScrollRestore } from "@/lib/hooks/useScrollRestore";
@@ -365,6 +367,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
     dispatch({ type: "SET_PANE_VIEW", paneId: pane.id, viewKind });
 
   const [dropActive, setDropActive] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // Only the header grip starts a drag: a draggable body would hijack text selection in the terminal.
   const handleDragStart = (e: React.DragEvent) => {
@@ -435,10 +438,26 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           />
         ) : (
           <div className={emptyPaneSlot}>
-            Click a session to open it here
+            <span>This pane is empty</span>
+            <button type="button" className={emptyPaneButton} onClick={() => setPickerOpen(true)} data-testid={`pane-choose-session-${pane.id}`}>
+              {/* analytics-exempt */}
+              Choose a session…
+            </button>
           </div>
         )}
       </div>
+      {pickerOpen && (
+        <SessionPickerDialog
+          sessions={sessions}
+          openSessionIds={new Set(getAllLeaves(state.root).flatMap((l) => (l.sessionId ? [l.sessionId] : [])))}
+          onClose={() => setPickerOpen(false)}
+          onPick={(sessionId) => {
+            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId });
+            dispatch({ type: "FOCUS_PANE", paneId: pane.id });
+            setPickerOpen(false);
+          }}
+        />
+      )}
       {pickerLetter && (
         <div
           className={pickerOverlay}
