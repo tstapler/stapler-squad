@@ -127,6 +127,7 @@ filegroup(
         "//server/services/insights:go_sources",
         "//server/services/internal/streammetrics:go_sources",
         "//server/services/internal/svctest:go_sources",
+        "//server/services/secretscan:go_sources",
         "//server/services/sessionbundle:go_sources",
         "//server/services/sessionretention:go_sources",
         "//server/services/unfinishedwork:go_sources",
@@ -196,6 +197,7 @@ filegroup(
         "//tools/ci/bazel-trend:go_sources",
         "//tools/ci/citime:go_sources",
         "//tools/ci/compare-affected:go_sources",
+        "//tools/ci/guardpaths:go_sources",
         "//tools/docscoverage/cmd/docscoverage:go_sources",
         "//tools/docscoverage/internal/changed:go_sources",
         "//tools/docscoverage/internal/check:go_sources",
@@ -246,5 +248,6 @@ filegroup(
         "//server/deliverygate:__pkg__",
         "//server/services:__pkg__",
         "//session:__pkg__",
+        "//tools/ci/guardpaths:__pkg__",
     ],
 )

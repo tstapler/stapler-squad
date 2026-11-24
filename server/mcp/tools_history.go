@@ -69,10 +69,8 @@ func (h *historyHandlers) searchClaudeHistory(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, "session service unavailable on this server configuration", ""), nil
 	}
 
-	// SearchClaudeHistory runs a full IncrementalSync on every call (see
-	// project_plans/mcp-search-list-tools's Risk Control) — log the call
-	// duration so a cost spike is visible if this bound proves wrong in
-	// practice.
+	// The search index is synced by a background loop, not per call; log the
+	// call duration so a cost spike is visible.
 	start := time.Now()
 	resp, err := h.svc.SearchClaudeHistory(ctx, connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:  query,

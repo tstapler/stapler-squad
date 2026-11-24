@@ -120,7 +120,7 @@ var spawnSF singleflight.Group //nolint:exhaustruct
 // daemon/socket underneath" hazard config.IsNamedInstance's doc comment
 // documents for tmux (an orphan sweep once killed 5 unrelated production
 // tmux sessions); do not reintroduce it here unguarded (see
-// session/backend_tymux.go's Story 2.1.3 callers and main.go's Epic 2.2
+// session/procbackend/backend_tymux.go's Story 2.1.3 callers and main.go's Epic 2.2
 // OnStop registration, both of which must check Spawned before registering
 // a stop hook).
 type TymuxdReady struct {

@@ -476,6 +476,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
 	}
 	srv.startLeaseWedgeWatcher(serverCtx, deps)
+	deps.SessionService.StartSearchIndexSync(serverCtx)
+	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.WaitSearchIndexSync)
 
 	// Initialize push notification service.
 	if configErr == nil {
@@ -1828,7 +1830,7 @@ const shutdownHooksTimeout = 30 * time.Second
 // zombie_detector.go's ScanZombies shells out to `ps` under its own 10s
 // timeout, so this value is not generous headroom above that — a stuck `ps`
 // call can consume the whole budget. Kept at 10s to match stopJoinTimeout's
-// order of magnitude (session/pty_discovery.go) rather than guessing a larger
+// order of magnitude (session/ptydiscovery/pty_discovery.go) rather than guessing a larger
 // number; revisit if the join-timeout warning fires in practice.
 //
 // This is the production default, set on Server.backgroundTasksJoinTimeout by

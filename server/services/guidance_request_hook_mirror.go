@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -167,11 +168,11 @@ func redactedPayload(p domain.QuestionPayload) (domain.QuestionPayload, error) {
 	}
 	qs := p.Questions()
 	for i := range qs {
-		qs[i].Text, _ = RedactSecrets(qs[i].Text)
-		qs[i].Header, _ = RedactSecrets(qs[i].Header)
+		qs[i].Text, _ = secretscan.RedactSecrets(qs[i].Text)
+		qs[i].Header, _ = secretscan.RedactSecrets(qs[i].Header)
 		for j := range qs[i].Options {
-			qs[i].Options[j].Label, _ = RedactSecrets(qs[i].Options[j].Label)
-			qs[i].Options[j].Description, _ = RedactSecrets(qs[i].Options[j].Description)
+			qs[i].Options[j].Label, _ = secretscan.RedactSecrets(qs[i].Options[j].Label)
+			qs[i].Options[j].Description, _ = secretscan.RedactSecrets(qs[i].Options[j].Description)
 		}
 	}
 	return domain.NewQuestionPayload(qs)

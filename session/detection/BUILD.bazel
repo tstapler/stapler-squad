@@ -73,6 +73,7 @@ go_test(
         "//session/detection/binaries",
         "//session/detection/dtypes",
         "//testutil/wait",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_stretchr_testify//require",
     ],
 )

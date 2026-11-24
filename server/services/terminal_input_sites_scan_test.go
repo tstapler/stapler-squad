@@ -18,18 +18,34 @@ var inputSiteAllowList = map[string]string{
 	"session_service_stream_terminal.go:StreamTerminal": "Connect stream path (path stream)",
 }
 
-// scanInputSites finds, in non-test sources, every inputReadLoopParams literal (which must set
-// onInput), every GetInput() call and every TerminalData_Input type-switch case.
+// dirsWithOwnInputScanner maps a leaf directory to the file holding its own input-site scanner,
+// so scanInputSites skips it. The file's existence is asserted: removing the scanner re-exposes the dir.
+var dirsWithOwnInputScanner = map[string]string{
+	"wsconn": "wsconn/terminal_input_sites_ws_test.go",
+}
+
+// scanInputSites finds, in non-test sources of this package and every leaf under it (a site moved
+// into a new package stays visible), every inputReadLoopParams literal (which must set onInput),
+// every GetInput() call and every TerminalData_Input type-switch case. Keys are slash paths
+// relative to server/services plus the function name.
 func scanInputSites(t *testing.T) map[string]bool {
 	t.Helper()
-	files, err := filepath.Glob("*.go")
-	require.NoError(t, err)
+	var files []string
+	for _, dir := range servicesSourceDirs(t) {
+		if _, own := dirsWithOwnInputScanner[filepath.ToSlash(dir)]; own {
+			continue
+		}
+		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		files = append(files, matches...)
+	}
 	found := map[string]bool{}
 	fset := token.NewFileSet()
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
+		f = filepath.ToSlash(f)
 		parsed, err := parser.ParseFile(fset, f, nil, 0)
 		require.NoError(t, err)
 		for _, decl := range parsed.Decls {
@@ -82,6 +98,13 @@ func litSetsKey(lit *ast.CompositeLit, key string) bool {
 		}
 	}
 	return false
+}
+
+func TestInputSites_ShouldFail_When_OwnScannerFileMissing(t *testing.T) {
+	t.Parallel()
+	for dir, scanner := range dirsWithOwnInputScanner {
+		assert.FileExists(t, scanner, "dir %s is skipped because this scanner guards it", dir)
+	}
 }
 
 func TestInputSites_ShouldFail_When_ConnectStreamInputWiringNotInAllowList(t *testing.T) {

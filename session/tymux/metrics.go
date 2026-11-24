@@ -15,7 +15,7 @@ import (
 // Instruments are built against telemetry.GetMeter() at package init, which
 // is OTel's global delegating meter until telemetry.Initialize installs the
 // real provider — the same idiom as session/lifecycle and
-// session/backend_observability.go. Label keys are deliberately low
+// session/procbackend/backend_observability.go. Label keys are deliberately low
 // cardinality (cause, kind, reason): never a session id or pane id.
 var (
 	reconnectCounter = mustInt64Counter("tymux_attach_stream_reconnects_total",

@@ -643,7 +643,7 @@ func (s Socket) String() string { return string(s) }
 // caller intentionally targeting a specific server, is always honored). An empty
 // socket -- historically "the real shared default socket" everywhere in this
 // package, including in code that enumerates or kills ALL sessions on it
-// (ReconcileOrphanedTmuxSessions, batchPaneActivity, health checks) -- resolves to
+// (ReconcileOrphanedTmuxSessions, BatchWindowActivity, health checks) -- resolves to
 // a per-process isolated socket inside a `go test` binary instead.
 //
 // Before this existed, "empty string" meant the real default socket unconditionally,
@@ -1959,7 +1959,7 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 // ([1, 65535]) before the narrowing int->uint16 conversion, so an
 // out-of-range or negative value can't silently wrap around into a bogus
 // terminal size. Exported so session/instance_tmux.go and
-// session/native_process_manager.go (which build pty.Winsize themselves,
+// session/procbackend/native_process_manager.go (which build pty.Winsize themselves,
 // outside this package) share one implementation instead of duplicating it.
 func ClampWinsizeDim(v int) uint16 {
 	switch {

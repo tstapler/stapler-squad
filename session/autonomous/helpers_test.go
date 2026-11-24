@@ -364,7 +364,7 @@ func newDiagnoseNudgeTestFixture(t *testing.T) (storage *session.Storage, repo *
 	return storage, repo, itemID, ctx
 }
 
-// fakeTmuxSocketQuerier is an in-memory TmuxSocketQuerier for tests. It lets tests
+// fakeTmuxSocketQuerier is an in-memory tmux.SocketQuerier for tests. It lets tests
 // declare independent live-session sets and down/up states per socket, so
 // multi-socket behavior (e.g. reconcileSessions, CheckAllSessions) is exercisable
 // without a real tmux server.

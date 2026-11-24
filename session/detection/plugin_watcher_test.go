@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -125,39 +127,100 @@ func TestPluginWatcher_should_restoreBuiltin_When_overridingPluginFileIsDeleted(
 	}, eventuallyTimeout, eventuallyPoll, "built-in claude detector was not restored within timeout after override removal")
 }
 
+// fakeDebounceTimer is a manually fired debounceTimer so the burst test never
+// depends on wall-clock timing.
+type fakeDebounceTimer struct {
+	mu     sync.Mutex
+	armed  bool
+	resets int
+	ch     chan time.Time
+}
+
+func newFakeDebounceTimer() *fakeDebounceTimer {
+	return &fakeDebounceTimer{ch: make(chan time.Time, 1)}
+}
+
+func (f *fakeDebounceTimer) C() <-chan time.Time { return f.ch }
+
+func (f *fakeDebounceTimer) Stop() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	was := f.armed
+	f.armed = false
+	return was
+}
+
+func (f *fakeDebounceTimer) Reset(time.Duration) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	was := f.armed
+	f.armed = true
+	f.resets++
+	return was
+}
+
+func (f *fakeDebounceTimer) resetCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resets
+}
+
+func (f *fakeDebounceTimer) fire() {
+	f.mu.Lock()
+	f.armed = false
+	f.mu.Unlock()
+	f.ch <- time.Time{}
+}
+
 func TestPluginWatcher_should_collapseBurstIntoOneReload_When_sameFileWrittenRepeatedly(t *testing.T) {
 	dir := t.TempDir()
-	startWatcherForTest(t, dir)
+	resetSnapshotAfterTest(t)
+	writePluginFile(t, dir, "my-agent.toml", validPluginTOML("my-agent", []string{"my-agent"}))
 
-	before := rebuildCount.Load()
-
-	// Writes are issued back-to-back with no inter-write sleep: the burst
-	// must land inside a single pluginReloadDebounce (200ms) window, and
-	// under CI scheduler contention even a 5ms-per-iteration sleep (50ms
-	// total) could erode enough of that margin to split the burst across
-	// two debounce windows and produce a spurious second rebuild — see the
-	// FAIL in https://github.com/tstapler/stapler-squad/actions/runs/32808236831.
-	path := filepath.Join(dir, "my-agent.toml")
-	for i := 0; i < 10; i++ {
-		if err := os.WriteFile(path, []byte(validPluginTOML("my-agent", []string{"my-agent"})), 0o644); err != nil {
-			t.Fatalf("iteration %d: failed to write plugin file: %v", i, err)
+	events := make(chan fsnotify.Event) // unbuffered: a completed send means watchLoop consumed it
+	timer := newFakeDebounceTimer()
+	w := &PluginWatcher{dir: dir, stopped: make(chan struct{}), events: events, newDebounce: func() debounceTimer { return timer }}
+	ctx, cancel := context.WithCancel(context.Background())
+	go w.watchLoop(ctx)
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-w.Stopped():
+		case <-time.After(eventuallyTimeout):
+			t.Error("watchLoop did not stop within timeout")
+		}
+	})
+	send := func(ev fsnotify.Event) {
+		t.Helper()
+		select {
+		case events <- ev:
+		case <-time.After(eventuallyTimeout):
+			t.Fatalf("watchLoop did not consume event %+v", ev)
 		}
 	}
 
-	// Wait for the debounced reload to land, then hold steady for a further
-	// window to prove no second reload follows.
-	wait.RequireEventually(t, func() bool {
-		_, ok := DetectorProvenance()["my-agent"]
-		return ok
-	}, eventuallyTimeout, eventuallyPoll, "burst-written plugin file was never loaded")
-
-	require.Never(t, func() bool {
-		return rebuildCount.Load() > before+1
-	}, 500*time.Millisecond, eventuallyPoll, "burst of rapid writes triggered more than one rebuild")
-
-	if got := rebuildCount.Load(); got != before+1 {
-		t.Errorf("rebuildCount increased by %d across the burst, want exactly 1", got-before)
+	before := rebuildCount.Load()
+	path := filepath.Join(dir, "my-agent.toml")
+	ignored := filepath.Join(dir, "ignored.txt")
+	const burst = 10
+	for i := 0; i < burst; i++ {
+		send(fsnotify.Event{Name: path, Op: fsnotify.Write})
 	}
+	// A non-.toml event is ignored but, being unbuffered, proves every earlier event was fully handled.
+	send(fsnotify.Event{Name: ignored, Op: fsnotify.Write})
+
+	require.Equal(t, burst, timer.resetCount(), "each qualifying event must re-arm the debounce timer")
+	require.Equal(t, before, rebuildCount.Load(), "no rebuild may happen before the debounce timer fires")
+
+	timer.fire()
+	wait.RequireEventually(t, func() bool {
+		return rebuildCount.Load() == before+1
+	}, eventuallyTimeout, eventuallyPoll, "debounce firing did not trigger exactly one rebuild")
+	_, ok := DetectorProvenance()["my-agent"]
+	require.True(t, ok, "rebuild did not load the plugin file")
+
+	send(fsnotify.Event{Name: ignored, Op: fsnotify.Write})
+	require.Equal(t, before+1, rebuildCount.Load(), "burst triggered more than one rebuild")
 }
 
 // TestPluginDirFingerprint_should_changeOnlyWhenTomlEntriesChange is a direct

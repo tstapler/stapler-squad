@@ -69,7 +69,7 @@ func coldRestoreSocket(t *testing.T) string {
 	return name
 }
 
-// fakeTmuxSocketQuerier is an in-memory session.TmuxSocketQuerier.
+// fakeTmuxSocketQuerier is an in-memory tmux.SocketQuerier.
 type fakeTmuxSocketQuerier struct {
 	mu       sync.Mutex
 	sessions map[string]map[string]bool // socket -> set of live session names

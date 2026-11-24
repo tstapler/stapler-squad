@@ -33,7 +33,7 @@ func CancelPendingKill(params CancelPendingKillParams) (resumed bool, err error)
 	}
 
 	if params.OriginalPID > 0 {
-		if err := session.ResumeOriginalProcess(params.OriginalPID); err != nil {
+		if err := ResumeOriginalProcess(params.OriginalPID); err != nil {
 			return false, fmt.Errorf("cancel pending kill: instance deleted but failed to resume original process: %w", err)
 		}
 	}

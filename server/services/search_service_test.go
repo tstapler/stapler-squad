@@ -25,7 +25,7 @@ func TestSearchClaudeHistory_ResponseUnchanged_When_NewFlagsUnset(t *testing.T) 
 			{role: "assistant", content: "sounds good", time: base.Add(time.Minute)},
 		}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query: "auth refactor",
@@ -63,7 +63,7 @@ func TestSearchClaudeHistory_DedupOversamplesBeforeTruncatingToRequestedLimit(t 
 	}
 
 	seedClaudeHome(t, sessions)
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "dark mode toggle",
@@ -97,7 +97,7 @@ func TestSearchClaudeHistory_ContextSourcedFromRawConversationFile_NotDocumentSt
 	seedClaudeHome(t, map[string]testConvSession{
 		"s1": {project: "/repo", messages: msgs},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "dark mode toggle",
@@ -128,7 +128,7 @@ func TestSearchClaudeHistory_LogsExcludedCountOnlyWhenSessionsActuallyExcluded(t
 			{role: "user", content: "dark mode toggle", time: base},
 		}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 	hiddenInst := &instance.Instance{Hidden: true} //nolint:exhaustruct
 	hiddenInst.SetClaudeConversationUUID("hidden-session")
 	svc.SetInstanceProvider(func() []*instance.Instance { return []*instance.Instance{hiddenInst} })
@@ -167,7 +167,7 @@ func TestSearchClaudeHistory_ProjectFilterAppliedBeforeAutomationFilterAndDedup(
 			{role: "user", content: "dark mode toggle", time: base},
 		}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "dark mode toggle",
@@ -194,7 +194,7 @@ func TestListClaudeHistory_ExcludesAutomationSessionsWhenRequested(t *testing.T)
 			{role: "user", content: "hello", time: base},
 		}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 	hiddenInst := &instance.Instance{Hidden: true} //nolint:exhaustruct
 	hiddenInst.SetClaudeConversationUUID("hidden-session")
 	svc.SetInstanceProvider(func() []*instance.Instance { return []*instance.Instance{hiddenInst} })
@@ -215,7 +215,7 @@ func TestSearchClaudeHistory_RejectsOffsetCombinedWithPostProcessing(t *testing.
 	seedClaudeHome(t, map[string]testConvSession{
 		"s1": {project: "/repo", messages: []testConvMsg{{role: "user", content: "hello", time: base}}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	_, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "hello",
@@ -234,7 +234,7 @@ func TestGetClaudeHistoryMessages_RejectsAnchorIndexCombinedWithTail(t *testing.
 	seedClaudeHome(t, map[string]testConvSession{
 		"s1": {project: "/repo", messages: []testConvMsg{{role: "user", content: "hello", time: base}}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	_, err := svc.GetClaudeHistoryMessages(t.Context(), connect.NewRequest(&sessionv1.GetClaudeHistoryMessagesRequest{
 		Id:          "s1",
@@ -265,7 +265,7 @@ func TestGetClaudeHistoryMessages_ResolvesTmuxUUID_When_DirectLookupMisses(t *te
 			{role: "assistant", content: "hi there", time: base.Add(time.Minute)},
 		}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	const tmuxUUID = "tmux-session-uuid"
 	svc.SetResolveConversationUUID(func(_ context.Context, id string) (string, error) {
@@ -293,7 +293,7 @@ func TestGetClaudeHistoryDetail_ResolvesTmuxUUID_When_DirectLookupMisses(t *test
 			{role: "user", content: "hello", time: base},
 		}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 
 	const tmuxUUID = "tmux-session-uuid"
 	svc.SetResolveConversationUUID(func(_ context.Context, id string) (string, error) {
@@ -319,7 +319,7 @@ func TestGetClaudeHistoryMessages_NotFound_When_ResolverAlsoMisses(t *testing.T)
 	seedClaudeHome(t, map[string]testConvSession{
 		"s1": {project: "/repo", messages: []testConvMsg{{role: "user", content: "hello", time: time.Now()}}},
 	})
-	svc := setupSearchService()
+	svc := setupSyncedSearchService(t)
 	svc.SetResolveConversationUUID(func(_ context.Context, _ string) (string, error) {
 		return "", nil
 	})
@@ -332,4 +332,13 @@ func TestGetClaudeHistoryMessages_NotFound_When_ResolverAlsoMisses(t *testing.T)
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// setupSyncedSearchService returns a SearchService whose index has been synced
+// from the (seeded) Claude home, standing in for the background sync loop.
+func setupSyncedSearchService(t *testing.T) *SearchService {
+	t.Helper()
+	svc := setupSearchService()
+	require.NoError(t, svc.SyncNow(t.Context()))
+	return svc
 }

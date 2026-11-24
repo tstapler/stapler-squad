@@ -176,7 +176,7 @@ func (i *Instance) piStatusCommandFactory() piCommandFactory {
 		// context.Background(): this subprocess outlives any single request
 		// and is torn down by PiStatusSource.Stop() calling cmd.Process.Kill()
 		// directly (not via context cancellation) -- same convention as
-		// session/native_process_manager.go's managed subprocess.
+		// session/procbackend/native_process_manager.go's managed subprocess.
 		cmd := safeexec.CommandContext(context.Background(), base, args...) //nolint:gosec // base is the operator-configured program command, same trust boundary as the tmux-launched invocation (buildPiCommand)
 		if path != "" {
 			cmd.Dir = path

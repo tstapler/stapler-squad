@@ -15,6 +15,7 @@ go_library(
         "//session/instance",
         "//session/procinfo",
         "//session/registry",
+        "//session/tmux",
         "@com_connectrpc_connect//:connect",
     ],
 )
@@ -35,7 +36,6 @@ go_test(
         "//proto/session/v1:sessionv1connect_go",
         "//server/interceptors",
         "//server/services/internal/svctest",
-        "//session",
         "//session/domain",
         "//session/importer",
         "//session/instance",

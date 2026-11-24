@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 
 	"go.uber.org/goleak"
 
@@ -1462,7 +1462,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &instance.Instance{Title: "archived-retry-test", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
 		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "tmux_exited", make(chan struct{}))
@@ -1485,7 +1485,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &instance.Instance{Title: "live-retry-scheduled", Status: domain.Stopped}
-		inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 		inst.RetryAttempt = 0
 		inst.RetryMaxAttempts = 3
 
@@ -1504,7 +1504,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &instance.Instance{Title: "live-retry-exhausted", Status: domain.Stopped}
-		inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 		inst.RetryAttempt = 1
 		inst.RetryMaxAttempts = 1 // already at cap
 
@@ -1529,7 +1529,7 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 		archivedAt := time.Now()
 		mock := &mockTmuxManager{}
 		inst := &instance.Instance{Title: "archived-pending-retry", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
 
 		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
@@ -1550,7 +1550,7 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &instance.Instance{Title: "live-pending-retry", Status: domain.Stopped}
-		inst.SetProcessManagerForTest(session.NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
 
 		policy := instance.RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}

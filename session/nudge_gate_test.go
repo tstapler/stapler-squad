@@ -39,7 +39,7 @@ func newRealTmuxInstanceForNudgeTest(t *testing.T, instUUID, envUUID string) *in
 	require.NoError(t, tmuxSession.Start(t.TempDir()))
 
 	inst := &instance.Instance{Title: name, UUID: instUUID}
-	_ = inst.PMForTest() // lazily initializes processManager as *TmuxBackend before SetTmuxSession
+	_ = inst.PMForTest() // lazily initializes processManager as *procbackend.TmuxBackend before SetTmuxSession
 	inst.SetTmuxSession(tmuxSession)
 
 	tmuxName := inst.GetTmuxSessionName()

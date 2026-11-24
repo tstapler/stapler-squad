@@ -8,10 +8,12 @@ session/backlog/pipeline !server
 session/backlog/reviewgate !server
 session/backlog/chains !server
 session/internal/sessiontest !server
+session/internal/procbackendtest !server
 server/services/sessionbundle !server/web
 server/services/devtools !server/web
 server/services/backlogsvc !server/web
 session/importer !server
+session/procbackend !server
 server/services/wsconn !server/web
 server/services/backlogflow !server/web
 server/services/webhooktrigger !server/web
@@ -19,7 +21,9 @@ server/services/sessionretention !server/web
 server/services/importsvc !server/web
 server/services/unfinishedwork !server/web
 server/services/federation !server/web
+server/services/secretscan !server/web
 session/ptyio !server
+session/ptydiscovery !server
 session/hostclaim !server
 session/dialogpresence !server
 session/summaries !server
