@@ -9,11 +9,21 @@ jest.mock("@/lib/api/transport", () => ({
 }));
 
 const mockSearchClaudeHistory = jest.fn();
+const mockStreamSearchClaudeHistory = jest.fn();
+let mockStreamingFlag = false;
 
-(createClient as jest.Mock).mockReturnValue({ searchClaudeHistory: mockSearchClaudeHistory });
+jest.mock("@/lib/contexts/FeatureFlagsContext", () => ({
+  useFeatureFlag: () => mockStreamingFlag,
+}));
+
+(createClient as jest.Mock).mockReturnValue({
+  searchClaudeHistory: mockSearchClaudeHistory,
+  streamSearchClaudeHistory: mockStreamSearchClaudeHistory,
+});
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockStreamingFlag = false;
   mockSearchClaudeHistory.mockResolvedValue({
     results: [],
     totalMatches: 0,
@@ -90,5 +100,94 @@ describe("useHistoryFullTextSearch", () => {
     expect(result.current.results[0].moreMatchesInSessionCount).toBe(2);
     expect(result.current.results[0].contextWindow).toHaveLength(1);
     expect(result.current.results[0].contextWindow[0].content).toBe("hi");
+  });
+});
+
+describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", () => {
+  const result = (id: string) => ({
+    sessionId: id, sessionName: id, project: "", messageIndex: 0, score: 1,
+    snippets: [], contextWindow: [], bookendFirst: [], bookendLast: [], moreMatchesInSessionCount: 0,
+  });
+
+  it("useHistoryFullTextSearch_should_RenderResultsProgressively_When_StreamingMessagesArrive", async () => {
+    mockStreamingFlag = true;
+    let releaseSecond!: () => void;
+    const gate = new Promise<void>((r) => { releaseSecond = r; });
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [result("a"), result("b")], totalMatches: 3, queryTimeMs: 1n, hasMore: false, isFinal: false, indexWarming: false };
+      await gate;
+      yield { results: [result("c")], totalMatches: 3, queryTimeMs: 1n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    await waitFor(() => expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a", "b"]));
+    expect(hook.current.loading).toBe(true);
+
+    releaseSecond();
+    await act(async () => { await done; });
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a", "b", "c"]);
+    expect(hook.current.loading).toBe(false);
+    expect(mockSearchClaudeHistory).not.toHaveBeenCalled();
+  });
+
+  it("useHistoryFullTextSearch_should_ExposeIndexWarmingUntilResultsArrive_When_ColdStartStream", async () => {
+    mockStreamingFlag = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      await gate;
+      yield { results: [result("a")], totalMatches: 1, queryTimeMs: 2n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    await waitFor(() => expect(hook.current.indexWarming).toBe(true));
+    expect(hook.current.loading).toBe(true);
+    expect(hook.current.results).toEqual([]);
+
+    release();
+    await act(async () => { await done; });
+    expect(hook.current.indexWarming).toBe(false);
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  it("useHistoryFullTextSearch_should_StopLoadingAndClearWarming_When_StreamEndsWithoutFinal", async () => {
+    mockStreamingFlag = true;
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [result("a")], totalMatches: 5, queryTimeMs: 1n, hasMore: true, isFinal: false, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    await act(async () => { await hook.current.search({ query: "x" }); });
+
+    expect(hook.current.loading).toBe(false);
+    expect(hook.current.results).toHaveLength(1);
+  });
+
+  it("useHistoryFullTextSearch_should_ClearWarming_When_StreamErrors", async () => {
+    mockStreamingFlag = true;
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      throw new Error("unavailable");
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    await act(async () => { await hook.current.search({ query: "x" }); });
+
+    expect(hook.current.indexWarming).toBe(false);
+    expect(hook.current.error).not.toBeNull();
+  });
+
+  it("useHistoryFullTextSearch_should_UseUnaryCall_When_FlagOff", async () => {
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    await act(async () => { await hook.current.search({ query: "x" }); });
+    expect(mockSearchClaudeHistory).toHaveBeenCalled();
+    expect(mockStreamSearchClaudeHistory).not.toHaveBeenCalled();
   });
 });

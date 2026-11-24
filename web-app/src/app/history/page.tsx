@@ -347,7 +347,7 @@ function HistoryBrowserPageInner() {
               <HistorySearchResults
                 results={fullTextSearch.results} totalMatches={fullTextSearch.totalMatches}
                 queryTimeMs={fullTextSearch.queryTimeMs} hasMore={fullTextSearch.hasMore}
-                loading={fullTextSearch.loading} error={fullTextSearch.error} query={fullTextSearch.query}
+                loading={fullTextSearch.loading} indexWarming={fullTextSearch.indexWarming} error={fullTextSearch.error} query={fullTextSearch.query}
                 onResultClick={handleSearchResultClick} onLoadMore={fullTextSearch.loadMore}
               />
             </>
