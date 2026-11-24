@@ -494,6 +494,7 @@ type fakeProber struct {
 	busyN  int
 	// started, when set, makes every probe after the first idleN wait for a build to be in flight, so the
 	// loaded sample set holds only load readings regardless of goroutine scheduling.
+	// idleN must equal the IdleSamples passed to Queued.
 	started chan struct{}
 	idleN   int
 }
