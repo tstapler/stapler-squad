@@ -8,18 +8,26 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/itemlink"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
-// GoalStore is the slice of *session.Storage the goal and workspace-peer tools call.
+// GoalStore is the slice of *session.Storage the goal tools call.
 // *session.Storage and a recording test fake are its two implementations.
 type GoalStore interface {
 	SetSessionGoal(ctx context.Context, sessionUUID, goal, status string, tasks []instance.TaskNode, setBy, workspaceKey string) (*instance.SessionGoalData, error)
 	GetSessionGoal(ctx context.Context, sessionUUID string) (*instance.SessionGoalData, error)
 	UpdateSessionTaskStatus(ctx context.Context, sessionUUID, taskID, newStatus string) (*instance.SessionGoalData, error)
-	ListWorkspacePeers(ctx context.Context, workspaceKey, excludeSessionUUID string) ([]session.WorkspacePeer, error)
 }
 
 var _ GoalStore = (*session.Storage)(nil)
+
+// PeerLister is the workspace-peer query behind list_workspace_peers.
+// *workspacepeers.Lister and a recording test fake are its two implementations.
+type PeerLister interface {
+	ListWorkspacePeers(ctx context.Context, workspaceKey, excludeSessionUUID string) ([]workspacepeers.WorkspacePeer, error)
+}
+
+var _ PeerLister = (*workspacepeers.Lister)(nil)
 
 // GuidanceStore is the slice of *session.Storage the guidance, request_help and
 // request_owner_action tools call: the guidance-request writes and reads, plus

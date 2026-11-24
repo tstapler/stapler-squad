@@ -88,3 +88,7 @@ session/itemlink !server
 session/credentialstore !server
 session/prmirror !server
 session/terminalstate !server
+session/jsonmigrate !server
+session/jsonmigrate !github
+session/workspacepeers !server
+session/backlogaux !server

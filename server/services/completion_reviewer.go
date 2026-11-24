@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -207,7 +208,7 @@ func (r *completionReviewer) review(ctx context.Context, item *backlogdto.Backlo
 	if err != nil {
 		log.Debug("completion_reviewer: session lookup failed, reviewing without sessions", "item", item.ID, "err", err)
 	}
-	raw, err := r.call(ctx, completionReviewSystemPrompt, buildCompletionReviewUserPrompt(session.BuildCompletionReviewContext(item, sessions)))
+	raw, err := r.call(ctx, completionReviewSystemPrompt, buildCompletionReviewUserPrompt(backlogaux.BuildCompletionReviewContext(item, sessions)))
 	if err != nil {
 		r.fail("ai call", item.ID, err)
 		return

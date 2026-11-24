@@ -20,7 +20,7 @@ import (
 // server/auth.RegisterRoutes's shared mux) -- confirmed as the only
 // cross-host-reachable HTTP surface in this codebase. It is deliberately
 // NOT a new listener and NOT piggybacked on WorkspacePeer (which is
-// local-only: DB + `tmux list-sessions`, see session/workspace_peers.go).
+// local-only: DB + `tmux list-sessions`, see session/workspacepeers).
 const AdvertisementEndpointPath = "/internal/host-advertisement"
 
 // HostAdvertiser is the client side of the gossip-style advertisement

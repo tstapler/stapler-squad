@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/jsonmigrate"
 )
 
 // TestRollbackMigration_Success tests successful rollback
@@ -31,7 +32,7 @@ func TestRollbackMigration_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rollback migration
-	err = RollbackMigration(backupPath, dbPath)
+	err = jsonmigrate.RollbackMigration(backupPath, dbPath)
 	assert.NoError(t, err, "Rollback should succeed")
 
 	// Verify DB file removed
@@ -52,7 +53,7 @@ func TestRollbackMigration_NonExistentBackup(t *testing.T) {
 	dbPath := filepath.Join(tmpDir, "sessions.db")
 
 	// Rollback should fail
-	err := RollbackMigration(backupPath, dbPath)
+	err := jsonmigrate.RollbackMigration(backupPath, dbPath)
 	assert.Error(t, err, "Should fail with nonexistent backup")
 	assert.Contains(t, err.Error(), "backup file not found")
 }
@@ -71,10 +72,10 @@ func TestMigrateJSONToEnt_Success(t *testing.T) {
 
 	entDBPath := filepath.Join(tmpDir, "ent_sessions.db")
 
-	result, err := MigrateJSONToEnt(MigrationOptions{
+	result, err := jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:   jsonPath,
 		SQLitePath: entDBPath,
-	})
+	}, openEntRepositoryForTest)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -110,10 +111,10 @@ func TestMigrateJSONToEnt_EmptyJSON(t *testing.T) {
 
 	entDBPath := filepath.Join(tmpDir, "ent_sessions.db")
 
-	result, err := MigrateJSONToEnt(MigrationOptions{
+	result, err := jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:   jsonPath,
 		SQLitePath: entDBPath,
-	})
+	}, openEntRepositoryForTest)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.TotalSessions)
@@ -135,11 +136,11 @@ func TestMigrateJSONToEnt_DryRun(t *testing.T) {
 
 	entDBPath := filepath.Join(tmpDir, "ent_sessions.db")
 
-	result, err := MigrateJSONToEnt(MigrationOptions{
+	result, err := jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:   jsonPath,
 		SQLitePath: entDBPath,
 		DryRun:     true,
-	})
+	}, openEntRepositoryForTest)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.TotalSessions)
@@ -169,19 +170,19 @@ func TestMigrateJSONToEnt_ForceOverwrite(t *testing.T) {
 	oldRepo.Close()
 
 	// Migration without force should fail
-	_, err = MigrateJSONToEnt(MigrationOptions{
+	_, err = jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:       jsonPath,
 		SQLitePath:     entDBPath,
 		ForceOverwrite: false,
-	})
+	}, openEntRepositoryForTest)
 	assert.Error(t, err, "Should fail without ForceOverwrite")
 
 	// Migration with force should succeed
-	result, err := MigrateJSONToEnt(MigrationOptions{
+	result, err := jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:       jsonPath,
 		SQLitePath:     entDBPath,
 		ForceOverwrite: true,
-	})
+	}, openEntRepositoryForTest)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.MigratedSessions)
 
@@ -209,13 +210,13 @@ func TestValidateEntMigration_Success(t *testing.T) {
 
 	entDBPath := filepath.Join(tmpDir, "ent_sessions.db")
 
-	_, err := MigrateJSONToEnt(MigrationOptions{
+	_, err := jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:   jsonPath,
 		SQLitePath: entDBPath,
-	})
+	}, openEntRepositoryForTest)
 	require.NoError(t, err)
 
-	err = ValidateEntMigration(jsonPath, entDBPath)
+	err = jsonmigrate.ValidateEntMigration(jsonPath, entDBPath, openEntRepositoryForTest)
 	assert.NoError(t, err, "Validation should pass for successful Ent migration")
 }
 
@@ -240,7 +241,7 @@ func TestValidateEntMigration_CountMismatch(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, createTestSession("ent-s2")))
 	repo.Close()
 
-	err = ValidateEntMigration(jsonPath, entDBPath)
+	err = jsonmigrate.ValidateEntMigration(jsonPath, entDBPath, openEntRepositoryForTest)
 	assert.Error(t, err, "Validation should fail with count mismatch")
 	assert.Contains(t, err.Error(), "session count mismatch")
 }
@@ -252,3 +253,14 @@ func writeJSONFile(t *testing.T, path string, sessions []domain.InstanceData) {
 	err = os.WriteFile(path, data, 0644)
 	require.NoError(t, err)
 }
+
+// openEntRepositoryForTest is the production opener: the real-schema path the cmd scripts use.
+func openEntRepositoryForTest(dbPath string) (jsonmigrate.Repository, error) {
+	repo, err := NewEntRepository(WithDatabasePath(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	return repo, nil
+}
+
+var _ jsonmigrate.Repository = (*EntRepository)(nil)

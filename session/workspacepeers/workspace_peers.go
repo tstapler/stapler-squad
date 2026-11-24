@@ -1,4 +1,7 @@
-package session
+// Package workspacepeers reports the other sessions that share a caller's workspace (repo) and
+// renders the session-start nudge about them. It reads sessions and goals through Store, so it
+// never imports session.
+package workspacepeers
 
 import (
 	"context"
@@ -10,10 +13,27 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// Store is the slice of *session.Storage the peer queries call.
+type Store interface {
+	ListInstanceData() ([]domain.InstanceData, error)
+	GetEntClient() *ent.Client
+}
+
+// Lister answers workspace-peer queries against a Store.
+type Lister struct {
+	store Store
+}
+
+// New returns a Lister over store.
+func New(store Store) *Lister {
+	return &Lister{store: store}
+}
 
 // goalStaleThreshold is how long a goal can go without an update before a live peer is
 // considered "stuck" rather than actively working. Goals are set at task start and only
@@ -57,11 +77,11 @@ func (p WorkspacePeer) Lifecycle() string {
 // excludeSessionUUID. Returns an empty slice (not an error) when workspaceKey is empty or
 // no peers exist. Goal-less peers are still returned (Goal is nil) since AC0 only requires
 // "other active sessions", not "sessions with a goal set".
-func (s *Storage) ListWorkspacePeers(ctx context.Context, workspaceKey string, excludeSessionUUID string) ([]WorkspacePeer, error) {
+func (l *Lister) ListWorkspacePeers(ctx context.Context, workspaceKey string, excludeSessionUUID string) ([]WorkspacePeer, error) {
 	if workspaceKey == "" {
 		return nil, nil
 	}
-	data, err := s.ListInstanceData()
+	data, err := l.store.ListInstanceData()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
@@ -89,7 +109,7 @@ func (s *Storage) ListWorkspacePeers(ctx context.Context, workspaceKey string, e
 		return peers, nil
 	}
 
-	goals, err := s.sessionGoalsByUUIDs(ctx, peerUUIDs)
+	goals, err := l.sessionGoalsByUUIDs(ctx, peerUUIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -110,8 +130,8 @@ func (s *Storage) ListWorkspacePeers(ctx context.Context, workspaceKey string, e
 
 // sessionGoalsByUUIDs bulk-loads SessionGoal rows for the given session UUIDs, keyed by
 // session UUID. Missing rows (no goal set) are simply absent from the map.
-func (s *Storage) sessionGoalsByUUIDs(ctx context.Context, uuids []string) (map[string]*instance.SessionGoalData, error) {
-	client := s.GetEntClient()
+func (l *Lister) sessionGoalsByUUIDs(ctx context.Context, uuids []string) (map[string]*instance.SessionGoalData, error) {
+	client := l.store.GetEntClient()
 	if client == nil {
 		return map[string]*instance.SessionGoalData{}, nil
 	}
@@ -141,8 +161,8 @@ func (s *Storage) sessionGoalsByUUIDs(ctx context.Context, uuids []string) (map[
 // SetSessionGoalWorkspaceKey stamps the workspace_key column on an existing goal row.
 // Best-effort/no-op if no goal row exists yet for sessionUUID. Kept separate from
 // SetSessionGoal so that method's signature (and existing tests/call sites) stay unchanged.
-func (s *Storage) SetSessionGoalWorkspaceKey(ctx context.Context, sessionUUID, workspaceKey string) error {
-	client := s.GetEntClient()
+func (l *Lister) SetSessionGoalWorkspaceKey(ctx context.Context, sessionUUID, workspaceKey string) error {
+	client := l.store.GetEntClient()
 	if client == nil {
 		return fmt.Errorf("goal storage not supported by this backend")
 	}
@@ -238,21 +258,21 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 	return sb.String()
 }
 
-// WorkspacePeersBlockForPath resolves repoPath's workspace identity, looks up its peers
+// BlockForPath resolves repoPath's workspace identity, looks up its peers
 // with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge.
-// Shared by both SessionService.CreateSession and BacklogService's initialPromptFor (both
-// gated behind the workspacePeersNudgeFlagName feature flag) so the two callers can't drift
-// on how the nudge is built. Returns "" on any detection/lookup failure, when storage is
-// nil, or when repoPath is empty — this is a best-effort convenience nudge, not required
+// Shared by SessionService.CreateSession and BacklogService's initialPromptFor (via
+// services.WorkspacePeersBlockFor, which holds the feature-flag gate) so the two callers
+// can't drift on how the nudge is built. Returns "" on any detection/lookup failure, when
+// the Lister or its store is nil, or when repoPath is empty — this is a best-effort convenience nudge, not required
 // session context, so failures are logged and swallowed rather than blocking session
 // creation.
-func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath string) string {
-	if repoPath == "" || storage == nil {
+func (l *Lister) BlockForPath(ctx context.Context, repoPath string) string {
+	if repoPath == "" || l == nil || l.store == nil {
 		return ""
 	}
 	info, err := instance.DetectWorktree(repoPath)
 	if err != nil {
-		log.Warn("WorkspacePeersBlockForPath: failed to detect worktree info", "repo_path", repoPath, "err", err)
+		log.Warn("BlockForPath: failed to detect worktree info", "repo_path", repoPath, "err", err)
 		return ""
 	}
 	mainRepoPath := repoPath
@@ -263,9 +283,9 @@ func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath 
 	if workspaceKey == "" {
 		return ""
 	}
-	peers, err := storage.ListWorkspacePeers(ctx, workspaceKey, "")
+	peers, err := l.ListWorkspacePeers(ctx, workspaceKey, "")
 	if err != nil {
-		log.Warn("WorkspacePeersBlockForPath: failed to list workspace peers", "workspace_key", workspaceKey, "err", err)
+		log.Warn("BlockForPath: failed to list workspace peers", "workspace_key", workspaceKey, "err", err)
 		return ""
 	}
 	ApplyTmuxLiveness(peers, LiveTmuxSessionUUIDs(ctx))

@@ -6,8 +6,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -74,7 +74,7 @@ var taskProtocolBlock = pipelinemode.ForDefault("## Your Task Protocol\n" +
 // verdict — mirroring server/services/backlog_service_triage.go's
 // recentReviewHadVerdict exactly (that helper also does not filter on
 // EndedAt, for the identical reason given on
-// reviewVerdictSummariesMostRecentFirst above), computed from data already
+// backlogaux.ReviewVerdictSummariesMostRecentFirst above), computed from data already
 // in hand.
 func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSummary) []bool {
 	var out []bool
@@ -100,7 +100,7 @@ func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSumma
 // parks the item and never respawns at all, so this never needs to render a
 // "third strike" framing.
 func escalationNotice(priorSessions []backlogdto.ItemSessionSummary) string {
-	verdicts := session.ReviewVerdictSummariesMostRecentFirst(priorSessions)
+	verdicts := backlogaux.ReviewVerdictSummariesMostRecentFirst(priorSessions)
 	if streak := stuck.ReviewFailureStreakLen(verdicts); streak == stuck.RepeatedFailureEscalationThreshold {
 		return fmt.Sprintf(
 			"## Escalation Notice\nThe last %d review attempts failed for the identical reason: %q. Repeating the same fix will fail again. Before writing any code, diagnose why the previous fix did not resolve this, and take a genuinely different approach this time (different root cause, different files touched, or a different fix strategy).\n\n",

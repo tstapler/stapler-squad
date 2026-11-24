@@ -353,7 +353,7 @@ func WaitForPaneSettle(ctx context.Context, inst paneSettleChecker, pollInterval
 // branch (commit 6c9026e81), which hardens reattach/kill call sites, not
 // this one — this check reads the same STAPLER_SESSION_UUID marker via the
 // same technique already used on main (LiveTmuxSessionUUIDs,
-// session/workspace_peers.go), so it does not depend on that branch merging.
+// session/workspacepeers/workspace_peers.go), so it does not depend on that branch merging.
 func VerifyPaneOwnershipBeforeWrite(ctx context.Context, inst *Instance) error {
 	if inst == nil {
 		return fmt.Errorf("nudge target session not found")

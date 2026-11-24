@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "workspacepeers",
+    srcs = ["workspace_peers.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/workspacepeers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//log",
+        "//session/domain",
+        "//session/instance",
+        "//session/tmux",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:sessiongoal",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workspacepeers",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workspacepeers_test",
+    srcs = [
+        "lister_test.go",
+        "live_tmux_test.go",
+        "main_test.go",
+        "workspace_peers_test.go",
+    ],
+    embed = [":workspacepeers"],
+    deps = [
+        "//session/domain",
+        "//session/instance",
+        "//tools/bzl/ent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)
