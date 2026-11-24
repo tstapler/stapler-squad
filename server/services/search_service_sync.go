@@ -63,9 +63,10 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 	if interval <= 0 {
 		interval = defaultSearchSyncInterval
 	}
-	ss.loopDone = make(chan struct{})
+	done := make(chan struct{})
+	ss.loopDone.Store(&done)
 	go func() {
-		defer close(ss.loopDone)
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -85,8 +86,8 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 // context given to StartSyncLoop ends and any in-flight sync finishes. It
 // returns at once if the loop was never started.
 func (ss *SearchService) WaitSyncLoop() {
-	if ss.loopStarted.Load() && ss.loopDone != nil {
-		<-ss.loopDone
+	if done := ss.loopDone.Load(); done != nil {
+		<-*done
 	}
 }
 
