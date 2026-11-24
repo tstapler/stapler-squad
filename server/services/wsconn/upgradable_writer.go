@@ -7,7 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 
@@ -27,13 +27,13 @@ type upgradableWriter struct {
 	instance *instance.Instance
 
 	mu         sync.Mutex
-	writer     services.TerminalWriter
+	writer     access.TerminalWriter
 	upgradable bool
 	upgrading  bool
 	flipped    bool
-	onUpgrade  func(services.TerminalWriter)
-	granted    services.TerminalWriter // the writer being granted, valid once flipped
-	lateResize func(writer services.TerminalWriter, cols, rows int)
+	onUpgrade  func(access.TerminalWriter)
+	granted    access.TerminalWriter // the writer being granted, valid once flipped
+	lateResize func(writer access.TerminalWriter, cols, rows int)
 	lastCols   int
 	lastRows   int
 	done       chan struct{}  // closed after the upgrade callback has run
@@ -74,7 +74,7 @@ func (u *upgradableWriter) LastDroppedResize() (cols, rows int, ok bool) {
 
 // SetOnUpgrade registers fn, run once (outside the lock) when the attach becomes
 // read-write; it runs immediately if that already happened.
-func (u *upgradableWriter) SetOnUpgrade(fn func(services.TerminalWriter)) {
+func (u *upgradableWriter) SetOnUpgrade(fn func(access.TerminalWriter)) {
 	u.mu.Lock()
 	u.onUpgrade = fn
 	granted := u.granted
@@ -87,7 +87,7 @@ func (u *upgradableWriter) SetOnUpgrade(fn func(services.TerminalWriter)) {
 
 // Writer returns the current capability, nil while the attach is read-only
 // (including while another caller is mid-upgrade).
-func (u *upgradableWriter) Writer() services.TerminalWriter {
+func (u *upgradableWriter) Writer() access.TerminalWriter {
 	u.mu.Lock()
 	if u.writer != nil || !u.upgradable || u.upgrading {
 		defer u.mu.Unlock()
@@ -119,7 +119,7 @@ func (u *upgradableWriter) Writer() services.TerminalWriter {
 	return writer
 }
 
-func (u *upgradableWriter) finishUpgrade(fn func(services.TerminalWriter), granted services.TerminalWriter) {
+func (u *upgradableWriter) finishUpgrade(fn func(access.TerminalWriter), granted access.TerminalWriter) {
 	fn(granted)
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -147,8 +147,8 @@ type writerUpgrade struct {
 	writer    *upgradableWriter
 	instance  *instance.Instance
 	handshake *sessionv1.CurrentPaneRequest
-	bus       *events.EventBus                                                          // nil: upgrade only when a client frame next asks for the writer
-	vote      func(ctx context.Context, writer services.TerminalWriter, cols, rows int) // nil: cast it on hub
+	bus       *events.EventBus                                                        // nil: upgrade only when a client frame next asks for the writer
+	vote      func(ctx context.Context, writer access.TerminalWriter, cols, rows int) // nil: cast it on hub
 }
 
 // resizeVoteTimeout bounds one post-upgrade resize vote (SetWindowSize + capture).
@@ -178,14 +178,14 @@ func (h *ConnectRPCWebSocketHandler) attachUpgradableSubscriber(connCtx context.
 func (h *ConnectRPCWebSocketHandler) wireWriterUpgrade(connCtx context.Context, w writerUpgrade) <-chan struct{} {
 	castVote := w.vote
 	if castVote == nil {
-		castVote = func(ctx context.Context, writer services.TerminalWriter, cols, rows int) {
+		castVote = func(ctx context.Context, writer access.TerminalWriter, cols, rows int) {
 			voteSize(ctx, w.hub, w.id, writer, cols, rows)
 		}
 	}
 	var voteMu sync.Mutex // serializes votes so the last recorded size wins
 	// voteLatest runs asynchronously: a hung tmux resize must not block the input read
 	// loop or keep the writer hidden. Each run votes the latest size recorded when it runs.
-	voteLatest := func(writer services.TerminalWriter) {
+	voteLatest := func(writer access.TerminalWriter) {
 		w.writer.votes.Add(1)
 		go func() {
 			defer w.writer.votes.Done()
@@ -205,9 +205,9 @@ func (h *ConnectRPCWebSocketHandler) wireWriterUpgrade(connCtx context.Context, 
 		}()
 	}
 	w.writer.mu.Lock()
-	w.writer.lateResize = func(writer services.TerminalWriter, _, _ int) { voteLatest(writer) }
+	w.writer.lateResize = func(writer access.TerminalWriter, _, _ int) { voteLatest(writer) }
 	w.writer.mu.Unlock()
-	w.writer.SetOnUpgrade(func(writer services.TerminalWriter) {
+	w.writer.SetOnUpgrade(func(writer access.TerminalWriter) {
 		w.hub.UpgradeSubscriber(w.id, streamhub.SubscriberCapability{
 			CanResize: true,
 			CanWrite:  w.instance.Snapshot().Permissions.CanSendCommand,

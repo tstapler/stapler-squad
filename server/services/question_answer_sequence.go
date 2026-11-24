@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -80,13 +81,13 @@ func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in Que
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}
-	if AccessFor(s.inst) != TerminalReadWrite {
+	if access.AccessFor(s.inst) != access.TerminalReadWrite {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "answer this question in the open session"), nil
 	}
 	if r.guard != nil && r.guard.Active(ctx, s.inst) {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, detailHumanActive), nil
 	}
-	refusal, err := EvaluateLocalWrite(ctx, inProcessPeerAddr, LocalWriteLocalCaller)
+	refusal, err := access.EvaluateLocalWrite(ctx, inProcessPeerAddr, access.LocalWriteLocalCaller)
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -78,7 +79,7 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	svc.DeliveryGate().Stats().SetWriterRunning(true)
 
 	var flipErr error
-	h := WithRequestRecord(ListenerLocal, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := access.WithRequestRecord(access.ListenerLocal, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, on := range []bool{true, false, true} {
 			if flipErr = gateFlagUpdate(svc, r.Context(), on); flipErr != nil {
 				return
@@ -105,9 +106,9 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 		assert.Equal(t, auditPhaseResult, al.Phase)
 		assert.Equal(t, flagOutcomeApplied, al.Outcome)
 		assert.Equal(t, int64(i+1), al.Seq)
-		assert.Equal(t, ListenerLocal, al.Listener)
+		assert.Equal(t, access.ListenerLocal, al.Listener)
 		assert.Equal(t, "localhost:8543", al.Host)
-		assert.Equal(t, AuthModeNone, al.AuthMode)
+		assert.Equal(t, access.AuthModeNone, al.AuthMode)
 		require.NotNil(t, al.Previous)
 		prevs = append(prevs, *al.Previous)
 	}

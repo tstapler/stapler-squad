@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -109,8 +110,8 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	msg := "re-check the acceptance criteria"
 	// The hidden-steer path evaluates the rebinding verdict from the stamped
 	// request record, as the production chain provides it.
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	reqCtx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	reqCtx := StampedContext(t, &cfg, access.ListenerLocal, false, "localhost:8543", nil)
 	resp, err := fix.svc.UpdateSession(reqCtx, connect.NewRequest(&sessionv1.UpdateSessionRequest{
 		Id:           inst.Title,
 		SteerMessage: &msg,

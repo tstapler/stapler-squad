@@ -1,4 +1,4 @@
-package services
+package access
 
 import (
 	"sort"
@@ -120,9 +120,9 @@ func (g *SessionNudgeGuard) TryBegin(id, sig string) (release func(success bool)
 	}, GuardOK
 }
 
-// abandon releases id's in-flight claim without recording anything, for a
+// Abandon releases id's in-flight claim without recording anything, for a
 // claim that never reached the PTY (not ready). The holder must not also call release.
-func (g *SessionNudgeGuard) abandon(id string) {
+func (g *SessionNudgeGuard) Abandon(id string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.inflight, id)
@@ -166,3 +166,7 @@ func (g *SessionNudgeGuard) evictLocked(now time.Time) {
 func NewSessionNudgeGuardWithClock(now func() time.Time) *SessionNudgeGuard {
 	return &SessionNudgeGuard{now: now}
 }
+
+// SetClock injects the clock into a guard held by value, for tests of other
+// packages; call it before the guard is shared.
+func (g *SessionNudgeGuard) SetClock(now func() time.Time) { g.now = now }

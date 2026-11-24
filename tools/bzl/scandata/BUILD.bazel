@@ -116,6 +116,7 @@ filegroup(
         "//server/push:go_sources",
         "//server/reviewqueue:go_sources",
         "//server/services:go_sources",
+        "//server/services/access:go_sources",
         "//server/services/anthropicwire:go_sources",
         "//server/services/antigravityexport:go_sources",
         "//server/services/backlogflow:go_sources",

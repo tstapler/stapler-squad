@@ -17,6 +17,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -341,7 +342,7 @@ func TestWriteFile_ShouldReturnPermissionDeniedHiddenSession_When_SessionHidden(
 	inst := hiddenInstance(t, true)
 	ws := &WorkspaceService{liveFinder: staticFinder{inst}}
 	requireRefusal(t, ws.CheckWriteAccess(inst.Title), connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_HIDDEN_SESSION)
-	off := &UnaryGuardsFlag{}
+	off := &access.UnaryGuardsFlag{}
 	off.SetEnabled(false)
 	ws.SetGuardsFlag(off)
 	assert.NoError(t, ws.CheckWriteAccess(inst.Title))

@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // Wiring of terminal input observability into the WebSocket input sites. Kept out of
@@ -23,7 +23,7 @@ func (s *muxStreamConn) listenerName() string {
 
 // inputSource returns the stream's input source for path, building it on first use so
 // log throttling is per stream. A nil stream yields nil, which records nothing.
-func (s *connectWebSocketStream) inputSource(path services.InputPath, sessionID string) *services.InputSource {
+func (s *connectWebSocketStream) inputSource(path access.InputPath, sessionID string) *access.InputSource {
 	if s == nil {
 		return nil
 	}
@@ -32,7 +32,7 @@ func (s *connectWebSocketStream) inputSource(path services.InputPath, sessionID 
 		if n, ok := s.conn.(listenerNamer); listener == "" && ok {
 			listener = n.listenerName()
 		}
-		s.input = services.NewInputSource(path, listener, sessionID)
+		s.input = access.NewInputSource(path, listener, sessionID)
 	})
 	return s.input
 }
@@ -40,20 +40,20 @@ func (s *connectWebSocketStream) inputSource(path services.InputPath, sessionID 
 // handleReadLoopInput counts one frame from the shared read loop (path "cm") and forwards
 // it when a writer is attached. forwarded is recorded only if onInput reports it issued
 // the write, so a permission denial is visible as received without forwarded.
-func handleReadLoopInput(p inputReadLoopParams, writer services.TerminalWriter, data []byte) {
-	src := p.stream.inputSource(services.PathCM, p.sessionID)
-	services.RecordTerminalInput(src, data, services.StageReceived)
+func handleReadLoopInput(p inputReadLoopParams, writer access.TerminalWriter, data []byte) {
+	src := p.stream.inputSource(access.PathCM, p.sessionID)
+	access.RecordTerminalInput(src, data, access.StageReceived)
 	if writer == nil {
 		log.Debug("[runInputReadLoop] read-only attach: input frame dropped", "session", p.sessionID, "bytes", len(data))
 		return
 	}
 	if p.onInput(data) {
-		services.RecordTerminalInput(src, data, services.StageForwarded)
+		access.RecordTerminalInput(src, data, access.StageForwarded)
 	}
 }
 
 // requestListener names the listener that accepted r ("" when no chain stamped it).
 func requestListener(r *http.Request) string {
-	rec, _ := services.RequestRecordFrom(r.Context())
+	rec, _ := access.RequestRecordFrom(r.Context())
 	return rec.Listener
 }

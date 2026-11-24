@@ -7,21 +7,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 func TestAnswerTarget_Admits(t *testing.T) {
 	tests := []struct {
 		name   string
 		target AnswerTarget
-		access TerminalAccess
+		access access.TerminalAccess
 		want   bool
 	}{
-		{"hidden target, hidden session", AnswerTargetHidden, TerminalReadOnly, true},
-		{"hidden target, visible session", AnswerTargetHidden, TerminalReadWrite, false},
-		{"visible target, visible session", AnswerTargetVisible, TerminalReadWrite, true},
-		{"visible target, hidden session", AnswerTargetVisible, TerminalReadOnly, false},
-		{"unset target, hidden session", 0, TerminalReadOnly, false},
-		{"unset target, visible session", 0, TerminalReadWrite, false},
+		{"hidden target, hidden session", AnswerTargetHidden, access.TerminalReadOnly, true},
+		{"hidden target, visible session", AnswerTargetHidden, access.TerminalReadWrite, false},
+		{"visible target, visible session", AnswerTargetVisible, access.TerminalReadWrite, true},
+		{"visible target, hidden session", AnswerTargetVisible, access.TerminalReadOnly, false},
+		{"unset target, hidden session", 0, access.TerminalReadOnly, false},
+		{"unset target, visible session", 0, access.TerminalReadWrite, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

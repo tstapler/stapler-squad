@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -415,8 +416,8 @@ func (s *SessionService) StreamTerminal(
 
 	// A hidden (background) session streams read-only: writer is nil and the
 	// loop below drops Input and Resize frames (ADR-005, Story 5.1).
-	writer, _ := AccessFor(instance).Writer(nil)
-	inputSrc := newInputSourceFromContext(ctx, PathStream, initialMsg.SessionId)
+	writer, _ := access.AccessFor(instance).Writer(nil)
+	inputSrc := access.NewInputSourceFromContext(ctx, access.PathStream, initialMsg.SessionId)
 
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
 	wg.Add(1)
@@ -459,7 +460,7 @@ func (s *SessionService) StreamTerminal(
 
 				switch data := msg.Data.(type) {
 				case *sessionv1.TerminalData_Input:
-					RecordTerminalInput(inputSrc, data.Input.Data, StageReceived)
+					access.RecordTerminalInput(inputSrc, data.Input.Data, access.StageReceived)
 					if writer == nil {
 						log.Debug("[StreamTerminal] read-only attach: input frame dropped", "session", msg.SessionId, "bytes", len(data.Input.Data))
 						continue
@@ -499,7 +500,7 @@ func (s *SessionService) StreamTerminal(
 						return
 					}
 
-					RecordTerminalInput(inputSrc, data.Input.Data, StageForwarded)
+					access.RecordTerminalInput(inputSrc, data.Input.Data, access.StageForwarded)
 
 					// Publish user interaction event for immediate review queue reactivity
 					s.eventBus.Publish(events.NewUserInteractionEvent(

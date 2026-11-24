@@ -1,6 +1,7 @@
-package services
+package access
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -9,8 +10,34 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
+
+// inputMetricReader backs the one real MeterProvider of this test binary; the
+// counters bind to the global delegating meter, so only the first
+// SetMeterProvider call rewires them.
+var inputMetricReader = sdkmetric.NewManualReader()
+
+func init() {
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(inputMetricReader)))
+}
+
+// collectInputMetric returns the collected instrument with the given name, or nil.
+func collectInputMetric(t *testing.T, name string) *metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, inputMetricReader.Collect(context.Background(), &rm))
+	for _, sm := range rm.ScopeMetrics {
+		for i := range sm.Metrics {
+			if sm.Metrics[i].Name == name {
+				return &sm.Metrics[i]
+			}
+		}
+	}
+	return nil
+}
 
 type inputLogLine struct {
 	msg  string
@@ -111,7 +138,7 @@ func TestRecordTerminalInput_ShouldUseOnlyKindListenerPathStageLabels_When_Recor
 	t.Parallel()
 	RecordTerminalInput(NewInputSource(PathCapture, ListenerRemote, "labels-check"), []byte("x"), StageForwarded)
 	for _, name := range []string{"terminal_input_frames_total", "terminal_input_bytes_total"} {
-		m := collectMetric(t, name)
+		m := collectInputMetric(t, name)
 		require.NotNil(t, m, name)
 		sum, ok := m.Data.(metricdata.Sum[int64])
 		require.True(t, ok)

@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
@@ -39,7 +40,7 @@ func capsClient(t *testing.T, ops *FileOps, listener string) sessionv1connect.Se
 	path, h := sessionv1connect.NewSessionServiceHandler(capsHandler{ops: ops})
 	mux := http.NewServeMux()
 	mux.Handle(path, h)
-	srv := httptest.NewServer(WithRequestRecord(listener, true)(mux))
+	srv := httptest.NewServer(access.WithRequestRecord(listener, true)(mux))
 	t.Cleanup(srv.Close)
 	return sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 }
@@ -53,7 +54,7 @@ func fetchCaps(t *testing.T, c sessionv1connect.SessionServiceClient) *sessionv1
 }
 
 func TestCapabilities_ShouldAdvertiseOnlyWhatListenerAndFlagsServe_And_BumpCapsEpochOnFlagChange(t *testing.T) {
-	for _, listener := range []string{ListenerLocal, ListenerRemote} {
+	for _, listener := range []string{access.ListenerLocal, access.ListenerRemote} {
 		t.Run(listener, func(t *testing.T) {
 			flags := &stubFilesFlags{}
 			ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: t.TempDir()}, Flags: flags}, fsops.OsRootBackend{})

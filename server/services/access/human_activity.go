@@ -1,4 +1,4 @@
-package services
+package access
 
 import (
 	"context"
@@ -55,9 +55,9 @@ func NewHumanActivity(now func() time.Time) *HumanActivity {
 	return &HumanActivity{now: now, last: map[string]time.Time{}}
 }
 
-// defaultHumanActivity is shared by every web-terminal stream, which each build
+// DefaultHumanActivity is shared by every web-terminal stream, which each build
 // their own paneWriter, and by the answer router's guard.
-var defaultHumanActivity = NewHumanActivity(nil)
+var DefaultHumanActivity = NewHumanActivity(nil)
 
 // Record notes input to tmuxSession now.
 func (h *HumanActivity) Record(tmuxSession string) {

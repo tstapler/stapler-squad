@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -43,7 +44,7 @@ type routerEnv struct {
 	*replyEnv
 	router   *AnswerRouter
 	acks     *recordingAcks
-	activity *HumanActivity
+	activity *access.HumanActivity
 	clients  []tmux.ClientActivity
 	flags    *fakeActionFlags
 }
@@ -51,10 +52,10 @@ type routerEnv struct {
 func newRouterEnv(t *testing.T) *routerEnv {
 	t.Helper()
 	e := &routerEnv{replyEnv: newReplyEnv(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
-	e.activity = NewHumanActivity(e.clock.Now)
+	e.activity = access.NewHumanActivity(e.clock.Now)
 	e.router = e.fix.svc.WireAnswerRouter(AnswerRouterDeps{Rows: e.fix.storage, Acks: e.acks})
 	e.router.flags = e.flags
-	e.router.guard = NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
+	e.router.guard = access.NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
 		return e.clients, nil
 	})
 	return e
@@ -168,7 +169,7 @@ func TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFive
 	qid := e.hookRow(inst, colorDialog)
 	e.activity.Record("ssq_visible-typing")
 	e.clock.Advance(2 * time.Second)
-	refusalsBefore := HumanActiveRefusals()
+	refusalsBefore := access.HumanActiveRefusals()
 
 	res := e.answer(inst, qid, replyColorLabel)
 
@@ -176,7 +177,7 @@ func TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFive
 	assert.Equal(t, "human_active", res.Detail)
 	assert.Empty(t, pm.writes(), "zero bytes written")
 	assert.Empty(t, e.row(qid).DeliveryState, "a refusal before any attempt moves no state")
-	assert.Equal(t, refusalsBefore+1, HumanActiveRefusals(), "human_active_refusal_total counted the refusal once")
+	assert.Equal(t, refusalsBefore+1, access.HumanActiveRefusals(), "human_active_refusal_total counted the refusal once")
 
 	e.clock.Advance(4 * time.Second)
 	assert.Equal(t, outApplied, e.answer(inst, qid, replyColorLabel).Outcome, "6 s after the last input the answer proceeds")

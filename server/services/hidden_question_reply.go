@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -133,7 +134,7 @@ func (s *SessionService) ReplyToPendingQuestion(
 	if s.replyPeerAddr != nil {
 		peer = s.replyPeerAddr(req)
 	}
-	refusal, err := EvaluateLocalWrite(ctx, peer, LocalWriteLocalCaller)
+	refusal, err := access.EvaluateLocalWrite(ctx, peer, access.LocalWriteLocalCaller)
 	if err != nil {
 		s.countReply(replyLabelRefused)
 		return nil, err
@@ -152,7 +153,7 @@ func (s *SessionService) ReplyToPendingQuestion(
 		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING), nil
 	}
 	in.sessionUUID = inst.GetStableID()
-	if AccessFor(inst) != TerminalReadOnly {
+	if access.AccessFor(inst) != access.TerminalReadOnly {
 		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_HIDDEN), nil
 	}
 	key := QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}

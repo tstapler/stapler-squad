@@ -1,4 +1,4 @@
-package services
+package access
 
 import (
 	"context"
@@ -14,41 +14,46 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// manualClock is a settable clock for the activity tests.
-type manualClock struct {
+// activityClock is a settable clock for the activity tests.
+type activityClock struct {
 	mu sync.Mutex
 	t  time.Time
 }
 
-func newManualClock() *manualClock { return &manualClock{t: time.Unix(1_800_000_000, 0)} }
+func newActivityClock() *activityClock { return &activityClock{t: time.Unix(1_800_000_000, 0)} }
 
-func (c *manualClock) Now() time.Time {
+func (c *activityClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.t
 }
 
-func (c *manualClock) Advance(d time.Duration) {
+func (c *activityClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	c.t = c.t.Add(d)
 	c.mu.Unlock()
 }
 
-// namedPM gives the test instance a tmux session name.
-type namedPM struct {
-	*replyPM
+// stubNamedPM gives the test instance a tmux session name; the other
+// ProcessManager methods the started-instance helper reads answer "alive, no pane".
+type stubNamedPM struct {
+	instance.ProcessManager
 	name string
 }
 
-func (n namedPM) GetSessionIdentifier() string { return n.name }
+func (n stubNamedPM) GetSessionIdentifier() string     { return n.name }
+func (n stubNamedPM) GetPanePID() (int32, error)       { return 0, errors.New("no pane") }
+func (n stubNamedPM) HasSession() bool                 { return true }
+func (n stubNamedPM) IsAlive() bool                    { return true }
+func (n stubNamedPM) HasMeaningfulContent(string) bool { return false }
 
 func namedInstance(t *testing.T, tmuxName string) *instance.Instance {
 	t.Helper()
-	return instance.NewStartedInstanceForTest(t, "human-active", namedPM{replyPM: &replyPM{}, name: tmuxName})
+	return instance.NewStartedInstanceForTest(t, "human-active", stubNamedPM{name: tmuxName})
 }
 
 func TestPaneWriter_ShouldRecordHumanActivity_WhenBrowserInputIsSent(t *testing.T) {
-	clock := newManualClock()
+	clock := newActivityClock()
 	w := &paneWriter{sender: &fakeTmuxSender{}, activity: NewHumanActivity(clock.Now)}
 
 	require.NoError(t, w.SendInput(context.Background(), PaneInput{ControlMode: &recordingControlMode{}, TmuxSession: "ssq_a", Data: []byte("x")}))
@@ -58,7 +63,7 @@ func TestPaneWriter_ShouldRecordHumanActivity_WhenBrowserInputIsSent(t *testing.
 }
 
 func TestHumanActiveGuard_ShouldFollowTheFiveSecondWindow_WhenWebTerminalSentInput(t *testing.T) {
-	clock := newManualClock()
+	clock := newActivityClock()
 	activity := NewHumanActivity(clock.Now)
 	guard := NewHumanActiveGuard(activity, nil)
 	inst := namedInstance(t, "ssq_a")
@@ -72,7 +77,7 @@ func TestHumanActiveGuard_ShouldFollowTheFiveSecondWindow_WhenWebTerminalSentInp
 }
 
 func TestHumanActiveGuard_ShouldIgnoreControlModeClientsAndCountAHumansAttach(t *testing.T) {
-	clock := newManualClock()
+	clock := newActivityClock()
 	var listed []tmux.ClientActivity
 	lister := func(context.Context, string) ([]tmux.ClientActivity, error) { return listed, nil }
 	guard := NewHumanActiveGuard(NewHumanActivity(clock.Now), lister)
@@ -95,7 +100,7 @@ func TestHumanActiveGuard_ShouldIgnoreControlModeClientsAndCountAHumansAttach(t 
 // The e2e run found that the pty client ssq attaches to every session it starts is a plain (non
 // control-mode) client whose activity moves on resize, so it must not read as a person typing.
 func TestHumanActiveGuard_ShouldNotCountSsqsOwnPtyAttach_AsAHuman(t *testing.T) {
-	clock := newManualClock()
+	clock := newActivityClock()
 	listed := []tmux.ClientActivity{{Session: "ssq_a", Activity: clock.Now().Add(-time.Second), PID: 7001}}
 	guard := NewHumanActiveGuard(NewHumanActivity(clock.Now), func(context.Context, string) ([]tmux.ClientActivity, error) { return listed, nil })
 	inst := namedInstance(t, "ssq_a")
@@ -108,7 +113,7 @@ func TestHumanActiveGuard_ShouldNotCountSsqsOwnPtyAttach_AsAHuman(t *testing.T) 
 }
 
 func TestHumanActiveGuard_ShouldFallBackToWebTerminalSignal_WhenListClientsFails(t *testing.T) {
-	clock := newManualClock()
+	clock := newActivityClock()
 	activity := NewHumanActivity(clock.Now)
 	guard := NewHumanActiveGuard(activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
 		return nil, errors.New("no server")

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -74,7 +75,7 @@ func TestUnaryGuards_ShouldAcceptHiddenTargetWhenReadonlyGuardsFlagOffAndRejectW
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("flag-hidden"))
 	require.NoError(t, err, "flag off: accepted as on main")
 	assert.Equal(t, []string{"ls", instance.EnterKeySequence}, hidden.pm.writes())
-	assert.Equal(t, TerminalReadOnly, AccessFor(hidden.inst), "the stream drops are not behind the flag")
+	assert.Equal(t, access.TerminalReadOnly, access.AccessFor(hidden.inst), "the stream drops are not behind the flag")
 
 	e.setGuards(true)
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("flag-hidden"))

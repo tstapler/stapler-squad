@@ -21,27 +21,27 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 )
 
 func TestUnaryDispatcher_ShouldBeNil_When_ListenerNotStarted(t *testing.T) {
 	srv, _ := newServerBase("localhost:8543")
 	t.Cleanup(srv.connCtxCancel)
-	assert.Nil(t, srv.unaryDispatcher(services.ListenerLocal))
-	assert.Nil(t, srv.unaryDispatcher(services.ListenerRemote))
+	assert.Nil(t, srv.unaryDispatcher(access.ListenerLocal))
+	assert.Nil(t, srv.unaryDispatcher(access.ListenerRemote))
 }
 
 func TestUnaryDispatcher_ShouldReturnPublishedHandlerPerListener(t *testing.T) {
 	srv, _ := newServerBase("localhost:8543")
 	t.Cleanup(srv.connCtxCancel)
 	local := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
-	srv.setUnaryDispatcher(services.ListenerLocal, local)
+	srv.setUnaryDispatcher(access.ListenerLocal, local)
 
-	require.NotNil(t, srv.unaryDispatcher(services.ListenerLocal))
-	assert.Nil(t, srv.unaryDispatcher(services.ListenerRemote), "remote stays unset")
+	require.NotNil(t, srv.unaryDispatcher(access.ListenerLocal))
+	assert.Nil(t, srv.unaryDispatcher(access.ListenerRemote), "remote stays unset")
 	w := httptest.NewRecorder()
-	srv.unaryDispatcher(services.ListenerLocal).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	srv.unaryDispatcher(access.ListenerLocal).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
 	assert.Equal(t, http.StatusTeapot, w.Code)
 }
 
@@ -99,9 +99,9 @@ type chainCase struct {
 }
 
 var chainCases = []chainCase{
-	{"local", services.ListenerLocal, false},
-	{"local-auth", services.ListenerLocal, true},
-	{"remote", services.ListenerRemote, true},
+	{"local", access.ListenerLocal, false},
+	{"local-auth", access.ListenerLocal, true},
+	{"remote", access.ListenerRemote, true},
 }
 
 type chainHarness struct {
@@ -130,16 +130,16 @@ func newChainHarnessWithRemoteAuth(t *testing.T, cc chainCase, remoteAuth bool) 
 
 	v := &chainValidator{}
 	bridge := wsconn.NewUnaryWsBridge(srv.unaryDispatcher,
-		wsconn.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+		wsconn.WithUnaryOriginPolicy(access.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
 	srv.mux.Handle(wsconn.UnaryWsPath, bridge)
 	srv.mux.Handle(wsconn.UnaryBatchPath, wsconn.NewUnaryBatchHandler(srv.unaryDispatcher))
 
 	hn := &chainHarness{chainCase: cc, stub: stub, validator: v, bridge: bridge}
-	if cc.listener == services.ListenerLocal {
+	if cc.listener == access.ListenerLocal {
 		if cc.auth {
 			srv.SetupAuth(middleware.Auth(v), true)
 		}
-		srv.setUnaryDispatcher(services.ListenerLocal, srv.localDispatcherWith(guardedProcedures))
+		srv.setUnaryDispatcher(access.ListenerLocal, srv.localDispatcherWith(guardedProcedures))
 		hn.ts = httptest.NewServer(srv.localChain())
 		hn.dialer = websocket.DefaultDialer
 	} else {
@@ -147,7 +147,7 @@ func newChainHarnessWithRemoteAuth(t *testing.T, cc chainCase, remoteAuth bool) 
 		if remoteAuth {
 			authMW = middleware.Auth(v)
 		}
-		srv.setUnaryDispatcher(services.ListenerRemote, srv.remoteDispatcher(authMW, remoteAuth))
+		srv.setUnaryDispatcher(access.ListenerRemote, srv.remoteDispatcher(authMW, remoteAuth))
 		hn.ts = httptest.NewUnstartedServer(srv.remoteChain(authMW, remoteAuth))
 		// Origins are set before the server starts: SetOrigins is not synchronized.
 		srv.SetOrigins([]string{"https://" + hn.ts.Listener.Addr().String()})
@@ -163,7 +163,7 @@ func (h *chainHarness) host() string {
 }
 
 func (h *chainHarness) scheme() string {
-	if h.listener == services.ListenerRemote {
+	if h.listener == access.ListenerRemote {
 		return "https"
 	}
 	return "http"
@@ -371,7 +371,7 @@ func decodeTestFrame(t *testing.T, raw []byte) unaryFrameLite {
 
 // CSWSH and auth-gate rows over the real remoteChain (Task 5.2.1g).
 
-var remoteChainCase = chainCase{"remote", services.ListenerRemote, true}
+var remoteChainCase = chainCase{"remote", access.ListenerRemote, true}
 
 func (h *chainHarness) expectDeniedUpgrade(t *testing.T, hd http.Header, wantStatus int, why string) {
 	t.Helper()
@@ -389,7 +389,7 @@ func TestUnaryChain_ShouldReturn403AtUpgradeAndSkipHandler_WhenRemoteCookieValid
 	hd.Set("Origin", "https://evil.example")
 
 	h.expectDeniedUpgrade(t, hd, http.StatusForbidden, "evil origin")
-	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(services.ListenerRemote, "origin"))
+	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(access.ListenerRemote, "origin"))
 
 	// Control: the same credentials with the allowed origin upgrade.
 	c, _, err := h.dial(t, h.header())
@@ -402,7 +402,7 @@ func TestUnaryChain_ShouldReturn401_WhenRemoteUpgradeHasNoCookie(t *testing.T) {
 	hd := http.Header{"Origin": {"https://" + h.host()}}
 
 	h.expectDeniedUpgrade(t, hd, http.StatusUnauthorized, "no cookie")
-	assert.Zero(t, h.bridge.Metrics().UpgradeDenied(services.ListenerRemote, "origin"), "bridge never ran")
+	assert.Zero(t, h.bridge.Metrics().UpgradeDenied(access.ListenerRemote, "origin"), "bridge never ran")
 }
 
 func TestUnaryChain_ShouldReturn403_WhenRemoteOriginSameSiteOtherPortPlaintextNullOrHostnameNotVerified(t *testing.T) {
@@ -451,7 +451,7 @@ func TestUnaryChain_ShouldReturn403AuthRequired_WhenRemoteChainHasNoAuthMiddlewa
 	hd := http.Header{"Origin": {"https://" + h.host()}}
 
 	h.expectDeniedUpgrade(t, hd, http.StatusForbidden, "open remote chain")
-	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(services.ListenerRemote, "auth_required"))
+	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(access.ListenerRemote, "auth_required"))
 }
 
 func TestUnaryChain_ShouldReturn401_WhenRevokedCookieOpensSecondRemoteSocket(t *testing.T) {

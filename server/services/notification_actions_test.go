@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -342,8 +343,8 @@ func TestBuildDescriptors_ShouldReduceToOpen_WhenRemoteChannelOff(t *testing.T) 
 
 func TestListenerClassFrom_ShouldDeriveFromStampedRequest_WhenLocalRemoteOrUnstamped(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, ListenerClassLocal, ListenerClassFrom(stampedContext(t, nil, ListenerLocal, false, "localhost:8543", nil)))
-	assert.Equal(t, ListenerClassRemote, ListenerClassFrom(stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)))
+	assert.Equal(t, ListenerClassLocal, ListenerClassFrom(StampedContext(t, nil, access.ListenerLocal, false, "localhost:8543", nil)))
+	assert.Equal(t, ListenerClassRemote, ListenerClassFrom(StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)))
 	assert.Equal(t, ListenerClassRemote, ListenerClassFrom(context.Background()), "unstamped fails closed")
 }
 

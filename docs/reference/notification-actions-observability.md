@@ -33,7 +33,7 @@ exports, the queries that judge a flag flip, and the alerts that exist. Plan:
 | `notification_inline_action_duration_seconds` | histogram, seconds; buckets 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 | `kind` (same values) | same |
 | `inline_action_undo_total` | counter | `kind`: `approve`, `deny`, `answer_question`, `backlog_decision`; anything else is `unknown` | `server/analytics/quality_metrics.go` |
 | `reopen_after_action_total` | counter | `kind`: always `answer_question` | `server/services/notification_quality_metrics.go` |
-| `human_active_refusal_total` | counter | none | `server/services/human_activity.go` |
+| `human_active_refusal_total` | counter | none | `server/services/access/human_activity.go` |
 
 Notes:
 

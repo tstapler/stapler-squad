@@ -16,7 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 const muxTestWait = 5 * time.Second
@@ -33,7 +33,7 @@ type muxTestClient struct {
 func newMuxTestClient(t *testing.T, serve muxServeFunc, poolSize int) (*muxTestClient, *TerminalMuxBridge) {
 	t.Helper()
 	bridge := NewTerminalMuxBridge(serve, poolSize, WithTerminalMuxDispatchers(allowAllDispatcher))
-	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(bridge))
+	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(bridge))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestMuxBridge_should_AdvertisePoolSize_When_SocketConnects(t *testing.T) {
 
 func TestMuxBridge_should_Return404_When_PoolSizeIsZero(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(NewTerminalMuxBridge(echoServe, 0)))
+	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(NewTerminalMuxBridge(echoServe, 0)))
 	defer srv.Close()
 	_, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.Error(t, err)
@@ -471,8 +471,8 @@ func TestMuxBridge_should_RefuseUpgrade_When_RemoteListenerLacksAuthOrOriginMatc
 	t.Parallel()
 	dial := func(listener string, requiresAuth bool, origin string) int {
 		bridge := NewTerminalMuxBridge(echoServe, 1,
-			WithTerminalMuxOriginPolicy(services.ListenerRemote, func(r *http.Request) bool { return r.Header.Get("Origin") == "https://ok.example" }))
-		srv := httptest.NewServer(services.WithRequestRecord(listener, requiresAuth)(bridge))
+			WithTerminalMuxOriginPolicy(access.ListenerRemote, func(r *http.Request) bool { return r.Header.Get("Origin") == "https://ok.example" }))
+		srv := httptest.NewServer(access.WithRequestRecord(listener, requiresAuth)(bridge))
 		defer srv.Close()
 		h := http.Header{}
 		if origin != "" {
@@ -485,10 +485,10 @@ func TestMuxBridge_should_RefuseUpgrade_When_RemoteListenerLacksAuthOrOriginMatc
 		}
 		return resp.StatusCode
 	}
-	assert.Equal(t, http.StatusForbidden, dial(services.ListenerRemote, false, "https://ok.example"), "remote without auth")
-	assert.Equal(t, http.StatusForbidden, dial(services.ListenerRemote, true, "https://evil.example"), "remote bad origin")
-	assert.Equal(t, http.StatusSwitchingProtocols, dial(services.ListenerRemote, true, "https://ok.example"))
-	assert.Equal(t, http.StatusForbidden, dial(services.ListenerLocal, false, "https://evil.example"), "local non-loopback origin")
+	assert.Equal(t, http.StatusForbidden, dial(access.ListenerRemote, false, "https://ok.example"), "remote without auth")
+	assert.Equal(t, http.StatusForbidden, dial(access.ListenerRemote, true, "https://evil.example"), "remote bad origin")
+	assert.Equal(t, http.StatusSwitchingProtocols, dial(access.ListenerRemote, true, "https://ok.example"))
+	assert.Equal(t, http.StatusForbidden, dial(access.ListenerLocal, false, "https://evil.example"), "local non-loopback origin")
 }
 
 func TestMuxBridge_should_ReportCounts_And_ValidateRequestedSize(t *testing.T) {
@@ -509,7 +509,7 @@ func TestMuxBridge_should_ReportCounts_And_ValidateRequestedSize(t *testing.T) {
 func TestMuxBridge_should_RefuseOpen_When_NoDispatcherConfigured(t *testing.T) {
 	t.Parallel()
 	bridge := NewTerminalMuxBridge(echoServe, 1)
-	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(bridge))
+	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(bridge))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.NoError(t, err)
@@ -537,7 +537,7 @@ func dispatcherReturning(status int) UnaryDispatchers {
 func dialMuxWith(t *testing.T, d UnaryDispatchers, served *atomic.Int32) *websocket.Conn {
 	t.Helper()
 	serve := func(conn streamConn, m string) { served.Add(1); echoServe(conn, m) }
-	srv := httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(NewTerminalMuxBridge(serve, 1, WithTerminalMuxDispatchers(d))))
+	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(NewTerminalMuxBridge(serve, 1, WithTerminalMuxDispatchers(d))))
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 	require.NoError(t, err)

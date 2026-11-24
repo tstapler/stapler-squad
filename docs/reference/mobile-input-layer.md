@@ -66,7 +66,7 @@ Open any page with `?mobile_input=0` (force off) or `?mobile_input=1` (force on)
 
 ## Input sites and the `received` / `forwarded` stages
 
-The server counts every input frame at its entry path (`server/services/terminal_input_metrics.go`, sites in `terminal_input_sites.go`). `received` is recorded at the entry, before the read-only and permission gates. `forwarded` is recorded when the gates passed and the write was issued, so `received - forwarded` means "denied before the write", never "this path does not record forwarded".
+The server counts every input frame at its entry path (`server/services/access/terminal_input_metrics.go`, sites in `terminal_input_sites.go`). `received` is recorded at the entry, before the read-only and permission gates. `forwarded` is recorded when the gates passed and the write was issued, so `received - forwarded` means "denied before the write", never "this path does not record forwarded".
 
 | `path` label | Entry function | `forwarded` recorded | Gates before it |
 |---|---|---|---|

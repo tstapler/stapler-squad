@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 const (
@@ -79,7 +80,7 @@ func newPruneHarness(t *testing.T, rows []pruneRow, hidden, visible []string) *p
 	mux := http.NewServeMux()
 	path, handler := sessionv1connect.NewSessionServiceHandler(&SessionService{notificationSvc: ns})
 	mux.Handle(path, handler)
-	h.srv = httptest.NewServer(WithRequestRecord(ListenerLocal, false)(mux))
+	h.srv = httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(mux))
 	t.Cleanup(h.srv.Close)
 	h.client = sessionv1connect.NewSessionServiceClient(h.srv.Client(), h.srv.URL)
 	return h
@@ -140,7 +141,7 @@ func TestPruneRPC_ShouldReturnFailedPrecondition_WhenIndexUnseeded(t *testing.T)
 	mux := http.NewServeMux()
 	path, handler := sessionv1connect.NewSessionServiceHandler(&SessionService{notificationSvc: unseeded})
 	mux.Handle(path, handler)
-	srv := httptest.NewServer(WithRequestRecord(ListenerLocal, false)(mux))
+	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(mux))
 	defer srv.Close()
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 
@@ -193,8 +194,8 @@ func TestPruneApply_ShouldAppendKindPruneAuditLineBeforeDeleteAndRejectRebinding
 	assert.Equal(t, map[string]int{
 		notifications.PruneReasonRoutine: 3, pruneCountKeptUnread: 1, pruneCountUndeterminable: 1, pruneCountVisible: 1,
 	}, req.Counts)
-	assert.Equal(t, ListenerLocal, req.Listener)
-	assert.Equal(t, AuthModeNone, req.AuthMode)
+	assert.Equal(t, access.ListenerLocal, req.Listener)
+	assert.Equal(t, access.AuthModeNone, req.AuthMode)
 	assert.Equal(t, "prune-test", req.UserAgent)
 	assert.True(t, strings.HasPrefix(req.PeerAddr, "127.0.0.1:"), req.PeerAddr)
 	require.NotNil(t, req.PeerLoopback)
@@ -313,7 +314,7 @@ func TestPruneRPC_ShouldRejectUnauthenticatedAndLogRemoteAddrAndHaveNoMCPTool_Wh
 		}
 		mux.ServeHTTP(w, r)
 	})
-	srv := httptest.NewServer(WithRequestRecord(ListenerRemote, true)(rejectAll))
+	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerRemote, true)(rejectAll))
 	defer srv.Close()
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 	_, err := client.PruneHiddenSessionNotifications(context.Background(),
@@ -328,8 +329,8 @@ func TestPruneRPC_ShouldRejectUnauthenticatedAndLogRemoteAddrAndHaveNoMCPTool_Wh
 	_, err = client.PruneHiddenSessionNotifications(context.Background(), authed)
 	require.NoError(t, err)
 	line := h.auditLines()[0]
-	assert.Equal(t, ListenerRemote, line.Listener)
-	assert.Equal(t, AuthModeRequired, line.AuthMode)
+	assert.Equal(t, access.ListenerRemote, line.Listener)
+	assert.Equal(t, access.AuthModeRequired, line.AuthMode)
 	assert.NotEmpty(t, line.PeerAddr)
 
 	assertNoMCPToolFor(t, "PruneHiddenSessionNotifications", "prune_hidden_session_notifications")

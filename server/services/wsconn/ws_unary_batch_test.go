@@ -18,7 +18,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // batchStub serves ListFiles with behavior chosen by SessionId: "missing" fails
@@ -88,7 +88,7 @@ func newBatchHarness(t *testing.T) *batchHarness {
 		connectHandler.ServeHTTP(w, r)
 	}))
 	handler := NewUnaryBatchHandler(func(string) http.Handler { return dispatcher })
-	h.srv = httptest.NewServer(services.WithRequestRecord(services.ListenerLocal, false)(handler))
+	h.srv = httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(handler))
 	t.Cleanup(h.srv.Close)
 	return h
 }

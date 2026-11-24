@@ -169,6 +169,10 @@ The first draft called five packages "L0 kernels" and an L1 layer without cycles
 
 Deferred from the `fsops` kernel PR (#1797): the `fsops` row for `expandTilde`, `parseJSONLogHeader`, `deployID` and `validateTargetDirectory` is owned by the Stage 5 `adminrpc`/`filesvc`/`workflows` PRs, which create the edges it cuts.
 
+Done in the `access` kernel PR: the first `access` row of the table above (`AuthModeRequired`, `ListenerLocal`, `ListenerRemote`, `RequestRecordFrom`, plus `RequestRecord`, `AuthModeNone`, `WithRequestRecord` and the context key they need, now `access/request_record.go`). Two receiver methods on `TerminalAccess` (`QuestionReplyWriter` in `pane_reply_core.go`, `BacklogSteerWriter` in `hidden_review_steer.go`) could not follow the type, so they became the functions `newQuestionReplyWriter` and `newBacklogSteerWriter` taking the access value first (a gap in this plan: 3.3.1 lists receiver files but not receiver methods on kernel types).
+
+Deferred from the `access` kernel PR: the second `access` row (`SteerOutcome` and its 8 constants, `ErrSteerPaneOwnership`, `NudgeRecorder`, `steerRequestFacts`, `requestFactsOf`, `BacklogLinkResolver`, `BacklogReviewLink`) is owned by the Stage 5 `providers`/`notify` PRs, which create the edges it cuts. `BacklogReviewLink` is a sinkguard capability keyed to `hidden_review_steer.go` (unexported fields, one constructor), and `steerRequestFacts` has unexported fields read in six files, so moving them needs the guard rows re-keyed and fields exported; that belongs with the PR that needs the symbols across the boundary. `AnswerTarget` (+2 methods) stays beside `PaneReplyCore` for the same reason (its only consumer is the pane-reply core).
+
 #### 3.3.3 L1 cycle cuts (each edge below is a symbol set that becomes a kernel symbol, a move, or a consumer-side port)
 
 | Edge cut | Symbols | Cut |
@@ -213,7 +217,7 @@ The per-file assignment is [session-service-hub-assignment.csv](session-service-
 | L0 kernels (import only domain, config, `session*`, and lower kernels) | `fsops` | 1,695 | `fsops`, `file_atomic`, `file_backend*`, `file_inode_*`, `file_codec`, `file_metrics`, `files_telemetry`, `dup_fd_*`, `exec_*`, `settings_file_atomic_write`, `path_resolver` |
 | | `secretscan` | 107 | `secret_scanner`, `redaction_sentinels` (the sentinels moved in from `ai_interfaces.go`, #1798) |
 | | `credkit` | 589 | `credentials`, `provider_limits` |
-| | `access` | 1,128 | `terminal_access`, `human_activity`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, `tmux_input_send`, `external_pane_resize`, plus the symbols in 3.3.2 |
+| | `access` | 1,187 | `terminal_access`, `human_activity`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, `tmux_input_send`, `external_pane_resize`, `request_record` (the capture-tap symbols of 3.3.2); the steer symbols are deferred (see 3.3.2) |
 | | `auditkit` | 467 | `hidden_reply_audit` (imports `fsops`) |
 | | `approvalkit` | 460 | `approval_store` |
 | | `flagsvc` | 1,695 | `feature_flag_*`, `feature_flags_*` (imports `auditkit`, `access`) |

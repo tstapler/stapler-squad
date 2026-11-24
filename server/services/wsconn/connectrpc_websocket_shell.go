@@ -11,7 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/protocol"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/resize"
@@ -35,7 +35,7 @@ type shellResizeReq struct{ cols, rows int }
 type shellStreamParams struct {
 	// writer is nil for a read-only attach (hidden parent session): input,
 	// resize and the initial redraw nudge are dropped.
-	writer               services.TerminalWriter
+	writer               access.TerminalWriter
 	stream               *connectWebSocketStream
 	instance             *instance.Instance
 	shellSess            *tmux.TmuxSession
@@ -316,10 +316,10 @@ func readShellWebSocketMessage(p shellStreamParams) (message []byte, stop bool) 
 // handleShellInput counts one shell input frame (path "shell") and forwards it; forwarded is
 // recorded only when the gates passed and the write was issued.
 func handleShellInput(p shellStreamParams, data []byte) {
-	src := p.stream.inputSource(services.PathShell, p.sessionID)
-	services.RecordTerminalInput(src, data, services.StageReceived)
+	src := p.stream.inputSource(access.PathShell, p.sessionID)
+	access.RecordTerminalInput(src, data, access.StageReceived)
 	if forwardShellInput(p, data) {
-		services.RecordTerminalInput(src, data, services.StageForwarded)
+		access.RecordTerminalInput(src, data, access.StageForwarded)
 	}
 }
 
@@ -338,7 +338,7 @@ func forwardShellInput(p shellStreamParams, data []byte) bool {
 	p.instance.UpdateTerminalTimestamps(string(data), true)
 
 	sendCtx, sendCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	_ = p.writer.SendInput(sendCtx, services.PaneInput{
+	_ = p.writer.SendInput(sendCtx, access.PaneInput{
 		ControlMode: p.shellSess,
 		TmuxSocket:  p.instance.Snapshot().TmuxServerSocket,
 		TmuxSession: p.shellTmuxSessionName,
