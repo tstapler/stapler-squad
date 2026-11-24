@@ -70,8 +70,9 @@ func TestNewDefaultChain_should_ResolveEnvFirst(t *testing.T) {
 func TestNewDefaultChain_should_KeepDocumentedSourceOrder(t *testing.T) {
 	t.Parallel()
 
-	var names []string
-	for _, s := range NewDefaultChain(&config.Config{}).sources {
+	sources := NewDefaultChain(&config.Config{}).sources
+	names := make([]string, 0, len(sources))
+	for _, s := range sources {
 		names = append(names, s.Name())
 	}
 	assert.Equal(t, []string{"env", "jules_keychain", "config", "claude_oauth", "agy_oauth"}, names)
