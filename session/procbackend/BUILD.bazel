@@ -107,6 +107,7 @@ go_test(
     srcs = [
         "backend_config_selection_test.go",
         "backend_factory_test.go",
+        "backend_kill_orphan_test.go",
         "backend_observability_test.go",
         "backend_registry_test.go",
         "backend_slow_call_test.go",

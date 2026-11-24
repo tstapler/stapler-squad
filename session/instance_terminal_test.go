@@ -78,7 +78,7 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 // via tmux.MockCmdExec's OutputFunc. PreviewContext type-asserts the concrete
 // *TmuxProcessManager (not the tmux.TmuxManager interface), so procbackendtest.MockTmuxManager (used by the
 // Preview() tests above) can't exercise it — this real-session construction is required
-// instead, mirroring the technique in tmux_process_manager_test.go.
+// instead, mirroring the technique in session/procbackend/tmux_process_manager_test.go.
 func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *exec.Cmd) ([]byte, error)) *instance.Instance {
 	t.Helper()
 	// sessionExists is filled in after ts is constructed below, so the
