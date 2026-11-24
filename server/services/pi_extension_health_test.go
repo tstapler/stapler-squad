@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -153,7 +154,7 @@ func TestHandlePiExtensionLoaded_RecordsPing_ViaSessionIDHeader(t *testing.T) {
 
 	bus := events.NewEventBus(1)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	tracker := NewPiExtensionHealthTracker()
 	h.SetPiExtensionHealthTracker(tracker)
 
@@ -173,7 +174,7 @@ func TestHandlePiExtensionLoaded_NoTracker_StillReturns200(t *testing.T) {
 
 	bus := events.NewEventBus(1)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	// Deliberately never call SetPiExtensionHealthTracker.
 
 	req := httptest.NewRequest(http.MethodPost, "/api/hooks/pi-extension-loaded", strings.NewReader(`{}`))
@@ -189,7 +190,7 @@ func TestHandlePiExtensionLoaded_RejectsNonPost(t *testing.T) {
 
 	bus := events.NewEventBus(1)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	h.SetPiExtensionHealthTracker(NewPiExtensionHealthTracker())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/hooks/pi-extension-loaded", nil)
@@ -206,7 +207,7 @@ func TestHandlePiExtensionLoaded_MalformedBody_StillReturns200(t *testing.T) {
 
 	bus := events.NewEventBus(1)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	h.SetPiExtensionHealthTracker(NewPiExtensionHealthTracker())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/hooks/pi-extension-loaded", strings.NewReader(`not json`))
@@ -228,7 +229,7 @@ func TestHandlePiExtensionLoaded_ShouldNotRecord_WhenPiSupportFlagIsOff(t *testi
 
 	bus := events.NewEventBus(1)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	tracker := NewPiExtensionHealthTracker()
 	h.SetPiExtensionHealthTracker(tracker)
 

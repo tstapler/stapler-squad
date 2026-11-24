@@ -166,6 +166,7 @@ The first draft called five packages "L0 kernels" and an L1 layer without cycles
 | `fsops` | `expandTilde`, `parseJSONLogHeader`, `deployID`, `validateTargetDirectory` (used by `adminrpc` and `workflows`) | `path_completion_service.go`, `log_header_scan.go`, `deploy_id.go`, `workflow_service.go` |
 | `questionkit` | `ActionResult`, `applied`, `notWired`, `outcome`, `replyOutcomeResult`, `StaleReasonAnswerPartial`, `tabbedQuestions`, `itemSessionLookup`(+`GetItemSessionBySessionUUID`), `metaGuidanceRequestID`, `metaQuestionID`, `metaReplyUnavailable`, `sanitizeNotificationText`; consumer-side ports replacing `AnswerRouter`, `answerRows`, `deliverySink` (7 symbols) | `notification_action_service.go`, `pane_reply_core.go`, `question_answer_sequence.go`, `hidden_review_steer.go`, `approval_question.go`, `approval_handler.go`, `question_answer_router.go` |
 | `anthropicwire` | `RuleSpec` (lower to `session/domain`, as the DTO-lowering plans do for value types) | `rules_store.go` |
+| `approvalkit` | `PendingApproval.Decisions()` (accessor for the unexported `decisionCh`, read by the approval handler wait loop and one rules test) | `approval_store.go` |
 
 Deferred from the `fsops` kernel PR (#1797): the `fsops` row for `expandTilde`, `parseJSONLogHeader`, `deployID` and `validateTargetDirectory` is owned by the Stage 5 `adminrpc`/`filesvc`/`workflows` PRs, which create the edges it cuts.
 

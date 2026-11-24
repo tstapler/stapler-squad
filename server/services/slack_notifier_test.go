@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -304,7 +305,7 @@ func TestNotifyApprovalPending_BuildsCorrectDashboardLink(t *testing.T) {
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
 
-	approval := &PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
+	approval := &approvalkit.PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
 	dashboardURL := "https://home.example.com"
 	n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", dashboardURL)
 	req := waitForCapturedRequest(t, ch)
@@ -327,7 +328,7 @@ func TestNotifyApprovalPending_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	cfg := slackConfigWithoutWebhook(t)
 	n := NewSlackNotifier()
 
-	approval := &PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
+	approval := &approvalkit.PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
 	n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", "https://home.example.com")
 
 	require.Never(t, func() bool {
@@ -343,7 +344,7 @@ func TestNotifyApprovalPending_PostsExpectedPayload_ToHTTPTestServer(t *testing.
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
 
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:        "appr-123",
 		SessionID: "sess-1",
 		ToolName:  "Bash",
@@ -416,7 +417,7 @@ func TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_
 		cfg := slackConfigWithWebhook(t, srv.URL)
 		n := NewSlackNotifier()
 
-		approval := &PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
+		approval := &approvalkit.PendingApproval{ID: "appr-123", SessionID: "sess-1", ToolName: "Bash"}
 		dashboardURL := "https://home.example.com"
 		wantLink := dashboardURL + "/?session=" + approval.SessionID
 		n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", dashboardURL)
@@ -448,7 +449,7 @@ func TestNotifyApprovalPending_IncludesActionsBlock_When_ApprovalEnabled(t *test
 	cfg.Slack.ApprovalEnabled = true
 	n := NewSlackNotifier()
 
-	approval := &PendingApproval{ID: "appr-9", SessionID: "sess-1", ToolName: "Bash"}
+	approval := &approvalkit.PendingApproval{ID: "appr-9", SessionID: "sess-1", ToolName: "Bash"}
 	n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", "https://home.example.com")
 	req := waitForCapturedRequest(t, ch)
 
@@ -476,7 +477,7 @@ func TestNotifyApprovalPending_OmitsActionsBlock_When_ApprovalDisabled(t *testin
 	cfg.Slack.ApprovalEnabled = false
 	n := NewSlackNotifier()
 
-	approval := &PendingApproval{ID: "appr-9", SessionID: "sess-1", ToolName: "Bash"}
+	approval := &approvalkit.PendingApproval{ID: "appr-9", SessionID: "sess-1", ToolName: "Bash"}
 	n.NotifyApprovalPending(context.Background(), cfg, approval, "fix-login-bug", "https://home.example.com")
 	req := waitForCapturedRequest(t, ch)
 
@@ -835,7 +836,7 @@ func TestNotifyApprovalPending_EscapesInjectedSlackDirective_InSessionNameAndDet
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
 
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:        "appr-123",
 		SessionID: "sess-1",
 		ToolName:  "Bash",

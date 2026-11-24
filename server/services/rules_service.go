@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -93,7 +94,7 @@ type reconcileCounts struct {
 // reconciliation-loop tests inject a lightweight fake for cases that only
 // exercise classify-and-branch logic, without a real ApprovalStore.
 type reconciliationResolver interface {
-	ListPendingApprovalsInternal() []*PendingApproval
+	ListPendingApprovalsInternal() []*approvalkit.PendingApproval
 	ResolveApprovalReconciled(ctx context.Context, approvalID, decision, ruleName string) error
 	// IsApprovalPending disambiguates a genuine CI-red-guard decline from
 	// "lost the race to a concurrent reconciliation pass" when
