@@ -11,7 +11,7 @@ In force today (enforced by `.golangci.yml` depguard rules and `tools/bzl/scopin
 - External-system adapters are isolated (`git_*` rules, `isolate_*` rules), and `scoping boundaries` (`tools/bzl/scoping/boundaries.txt`) forbids transitive imports for the packages listed there.
 - Per-package size, file and import caps ratchet down (`tools/bzl/scoping/budget.txt`).
 
-Still a direction (see `project_plans/package-split-ocp/`): `session` (about 12.9k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`) and `server/services` (about 65.7k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
+Still a direction (see `project_plans/package-split-ocp/`): `session` (about 12.9k top-level non-test lines: `wc -l` over `session/*.go` minus `_test.go`) and `server/services` (about 65.9k) remain hubs because `Storage`, `EntRepository` and `SessionService` bind most of their files. The persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged unlock for the rest of `EntRepository`; the instance DTO lowering (`instance-dto-lowering-plan.md`) is finished, so `ent_repository.go` is only the constructor and its embedded stores. Do not invent a new layout; extend the one below and use the roadmap's stages for the hubs.
 
 ### Leaves that exist today
 
