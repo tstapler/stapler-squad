@@ -67,6 +67,28 @@ func TestNewDefaultChain_should_ResolveEnvFirst(t *testing.T) {
 	assert.Equal(t, "env-first", cred.APIKey)
 }
 
+func TestNewDefaultChain_should_KeepDocumentedSourceOrder(t *testing.T) {
+	t.Parallel()
+
+	var names []string
+	for _, s := range NewDefaultChain(&config.Config{}).sources {
+		names = append(names, s.Name())
+	}
+	assert.Equal(t, []string{"env", "jules_keychain", "config", "claude_oauth", "agy_oauth"}, names)
+}
+
+func TestNewDefaultChain_should_PreferConfigKeyOverClaudeOAuth(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"oauth-token"}}`)
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	cred, err := NewDefaultChain(&config.Config{AnthropicAPIKey: "cfg-key"}).Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.Equal(t, "cfg-key", cred.APIKey)
+	assert.Equal(t, "config:anthropicApiKey", cred.Source)
+}
+
 func TestCredentialChain_SetJulesTokenSource_should_RewireOnlyJulesSources(t *testing.T) {
 	t.Parallel()
 

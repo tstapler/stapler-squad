@@ -105,14 +105,10 @@ type CredentialChain struct {
 
 // NewDefaultChain returns a chain with the standard priority order:
 //  1. Environment variable (highest priority — always wins)
-//  2. Config file explicit entry
-//  3. Claude CLI OAuth file (~/.claude/.credentials.json)
-//  4. Antigravity OAuth file (~/.gemini/oauth_creds.json)
-//  5. gcloud Application Default Credentials
-//
-// JulesCredentialSource is registered immediately after EnvVarCredentialSource
-// so JULES_API_KEY still wins over the keychain for scripted/CI use, matching
-// this chain's existing env-first ordering.
+//  2. Jules keychain (after env so JULES_API_KEY still wins for scripted/CI use)
+//  3. Config file explicit entry
+//  4. Claude CLI OAuth file (~/.claude/.credentials.json)
+//  5. Antigravity OAuth file (~/.gemini/oauth_creds.json), then gcloud ADC
 func NewDefaultChain(cfg *config.Config) *CredentialChain {
 	return &CredentialChain{sources: []CredentialSource{
 		&EnvVarCredentialSource{},
