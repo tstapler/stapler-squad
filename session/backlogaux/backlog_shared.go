@@ -1,13 +1,11 @@
-package session
+package backlogaux
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// Declarations the session core shares with the backlog lifecycle code (relocated so that code can move to its own package).
-
-// reviewVerdictSummariesMostRecentFirst extracts the review verdicts from
+// ReviewVerdictSummariesMostRecentFirst extracts the review verdicts from
 // priorSessions (ordered oldest-first, as Storage.ListItemSessions returns)
 // into a most-recent-first []ReviewVerdictSummary — mirroring exactly what
 // Storage.GetRecentReviewVerdictSummaries returns (that query filters on

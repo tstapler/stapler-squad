@@ -1,4 +1,4 @@
-package session
+package backlogaux
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"
