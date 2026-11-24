@@ -177,3 +177,24 @@ func TestSearchService_should_UseEnvSyncInterval_When_Valid(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestStreamSearchClaudeHistory_should_SendMetadataResultsInFirstMessage_When_ColdStart(t *testing.T) {
+	seedManySessions(t, 3)
+	ss := setupSearchService() // never synced
+	client := newStreamClient(t, ss)
+
+	st, err := client.StreamSearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "repo"}))
+	require.NoError(t, err)
+
+	require.True(t, st.Receive())
+	first := st.Msg()
+	require.True(t, first.IndexWarming)
+	require.False(t, ss.indexSynced(), "first batch must precede the first sync")
+	require.Len(t, first.Results, 3, "metadata hits from the history cache")
+	require.Equal(t, "metadata_preview", first.Results[0].Metadata.MatchSource)
+
+	require.NoError(t, ss.SyncNow(t.Context()))
+	for st.Receive() {
+	}
+	require.NoError(t, st.Err())
+}

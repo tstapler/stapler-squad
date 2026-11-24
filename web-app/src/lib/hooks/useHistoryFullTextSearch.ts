@@ -233,11 +233,17 @@ export function useHistoryFullTextSearch(
           // Batches arrive in rank order: append each one as it lands rather
           // than clearing the list, so the top hits show immediately.
           let first = !searchOptions.append;
+          let previewShown = false; // cold-start metadata hits, replaced by the first ranked batch
           for await (const msg of clientRef.current.streamSearchClaudeHistory(request, { signal })) {
             if (signal.aborted) return;
             const batch = msg.results.map(convertResult);
-            const replace = first && !msg.indexWarming;
-            if (!msg.indexWarming) first = false;
+            const replace = first || (previewShown && !msg.indexWarming);
+            if (msg.indexWarming && batch.length === 0) {
+              setState((prev) => ({ ...prev, loading: true, indexWarming: true }));
+              continue;
+            }
+            previewShown = msg.indexWarming;
+            first = false;
             setState((prev) => ({
               results: replace ? batch : [...prev.results, ...batch],
               totalMatches: msg.indexWarming ? prev.totalMatches : msg.totalMatches,

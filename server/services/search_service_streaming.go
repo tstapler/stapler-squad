@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -33,7 +34,10 @@ func (ss *SearchService) StreamSearchClaudeHistory(
 	}
 
 	if !ss.indexSynced() {
-		if err := stream.Send(&sessionv1.SearchClaudeHistoryStreamResponse{IndexWarming: true}); err != nil {
+		if err := stream.Send(&sessionv1.SearchClaudeHistoryStreamResponse{
+			IndexWarming: true,
+			Results:      ss.metadataPreview(ctx, req.Msg),
+		}); err != nil {
 			return err
 		}
 		if err := ss.waitForFirstSync(ctx); err != nil {
@@ -52,6 +56,36 @@ func (ss *SearchService) StreamSearchClaudeHistory(
 		return ss.streamBatches(stream, raw, ss.finishPostProcessed(raw, req.Msg), nil)
 	}
 	return ss.streamBatches(stream, raw, nil, req.Msg)
+}
+
+// metadataPreview returns up to one batch of session-name/project matches from
+// the in-memory history cache, so a cold-start stream shows real hits before the
+// index finishes its first sync. The first ranked batch replaces them. A load
+// failure yields no preview; the stream still waits for the sync.
+func (ss *SearchService) metadataPreview(ctx context.Context, msg *sessionv1.SearchClaudeHistoryRequest) []*sessionv1.SearchResult {
+	hist, err := ss.getOrRefreshHistoryCache(ctx)
+	if err != nil {
+		return nil
+	}
+	entries := hist.Search(msg.Query)
+	if len(entries) > streamSearchBatchSize {
+		entries = entries[:streamSearchBatchSize]
+	}
+	out := make([]*sessionv1.SearchResult, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, &sessionv1.SearchResult{
+			SessionId:   e.ID,
+			SessionName: e.Name,
+			Project:     e.Project,
+			Metadata: &sessionv1.SearchResultMetadata{
+				IsMetadataMatch: true,
+				MatchSource:     "metadata_preview",
+				Model:           e.Model,
+				CreatedAt:       timestamppb.New(e.CreatedAt),
+			},
+		})
+	}
+	return out
 }
 
 // finishPostProcessed enriches every raw hit and applies the post-processing
