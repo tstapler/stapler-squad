@@ -6,20 +6,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 )
 
 // flagAudit is the audit state of one UpdateFeatureFlag call.
 type flagAudit struct {
-	sink     *AuditSink
-	base     AuditLine
+	sink     *auditkit.AuditSink
+	base     auditkit.AuditLine
 	previous bool
 	seq      int64
 	outcome  string
 	enabled  bool
 }
 
-func flagRequestFields(ctx context.Context, peer string, header http.Header) AuditLine {
-	l := AuditLine{PeerAddr: peer, UserAgent: header.Get("User-Agent")}
+func flagRequestFields(ctx context.Context, peer string, header http.Header) auditkit.AuditLine {
+	l := auditkit.AuditLine{PeerAddr: peer, UserAgent: header.Get("User-Agent")}
 	if rec, ok := access.RequestRecordFrom(ctx); ok {
 		l.Listener, l.Host, l.Origin, l.AuthMode = rec.Listener, rec.Host, rec.Origin, rec.AuthMode
 	}
@@ -33,26 +34,26 @@ func boolRef(b bool) *bool { return &b }
 
 // begin writes the durable `requested` line of a loosening flip before the
 // update mutex is taken (bounded, so a stalled fsync cannot queue the kill
-// switch behind it). It returns ErrAuditFailed or ErrAuditTimeout when the flip
+// switch behind it). It returns auditkit.ErrAuditFailed or auditkit.ErrAuditTimeout when the flip
 // must be refused.
-func (f *FeatureFlagService) auditBegin(ctx context.Context, op flagOp, fields AuditLine) (*flagAudit, error) {
+func (f *FeatureFlagService) auditBegin(ctx context.Context, op flagOp, fields auditkit.AuditLine) (*flagAudit, error) {
 	name, enabled := op.name, op.enabled
 	policy, audited := f.auditPolicies[name]
 	if f.audit == nil || !audited {
 		return &flagAudit{}, nil // inactive: no sink or no policy for this flag
 	}
-	a := &flagAudit{sink: f.audit, enabled: enabled, outcome: flagOutcomePersistFailed}
+	a := &flagAudit{sink: f.audit, enabled: enabled, outcome: auditkit.FlagOutcomePersistFailed}
 	a.base = fields
-	a.base.Kind, a.base.Flag, a.base.Scope, a.base.ChangeID = auditKindFlagChg, name, op.auditScope(), uuid.NewString()
+	a.base.Kind, a.base.Flag, a.base.Scope, a.base.ChangeID = auditkit.AuditKindFlagChg, name, op.auditScope(), uuid.NewString()
 	a.base.Mutation = op.mutationName()
 	if policy.Loosening == nil || !policy.Loosening(enabled) {
 		return a, nil
 	}
 	req := a.base
-	req.Phase, req.New = auditPhaseRequest, boolRef(enabled)
+	req.Phase, req.New = auditkit.AuditPhaseRequest, boolRef(enabled)
 	if err := f.audit.AppendBounded(ctx, req); err != nil {
 		if policy.EscapeHatchFor(a.base.Scope) {
-			f.audit.fallback(req, err)
+			f.audit.Fallback(req, err)
 			return a, nil
 		}
 		return nil, err
@@ -67,7 +68,7 @@ func (a *flagAudit) finish() {
 		return
 	}
 	l := a.base
-	l.Phase, l.Outcome, l.Seq = auditPhaseResult, a.outcome, a.seq
+	l.Phase, l.Outcome, l.Seq = auditkit.AuditPhaseResult, a.outcome, a.seq
 	l.Previous, l.New = boolRef(a.previous), boolRef(a.enabled)
 	a.sink.Enqueue(l)
 }

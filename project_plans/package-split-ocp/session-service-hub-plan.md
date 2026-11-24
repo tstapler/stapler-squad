@@ -174,6 +174,8 @@ Done in the `access` kernel PR: the first `access` row of the table above (`Auth
 
 Deferred from the `access` kernel PR: the second `access` row (`SteerOutcome` and its 8 constants, `ErrSteerPaneOwnership`, `NudgeRecorder`, `steerRequestFacts`, `requestFactsOf`, `BacklogLinkResolver`, `BacklogReviewLink`) is owned by the Stage 5 `providers`/`notify` PRs, which create the edges it cuts. `BacklogReviewLink` is a sinkguard capability keyed to `hidden_review_steer.go` (unexported fields, one constructor), and `steerRequestFacts` has unexported fields read in six files, so moving them needs the guard rows re-keyed and fields exported; that belongs with the PR that needs the symbols across the boundary. `AnswerTarget` (+2 methods) stays beside `PaneReplyCore` for the same reason (its only consumer is the pane-reply core).
 
+Added by the `auditkit` kernel PR: the in-memory `fsops.FSOps` test double (`memFS`) moves from `server/services/fsops_test.go` to `server/services/fsops/memfs` so both `auditkit` and the staying `server/services` tests share it; it adds one tiny test-support leaf beyond the plan, and `fsopstest` could not host it because `fsops`'s own tests import `fsopstest`.
+
 #### 3.3.3 L1 cycle cuts (each edge below is a symbol set that becomes a kernel symbol, a move, or a consumer-side port)
 
 | Edge cut | Symbols | Cut |
@@ -219,7 +221,7 @@ The per-file assignment is [session-service-hub-assignment.csv](session-service-
 | | `secretscan` | 107 | `secret_scanner`, `redaction_sentinels` (the sentinels moved in from `ai_interfaces.go`, #1798) |
 | | `credkit` | 589 | `credentials`, `provider_limits` |
 | | `access` | 1,187 | `terminal_access`, `human_activity`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, `tmux_input_send`, `external_pane_resize`, `request_record` (the capture-tap symbols of 3.3.2); the steer symbols are deferred (see 3.3.2) |
-| | `auditkit` | 467 | `hidden_reply_audit` (imports `fsops`) |
+| | `auditkit` | 468 | `hidden_reply_audit` (imports `fsops`; `AuditKind*`, `AuditPhase*`, `FlagOutcome*` and `Fallback` are exported because the staying callers cross the package boundary, and `AuditFileName`, `AuditQueueSize`, `AuditModeQueued` and `AuditModeFallbackLog` only because the staying tests read them; the audit-focused tests of the sink moved with it, the flag-flip tests stay in `feature_flag_audit_test.go`) |
 | | `approvalkit` | 460 | `approval_store` |
 | | `flagsvc` | 1,695 | `feature_flag_*`, `feature_flags_*` (imports `auditkit`, `access`) |
 | | `questionkit` | 1,716 | `pending_question_store`, `askuserquestion_parser`, `question_delivery_track`, `answer_listener`, `guidance_request_hook_mirror`, `guidance_request_mirror_proto`, `guidance_dialog_*`, `notification_quality_metrics`, `reply_idempotency` (imports `flagsvc`, `secretscan`) |

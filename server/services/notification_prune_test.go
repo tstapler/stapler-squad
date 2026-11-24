@@ -20,6 +20,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 )
 
 const (
@@ -41,7 +43,7 @@ type pruneHarness struct {
 	ns        *NotificationService
 	store     *notifications.NotificationHistoryStore
 	gate      *deliverygate.Gate
-	mfs       *memFS
+	mfs       *memfs.MemFS
 	storePath string
 	srv       *httptest.Server
 	client    sessionv1connect.SessionServiceClient
@@ -70,9 +72,9 @@ func newPruneHarness(t *testing.T, rows []pruneRow, hidden, visible []string) *p
 	for _, id := range visible {
 		entries = append(entries, deliverygate.Entry{UUID: id, Title: "title-" + id})
 	}
-	mfs := newMemFS()
+	mfs := memfs.New()
 	ns := &NotificationService{notificationStore: store, deliveryGate: gate}
-	ns.SetAuditSink(NewAuditSink(func() (string, error) { return "/cfg", nil }, WithAuditFS(mfs)))
+	ns.SetAuditSink(auditkit.NewAuditSink(func() (string, error) { return "/cfg", nil }, auditkit.WithAuditFS(mfs)))
 	ns.pruneNow = func() time.Time { return time.Date(2026, 10, 9, 18, 30, 45, 0, time.UTC) }
 
 	h := &pruneHarness{t: t, ns: ns, store: store, gate: gate, mfs: mfs, storePath: storePath}
@@ -100,14 +102,14 @@ func (h *pruneHarness) prune(apply, includeUnread bool) (*sessionv1.PruneHiddenS
 	return resp.Msg, nil
 }
 
-func (h *pruneHarness) auditLines() []AuditLine {
-	b, ok := h.mfs.get("/cfg/audit/hidden-session-replies.jsonl")
+func (h *pruneHarness) auditLines() []auditkit.AuditLine {
+	b, ok := h.mfs.Get("/cfg/audit/hidden-session-replies.jsonl")
 	if !ok {
 		return nil
 	}
-	var out []AuditLine
+	var out []auditkit.AuditLine
 	for _, l := range lines(b) {
-		var al AuditLine
+		var al auditkit.AuditLine
 		require.NoError(h.t, json.Unmarshal(l, &al))
 		out = append(out, al)
 	}
@@ -185,8 +187,8 @@ func TestPruneApply_ShouldAppendKindPruneAuditLineBeforeDeleteAndRejectRebinding
 	got := h.auditLines()
 	require.Len(t, got, 2)
 	req, result := got[0], got[1]
-	assert.Equal(t, auditKindPrune, req.Kind)
-	assert.Equal(t, auditPhaseRequest, req.Phase)
+	assert.Equal(t, auditkit.AuditKindPrune, req.Kind)
+	assert.Equal(t, auditkit.AuditPhaseRequest, req.Phase)
 	require.NotNil(t, req.MatchedCount)
 	assert.Equal(t, 3, *req.MatchedCount)
 	require.NotNil(t, req.IncludeUnreadActionable)
@@ -200,11 +202,11 @@ func TestPruneApply_ShouldAppendKindPruneAuditLineBeforeDeleteAndRejectRebinding
 	assert.True(t, strings.HasPrefix(req.PeerAddr, "127.0.0.1:"), req.PeerAddr)
 	require.NotNil(t, req.PeerLoopback)
 	assert.True(t, *req.PeerLoopback)
-	assert.Equal(t, auditPhaseResult, result.Phase)
+	assert.Equal(t, auditkit.AuditPhaseResult, result.Phase)
 	assert.Equal(t, pruneOutcomeApplied, result.Outcome)
 	assert.Equal(t, req.ChangeID, result.ChangeID)
 
-	raw, _ := h.mfs.get("/cfg/audit/hidden-session-replies.jsonl")
+	raw, _ := h.mfs.Get("/cfg/audit/hidden-session-replies.jsonl")
 	for _, secret := range []string{"h1-warn", "h1-info", "title-h1", "\"h1\"", "session_id"} {
 		assert.NotContains(t, string(raw), secret, "the audit line carries counts only")
 	}
@@ -212,7 +214,7 @@ func TestPruneApply_ShouldAppendKindPruneAuditLineBeforeDeleteAndRejectRebinding
 
 func TestPruneApply_ShouldReturnInternalWithNoDeleteAndNoBackup_WhenAuditAppendFails(t *testing.T) {
 	h := newPruneHarness(t, storyRows(), []string{"h1", "h2"}, []string{"v1"})
-	h.mfs.setFailWrite(errDiskFull)
+	h.mfs.SetFailWrite(errDiskFull)
 
 	_, err := h.prune(true, false)
 

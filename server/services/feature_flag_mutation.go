@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
@@ -206,14 +207,14 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	})
 	if rollbackErr != nil {
 		if audit.active() {
-			audit.outcome = flagOutcomeControllerFailed
+			audit.outcome = auditkit.FlagOutcomeControllerFailed
 		}
 		return connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to apply scope %q of %q: %w (rollback also failed, disk state may be inconsistent: %v)",
 				op.scope, op.name, ctrlErr, rollbackErr))
 	}
 	if audit.active() {
-		audit.outcome = flagOutcomeRolledBack
+		audit.outcome = auditkit.FlagOutcomeRolledBack
 	}
 	f.notifyObserver(op.name)
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to apply scope %q of %q: %w", op.scope, op.name, ctrlErr))

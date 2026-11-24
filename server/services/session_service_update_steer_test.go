@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -71,7 +73,7 @@ func (r *steerRecordingPM) writes() []string {
 func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	ctx := context.Background()
-	sink := NewAuditSink(func() (string, error) { return "/cfg", nil }, WithAuditFS(newMemFS()))
+	sink := auditkit.NewAuditSink(func() (string, error) { return "/cfg", nil }, auditkit.WithAuditFS(memfs.New()))
 	t.Cleanup(sink.Close)
 	fix.svc.featureFlagSvc.SetAudit(sink, nil)
 

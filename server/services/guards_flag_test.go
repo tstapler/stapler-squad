@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -118,11 +119,11 @@ func TestUnaryGuards_ShouldKeepTypedPathAndAuditInBothFlagStates_AndAuditGuardBy
 	assert.Equal(t, uint64(1), e.fix.svc.guardBypass.count.Load())
 
 	lines := e.auditLines()
-	assert.Len(t, steerLines(lines, auditKindBacklogSteer), 4, "two typed steers, a request and a result line each")
-	bypass := steerLines(lines, auditKindGuardBypass)
+	assert.Len(t, steerLines(lines, auditkit.AuditKindBacklogSteer), 4, "two typed steers, a request and a result line each")
+	bypass := steerLines(lines, auditkit.AuditKindGuardBypass)
 	require.Len(t, bypass, 2)
-	assert.Equal(t, auditPhaseRequest, bypass[0].Phase)
-	assert.Equal(t, auditPhaseResult, bypass[1].Phase)
+	assert.Equal(t, auditkit.AuditPhaseRequest, bypass[0].Phase)
+	assert.Equal(t, auditkit.AuditPhaseResult, bypass[1].Phase)
 	assert.Equal(t, steerOutcomeSent, bypass[1].Outcome)
 	assert.Equal(t, diag.inst.UUID, bypass[0].SessionUUID)
 }
@@ -133,7 +134,7 @@ func TestGuardBypass_ShouldRefuseWithZeroWrites_WhenTheAuditSinkIsDown_AndStillS
 	diag := e.addSession("down-diagnose", true, instance.SessionRoleDiagnose)
 	e.setGuards(false)
 	e.sink.Close() // drains the flag-change result line before the fault is injected
-	e.mfs.setFailWrite(errDiskFull)
+	e.mfs.SetFailWrite(errDiskFull)
 
 	err := e.steer(e.localCtx(), diag.inst.Title, "bypass")
 	require.Error(t, err)
@@ -181,11 +182,11 @@ func TestGuardsFlag_ShouldRecordFlagChangeLinesAndPersistOffWithOnlyTheFallbackR
 	e.sink.Close() // drains the queued result lines
 
 	var requested, results int
-	for _, l := range steerLines(e.readLines(), auditKindFlagChg) {
+	for _, l := range steerLines(e.readLines(), auditkit.AuditKindFlagChg) {
 		if l.Flag != hiddenSessionReadonlyGuardsFlagName {
 			continue
 		}
-		if l.Phase == auditPhaseRequest {
+		if l.Phase == auditkit.AuditPhaseRequest {
 			requested++
 			continue
 		}
@@ -197,7 +198,7 @@ func TestGuardsFlag_ShouldRecordFlagChangeLinesAndPersistOffWithOnlyTheFallbackR
 	assert.Equal(t, 1, requested, "only the loosening flip writes a durable requested line first")
 	assert.Equal(t, 2, results)
 
-	e.mfs.setFailWrite(errDiskFull)
+	e.mfs.SetFailWrite(errDiskFull)
 	require.NoError(t, flagUpdateCtx(context.Background(), e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName, false),
 		"off is the hatch for a sink fault: never refused")
 	assert.False(t, e.fix.svc.guards.GuardsEnabled())

@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "memfs",
+    srcs = ["memfs.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/fsops/memfs",
+    visibility = ["//visibility:public"],
+    deps = ["//server/services/fsops"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":memfs",
+    visibility = ["//visibility:public"],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

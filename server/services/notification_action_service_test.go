@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -135,28 +136,28 @@ func (m *recordingMetrics) Record(s ActionSample) {
 
 type recordingAudit struct {
 	mu    sync.Mutex
-	lines []AuditLine
+	lines []auditkit.AuditLine
 	fail  bool
 }
 
-func (a *recordingAudit) Append(l AuditLine) error {
+func (a *recordingAudit) Append(l auditkit.AuditLine) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lines = append(a.lines, l)
 	return nil
 }
 
-func (a *recordingAudit) AppendBounded(_ context.Context, l AuditLine) error {
+func (a *recordingAudit) AppendBounded(_ context.Context, l auditkit.AuditLine) error {
 	if a.fail {
-		return ErrAuditFailed
+		return auditkit.ErrAuditFailed
 	}
 	return a.Append(l)
 }
 
-func (a *recordingAudit) snapshot() []AuditLine {
+func (a *recordingAudit) snapshot() []auditkit.AuditLine {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return append([]AuditLine(nil), a.lines...)
+	return append([]auditkit.AuditLine(nil), a.lines...)
 }
 
 type dispatchFixture struct {
@@ -318,7 +319,7 @@ func TestInvokeNotificationAction_ShouldAuditChannelAndCallerKind_WhenSPAHeaderP
 
 	lines := f.audit.snapshot()
 	require.Len(t, lines, 2)
-	assert.Equal(t, auditKindNotificationAction, lines[0].Kind)
+	assert.Equal(t, auditkit.AuditKindNotificationAction, lines[0].Kind)
 	assert.Equal(t, channelWebLocal, lines[0].Channel)
 	assert.Equal(t, callerOperatorUI, lines[0].CallerKind)
 	assert.Equal(t, channelUnknown, lines[1].Channel)

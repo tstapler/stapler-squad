@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -71,13 +72,13 @@ func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeve
 	e := newAuditEnv(t)
 	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
 	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
-	e.mfs.setFailWrite(errDiskFull)
+	e.mfs.SetFailWrite(errDiskFull)
 
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))
 	v, ok := overrideOf(terminalWriteLeaseFlagName)
 	assert.True(t, ok && !v, "persisted")
 	assert.False(t, instance.DefaultLeaseFlag.Enabled(), "applied")
-	assert.GreaterOrEqual(t, e.degradedCount(auditModeFallbackLog), 1)
+	assert.GreaterOrEqual(t, e.degradedCount(auditkit.AuditModeFallbackLog), 1)
 
 	// The on flip is a tightening flip: it never waits on or fails with the sink.
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, true))
@@ -95,11 +96,11 @@ func TestTerminalWriteLeaseFlag_ShouldAppendFlagChangeLineWithTruePreviousValueF
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, true))
 	e.sink.Close()
 
-	var results []AuditLine
+	var results []auditkit.AuditLine
 	for _, l := range e.lines(t) {
-		assert.Equal(t, auditKindFlagChg, l.Kind)
+		assert.Equal(t, auditkit.AuditKindFlagChg, l.Kind)
 		assert.Equal(t, terminalWriteLeaseFlagName, l.Flag)
-		if l.Phase == auditPhaseResult {
+		if l.Phase == auditkit.AuditPhaseResult {
 			results = append(results, l)
 		}
 	}
