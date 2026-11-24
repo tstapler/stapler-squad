@@ -20,6 +20,7 @@ server/services/sessionretention !server/web
 server/services/importsvc !server/web
 server/services/unfinishedwork !server/web
 server/services/federation !server/web
+server/services/secretscan !server/web
 session/ptyio !server
 session/ptydiscovery !server
 session/hostclaim !server

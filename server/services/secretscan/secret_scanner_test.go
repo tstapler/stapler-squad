@@ -1,6 +1,9 @@
-package services
+package secretscan
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestScanForSecrets_NoFalsePositives(t *testing.T) {
 	t.Parallel()
@@ -115,6 +118,56 @@ func TestScanForSecrets_TruePositives(t *testing.T) {
 				t.Errorf("missed secret: %q should have been flagged", tc.name)
 			} else if result.PatternName != tc.wantPattern {
 				t.Errorf("wrong pattern: got %q, want %q", result.PatternName, tc.wantPattern)
+			}
+		})
+	}
+}
+
+func TestScanForSecrets_should_OnlyScanTheFirst4096Bytes(t *testing.T) {
+	t.Parallel()
+	token := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	pad := func(n int) string { return strings.Repeat(" ", n) }
+
+	if got := ScanForSecrets(pad(4097-len(token)) + token); got.Found {
+		t.Errorf("secret ending at byte 4097 must not be scanned, got %+v", got)
+	}
+	if got := ScanForSecrets(pad(4096-len(token)) + token + "x"); !got.Found {
+		t.Error("secret ending exactly at byte 4096 of a longer string must be found")
+	}
+}
+
+func TestFormatSecretDenyMessage_should_NameThePattern(t *testing.T) {
+	t.Parallel()
+	got := FormatSecretDenyMessage("AWS access key ID")
+	for _, want := range []string{"Blocked:", "(AWS access key ID)", "secrets manager"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("message %q missing %q", got, want)
+		}
+	}
+}
+
+func TestRedactSecrets(t *testing.T) {
+	t.Parallel()
+	token := "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+	tests := []struct {
+		name        string
+		in          string
+		want        string
+		wantChanged bool
+	}{
+		{name: "no secret is returned unchanged", in: "echo $HOME", want: "echo $HOME"},
+		{name: "empty", in: "", want: ""},
+		{name: "one secret", in: "token " + token + " end", want: "token [redacted] end", wantChanged: true},
+		{name: "every occurrence", in: token + " " + token, want: "[redacted] [redacted]", wantChanged: true},
+		{name: "different patterns in one string", in: "AKIAIOSFODNN7EXAMPLE and " + token, want: "[redacted] and [redacted]", wantChanged: true},
+		{name: "scans past 4096 bytes", in: strings.Repeat("a ", 2048) + token, want: strings.Repeat("a ", 2048) + "[redacted]", wantChanged: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, changed := RedactSecrets(tc.in)
+			if got != tc.want || changed != tc.wantChanged {
+				t.Errorf("RedactSecrets(%q) = (%q, %v), want (%q, %v)", tc.in, got, changed, tc.want, tc.wantChanged)
 			}
 		})
 	}
