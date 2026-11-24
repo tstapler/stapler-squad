@@ -519,7 +519,7 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 // SearchClaudeHistory performs full-text search across Claude conversation history.
 //
 // The search index is kept fresh by the background sync loop (see
-// startSyncLoop), so this never syncs on the request path; before the first
+// StartSyncLoop), so this never syncs on the request path; before the first
 // sync completes it returns CodeUnavailable.
 func (ss *SearchService) SearchClaudeHistory(
 	ctx context.Context,

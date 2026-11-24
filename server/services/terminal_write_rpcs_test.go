@@ -136,7 +136,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"ResolveDefaults", "RestartTmuxServer", "ResumeCrashedSession", "ResumeHibernatedSession", "RetrySession",
 		"RetrySessionCreation", "RevokeEgressConsent", "RunOneShot", "RunWorkflow", "SaveRulesToConfigFile",
 		"SearchClaudeHistory", "SearchContent", "SearchFiles", "SearchSessionArtifacts", "FindSessionsByPullRequest", "ListSessionArtifacts", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
-		"SetStreamHubSessionOverride", "StatFile", "StopShell", "StreamTerminal", "SwitchDatabase",
+		"SetStreamHubSessionOverride", "StatFile", "StopShell", "StreamSearchClaudeHistory", "StreamTerminal", "SwitchDatabase",
 		"TestJulesConnection", "TestSlackWebhook", "UnarchiveSession", "UnpinSession", "UpdateBackgroundModels",
 		"UpdateCallbackConfig", "UpdateClaudeConfig", "UpdateFeatureFlag", "UpdateGlobalDefaults",
 		"UpdateJulesConfig", "UpdateProject", "UpdateSlackConfig", "UpdateTaggingClassifierConfig",
