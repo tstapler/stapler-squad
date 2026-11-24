@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
 import type { LogEntry as ProtoLogEntry } from "@/gen/session/v1/session_pb";
 import { useLogViewer, type LogViewerTimeRange, type LogEntry } from "@/lib/hooks/useLogViewer";
+import { nextLevelFilters } from "@/lib/logs/levelFilter";
 import { VirtualLogList } from "./VirtualLogList";
 import { JumpToLatestButton } from "./JumpToLatestButton";
 import { LogViewerToolbar } from "./LogViewerToolbar";
@@ -80,7 +81,7 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
 
   // Badge tap: show only that level; tapping it again (it is the sole active filter) clears the filter.
   const toggleLevelFilter = useCallback(
-    (level: string) => setLevelFilters(levelFilters.length === 1 && levelFilters[0] === level ? [] : [level]),
+    (level: string) => setLevelFilters(nextLevelFilters(levelFilters, level)),
     [levelFilters, setLevelFilters],
   );
 

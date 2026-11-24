@@ -73,6 +73,8 @@ export const LogRow = React.memo(function LogRow({
         {onFilterByLevel && level !== "UNKNOWN" ? (
           <button
             type="button"
+            // Roving tabindex stays on the row; the badge is a pointer/touch affordance, not a tab stop per row.
+            tabIndex={-1}
             className={levelBadge({ level })}
             aria-label={`Filter by ${level}`}
             data-testid={`log-level-badge-${index}`}
@@ -81,8 +83,10 @@ export const LogRow = React.memo(function LogRow({
               e.stopPropagation();
               onFilterByLevel(level);
             }}
-            // Space/Enter on the badge must not bubble to the row's expand handler.
-            onKeyDown={(e) => e.stopPropagation()}
+            // Enter/Space activate the button; they must not also bubble to the row's expand handler.
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+            }}
           >
             {level}
           </button>

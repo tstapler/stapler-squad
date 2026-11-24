@@ -22,11 +22,12 @@ export const levelBadge = recipe({
     // Reset <button> chrome; the badge is a <button> only when it filters by level.
     border: "none",
     margin: 0,
+    cursor: "pointer",
     lineHeight: "inherit",
     touchAction: "manipulation",
     "@media": {
-      // Coarse pointer: taller tap target; row min-height (44) holds it.
-      "(pointer: coarse)": { minHeight: 32 },
+      // Coarse pointer: full 44px-tall tap target (WCAG 2.5.5), buttons only — plain-text badges stay compact.
+      "(pointer: coarse)": { selectors: { "button&": { minHeight: 44 } } },
     },
   },
   variants: {

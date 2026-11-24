@@ -25,13 +25,17 @@ globalStyle(`${codeEditor} .cm-editor`, {
 
 globalStyle(`${codeEditor} .cm-changeGutter`, {
   width: 4,
+  "@media": {
+    // The gutter clips overflow, so it must grow with the marker (see gutterMarker): 44 + 10 + 1px border = 55px.
+    "(pointer: coarse)": { width: 10 },
+  },
 });
 
 const gutterMarker = style({
   width: 4,
   height: "100%",
   "@media": {
-    // Coarse pointer: wider strip to tap. With the 44px line-number column and 1px border the gutter totals 55px (≤56).
+    // Coarse pointer: wider strip to tap (the .cm-changeGutter column above widens to match).
     "(pointer: coarse)": { width: 10 },
   },
 });

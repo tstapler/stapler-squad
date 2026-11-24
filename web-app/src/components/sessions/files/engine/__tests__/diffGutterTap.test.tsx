@@ -26,7 +26,12 @@ describe("nextHunkDocLine", () => {
 });
 
 describe("change gutter tap", () => {
+  const originalMatchMedia = window.matchMedia;
   beforeAll(installJsdomLayoutShims);
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    document.body.innerHTML = "";
+  });
   const mountView = async () => {
     const engine = new CmEngine();
     const host = document.createElement("div");
