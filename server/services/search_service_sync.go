@@ -39,7 +39,7 @@ func (ss *SearchService) SyncNow(ctx context.Context) error {
 	}
 	ss.historySnap.Store(&historySnapshot{cache: hist, at: time.Now()})
 
-	result, err := ss.searchEngine.IncrementalSync(hist)
+	result, err := ss.searchEngine.IncrementalSyncContext(ctx, hist)
 	if err != nil {
 		return fmt.Errorf("sync search index: %w", err)
 	}
