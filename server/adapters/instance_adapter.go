@@ -6,10 +6,10 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -207,7 +207,7 @@ func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
 	protoSession.Pinned = snap.Pinned
-	protoSession.TerminalReadOnly, _ = session.TerminalInputBlock(snap)
+	protoSession.TerminalReadOnly, _ = terminalstate.TerminalInputBlock(snap)
 
 	// Workflow linkage, name, and archive state.
 	protoSession.WorkflowId = snap.WorkflowID

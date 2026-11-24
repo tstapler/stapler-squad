@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/prmirror"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,8 +22,8 @@ func linkPR(t *testing.T, s *Storage, uuid string, n int, role domain.PRRole, at
 	require.NoError(t, err)
 }
 
-func reconcilerFor(s *Storage, insts []*instance.Instance) *PRMirrorReconciler {
-	return NewPRMirrorReconciler(func() []*instance.Instance { return insts }, s)
+func reconcilerFor(s *Storage, insts []*instance.Instance) *prmirror.Reconciler {
+	return prmirror.NewReconciler(func() []*instance.Instance { return insts }, s)
 }
 
 func loadByTitle(t *testing.T, s *Storage, title string) *instance.Instance {
@@ -50,12 +51,12 @@ func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActive
 	require.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber, "the snapshot already projects the active PR")
 	require.Equal(t, 11, sessionMirror(t, storage, "drifted").GitHubPRNumber)
 
-	before := PRMirrorDriftCorrected()
+	before := prmirror.DriftCorrected()
 	corrected, skipped := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 
 	assert.Equal(t, 1, corrected)
 	assert.Zero(t, skipped)
-	assert.Equal(t, before+1, PRMirrorDriftCorrected())
+	assert.Equal(t, before+1, prmirror.DriftCorrected())
 	assert.Equal(t, 12, sessionMirror(t, storage, "drifted").GitHubPRNumber)
 
 	corrected, _ = reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
@@ -70,13 +71,13 @@ func TestMirrorReconciler_ShouldSkipAndCount_WhenLegacyPRUnrepresented(t *testin
 	inst := loadByTitle(t, storage, "skipped")
 	want := sessionMirror(t, storage, "skipped")
 
-	before, driftBefore := PRMirrorDriftSkipped(), PRMirrorDriftCorrected()
+	before, driftBefore := prmirror.DriftSkipped(), prmirror.DriftCorrected()
 	corrected, skipped := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 
 	assert.Zero(t, corrected)
 	assert.Equal(t, 1, skipped)
-	assert.Equal(t, before+1, PRMirrorDriftSkipped())
-	assert.Equal(t, driftBefore, PRMirrorDriftCorrected(), "a skip is not drift")
+	assert.Equal(t, before+1, prmirror.DriftSkipped())
+	assert.Equal(t, driftBefore, prmirror.DriftCorrected(), "a skip is not drift")
 	got := sessionMirror(t, storage, "skipped")
 	assert.Equal(t, want.GitHubPRNumber, got.GitHubPRNumber)
 	assert.Equal(t, want.GitHubPRURL, got.GitHubPRURL)

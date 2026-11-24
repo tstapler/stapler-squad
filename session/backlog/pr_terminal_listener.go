@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // maxListenerCleanupsPerTick bounds how many done/archived items one terminal batch
@@ -73,7 +74,7 @@ func (l *BacklogLifecycleListener) cleanupItemsOfTerminalStates(ctx context.Cont
 			return
 		}
 		item, gerr := l.storage.GetBacklogItem(ctx, id)
-		if gerr != nil || !session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+		if gerr != nil || !terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 			continue
 		}
 		l.cleanupTerminalItemSync(session.WithCleanupPath(ctx, session.CleanupPathListener), id)

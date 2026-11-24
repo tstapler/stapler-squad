@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "prmirror",
+    srcs = ["reconciler.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/prmirror",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/instance",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prmirror",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prmirror_test",
+    srcs = [
+        "main_test.go",
+        "reconciler_test.go",
+    ],
+    embed = [":prmirror"],
+    deps = [
+        "//session/domain",
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

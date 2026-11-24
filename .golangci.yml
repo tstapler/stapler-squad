@@ -254,6 +254,18 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent
             - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/shell
+        # session/credentialstore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_credentialstore:
+          list-mode: strict
+          files:
+            - "**/session/credentialstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/integrationcredential
         # session/projectstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_projectstore:
@@ -526,6 +538,7 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/itemlink
             - github.com/tstapler/stapler-squad/session/nudgeoutcomes
+            - github.com/tstapler/stapler-squad/session/terminalstate
             - github.com/tstapler/stapler-squad/session/workspacepeers
           # Belt and braces: this row's allow matching is order-dependent (verified, mechanism not read),
           # so the exact import set in server/mcp/import_set_guard_test.go is the dependable control.

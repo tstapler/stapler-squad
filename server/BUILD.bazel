@@ -150,6 +150,7 @@ go_library(
         "//session/memory",
         "//session/nudgeoutcomes",
         "//session/pipelinemode",
+        "//session/prmirror",
         "//session/prpoller",
         "//session/queue",
         "//session/registry",

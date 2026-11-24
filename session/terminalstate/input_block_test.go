@@ -1,4 +1,4 @@
-package session
+package terminalstate
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"

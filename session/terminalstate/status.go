@@ -1,4 +1,7 @@
-package session
+// Package terminalstate holds the terminal-state predicates the backlog and UI layers share:
+// whether a backlog status is terminal, whether a terminal stream must be read-only, and the
+// settled-key tracker that stops safety-net sweeps re-reading finished items.
+package terminalstate
 
 import "github.com/tstapler/stapler-squad/session/domain"
 

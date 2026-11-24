@@ -1,4 +1,7 @@
-package session
+// Package credentialstore persists integration credentials: sha256-hashed bearer tokens
+// issued to machine principals. session.EntRepository embeds *Credentials so existing
+// callers keep their method set.
+package credentialstore
 
 import (
 	"context"
@@ -22,11 +25,14 @@ const integrationTokenPrefix = "sqi_"
 // of the token is not brute-forceable, which is why only the hash is stored.
 const integrationTokenBytes = 32
 
-// IntegrationCredentialInfo is what a successfully authenticated token resolves to.
-type IntegrationCredentialInfo struct {
-	PrincipalID    string
-	WorkspaceID    string
-	AllowedDirRoot string
+// Credentials owns the integration_credentials table.
+type Credentials struct {
+	client *ent.Client
+}
+
+// New returns Credentials over client, which must already hold the migrated schema.
+func New(client *ent.Client) *Credentials {
+	return &Credentials{client: client}
 }
 
 func hashIntegrationToken(token string) string {
@@ -38,7 +44,7 @@ func hashIntegrationToken(token string) string {
 // plaintext token. The token is returned exactly once and is not recoverable afterwards.
 // PrincipalID is unique: re-issuing for an existing principal fails rather than silently
 // rotating, so a leaked token can only be replaced via an explicit revoke.
-func (r *EntRepository) IssueIntegrationCredential(ctx context.Context, info IntegrationCredentialInfo) (string, error) {
+func (c *Credentials) IssueIntegrationCredential(ctx context.Context, info domain.IntegrationCredentialInfo) (string, error) {
 	if info.PrincipalID == "" || info.WorkspaceID == "" || info.AllowedDirRoot == "" {
 		return "", fmt.Errorf("principal, workspace and allowed directory root are required")
 	}
@@ -48,7 +54,7 @@ func (r *EntRepository) IssueIntegrationCredential(ctx context.Context, info Int
 	}
 	token := integrationTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 
-	_, err := r.Client.IntegrationCredential.Create().
+	_, err := c.client.IntegrationCredential.Create().
 		SetPrincipalID(info.PrincipalID).
 		SetTokenSha256(hashIntegrationToken(token)).
 		SetWorkspaceID(info.WorkspaceID).
@@ -65,11 +71,11 @@ func (r *EntRepository) IssueIntegrationCredential(ctx context.Context, info Int
 
 // AuthenticateIntegrationToken resolves a bearer token to its credential. An unknown or
 // revoked token returns ErrNotFound, deliberately indistinguishable from each other.
-func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token string) (*IntegrationCredentialInfo, error) {
+func (c *Credentials) AuthenticateIntegrationToken(ctx context.Context, token string) (*domain.IntegrationCredentialInfo, error) {
 	if token == "" {
 		return nil, domain.ErrNotFound
 	}
-	cred, err := r.Client.IntegrationCredential.Query().
+	cred, err := c.client.IntegrationCredential.Query().
 		Where(
 			integrationcredential.TokenSha256(hashIntegrationToken(token)),
 			integrationcredential.RevokedAtIsNil(),
@@ -81,7 +87,7 @@ func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token 
 		}
 		return nil, fmt.Errorf("lookup integration credential: %w", err)
 	}
-	return &IntegrationCredentialInfo{
+	return &domain.IntegrationCredentialInfo{
 		PrincipalID:    cred.PrincipalID,
 		WorkspaceID:    cred.WorkspaceID,
 		AllowedDirRoot: cred.AllowedDirRoot,
@@ -90,8 +96,8 @@ func (r *EntRepository) AuthenticateIntegrationToken(ctx context.Context, token 
 
 // RevokeIntegrationCredential disables the principal's credential. Its registrations are
 // left in place; revoking authority is separate from tearing down what it created.
-func (r *EntRepository) RevokeIntegrationCredential(ctx context.Context, principalID string) error {
-	n, err := r.Client.IntegrationCredential.Update().
+func (c *Credentials) RevokeIntegrationCredential(ctx context.Context, principalID string) error {
+	n, err := c.client.IntegrationCredential.Update().
 		Where(integrationcredential.PrincipalID(principalID), integrationcredential.RevokedAtIsNil()).
 		SetRevokedAt(time.Now().UTC()).
 		Save(ctx)

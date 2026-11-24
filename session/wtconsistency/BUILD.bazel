@@ -13,6 +13,7 @@ go_library(
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",
+        "//session/terminalstate",
         "//tools/bzl/ent",
         "//tools/bzl/ent:session",
         "//tools/bzl/ent:worktree",
