@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -90,7 +91,7 @@ func TestAnthropicHTTPClientBaseURLConfigurableButProbeIsNot(t *testing.T) {
 	// Capacity monitor probe must keep targeting the real Anthropic endpoint
 	// no matter what backend settings say: record where it actually sends.
 	var probedURL string
-	probe := NewAnthropicLimitsClient(NewChain(staticAnthropicSource{}), "")
+	probe := NewAnthropicLimitsClient(credkit.NewChain(staticAnthropicSource{}), "")
 	probe.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		probedURL = r.URL.String()
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
@@ -149,8 +150,8 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 type staticAnthropicSource struct{}
 
 func (staticAnthropicSource) Name() string { return "static-test" }
-func (staticAnthropicSource) Resolve(context.Context, string) (Credential, bool, error) {
-	return Credential{APIKey: "k"}, true, nil
+func (staticAnthropicSource) Resolve(context.Context, string) (credkit.Credential, bool, error) {
+	return credkit.Credential{APIKey: "k"}, true, nil
 }
 
 func TestLLMBackendServiceGetReturnsDefaults(t *testing.T) {

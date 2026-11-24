@@ -11,17 +11,18 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 )
 
 type AnthropicLimitsClient struct {
-	chain  *CredentialChain
+	chain  *credkit.CredentialChain
 	client *http.Client
 	model  string
 	mu     sync.Mutex
-	cached ProviderLimits
+	cached credkit.ProviderLimits
 }
 
-func NewAnthropicLimitsClient(chain *CredentialChain, model string) *AnthropicLimitsClient {
+func NewAnthropicLimitsClient(chain *credkit.CredentialChain, model string) *AnthropicLimitsClient {
 	if model == "" {
 		model = anthropicModel
 	}
@@ -29,7 +30,7 @@ func NewAnthropicLimitsClient(chain *CredentialChain, model string) *AnthropicLi
 		chain:  chain,
 		client: &http.Client{Timeout: 10 * time.Second},
 		model:  model,
-		cached: ProviderLimits{
+		cached: credkit.ProviderLimits{
 			Provider:  "anthropic",
 			Model:     model,
 			Available: true,
@@ -41,7 +42,7 @@ func (c *AnthropicLimitsClient) Provider() string {
 	return "anthropic"
 }
 
-func (c *AnthropicLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits, error) {
+func (c *AnthropicLimitsClient) QueryLimits(ctx context.Context) (credkit.ProviderLimits, error) {
 	cred, err := c.chain.Resolve(ctx, "anthropic")
 	if err != nil {
 		c.mu.Lock()
@@ -120,7 +121,7 @@ func (c *AnthropicLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits
 	return c.cached, nil
 }
 
-func (c *AnthropicLimitsClient) UpdateFromResponseHeaders(h http.Header, current ProviderLimits) ProviderLimits {
+func (c *AnthropicLimitsClient) UpdateFromResponseHeaders(h http.Header, current credkit.ProviderLimits) credkit.ProviderLimits {
 	out := current
 	out.Provider = "anthropic"
 	out.Model = c.model
@@ -133,44 +134,44 @@ func (c *AnthropicLimitsClient) UpdateFromResponseHeaders(h http.Header, current
 	// anthropic-ratelimit-tokens-limit: 100000
 	// anthropic-ratelimit-tokens-remaining: 99900
 	// anthropic-ratelimit-tokens-reset: 2024-01-01T00:00:00Z
-	if reqLimit := parseIntHeader(h, "anthropic-ratelimit-requests-limit"); reqLimit != -1 {
+	if reqLimit := credkit.ParseIntHeader(h, "anthropic-ratelimit-requests-limit"); reqLimit != -1 {
 		out.RequestsLimit = reqLimit
 	}
-	if reqRem := parseIntHeader(h, "anthropic-ratelimit-requests-remaining"); reqRem != -1 {
+	if reqRem := credkit.ParseIntHeader(h, "anthropic-ratelimit-requests-remaining"); reqRem != -1 {
 		out.RequestsRemaining = reqRem
 	}
-	if reqReset := parseTimeHeader(h, "anthropic-ratelimit-requests-reset"); !reqReset.IsZero() {
+	if reqReset := credkit.ParseTimeHeader(h, "anthropic-ratelimit-requests-reset"); !reqReset.IsZero() {
 		out.RequestsReset = reqReset
 	}
 
-	if tokLimit := parseIntHeader(h, "anthropic-ratelimit-tokens-limit"); tokLimit != -1 {
+	if tokLimit := credkit.ParseIntHeader(h, "anthropic-ratelimit-tokens-limit"); tokLimit != -1 {
 		out.TokensLimit = tokLimit
 	}
-	if tokRem := parseIntHeader(h, "anthropic-ratelimit-tokens-remaining"); tokRem != -1 {
+	if tokRem := credkit.ParseIntHeader(h, "anthropic-ratelimit-tokens-remaining"); tokRem != -1 {
 		out.TokensRemaining = tokRem
 	}
-	if tokReset := parseTimeHeader(h, "anthropic-ratelimit-tokens-reset"); !tokReset.IsZero() {
+	if tokReset := credkit.ParseTimeHeader(h, "anthropic-ratelimit-tokens-reset"); !tokReset.IsZero() {
 		out.TokensReset = tokReset
 	}
 
 	// Also support input/output token headers if present.
-	if inLimit := parseIntHeader(h, "anthropic-ratelimit-input-tokens-limit"); inLimit != -1 {
+	if inLimit := credkit.ParseIntHeader(h, "anthropic-ratelimit-input-tokens-limit"); inLimit != -1 {
 		out.InputTokensLimit = inLimit
 	}
-	if inRem := parseIntHeader(h, "anthropic-ratelimit-input-tokens-remaining"); inRem != -1 {
+	if inRem := credkit.ParseIntHeader(h, "anthropic-ratelimit-input-tokens-remaining"); inRem != -1 {
 		out.InputTokensRemaining = inRem
 	}
-	if inReset := parseTimeHeader(h, "anthropic-ratelimit-input-tokens-reset"); !inReset.IsZero() {
+	if inReset := credkit.ParseTimeHeader(h, "anthropic-ratelimit-input-tokens-reset"); !inReset.IsZero() {
 		out.InputTokensReset = inReset
 	}
 
-	if outLimit := parseIntHeader(h, "anthropic-ratelimit-output-tokens-limit"); outLimit != -1 {
+	if outLimit := credkit.ParseIntHeader(h, "anthropic-ratelimit-output-tokens-limit"); outLimit != -1 {
 		out.OutputTokensLimit = outLimit
 	}
-	if outRem := parseIntHeader(h, "anthropic-ratelimit-output-tokens-remaining"); outRem != -1 {
+	if outRem := credkit.ParseIntHeader(h, "anthropic-ratelimit-output-tokens-remaining"); outRem != -1 {
 		out.OutputTokensRemaining = outRem
 	}
-	if outReset := parseTimeHeader(h, "anthropic-ratelimit-output-tokens-reset"); !outReset.IsZero() {
+	if outReset := credkit.ParseTimeHeader(h, "anthropic-ratelimit-output-tokens-reset"); !outReset.IsZero() {
 		out.OutputTokensReset = outReset
 	}
 
