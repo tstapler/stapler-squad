@@ -144,7 +144,7 @@ func (s *BacklogService) endItemSessionForCallError(ctx context.Context, itemSes
 // absolute path, or "" if there was nothing to capture or the write failed.
 // Deliberately swallow-and-log rather than propagate: a failure to persist
 // diagnostic data about a failure must never mask or block handling of the
-// original failure itself. See session.WriteHeadlessFailureCapture's doc
+// original failure itself. See backlogaux.WriteHeadlessFailureCapture's doc
 // comment for why this exists (log rotation + the ~200-byte preview
 // previously logged on parse failure are not enough to diagnose a failed
 // call after the fact).

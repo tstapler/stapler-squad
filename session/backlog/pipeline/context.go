@@ -74,7 +74,7 @@ var taskProtocolBlock = pipelinemode.ForDefault("## Your Task Protocol\n" +
 // verdict — mirroring server/services/backlog_service_triage.go's
 // recentReviewHadVerdict exactly (that helper also does not filter on
 // EndedAt, for the identical reason given on
-// reviewVerdictSummariesMostRecentFirst above), computed from data already
+// backlogaux.ReviewVerdictSummariesMostRecentFirst above), computed from data already
 // in hand.
 func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSummary) []bool {
 	var out []bool

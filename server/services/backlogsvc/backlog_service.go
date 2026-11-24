@@ -1420,7 +1420,7 @@ func cumulativeItemSpendUSD(sessions []backlogdto.ItemSessionSummary) (totalUSD 
 // effectiveBudgetThreshold resolves the soft budget for an item: its own
 // threshold wins, otherwise the live global quota.default_cost_budget_threshold_usd
 // (read per call so edits apply without restart). nil = off; 0.0 is a valid
-// threshold. Resolution lives here so session.EvaluateBudgetThreshold stays pure.
+// threshold. Resolution lives here so backlogaux.EvaluateBudgetThreshold stays pure.
 // Crossing is log-only ([BudgetWarning]); no notification is sent.
 func effectiveBudgetThreshold(itemThresholdUSD *float64) *float64 {
 	if itemThresholdUSD != nil {

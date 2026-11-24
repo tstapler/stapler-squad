@@ -80,4 +80,4 @@ session/conflictretry files=1 loc=171 imports=0
 session/nudgeoutcomes files=1 loc=224 imports=3
 session/slowops files=3 loc=281 imports=3
 session/itemlink files=2 loc=198 imports=4
-session/backlogaux files=6 loc=311 imports=3
+session/backlogaux files=6 loc=308 imports=3
