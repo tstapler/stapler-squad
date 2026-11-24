@@ -61,8 +61,13 @@ func (ss *SearchService) StreamSearchClaudeHistory(
 // metadataPreview returns up to one batch of session-name/project matches from
 // the in-memory history cache, so a cold-start stream shows real hits before the
 // index finishes its first sync. The first ranked batch replaces them. A load
-// failure yields no preview; the stream still waits for the sync.
+// failure yields no preview; the stream still waits for the sync. Requests with
+// filters or an offset get none, since the preview cannot honor them.
 func (ss *SearchService) metadataPreview(ctx context.Context, msg *sessionv1.SearchClaudeHistoryRequest) []*sessionv1.SearchResult {
+	if msg.GetOffset() > 0 || msg.GetProject() != "" || msg.GetModel() != "" ||
+		msg.GetStartTime() != nil || msg.GetEndTime() != nil || msg.GetExcludeAutomationSessions() {
+		return nil
+	}
 	hist, err := ss.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil

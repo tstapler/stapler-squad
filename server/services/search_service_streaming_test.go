@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"google.golang.org/protobuf/proto"
 )
 
 // streamClient serves only the streaming search RPC from a SearchService.
@@ -197,4 +198,20 @@ func TestStreamSearchClaudeHistory_should_SendMetadataResultsInFirstMessage_When
 	for st.Receive() {
 	}
 	require.NoError(t, st.Err())
+}
+
+func TestStreamSearchClaudeHistory_should_OmitPreview_When_RequestHasFilters(t *testing.T) {
+	seedManySessions(t, 3)
+	ss := setupSearchService()
+	client := newStreamClient(t, ss)
+
+	st, err := client.StreamSearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "repo", Project: proto.String("/other")}))
+	require.NoError(t, err)
+	require.True(t, st.Receive())
+	require.True(t, st.Msg().IndexWarming)
+	require.Empty(t, st.Msg().Results)
+
+	require.NoError(t, ss.SyncNow(t.Context()))
+	for st.Receive() {
+	}
 }
