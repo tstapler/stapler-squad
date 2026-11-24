@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"context"
@@ -210,18 +210,18 @@ func BucketCount(n int) CountBucket {
 	}
 }
 
-type noopFilesTelemetry struct{}
+type NoopFilesTelemetry struct{}
 
-func (noopFilesTelemetry) RecordWrite(context.Context, string, WriteOutcomeEvent)   {}
-func (noopFilesTelemetry) RecordSearch(context.Context, string, SearchOutcomeEvent) {}
-func (noopFilesTelemetry) RecordSearchFirstResult(context.Context, string, SearchFirstResultEvent) {
+func (NoopFilesTelemetry) RecordWrite(context.Context, string, WriteOutcomeEvent)   {}
+func (NoopFilesTelemetry) RecordSearch(context.Context, string, SearchOutcomeEvent) {}
+func (NoopFilesTelemetry) RecordSearchFirstResult(context.Context, string, SearchFirstResultEvent) {
 }
-func (noopFilesTelemetry) RecordPatch(context.Context, string, PatchOutcomeEvent) {}
+func (NoopFilesTelemetry) RecordPatch(context.Context, string, PatchOutcomeEvent) {}
 
 // NewFilesTelemetry adapts an AnalyticsProvider; nil gives the no-op default.
 func NewFilesTelemetry(provider analytics.AnalyticsProvider) FilesTelemetry {
 	if provider == nil {
-		return noopFilesTelemetry{}
+		return NoopFilesTelemetry{}
 	}
 	return &analyticsFilesTelemetry{provider: provider}
 }

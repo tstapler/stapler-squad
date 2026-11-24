@@ -1,14 +1,14 @@
 //go:build windows
 
-package services
+package fsops
 
 import (
 	"fmt"
 	"os/exec"
 )
 
-// execSyscall on Windows starts a new process (true exec-replace is not available).
-func execSyscall(executable string, args []string, env []string) error {
+// ExecSyscall on Windows starts a new process (true exec-replace is not available).
+func ExecSyscall(executable string, args []string, env []string) error {
 	cmd := exec.Command(executable, args[1:]...) //nolint:norawexec Windows has no exec-replace; the child is started and deliberately left running
 	cmd.Env = env
 	if err := cmd.Start(); err != nil {

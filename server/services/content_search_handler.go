@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const (
@@ -122,7 +123,7 @@ type searchCall struct {
 	firstResult time.Duration
 	results     int
 	stats       SearchStats
-	outcome     SearchOutcome
+	outcome     fsops.SearchOutcome
 }
 
 // Handle runs one SearchContent call. remoteAddr is the connection's peer address.
@@ -134,12 +135,12 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 	defer func() { h.finish(ctx, call, err) }()
 
 	if !h.viewerV2(ctx) {
-		call.outcome = SearchOutcomeDisabled
+		call.outcome = fsops.SearchOutcomeDisabled
 		return readOnlyError(connect.CodeFailedPrecondition, "viewer v2 disabled", sessionv1.ReadOnlyReason_READ_ONLY_REASON_FLAG_OFF)
 	}
 	opts, err := NewSearchOptions(msg.GetOptions())
 	if err != nil {
-		call.outcome = SearchOutcomeInvalid
+		call.outcome = fsops.SearchOutcomeInvalid
 		return err
 	}
 	key := SearchKey{SessionID: msg.GetSessionId(), ClientID: msg.GetClientId()}
@@ -166,7 +167,7 @@ func (h *SearchHandler) Handle(ctx context.Context, msg *sessionv1.SearchContent
 		}
 	}
 	if refused != "" {
-		call.outcome = SearchOutcomeBusy
+		call.outcome = fsops.SearchOutcomeBusy
 		return busyError(refused)
 	}
 
@@ -290,17 +291,17 @@ func queuedMessage(ahead int) *sessionv1.SearchContentResponse {
 // accepts the repo-root fallback: a paused or archived session whose worktree is gone
 // is refused so the user is not shown another checkout's contents.
 func (o *FileOps) openSearchRoot(sessionID string) (fs.FS, io.Closer, error) {
-	ws, dir, err := workspaceDirFor(o.policy.Workspace, FileRef{SessionID: sessionID}, AccessRead)
+	ws, dir, err := fsops.WorkspaceDirFor(o.policy.Workspace, fsops.FileRef{SessionID: sessionID}, fsops.AccessRead)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !worktreeOnDisk(ws) {
+	if !fsops.WorktreeOnDisk(ws) {
 		return nil, nil, readOnlyError(connect.CodeFailedPrecondition, "WorktreeMissing: session worktree is not on disk",
 			sessionv1.ReadOnlyReason_READ_ONLY_REASON_WORKTREE_MISSING)
 	}
 	root, err := o.backend.OpenRoot(dir)
 	if err != nil {
-		return nil, nil, openRootError(err)
+		return nil, nil, fsops.OpenRootError(err)
 	}
 	walkable, ok := root.(interface{ FS() fs.FS })
 	if !ok {
@@ -321,7 +322,7 @@ func searchStopError(parent, sctx context.Context, call *searchCall, err error) 
 		return err
 	}
 	if parent.Err() != nil || errors.Is(context.Cause(sctx), errSearchSuperseded) || errors.Is(err, context.Canceled) {
-		call.outcome = SearchOutcomeCancelled
+		call.outcome = fsops.SearchOutcomeCancelled
 		return connect.NewError(connect.CodeCanceled, context.Cause(sctx))
 	}
 	return connect.NewError(connect.CodeInternal, errors.New("search failed"))
@@ -353,31 +354,31 @@ func (h *SearchHandler) finish(ctx context.Context, call *searchCall, err error)
 	}
 	log.Info("content search", "session", call.sessionID, "outcome", string(outcome), "query_len", call.queryLen,
 		"duration_ms", total.Milliseconds(), "results", call.results, "files_scanned", call.stats.FilesScanned,
-		"truncated", call.stats.Truncated, "backend", string(SearchBackendWalker), "queued", call.queued)
-	recordSearchMetrics(ctx, outcome, total, call.firstResult)
+		"truncated", call.stats.Truncated, "backend", string(fsops.SearchBackendWalker), "queued", call.queued)
+	fsops.RecordSearchMetrics(ctx, outcome, total, call.firstResult)
 
-	scale := BucketScale(call.stats.FilesScanned)
+	scale := fsops.BucketScale(call.stats.FilesScanned)
 	tel := h.ops.policy.Telemetry
-	tel.RecordSearch(ctx, call.sessionID, SearchOutcomeEvent{
-		Outcome: outcome, Results: BucketCount(call.results), Scale: scale, Queued: call.queued,
-		Backend: SearchBackendWalker, Large: call.large, Duration: total,
+	tel.RecordSearch(ctx, call.sessionID, fsops.SearchOutcomeEvent{
+		Outcome: outcome, Results: fsops.BucketCount(call.results), Scale: scale, Queued: call.queued,
+		Backend: fsops.SearchBackendWalker, Large: call.large, Duration: total,
 	})
 	if call.firstResult > 0 {
-		tel.RecordSearchFirstResult(ctx, call.sessionID, SearchFirstResultEvent{Scale: scale, Duration: call.firstResult})
+		tel.RecordSearchFirstResult(ctx, call.sessionID, fsops.SearchFirstResultEvent{Scale: scale, Duration: call.firstResult})
 	}
 }
 
-func classifySearchOutcome(call *searchCall, err error) SearchOutcome {
+func classifySearchOutcome(call *searchCall, err error) fsops.SearchOutcome {
 	switch {
 	case err == nil && call.stats.Truncated:
-		return SearchOutcomeTruncated
+		return fsops.SearchOutcomeTruncated
 	case err == nil:
-		return SearchOutcomeOK
+		return fsops.SearchOutcomeOK
 	case connect.CodeOf(err) == connect.CodeCanceled:
-		return SearchOutcomeCancelled
+		return fsops.SearchOutcomeCancelled
 	case connect.CodeOf(err) == connect.CodeResourceExhausted:
-		return SearchOutcomeBusy
+		return fsops.SearchOutcomeBusy
 	default:
-		return SearchOutcomeError
+		return fsops.SearchOutcomeError
 	}
 }

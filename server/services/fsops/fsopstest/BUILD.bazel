@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fsopstest",
+    srcs = ["fsopstest.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/fsops/fsopstest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//server/analytics",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fsopstest",
+    visibility = ["//visibility:public"],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

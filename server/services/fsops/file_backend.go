@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"io"
@@ -29,7 +29,7 @@ type FileRoot interface {
 }
 
 // FileBackend is the storage port under FileOps: no policy, only bytes and
-// metadata. osRootBackend is production; memBackend is for tests.
+// metadata. OsRootBackend is production; MemBackend is for tests.
 type FileBackend interface {
 	OpenRoot(dir string) (FileRoot, error)
 }

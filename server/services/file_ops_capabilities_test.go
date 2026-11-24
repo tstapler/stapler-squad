@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 type stubFilesFlags struct{ editing, rangeRead, deltaWrite, editLarge bool }
@@ -55,7 +56,7 @@ func TestCapabilities_ShouldAdvertiseOnlyWhatListenerAndFlagsServe_And_BumpCapsE
 	for _, listener := range []string{ListenerLocal, ListenerRemote} {
 		t.Run(listener, func(t *testing.T) {
 			flags := &stubFilesFlags{}
-			ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: t.TempDir()}, Flags: flags}, osRootBackend{})
+			ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: t.TempDir()}, Flags: flags}, fsops.OsRootBackend{})
 			c := capsClient(t, ops, listener)
 
 			var lastEpoch uint64
@@ -102,7 +103,7 @@ func TestCapabilities_ShouldRefuseUnadvertisedOpWithFailedPrecondition_And_Serve
 	writeFixtureFile(t, filepath.Join(dir, "a.txt"), []byte("x\n"))
 	for _, editing := range []bool{false, true} {
 		flags := &stubFilesFlags{editing: editing}
-		ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: flags}, osRootBackend{})
+		ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: flags}, fsops.OsRootBackend{})
 		advertised := map[sessionv1.FileOp]bool{}
 		for _, op := range ops.Capabilities(context.Background()).Ops {
 			advertised[op] = true

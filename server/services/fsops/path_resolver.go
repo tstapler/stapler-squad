@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"context"
@@ -18,10 +18,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// errGitInternal and errWorktreeMissing let the write path attach typed reasons to resolver refusals.
+// ErrGitInternal and ErrWorktreeMissing let the write path attach typed reasons to resolver refusals.
 var (
-	errGitInternal     = errors.New(".git is not accessible")
-	errWorktreeMissing = errors.New("WorktreeMissing: session worktree is not on disk")
+	ErrGitInternal     = errors.New(".git is not accessible")
+	ErrWorktreeMissing = errors.New("WorktreeMissing: session worktree is not on disk")
 )
 
 // maxSymlinkHops bounds symlink expansion so a link cycle cannot loop forever.
@@ -123,13 +123,13 @@ func (w *WorktreeRoot) ReadDir(p ResolvedPath) ([]os.DirEntry, error) {
 // redirected through a link. A missing leaf is not an error here: the open
 // reports NotFound, and a write may create it.
 func resolveInWorktree(root linkProber, rel string, mode AccessMode) (ResolvedPath, error) {
-	resolved, _, err := resolveInWorktreeLinks(root, rel, mode)
+	resolved, _, err := ResolveInWorktreeLinks(root, rel, mode)
 	return resolved, err
 }
 
-// resolveInWorktreeLinks is resolveInWorktree that also reports whether any
+// ResolveInWorktreeLinks is resolveInWorktree that also reports whether any
 // component was a symlink, which callers surface as ReadOnlyReason=Symlink.
-func resolveInWorktreeLinks(root linkProber, rel string, mode AccessMode) (ResolvedPath, bool, error) {
+func ResolveInWorktreeLinks(root linkProber, rel string, mode AccessMode) (ResolvedPath, bool, error) {
 	if strings.ContainsRune(rel, 0) {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("path contains NUL"))
 	}
@@ -140,13 +140,13 @@ func resolveInWorktreeLinks(root linkProber, rel string, mode AccessMode) (Resol
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, errors.New("path traversal detected"))
 	}
-	if hasGitComponent(clean) {
-		return "", false, connect.NewError(connect.CodePermissionDenied, errGitInternal)
+	if HasGitComponent(clean) {
+		return "", false, connect.NewError(connect.CodePermissionDenied, ErrGitInternal)
 	}
 	return expandLinks(root, clean, mode)
 }
 
-func hasGitComponent(p string) bool {
+func HasGitComponent(p string) bool {
 	for _, c := range strings.Split(p, "/") {
 		if strings.EqualFold(c, ".git") {
 			return true
@@ -171,7 +171,7 @@ func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				return finishResolved(append(next, pending...), viaLink), viaLink, nil
 			}
-			return "", false, internalIOError("resolve_lstat", ResolvedPath(nextPath), err, "failed to stat path")
+			return "", false, InternalIOError("resolve_lstat", ResolvedPath(nextPath), err, "failed to stat path")
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			cur = next
@@ -186,13 +186,13 @@ func expandLinks(root linkProber, p string, mode AccessMode) (ResolvedPath, bool
 		viaLink = true
 		target, err := root.Readlink(nextPath)
 		if err != nil {
-			return "", false, internalIOError("readlink", ResolvedPath(nextPath), err, "failed to read symlink")
+			return "", false, InternalIOError("readlink", ResolvedPath(nextPath), err, "failed to read symlink")
 		}
 		if filepath.IsAbs(target) || strings.HasPrefix(target, "/") {
 			return "", false, symlinkDenied(nextPath, target)
 		}
 		joined := path.Clean(path.Join(strings.Join(cur, "/"), filepath.ToSlash(target)))
-		if joined == ".." || strings.HasPrefix(joined, "../") || hasGitComponent(joined) {
+		if joined == ".." || strings.HasPrefix(joined, "../") || HasGitComponent(joined) {
 			return "", false, symlinkDenied(nextPath, target)
 		}
 		cur = nil
@@ -221,38 +221,38 @@ type FileRef struct {
 	Path      string
 }
 
-// resolvedRequest is what resolveFileRequest hands to a handler. The caller
+// ResolvedRequest is what ResolveFileRequest hands to a handler. The caller
 // must Close Root.
-type resolvedRequest struct {
+type ResolvedRequest struct {
 	Root      *WorktreeRoot
 	Resolved  ResolvedPath
 	ViaLink   bool
 	Workspace domain.Workspace
 }
 
-// resolveFileRequest is the shared request preamble: workspace lookup, root
+// ResolveFileRequest is the shared request preamble: workspace lookup, root
 // selection per mode, and path confinement. Read uses ExistingDir. Write uses
 // ActiveDir and requires it to equal ExistingDir, which blocks the silent
 // fallback to the repo root after a worktree has been cleaned up.
-func resolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileRef, mode AccessMode) (*resolvedRequest, error) {
-	ws, dir, err := workspaceDirFor(provider, ref, mode)
+func ResolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileRef, mode AccessMode) (*ResolvedRequest, error) {
+	ws, dir, err := WorkspaceDirFor(provider, ref, mode)
 	if err != nil {
 		return nil, err
 	}
 	root, err := OpenWorktreeRoot(dir)
 	if err != nil {
-		return nil, openRootError(err)
+		return nil, OpenRootError(err)
 	}
-	resolved, viaLink, err := resolveInWorktreeLinks(root, refPathOrDot(ref), mode)
+	resolved, viaLink, err := ResolveInWorktreeLinks(root, RefPathOrDot(ref), mode)
 	if err != nil {
 		_ = root.Close()
 		return nil, err
 	}
-	return &resolvedRequest{Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
+	return &ResolvedRequest{Root: root, Resolved: resolved, ViaLink: viaLink, Workspace: ws}, nil
 }
 
-// workspaceDirFor looks up the session's workspace and picks the directory for mode.
-func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (domain.Workspace, string, error) {
+// WorkspaceDirFor looks up the session's workspace and picks the directory for mode.
+func WorkspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (domain.Workspace, string, error) {
 	if ref.SessionID == "" {
 		return domain.Workspace{}, "", connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
 	}
@@ -262,8 +262,8 @@ func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (
 	}
 	dir := ws.ExistingDir
 	if mode == AccessWrite {
-		if !worktreeOnDisk(ws) {
-			return domain.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errWorktreeMissing)
+		if !WorktreeOnDisk(ws) {
+			return domain.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, ErrWorktreeMissing)
 		}
 		dir = ws.ActiveDir
 	}
@@ -273,13 +273,13 @@ func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (
 	return ws, dir, nil
 }
 
-// worktreeOnDisk is false once the session's active directory is gone and ExistingDir
+// WorktreeOnDisk is false once the session's active directory is gone and ExistingDir
 // has fallen back to the repo root. Writes and content search both refuse that state.
-func worktreeOnDisk(ws domain.Workspace) bool {
+func WorktreeOnDisk(ws domain.Workspace) bool {
 	return ws.ActiveDir != "" && ws.ActiveDir == ws.ExistingDir
 }
 
-func openRootError(err error) error {
+func OpenRootError(err error) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return connect.NewError(connect.CodeNotFound, errors.New("working directory not found"))
 	}
@@ -287,7 +287,7 @@ func openRootError(err error) error {
 	return connect.NewError(connect.CodeInternal, errors.New("failed to open working directory"))
 }
 
-func refPathOrDot(ref FileRef) string {
+func RefPathOrDot(ref FileRef) string {
 	if ref.Path == "" {
 		return "."
 	}

@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -187,10 +188,10 @@ func (s *SessionService) StreamTerminal(
 		// its own independent *os.File/poll.FD — closing or setting a deadline
 		// on readFile has no effect on ptyFile or its other readers, since the
 		// underlying open file description is only released once every fd
-		// referencing it is closed. dupPTYFile is platform-specific
-		// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
+		// referencing it is closed. DupPTYFile is platform-specific
+		// (fsops/dup_fd_unix.go, fsops/dup_fd_windows.go) since syscall.Dup isn't available
 		// on Windows.
-		readFile, err = dupPTYFile(ptyFile)
+		readFile, err = fsops.DupPTYFile(ptyFile)
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, err)
 		}

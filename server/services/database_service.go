@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 
 	"connectrpc.com/connect"
@@ -383,7 +384,7 @@ func execRestart() {
 	}
 
 	log.Info("exec restart: replacing process", "executable", executable)
-	if err := execSyscall(executable, os.Args, os.Environ()); err != nil {
+	if err := fsops.ExecSyscall(executable, os.Args, os.Environ()); err != nil {
 		log.Error("exec restart: exec failed", "err", err)
 	}
 }

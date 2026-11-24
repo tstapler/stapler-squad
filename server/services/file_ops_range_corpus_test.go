@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -147,7 +148,7 @@ func TestReadRange_ShouldRefuseExactlyLikeGetFileContent_When_FlagOffHiddenSymli
 func TestReadRange_ShouldFollowReadPolicy_When_WorktreeIsGoneFromDisk(t *testing.T) {
 	dir := buildReadCorpus(t)
 	provider := pausedWorkspace{existing: dir}
-	ops := NewFileOps(FilePolicy{Workspace: provider, Flags: &stubFilesFlags{rangeRead: true}}, osRootBackend{})
+	ops := NewFileOps(FilePolicy{Workspace: provider, Flags: &stubFilesFlags{rangeRead: true}}, fsops.OsRootBackend{})
 	t.Cleanup(ops.analysis.Close)
 	ctx := context.Background()
 	got, getErr := ops.GetContent(ctx, "test-session", "plain.txt")
@@ -166,12 +167,12 @@ func (p pausedWorkspace) GetWorkspace(string) (domain.Workspace, error) {
 
 func TestReadRange_ShouldReturnIdenticalResponses_When_OsRootAndMemBackends(t *testing.T) {
 	dir := buildReadCorpus(t)
-	newOps := func(b FileBackend) *FileOps {
+	newOps := func(b fsops.FileBackend) *FileOps {
 		ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, b)
 		t.Cleanup(ops.analysis.Close)
 		return ops
 	}
-	osOps, memOps := newOps(osRootBackend{}), newOps(memFromDir(t, dir))
+	osOps, memOps := newOps(fsops.OsRootBackend{}), newOps(memFromDir(t, dir))
 	reqs := []*sessionv1.ReadFileRangeRequest{
 		linesReq("plain.txt", 1, sessionv1.RangeDir_RANGE_DIR_FORWARD, 400, 0),
 		linesReq("docs/a.md", 3, sessionv1.RangeDir_RANGE_DIR_AROUND, 2, 0),

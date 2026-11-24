@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // The audit sink is the one append-only JSONL file behind hidden-session
@@ -132,7 +133,7 @@ type AuditLine struct {
 // no I/O until first use, so a server that never flips a gate flag never
 // creates the directory.
 type AuditSink struct {
-	fs       fsOps
+	fs       fsops.FSOps
 	dirFn    func() (string, error)
 	now      func() time.Time
 	logger   *slog.Logger
@@ -149,7 +150,7 @@ type AuditSink struct {
 	startOnce sync.Once
 
 	mu   sync.Mutex // process-wide: append and rotate
-	file appendFile
+	file fsops.AppendFile
 	size int64
 
 	queue     chan AuditLine
@@ -163,7 +164,7 @@ type AuditSink struct {
 type AuditSinkOption func(*AuditSink)
 
 // WithAuditFS injects the file system.
-func WithAuditFS(f fsOps) AuditSinkOption { return func(s *AuditSink) { s.fs = f } }
+func WithAuditFS(f fsops.FSOps) AuditSinkOption { return func(s *AuditSink) { s.fs = f } }
 
 // WithAuditClock injects the clock.
 func WithAuditClock(now func() time.Time) AuditSinkOption { return func(s *AuditSink) { s.now = now } }
@@ -184,7 +185,7 @@ func WithAuditDegradedCounter(f func(mode string)) AuditSinkOption {
 // NewAuditSink builds a sink whose directory is resolved once, on first use.
 func NewAuditSink(dirFn func() (string, error), opts ...AuditSinkOption) *AuditSink {
 	s := &AuditSink{
-		fs: osFS{}, dirFn: dirFn, now: time.Now, logger: deliverygate.NewRepoLogger(),
+		fs: fsops.OSFS{}, dirFn: dirFn, now: time.Now, logger: deliverygate.NewRepoLogger(),
 		after: time.After, degraded: func(string) {},
 		queue: make(chan AuditLine, auditQueueSize), stop: make(chan struct{}), closed: make(chan struct{}),
 	}
