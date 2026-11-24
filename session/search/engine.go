@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -456,6 +457,15 @@ func (e *SearchEngine) GetTokenizer() *Tokenizer {
 // It only indexes new/modified sessions and removes deleted ones.
 // On first run or when metadata is missing, falls back to full rebuild.
 func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
+	return e.IncrementalSyncContext(context.Background(), history)
+}
+
+// IncrementalSyncContext is IncrementalSync that checks ctx between sessions
+// and returns ctx.Err() once cancelled, before updating counts or persisting.
+// A cancelled full build clears the sync metadata so the next sync rebuilds; a
+// cancelled incremental pass leaves per-session metadata consistent, so the
+// next sync picks up the remainder.
+func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
 	e.ensureLoaded()
 	startTime := time.Now()
 	result := &SyncResult{}
@@ -465,7 +475,7 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	// If no sync metadata, need full rebuild
 	if e.syncMetadata == nil || e.ShouldRebuildLocked() {
-		if err := e.buildIndexLocked(history); err != nil {
+		if err := e.buildIndexLocked(ctx, history); err != nil {
 			return nil, err
 		}
 		result.WasFullRebuild = true
@@ -490,6 +500,9 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	// Process additions
 	for _, entry := range added {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		docCount, err := e.indexSessionLocked(history, entry)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
@@ -508,6 +521,9 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	// Process updates (re-index modified sessions)
 	for _, entry := range updated {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
 			result.DocumentsRemoved += meta.DocCount
 		}
@@ -666,7 +682,7 @@ func (e *SearchEngine) ShouldRebuildLocked() bool {
 
 // buildIndexLocked performs a full index build and initializes sync metadata.
 // Must be called with lock held.
-func (e *SearchEngine) buildIndexLocked(history *claudehistory.ClaudeSessionHistory) error {
+func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehistory.ClaudeSessionHistory) error {
 	// Clear existing index
 	e.index.Clear()
 	e.docStore.Clear()
@@ -679,6 +695,10 @@ func (e *SearchEngine) buildIndexLocked(history *claudehistory.ClaudeSessionHist
 	entries := history.GetAll()
 
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			e.syncMetadata = nil // partial index: force a full rebuild next time
+			return err
+		}
 		docCount, err := e.indexSessionLocked(history, entry)
 		if err != nil {
 			// Log and continue - don't fail entire index build
