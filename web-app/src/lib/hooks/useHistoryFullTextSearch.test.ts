@@ -133,6 +133,36 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     expect(mockSearchClaudeHistory).not.toHaveBeenCalled();
   });
 
+  it("useHistoryFullTextSearch_should_ShowFirstBatchWithin200ms_And_NeverClearList_When_LaterBatchesArrive", async () => {
+    mockStreamingFlag = true;
+    let releaseSecond!: () => void;
+    const gate = new Promise<void>((r) => { releaseSecond = r; });
+    let firstYieldAt = 0;
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      firstYieldAt = performance.now();
+      yield { results: [result("a")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: false, indexWarming: false };
+      await gate;
+      yield { results: [result("b")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    const seen: number[] = [];
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    await waitFor(() => expect(hook.current.results).toHaveLength(1));
+    const renderedAfterMs = performance.now() - firstYieldAt;
+    seen.push(hook.current.results.length);
+    // Second batch is still gated, so the first batch is visible before the stream completes.
+    expect(hook.current.loading).toBe(true);
+    expect(renderedAfterMs).toBeLessThan(200);
+
+    releaseSecond();
+    await act(async () => { await done; });
+    seen.push(hook.current.results.length);
+    expect(seen).toEqual([1, 2]);
+  });
+
   it("useHistoryFullTextSearch_should_ExposeIndexWarmingUntilResultsArrive_When_ColdStartStream", async () => {
     mockStreamingFlag = true;
     let release!: () => void;
@@ -155,6 +185,28 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     await act(async () => { await done; });
     expect(hook.current.indexWarming).toBe(false);
     expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  it("useHistoryFullTextSearch_should_ShowWarmingPreviewThenReplaceWithRanked_When_ColdStartStream", async () => {
+    mockStreamingFlag = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [result("preview")], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      await gate;
+      yield { results: [result("ranked")], totalMatches: 1, queryTimeMs: 2n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    await waitFor(() => expect(hook.current.results.map((r) => r.sessionId)).toEqual(["preview"]));
+    expect(hook.current.indexWarming).toBe(true);
+
+    release();
+    await act(async () => { await done; });
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["ranked"]);
   });
 
   it("useHistoryFullTextSearch_should_StopLoadingAndClearWarming_When_StreamEndsWithoutFinal", async () => {

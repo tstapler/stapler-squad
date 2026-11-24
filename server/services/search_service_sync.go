@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -13,6 +14,10 @@ import (
 // defaultSearchSyncInterval is how often the background loop re-syncs the
 // search index with Claude history on disk.
 const defaultSearchSyncInterval = 60 * time.Second
+
+// SearchSyncIntervalEnv sets the background sync interval as a Go duration
+// (e.g. "30s", "5m"); unset, invalid or non-positive values keep the default.
+const SearchSyncIntervalEnv = "STAPLER_SQUAD_SEARCH_SYNC_INTERVAL"
 
 // SetSyncInterval overrides the background sync interval; call before
 // StartSyncLoop. Non-positive values keep the current interval.
@@ -53,9 +58,14 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 	}
 	interval := ss.syncInterval
 	if interval <= 0 {
+		interval = searchSyncIntervalFromEnv()
+	}
+	if interval <= 0 {
 		interval = defaultSearchSyncInterval
 	}
+	ss.loopDone = make(chan struct{})
 	go func() {
+		defer close(ss.loopDone)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -69,6 +79,15 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// WaitSyncLoop blocks until the loop goroutine has exited, i.e. after the
+// context given to StartSyncLoop ends and any in-flight sync finishes. It
+// returns at once if the loop was never started.
+func (ss *SearchService) WaitSyncLoop() {
+	if ss.loopStarted.Load() && ss.loopDone != nil {
+		<-ss.loopDone
+	}
 }
 
 // markSynced records that the index has been synced at least once and wakes
@@ -116,4 +135,17 @@ func (ss *SearchService) requireIndexSynced(ctx context.Context) error {
 	}
 	return connect.NewError(connect.CodeUnavailable,
 		fmt.Errorf("search index is warming up (first sync has not completed); retry shortly"))
+}
+
+func searchSyncIntervalFromEnv() time.Duration {
+	raw := os.Getenv(SearchSyncIntervalEnv)
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Warn("ignoring invalid search sync interval", "env", SearchSyncIntervalEnv, "value", raw)
+		return 0
+	}
+	return d
 }
