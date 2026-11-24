@@ -25,6 +25,13 @@ const chrome = EditorView.theme(
       borderRight: `1px solid ${vars.color.terminalBorder}`,
     },
     ".cm-lineNumbers .cm-gutterElement": { color: vars.color.terminalTextMuted },
+    // Touch targets: coarse pointers only, so the desktop gutter is unchanged. 44px line numbers + the 10px diff
+    // strip (CodeEditor.css.ts) + 1px border = 55px, within the 56px budget on ≤390px viewports.
+    "@media (pointer: coarse)": {
+      ".cm-lineNumbers .cm-gutterElement": { boxSizing: "border-box", minWidth: "44px", padding: "0 6px" },
+      // If foldGutter() is ever added, give its elements the same 44px-tall target here:
+      //   ".cm-foldGutter .cm-gutterElement": { minHeight: "44px", minWidth: "44px" }
+    },
   },
   { dark: true },
 );

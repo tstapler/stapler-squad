@@ -30,6 +30,10 @@ globalStyle(`${codeEditor} .cm-changeGutter`, {
 const gutterMarker = style({
   width: 4,
   height: "100%",
+  "@media": {
+    // Coarse pointer: wider strip to tap. With the 44px line-number column and 1px border the gutter totals 55px (≤56).
+    "(pointer: coarse)": { width: 10 },
+  },
 });
 
 export const gutterMarkerAdd = style([gutterMarker, { background: vars.color.gitAdded }]);

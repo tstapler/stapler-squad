@@ -78,6 +78,12 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
     onStateChange?.({ logs, rawEntries, totalCount: serverTotalCount, lastRefresh, error });
   }, [logs, rawEntries, serverTotalCount, lastRefresh, error, onStateChange]);
 
+  // Badge tap: show only that level; tapping it again (it is the sole active filter) clears the filter.
+  const toggleLevelFilter = useCallback(
+    (level: string) => setLevelFilters(levelFilters.length === 1 && levelFilters[0] === level ? [] : [level]),
+    [levelFilters, setLevelFilters],
+  );
+
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
@@ -237,6 +243,7 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
           searchQuery={searchQuery}
           onAtBottomStateChange={onAtBottomStateChange}
           onToggleRow={toggleRow}
+          onFilterByLevel={toggleLevelFilter}
           virtuosoRef={virtuosoRef}
         />
 

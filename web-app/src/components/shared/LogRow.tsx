@@ -1,5 +1,5 @@
 import React from "react";
-import type { LogEntry } from "@/lib/hooks/useLogViewer";
+import type { LogEntry, LogLevel } from "@/lib/hooks/useLogViewer";
 import { segmentText } from "@/lib/logs/logParser";
 import {
   levelBadge,
@@ -19,6 +19,8 @@ interface LogRowProps {
   isSelected: boolean;
   onToggle: () => void;
   searchQuery: string;
+  /** When set, the level badge is a button that filters the log by that level instead of expanding the row. */
+  onFilterByLevel?: (level: LogLevel) => void;
 }
 
 /**
@@ -38,6 +40,7 @@ export const LogRow = React.memo(function LogRow({
   isSelected,
   onToggle,
   searchQuery,
+  onFilterByLevel,
 }: LogRowProps) {
   const level = entry.level;
   const segments = segmentText(entry.message, searchQuery);
@@ -67,7 +70,24 @@ export const LogRow = React.memo(function LogRow({
       */}
       <div className={gutterAbsolute}>
         <span className={lineNumber}>{index + 1}</span>
-        <span className={levelBadge({ level })}>{level === "UNKNOWN" ? "" : level}</span>
+        {onFilterByLevel && level !== "UNKNOWN" ? (
+          <button
+            type="button"
+            className={levelBadge({ level })}
+            aria-label={`Filter by ${level}`}
+            data-testid={`log-level-badge-${index}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onFilterByLevel(level);
+            }}
+            // Space/Enter on the badge must not bubble to the row's expand handler.
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            {level}
+          </button>
+        ) : (
+          <span className={levelBadge({ level })}>{level === "UNKNOWN" ? "" : level}</span>
+        )}
       </div>
 
       {/*

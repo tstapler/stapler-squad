@@ -19,6 +19,15 @@ export const levelBadge = recipe({
     letterSpacing: "0.05em",
     minWidth: 44,
     textAlign: "center",
+    // Reset <button> chrome; the badge is a <button> only when it filters by level.
+    border: "none",
+    margin: 0,
+    lineHeight: "inherit",
+    touchAction: "manipulation",
+    "@media": {
+      // Coarse pointer: taller tap target; row min-height (44) holds it.
+      "(pointer: coarse)": { minHeight: 32 },
+    },
   },
   variants: {
     level: {
@@ -43,6 +52,10 @@ export const rowTint = recipe({
     borderBottomColor: "rgba(255,255,255,0.06)",
     cursor: "pointer",
     minHeight: 28,
+    "@media": {
+      // WCAG 2.5.5 touch target; fine pointers keep the compact 28px row.
+      "(pointer: coarse)": { minHeight: 44 },
+    },
     // T2: eliminate iOS 300ms tap delay at the row level
     touchAction: "manipulation",
   },

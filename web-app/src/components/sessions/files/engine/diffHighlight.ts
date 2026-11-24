@@ -16,6 +16,26 @@ export function markAtDocLine(state: EditorState, marks: Map<number, GutterMarkT
   return marks.get(absLineOfDocLine(state, docLine));
 }
 
+/**
+ * Document line (1-based) of the next change hunk after `fromDocLine`, wrapping past the last hunk to the first.
+ * A hunk is a run of consecutive marked document lines; gap placeholders are never marked, so they split hunks
+ * and are never targeted. Null when the document has no marks.
+ */
+export function nextHunkDocLine(state: EditorState, marks: Map<number, GutterMarkType>, fromDocLine: number): number | null {
+  let first: number | null = null;
+  let next: number | null = null;
+  let prevMarked = false;
+  for (let n = 1; n <= state.doc.lines; n++) {
+    const marked = markAtDocLine(state, marks, n) !== undefined;
+    if (marked && !prevMarked) {
+      first ??= n;
+      if (next === null && n > fromDocLine) next = n;
+    }
+    prevMarked = marked;
+  }
+  return next ?? first;
+}
+
 /** Tints changed lines to match their gutter bar. */
 export function diffHighlightExtension(marks: Map<number, GutterMarkType> | undefined): Extension {
   if (!marks || marks.size === 0) return [];
