@@ -64,7 +64,7 @@ server/services/importsvc files=1 loc=454 imports=9
 server/services/federation files=6 loc=955 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
 server/services/featureflags files=5 loc=196 imports=2
-server/services/secretscan files=3 loc=107 imports=0
+server/services/secretscan files=2 loc=107 imports=0
 server/services/credkit files=2 loc=589 imports=3
 server/services/anthropicwire files=6 loc=824 imports=7
 session/driver files=5 loc=1628 imports=9

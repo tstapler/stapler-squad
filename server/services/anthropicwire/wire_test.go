@@ -72,6 +72,7 @@ func TestAnthropicAIClient_Complete_RequestBodyAndHeadersGolden(t *testing.T) {
 	assert.Equal(t, "hello", out)
 	assert.Equal(t, http.MethodPost, got.method)
 	assert.Equal(t, AnthropicAPIURL, got.url)
+	assert.Equal(t, "https://api.anthropic.com/v1/messages", got.url)
 	assert.JSONEq(t, `{"model":"claude-haiku-4-5-20251001","max_tokens":2048,"system":"sys","messages":[{"role":"user","content":"usr"}]}`, got.body)
 	assert.Equal(t, "2023-06-01", got.header.Get("anthropic-version"))
 	assert.Equal(t, "application/json", got.header.Get("Content-Type"))
@@ -125,28 +126,34 @@ func TestAnthropicAIClient_Complete_InvokesOnResponseHeaders(t *testing.T) {
 
 func TestAnthropicMessagesURL_DefaultsToFixedEndpoint(t *testing.T) {
 	isolateLLMConfig(t)
-	assert.Equal(t, AnthropicAPIURL, AnthropicMessagesURL())
+	assert.Equal(t, "https://api.anthropic.com/v1/messages", AnthropicMessagesURL())
 }
 
 func TestAnthropicLimitsClient_QueryLimits(t *testing.T) {
-	isolateLLMConfig(t)
-	reset := "2030-01-02T03:04:05Z"
+	t.Parallel()
+	resets := map[string]string{
+		"requests":      "2030-01-02T03:04:05Z",
+		"tokens":        "2031-02-03T04:05:06Z",
+		"input-tokens":  "2032-03-04T05:06:07Z",
+		"output-tokens": "2033-04-05T06:07:08Z",
+	}
 	hdr := map[string]string{
 		"anthropic-ratelimit-requests-limit":          "50",
 		"anthropic-ratelimit-requests-remaining":      "49",
-		"anthropic-ratelimit-requests-reset":          reset,
+		"anthropic-ratelimit-requests-reset":          resets["requests"],
 		"anthropic-ratelimit-tokens-limit":            "100000",
 		"anthropic-ratelimit-tokens-remaining":        "99900",
-		"anthropic-ratelimit-tokens-reset":            reset,
+		"anthropic-ratelimit-tokens-reset":            resets["tokens"],
 		"anthropic-ratelimit-input-tokens-limit":      "60000",
 		"anthropic-ratelimit-input-tokens-remaining":  "59000",
-		"anthropic-ratelimit-input-tokens-reset":      reset,
+		"anthropic-ratelimit-input-tokens-reset":      resets["input-tokens"],
 		"anthropic-ratelimit-output-tokens-limit":     "40000",
 		"anthropic-ratelimit-output-tokens-remaining": "39000",
-		"anthropic-ratelimit-output-tokens-reset":     reset,
+		"anthropic-ratelimit-output-tokens-reset":     resets["output-tokens"],
 	}
 
 	t.Run("success parses headers and sends golden probe", func(t *testing.T) {
+		t.Parallel()
 		var got captured
 		chain := credkit.NewChain(fixedSource{"anthropic", credkit.Credential{BearerToken: "tok"}})
 		c := NewAnthropicLimitsClient(chain, "")
@@ -170,16 +177,20 @@ func TestAnthropicLimitsClient_QueryLimits(t *testing.T) {
 		assert.Equal(t, 59000, lim.InputTokensRemaining)
 		assert.Equal(t, 40000, lim.OutputTokensLimit)
 		assert.Equal(t, 39000, lim.OutputTokensRemaining)
-		want, perr := time.Parse(time.RFC3339, reset)
-		require.NoError(t, perr)
-		assert.True(t, lim.RequestsReset.Equal(want))
-		assert.True(t, lim.TokensReset.Equal(want))
-		assert.True(t, lim.InputTokensReset.Equal(want))
-		assert.True(t, lim.OutputTokensReset.Equal(want))
+		mustTime := func(v string) time.Time {
+			ts, perr := time.Parse(time.RFC3339, v)
+			require.NoError(t, perr)
+			return ts
+		}
+		assert.True(t, lim.RequestsReset.Equal(mustTime(resets["requests"])), "RequestsReset %v", lim.RequestsReset)
+		assert.True(t, lim.TokensReset.Equal(mustTime(resets["tokens"])), "TokensReset %v", lim.TokensReset)
+		assert.True(t, lim.InputTokensReset.Equal(mustTime(resets["input-tokens"])), "InputTokensReset %v", lim.InputTokensReset)
+		assert.True(t, lim.OutputTokensReset.Equal(mustTime(resets["output-tokens"])), "OutputTokensReset %v", lim.OutputTokensReset)
 		assert.Equal(t, 200_000, lim.ContextTokensMax)
 	})
 
 	t.Run("typed API error marks unavailable", func(t *testing.T) {
+		t.Parallel()
 		var got captured
 		chain := credkit.NewChain(fixedSource{"anthropic", credkit.Credential{APIKey: "k"}})
 		c := NewAnthropicLimitsClient(chain, "m")
@@ -192,6 +203,7 @@ func TestAnthropicLimitsClient_QueryLimits(t *testing.T) {
 	})
 
 	t.Run("untyped error uses status code", func(t *testing.T) {
+		t.Parallel()
 		var got captured
 		chain := credkit.NewChain(fixedSource{"anthropic", credkit.Credential{APIKey: "k"}})
 		c := NewAnthropicLimitsClient(chain, "")
@@ -203,6 +215,7 @@ func TestAnthropicLimitsClient_QueryLimits(t *testing.T) {
 	})
 
 	t.Run("no credentials", func(t *testing.T) {
+		t.Parallel()
 		c := NewAnthropicLimitsClient(credkit.NewChain(), "")
 		lim, err := c.QueryLimits(context.Background())
 		require.Error(t, err)
@@ -222,12 +235,14 @@ func TestAnthropicLimitsClient_QueryLimits(t *testing.T) {
 }
 
 func TestAnthropicContextWindow(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, 200_000, AnthropicContextWindow("claude-opus-4-5"))
 	assert.Equal(t, 200_000, AnthropicContextWindow("unknown-model"))
 	assert.Equal(t, 200_000, (&AnthropicLimitsClient{}).ModelContextWindow("claude-sonnet-4-5"))
 }
 
 func TestGeminiLimitsClient_Constructor(t *testing.T) {
+	t.Parallel()
 	c := NewGeminiLimitsClient(credkit.NewChain(), "")
 	assert.Equal(t, "models/gemini-2.0-flash", c.model)
 	assert.Equal(t, "google", c.Provider())
@@ -236,7 +251,9 @@ func TestGeminiLimitsClient_Constructor(t *testing.T) {
 }
 
 func TestGeminiLimitsClient_QueryLimits(t *testing.T) {
+	t.Parallel()
 	t.Run("bearer token request and parsed metadata", func(t *testing.T) {
+		t.Parallel()
 		var got captured
 		chain := credkit.NewChain(fixedSource{"google", credkit.Credential{BearerToken: "tok"}})
 		c := NewGeminiLimitsClient(chain, "")
@@ -265,6 +282,7 @@ func TestGeminiLimitsClient_QueryLimits(t *testing.T) {
 	})
 
 	t.Run("api key goes in the query string and context window falls back", func(t *testing.T) {
+		t.Parallel()
 		var got captured
 		chain := credkit.NewChain(fixedSource{"google", credkit.Credential{APIKey: "a b&c"}})
 		c := NewGeminiLimitsClient(chain, "gemini-2.5-pro")
@@ -277,6 +295,7 @@ func TestGeminiLimitsClient_QueryLimits(t *testing.T) {
 	})
 
 	t.Run("non-200 is an error", func(t *testing.T) {
+		t.Parallel()
 		var got captured
 		chain := credkit.NewChain(fixedSource{"google", credkit.Credential{BearerToken: "tok"}})
 		c := NewGeminiLimitsClient(chain, "")
@@ -289,6 +308,7 @@ func TestGeminiLimitsClient_QueryLimits(t *testing.T) {
 	})
 
 	t.Run("no credentials", func(t *testing.T) {
+		t.Parallel()
 		c := NewGeminiLimitsClient(credkit.NewChain(), "")
 		lim, err := c.QueryLimits(context.Background())
 		require.Error(t, err)
@@ -306,6 +326,7 @@ func TestGeminiLimitsClient_QueryLimits(t *testing.T) {
 }
 
 func TestGeminiLimitsClient_ResolveTokenAndExchange(t *testing.T) {
+	t.Parallel()
 	c := NewGeminiLimitsClient(credkit.NewChain(), "")
 
 	tok, err := c.resolveToken(context.Background(), credkit.Credential{BearerToken: "b"})
@@ -340,6 +361,7 @@ func TestGeminiLimitsClient_ResolveTokenAndExchange(t *testing.T) {
 }
 
 func TestGeminiLimitsClient_ModelContextWindow(t *testing.T) {
+	t.Parallel()
 	c := NewGeminiLimitsClient(credkit.NewChain(), "")
 	assert.Equal(t, 1_048_576, c.ModelContextWindow("models/gemini-2.5-flash"))
 	assert.Equal(t, 2_097_152, c.ModelContextWindow("gemini-1.5-pro"))
@@ -347,6 +369,7 @@ func TestGeminiLimitsClient_ModelContextWindow(t *testing.T) {
 }
 
 func TestWrapRulesAIClient_NilFallbackStaysNil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, WrapRulesAIClient(nil))
 }
 
@@ -382,4 +405,22 @@ func TestWrapRulesAIClient_RoutesByFeatureSetting(t *testing.T) {
 	require.Error(t, err, "overridden feature goes through the selector (no backends registered)")
 	assert.Contains(t, err.Error(), "rules generation via selected backend")
 	assert.False(t, fb.called)
+}
+
+func TestCLIAIClient_Complete_TrimsOutputAndUsesSeparator(t *testing.T) {
+	t.Parallel()
+	c, err := NewCLIAIClient(CLIAgentSpec{Name: "cat", Binary: "cat", Args: func() []string { return nil }, PromptSeparator: "|"})
+	require.NoError(t, err)
+	out, err := c.Complete(context.Background(), "S", "U\n\n  ")
+	require.NoError(t, err)
+	assert.Equal(t, "S|U", out, "stdout is trimmed at both ends and joined by the spec separator")
+}
+
+func TestNewCLIAIClient_DefaultsPromptSeparator(t *testing.T) {
+	t.Parallel()
+	c, err := NewCLIAIClient(CLIAgentSpec{Name: "cat", Binary: "cat", Args: func() []string { return nil }})
+	require.NoError(t, err)
+	out, err := c.Complete(context.Background(), "S", "U")
+	require.NoError(t, err)
+	assert.Equal(t, "S\n\n---\n\nU", out)
 }
