@@ -64,6 +64,7 @@ export function PaneHeader({
         <span
           className={paneDragHandle}
           draggable
+          role="button"
           onDragStart={onDragStart}
           onClick={(e) => e.stopPropagation()}
           title="Drag to swap with another pane"
