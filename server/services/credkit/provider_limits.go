@@ -1,4 +1,4 @@
-package services
+package credkit
 
 import (
 	"context"
@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// parseIntHeader parses an HTTP header value as an integer.
+// ParseIntHeader parses an HTTP header value as an integer.
 // Returns -1 if the header is absent or cannot be parsed as an integer.
-func parseIntHeader(h http.Header, key string) int {
+func ParseIntHeader(h http.Header, key string) int {
 	val := h.Get(key)
 	if val == "" {
 		return -1
@@ -21,13 +21,13 @@ func parseIntHeader(h http.Header, key string) int {
 	return num
 }
 
-// parseTimeHeader parses an HTTP header value as a time.Time.
+// ParseTimeHeader parses an HTTP header value as a time.Time.
 // Handles (in order): RFC3339 datetime strings, "2006-01-02T15:04:05Z" UTC
 // datetime strings, floating-point second duration strings (e.g. "1.5" → now
 // + 1.5 s), Go duration strings (e.g. "500ms"), and plain integer-second
 // duration strings.  Returns time.Time{} if the header is absent or cannot
 // be parsed.
-func parseTimeHeader(h http.Header, key string) time.Time {
+func ParseTimeHeader(h http.Header, key string) time.Time {
 	val := h.Get(key)
 	if val == "" {
 		return time.Time{}

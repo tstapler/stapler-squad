@@ -6,7 +6,7 @@
 
 ## Problem Description
 
-`server/services/credentials.go`'s `CredentialChain` (specifically `ClaudeOAuthCredentialSource`/`AgyCredentialSource`) resolves credentials via `os.UserHomeDir()` directly, rather than respecting `STAPLER_SQUAD_TEST_DIR` (the env var this codebase otherwise uses consistently for test-mode config isolation — see `session_service.go:607`'s existing `config.IsTestMode()` guard as the established pattern). This means any test — not just deliberately-integration tests — that builds a real `SessionService` and calls `SetLifecycleContext` (which unconditionally starts `CapacityMonitor`'s polling loop) picks up the *developer's own real credentials* and begins making *real* outbound API calls to Anthropic/Gemini as a side effect of running `go test`.
+`server/services/credkit/credentials.go`'s `CredentialChain` (specifically `ClaudeOAuthCredentialSource`/`AgyCredentialSource`) resolves credentials via `os.UserHomeDir()` directly, rather than respecting `STAPLER_SQUAD_TEST_DIR` (the env var this codebase otherwise uses consistently for test-mode config isolation — see `session_service.go:607`'s existing `config.IsTestMode()` guard as the established pattern). This means any test — not just deliberately-integration tests — that builds a real `SessionService` and calls `SetLifecycleContext` (which unconditionally starts `CapacityMonitor`'s polling loop) picks up the *developer's own real credentials* and begins making *real* outbound API calls to Anthropic/Gemini as a side effect of running `go test`.
 
 ## Reproduction Steps
 
@@ -17,11 +17,11 @@
 
 ## Root Cause
 
-`server/services/credentials.go`'s credential-resolution sources call `os.UserHomeDir()` directly instead of going through this repo's test-mode config path (`config.IsTestMode()` / `STAPLER_SQUAD_TEST_DIR`), unlike most of the rest of the codebase's test-isolation surface (e.g. `session_service.go:607`'s existing guard). `SessionService.SetLifecycleContext` unconditionally starts `CapacityMonitor`, which unconditionally resolves credentials via this chain — there is no test-mode short-circuit before real network calls are attempted.
+`server/services/credkit/credentials.go`'s credential-resolution sources call `os.UserHomeDir()` directly instead of going through this repo's test-mode config path (`config.IsTestMode()` / `STAPLER_SQUAD_TEST_DIR`), unlike most of the rest of the codebase's test-isolation surface (e.g. `session_service.go:607`'s existing guard). `SessionService.SetLifecycleContext` unconditionally starts `CapacityMonitor`, which unconditionally resolves credentials via this chain — there is no test-mode short-circuit before real network calls are attempted.
 
 ## Files Likely Affected
 
-- `server/services/credentials.go` — `CredentialChain`, `ClaudeOAuthCredentialSource`, `AgyCredentialSource` — the `os.UserHomeDir()` call sites.
+- `server/services/credkit/credentials.go` — `CredentialChain`, `ClaudeOAuthCredentialSource`, `AgyCredentialSource` — the `os.UserHomeDir()` call sites.
 - `server/services/capacity_monitor.go` — `CapacityMonitor.Start` — the call site that should have a test-mode guard, mirroring `session_service.go:607`'s existing pattern.
 - `server/services/session_service.go:607` — the existing `config.IsTestMode()` guard to use as the precedent/template for the fix.
 

@@ -1,4 +1,4 @@
-package services
+package credkit
 
 import (
 	"context"
@@ -138,7 +138,7 @@ func NewChain(sources ...CredentialSource) *CredentialChain {
 // see jules/keychain.go's KeyringTokenSource doc comment for why only one
 // instance may exist per process. A no-op if no JulesCredentialSource is in
 // the chain (e.g. a test-built chain via NewChain).
-func (c *CredentialChain) SetJulesTokenSource(tokens julesKeyringTokenSource) {
+func (c *CredentialChain) SetJulesTokenSource(tokens JulesKeyringTokenSource) {
 	for _, src := range c.sources {
 		if jcs, ok := src.(*JulesCredentialSource); ok {
 			jcs.tokens = tokens
@@ -435,10 +435,10 @@ func (s *AgyCredentialSource) resolveGcloudADC(path string) (Credential, bool, e
 // 5. JulesCredentialSource — reads the Jules API key from the OS keychain
 // ---------------------------------------------------------------------------
 
-// julesKeyringTokenSource is the subset of *jules.KeyringTokenSource this
+// JulesKeyringTokenSource is the subset of *jules.KeyringTokenSource this
 // package depends on, so tests can inject a stub without touching the real
 // OS keychain.
-type julesKeyringTokenSource interface {
+type JulesKeyringTokenSource interface {
 	APIKey(ctx context.Context) (jules.JulesAPIKey, error)
 }
 
@@ -447,7 +447,7 @@ type julesKeyringTokenSource interface {
 // project_plans/google-jules-integration/implementation/plan.md Epic 1.2).
 // It is a no-op for every other provider.
 type JulesCredentialSource struct {
-	tokens julesKeyringTokenSource
+	tokens JulesKeyringTokenSource
 }
 
 func (s *JulesCredentialSource) Name() string { return "jules_keychain" }

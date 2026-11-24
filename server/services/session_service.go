@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session"
@@ -265,7 +266,7 @@ type SessionService struct {
 	// swaps that for the process-wide instance once dependencies.go builds it,
 	// so this chain never resolves the Jules OS-keychain entry through a
 	// second, independent cache/circuit-breaker.
-	credChain *CredentialChain
+	credChain *credkit.CredentialChain
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
@@ -932,7 +933,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(directCfg)
+	credChain := credkit.NewDefaultChain(directCfg)
 
 	var capRoleResolver SessionRoleResolver
 	var capTerminator SessionTerminator

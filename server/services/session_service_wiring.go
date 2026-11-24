@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -551,7 +552,7 @@ func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, source
 // spins up a second, independent cache/circuit-breaker/singleflight-group
 // over the same OS keychain entry. A no-op if credChain is nil (should not
 // happen outside tests that bypass NewSessionServiceWithSearchEngine).
-func (s *SessionService) SetJulesKeyringTokenSource(tokens julesKeyringTokenSource) {
+func (s *SessionService) SetJulesKeyringTokenSource(tokens credkit.JulesKeyringTokenSource) {
 	if s.credChain != nil {
 		s.credChain.SetJulesTokenSource(tokens)
 	}

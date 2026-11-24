@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 )
 
 const (
@@ -34,7 +35,7 @@ func anthropicMessagesURL() string {
 // It accepts a Credential rather than a raw API key string so that both
 // API-key users and Claude subscription (OAuth) users are supported.
 type AnthropicAIClient struct {
-	cred              Credential
+	cred              credkit.Credential
 	client            *http.Client
 	model             string
 	OnResponseHeaders func(http.Header)
@@ -42,7 +43,7 @@ type AnthropicAIClient struct {
 
 // NewAnthropicAIClient creates an AnthropicAIClient from a resolved Credential.
 // Returns an error if the credential is not valid for Anthropic.
-func NewAnthropicAIClient(cred Credential) (*AnthropicAIClient, error) {
+func NewAnthropicAIClient(cred credkit.Credential) (*AnthropicAIClient, error) {
 	if !cred.IsValid() {
 		return nil, fmt.Errorf("AnthropicAIClient: credential is empty (source: %q)", cred.Source)
 	}
@@ -60,7 +61,7 @@ func NewAnthropicAIClientFromKey(apiKey string) (*AnthropicAIClient, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("AnthropicAIClient: apiKey must not be empty")
 	}
-	return NewAnthropicAIClient(Credential{
+	return NewAnthropicAIClient(credkit.Credential{
 		Provider: "anthropic",
 		APIKey:   apiKey,
 		Source:   "direct_key",

@@ -1,4 +1,4 @@
-package services
+package credkit
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 )
 
-// stubJulesTokens is a test double for the julesKeyringTokenSource interface
+// stubJulesTokens is a test double for the JulesKeyringTokenSource interface
 // JulesCredentialSource depends on, so these tests never touch a real OS
 // keychain.
 type stubJulesTokens struct {
