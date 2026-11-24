@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"crypto/sha256"
@@ -75,19 +75,19 @@ func TestDetectLineEnding_ShouldClassify_When_LfCrlfMixedAndLoneCr(t *testing.T)
 		"trailing lone cr":     {"a\r\nb\r", sessionv1.LineEnding_LINE_ENDING_MIXED},
 		"cr only":              {"a\rb\r", sessionv1.LineEnding_LINE_ENDING_MIXED},
 	} {
-		assert.Equal(t, tc.want, detectLineEnding([]byte(tc.in)), name)
+		assert.Equal(t, tc.want, DetectLineEnding([]byte(tc.in)), name)
 	}
 }
 
 func TestDetectBOM_ShouldStripOnlyLeadingUtf8Bom(t *testing.T) {
 	t.Parallel()
-	has, rest := detectBOM([]byte("\xEF\xBB\xBFhi"))
+	has, rest := DetectBOM([]byte("\xEF\xBB\xBFhi"))
 	assert.True(t, has)
 	assert.Equal(t, "hi", string(rest))
-	has, rest = detectBOM([]byte("hi\xEF\xBB\xBF"))
+	has, rest = DetectBOM([]byte("hi\xEF\xBB\xBF"))
 	assert.False(t, has)
 	assert.Equal(t, "hi\xEF\xBB\xBF", string(rest))
-	has, _ = detectBOM(nil)
+	has, _ = DetectBOM(nil)
 	assert.False(t, has)
 }
 
@@ -102,22 +102,22 @@ func TestValidateEditableUTF8_ShouldRejectNulAndInvalidUtf8(t *testing.T) {
 func TestClassifyReadOnly_ShouldMapFixtures_When_BinaryLatin1MixedLoneCrSymlink(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		facts readFacts
+		facts ReadFacts
 		want  sessionv1.ReadOnlyReason
 	}{
-		"editable":        {readFacts{Body: []byte("a\nb\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE},
-		"editable crlf":   {readFacts{Body: []byte("a\r\nb\r\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE},
-		"binary":          {readFacts{Binary: true}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY},
-		"late nul":        {readFacts{Body: []byte("text\x00x")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY},
-		"truncated":       {readFacts{Truncated: true, Body: []byte("abc")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TRUNCATED},
-		"latin-1":         {readFacts{Body: []byte("caf\xE9\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8},
-		"mixed eol":       {readFacts{Body: []byte("a\r\nb\nc\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
-		"lone cr":         {readFacts{Body: []byte("a\nb\rc\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
-		"in-tree symlink": {readFacts{ViaLink: true, Body: []byte("a\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK},
-		"binary beats truncated": {readFacts{Binary: true, Truncated: true},
+		"editable":        {ReadFacts{Body: []byte("a\nb\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE},
+		"editable crlf":   {ReadFacts{Body: []byte("a\r\nb\r\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE},
+		"binary":          {ReadFacts{Binary: true}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY},
+		"late nul":        {ReadFacts{Body: []byte("text\x00x")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY},
+		"truncated":       {ReadFacts{Truncated: true, Body: []byte("abc")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TRUNCATED},
+		"latin-1":         {ReadFacts{Body: []byte("caf\xE9\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8},
+		"mixed eol":       {ReadFacts{Body: []byte("a\r\nb\nc\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
+		"lone cr":         {ReadFacts{Body: []byte("a\nb\rc\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
+		"in-tree symlink": {ReadFacts{ViaLink: true, Body: []byte("a\n")}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK},
+		"binary beats truncated": {ReadFacts{Binary: true, Truncated: true},
 			sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY},
 	} {
-		assert.Equal(t, tc.want, classifyReadOnly(tc.facts), name)
+		assert.Equal(t, tc.want, ClassifyReadOnly(tc.facts), name)
 	}
 }
 
@@ -125,13 +125,13 @@ func TestTruncateOnRuneBoundary_ShouldNotSplitRune_When_CutInsideMultibyte(t *te
 	t.Parallel()
 	s := "ab世界" // 2 + 3 + 3 bytes
 	for cut := 0; cut <= len(s); cut++ {
-		got := truncateOnRuneBoundary([]byte(s[:cut]))
+		got := TruncateOnRuneBoundary([]byte(s[:cut]))
 		assert.True(t, utf8.Valid(got), "cut=%d", cut)
 		assert.True(t, strings.HasPrefix(s, string(got)), "cut=%d", cut)
 		assert.LessOrEqual(t, cut-len(got), utf8.UTFMax-1, "cut=%d dropped too much", cut)
 	}
-	assert.Equal(t, "ab世", string(truncateOnRuneBoundary([]byte(s[:7]))))
-	assert.Empty(t, truncateOnRuneBoundary(nil))
+	assert.Equal(t, "ab世", string(TruncateOnRuneBoundary([]byte(s[:7]))))
+	assert.Empty(t, TruncateOnRuneBoundary(nil))
 }
 
 func FuzzTruncateOnRuneBoundary(f *testing.F) {
@@ -142,7 +142,7 @@ func FuzzTruncateOnRuneBoundary(f *testing.F) {
 			return
 		}
 		in := []byte(s[:cut])
-		got := truncateOnRuneBoundary(in)
+		got := TruncateOnRuneBoundary(in)
 		if !strings.HasPrefix(string(in), string(got)) || len(in)-len(got) > utf8.UTFMax-1 {
 			t.Fatalf("not a short prefix: in=%q got=%q", in, got)
 		}
@@ -156,7 +156,7 @@ func FuzzDetectLineEnding(f *testing.F) {
 	f.Add([]byte("a\r\nb\n"))
 	f.Add([]byte("a\rb"))
 	f.Fuzz(func(t *testing.T, b []byte) {
-		le := detectLineEnding(b)
+		le := DetectLineEnding(b)
 		if le == sessionv1.LineEnding_LINE_ENDING_UNSPECIFIED {
 			t.Fatal("never unspecified")
 		}

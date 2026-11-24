@@ -15,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 func keyOf(path string, size int64) analysisKey {
@@ -267,7 +268,7 @@ func TestAnalysisCache_ShouldRunOnePassAtATime_And_EvictLeastRecentlyUsed(t *tes
 func TestAnalysisCache_ShouldDiscardResultAndMarkStale_When_FileChangesDuringPass(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	dir := "/w"
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	mem.AddFile(dir, "log.txt", []byte(strings.Repeat("line\n", 100)), readCorpusMTime)
 	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, mem)
 	defer ops.analysis.Close()
@@ -301,7 +302,7 @@ func TestStatFile_ShouldReturnAnalysisStateAndSha256Token_When_WantFlagsAndRange
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	dir := "/w"
 	body := []byte(strings.Repeat("0123456789\n", 200_000)) // 2.2 MB: above the cheap 1 MiB hash path
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	mem.AddFile(dir, "big.log", body, readCorpusMTime)
 	flags := &stubFilesFlags{}
 	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: flags}, mem)
@@ -319,7 +320,7 @@ func TestStatFile_ShouldReturnAnalysisStateAndSha256Token_When_WantFlagsAndRange
 	assert.Equal(t, analysisStateUnspecified, stat(false, false).Analysis, "cheap path unchanged")
 	analysisEventually(t, func() bool { return stat(true, false).Analysis == analysisStateReady })
 	resp := stat(true, true)
-	want := NewFileVersionToken(int64(len(body)), readCorpusMTime.UnixNano(), body)
+	want := fsops.NewFileVersionToken(int64(len(body)), readCorpusMTime.UnixNano(), body)
 	assert.Equal(t, want.String(), resp.VersionToken, "ready sha256 token equals NewFileVersionToken")
 	assert.NotEqual(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE, resp.ReadOnlyReason)
 	assert.True(t, strings.HasSuffix(stat(true, false).VersionToken, ":-"), "sha stays out unless want_sha256")
@@ -328,7 +329,7 @@ func TestStatFile_ShouldReturnAnalysisStateAndSha256Token_When_WantFlagsAndRange
 func TestStatFile_ShouldKeepDashToken_When_AnalysisPending(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	dir := "/w"
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	mem.AddFile(dir, "big.log", []byte(strings.Repeat("x\n", 600_000)), readCorpusMTime)
 	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, mem)
 	defer ops.analysis.Close()

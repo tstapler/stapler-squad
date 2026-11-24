@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -190,7 +191,7 @@ func (s *SessionService) StreamTerminal(
 		// referencing it is closed. dupPTYFile is platform-specific
 		// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
 		// on Windows.
-		readFile, err = dupPTYFile(ptyFile)
+		readFile, err = fsops.DupPTYFile(ptyFile)
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, err)
 		}

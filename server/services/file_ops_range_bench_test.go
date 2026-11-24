@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // Task 1.6.7b: recorded, never gated. Run in the background, numbers go to ADR-036 "Spike outcomes":
@@ -17,7 +18,7 @@ import (
 
 func rangeBenchOps(b *testing.B, dir string) *FileOps {
 	b.Helper()
-	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, osRootBackend{})
+	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, fsops.OsRootBackend{})
 	b.Cleanup(ops.analysis.Close)
 	return ops
 }

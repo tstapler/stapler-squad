@@ -9,6 +9,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // StatFile returns a file's version token, size and read-only reason without its content.
@@ -40,7 +41,7 @@ func (fs *FileService) GetFileTransportCapabilities(
 }
 
 // SetTelemetry wires the Files outcome port; call at startup, before serving.
-func (fs *FileService) SetTelemetry(t FilesTelemetry) {
+func (fs *FileService) SetTelemetry(t fsops.FilesTelemetry) {
 	if t != nil {
 		fs.ops.policy.Telemetry = t
 	}
@@ -163,5 +164,5 @@ func logRangeCall(ctx context.Context, req *sessionv1.ReadFileRangeRequest, resp
 	}
 	log.Info("file range read", "session", req.SessionId, "path", req.Path, "kind", kind,
 		"bytes", bytes, "lines", lines, "duration_ms", took.Milliseconds(), "outcome", outcome)
-	recordRangeMetrics(ctx, outcome, took)
+	fsops.RecordRangeMetrics(ctx, outcome, took)
 }

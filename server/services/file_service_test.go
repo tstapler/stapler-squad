@@ -20,6 +20,8 @@ import (
 
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -192,13 +194,13 @@ func (t *testFileService) getFileContent(ctx context.Context, req *connect.Reque
 
 	readLimit := size
 	isTruncated := false
-	if size > truncateSize {
-		readLimit = truncateSize
+	if size > fsops.TruncateSize {
+		readLimit = fsops.TruncateSize
 		isTruncated = true
 	}
 
 	ext := strings.ToLower(filepath.Ext(fullPath))
-	isKnownText := knownTextExtensions[ext]
+	isKnownText := fsops.KnownTextExtensions[ext]
 
 	f, openErr := os.Open(fullPath)
 	if openErr != nil {
@@ -233,7 +235,7 @@ func (t *testFileService) getFileContent(ctx context.Context, req *connect.Reque
 
 	_, _ = f.Seek(0, 0)
 	buf := make([]byte, readLimit)
-	n, _ := readFull(f, buf)
+	n, _ := fsops.ReadFull(f, buf)
 	buf = buf[:n]
 
 	return connect.NewResponse(&sessionv1.GetFileContentResponse{
@@ -597,7 +599,7 @@ func TestGetFileContent_PathTraversal(t *testing.T) {
 func TestGetFileContent_Truncation(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	content := strings.Repeat("x", truncateSize+1)
+	content := strings.Repeat("x", fsops.TruncateSize+1)
 	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -613,8 +615,8 @@ func TestGetFileContent_Truncation(t *testing.T) {
 	if !resp.Msg.IsTruncated {
 		t.Error("expected is_truncated=true for file >1MB")
 	}
-	if int64(len(resp.Msg.Content)) != truncateSize {
-		t.Errorf("expected content length %d, got %d", truncateSize, len(resp.Msg.Content))
+	if int64(len(resp.Msg.Content)) != fsops.TruncateSize {
+		t.Errorf("expected content length %d, got %d", fsops.TruncateSize, len(resp.Msg.Content))
 	}
 }
 
@@ -1073,7 +1075,7 @@ func TestGetFileContent_RealHandler_ShouldKeepBehavior_ForTextBinaryTruncatedAnd
 	writeFixtureFile(t, filepath.Join(root, "main.go"), []byte("package main\n"))
 	writeFixtureFile(t, filepath.Join(root, "data.bin"), []byte{0, 1, 2, 0})
 	writeFixtureFile(t, filepath.Join(root, "nul.dat"), append([]byte("text then "), 0, 'x'))
-	writeFixtureFile(t, filepath.Join(root, "big.txt"), []byte(strings.Repeat("a", truncateSize+10)))
+	writeFixtureFile(t, filepath.Join(root, "big.txt"), []byte(strings.Repeat("a", fsops.TruncateSize+10)))
 	writeFixtureFile(t, filepath.Join(root, "huge.txt"), []byte(strings.Repeat("a", maxFileSize+1)))
 	mustMkdir(t, filepath.Join(root, "dir"))
 
@@ -1087,7 +1089,7 @@ func TestGetFileContent_RealHandler_ShouldKeepBehavior_ForTextBinaryTruncatedAnd
 	if got, err = realGetFileContent(t, root, "nul.dat"); err != nil || !got.IsBinary {
 		t.Fatalf("null-byte scan: %+v, %v", got, err)
 	}
-	if got, err = realGetFileContent(t, root, "big.txt"); err != nil || !got.IsTruncated || len(got.Content) != truncateSize {
+	if got, err = realGetFileContent(t, root, "big.txt"); err != nil || !got.IsTruncated || len(got.Content) != fsops.TruncateSize {
 		t.Fatalf("truncated: truncated=%v len=%d err=%v", got.GetIsTruncated(), len(got.GetContent()), err)
 	}
 	for rel, want := range map[string]connect.Code{
@@ -1104,7 +1106,7 @@ func TestGetFileContent_RealHandler_ShouldKeepBehavior_ForTextBinaryTruncatedAnd
 }
 
 func TestGetFileContent_ShouldReturnPermissionDenied_When_LeafIsSymlinkEscape(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	got, err := realGetFileContent(t, dir, "leak")
 	if connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("code %v, want PermissionDenied (%v)", connect.CodeOf(err), err)
@@ -1117,7 +1119,7 @@ func TestGetFileContent_ShouldReturnPermissionDenied_When_LeafIsSymlinkEscape(t 
 // In-tree link reads carry ReadOnlyReason=Symlink; escaping links are denied with a typed
 // ReadOnlyReasonDetail that does not echo the link target.
 func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithoutEchoingTarget_When_LinkClasses(t *testing.T) {
-	dir, outside := newResolverFixture(t)
+	dir, outside := fsopstest.NewResolverFixture(t)
 	for rel, want := range map[string]string{"AGENTS.md": "claude\n", "docs/alias.md": "readme\n", "chain1": "claude\n", "shared/x.txt": "shared\n"} {
 		got, err := realGetFileContent(t, dir, rel)
 		if err != nil || got.Content != want {
@@ -1137,7 +1139,7 @@ func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithoutE
 	}
 	for rel, target := range denied {
 		got, err := realGetFileContent(t, dir, rel)
-		var sym *SymlinkDeniedError
+		var sym *fsops.SymlinkDeniedError
 		if got != nil || connect.CodeOf(err) != connect.CodePermissionDenied || !errors.As(err, &sym) || sym.Target != target {
 			t.Errorf("%s: got=%v err=%v want target %q", rel, got, err, target)
 			continue
@@ -1162,7 +1164,7 @@ func TestGetFileContent_ShouldReadInTreeSymlinkReadOnly_And_DenyEscapingWithoutE
 }
 
 func TestServeFileRaw_ShouldRefuseEscapingSymlinkAndServeInTreeLink(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	svc := realFileService(dir)
 	resp := serveFileRawRequest(t, svc, "leak", "")
 	body, _ := io.ReadAll(resp.Body)
@@ -1193,7 +1195,7 @@ func realListFiles(t *testing.T, root, rel string) (*sessionv1.ListFilesResponse
 }
 
 func TestListFiles_ShouldListInTreeDirSymlinkAndRefuseEscapingOrGitLink_When_RetrofittedToOsRoot(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	got, err := realListFiles(t, dir, "shared")
 	if err != nil || len(got.Files) != 1 || got.Files[0].Name != "x.txt" || got.Files[0].Path != "shared/x.txt" {
 		t.Fatalf("shared: %+v, %v", got, err)
@@ -1218,7 +1220,7 @@ func TestListFiles_ShouldListInTreeDirSymlinkAndRefuseEscapingOrGitLink_When_Ret
 }
 
 func TestSearchFiles_ShouldNotFollowSymlinkOutOfRoot_When_TreeSearchWalksOsRoot(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	resp, err := realFileService(dir).SearchFiles(context.Background(), connect.NewRequest(
 		&sessionv1.SearchFilesRequest{SessionId: "test-session", Query: "secret", IncludeIgnored: true}))
 	if err != nil {
@@ -1279,12 +1281,12 @@ func TestStatFileAndGetFileContent_ShouldReturnTokenLineEndingBomReason_When_Crl
 	writeFixtureFile(t, path, doc)
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	wantTok := NewFileVersionToken(120, info.ModTime().UnixNano(), doc).String()
+	wantTok := fsops.NewFileVersionToken(120, info.ModTime().UnixNano(), doc).String()
 
 	got, err := realGetFileContent(t, root, "docs/a.md")
 	require.NoError(t, err)
 	assert.Equal(t, wantTok, got.VersionToken)
-	_, parseErr := ParseFileVersionToken(got.VersionToken)
+	_, parseErr := fsops.ParseFileVersionToken(got.VersionToken)
 	require.NoError(t, parseErr)
 	assert.True(t, strings.HasPrefix(got.VersionToken, "v1:120:"), got.VersionToken)
 	assert.Equal(t, sessionv1.LineEnding_LINE_ENDING_CRLF, got.LineEnding)
@@ -1311,7 +1313,7 @@ func TestStatFileAndGetFileContent_ShouldReturnTokenLineEndingBomReason_When_Crl
 }
 
 func TestGetFileContent_ShouldClassifyEveryReadOnlyReason_When_FixtureFiles(t *testing.T) {
-	root, _ := newResolverFixture(t)
+	root, _ := fsopstest.NewResolverFixture(t)
 	writeFixtureFile(t, filepath.Join(root, "bin.dat"), []byte{0, 1, 2, 3})
 	writeFixtureFile(t, filepath.Join(root, "latin1.txt"), []byte("caf\xE9\n"))
 	writeFixtureFile(t, filepath.Join(root, "mixed.txt"), []byte("a\r\nb\nc\n"))
@@ -1350,8 +1352,8 @@ func TestGetFileContent_ShouldCutOnRuneBoundaryAndCarryDashToken_When_TwoMegabyt
 	assert.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TRUNCATED, got.ReadOnlyReason)
 	assert.True(t, strings.HasSuffix(got.VersionToken, ":-"), got.VersionToken)
 	assert.True(t, utf8.ValidString(got.Content))
-	assert.LessOrEqual(t, len(got.Content), truncateSize)
-	assert.Greater(t, len(got.Content), truncateSize-utf8.UTFMax)
+	assert.LessOrEqual(t, len(got.Content), fsops.TruncateSize)
+	assert.Greater(t, len(got.Content), fsops.TruncateSize-utf8.UTFMax)
 	assert.Equal(t, int64((2<<20)/3*3), got.Size)
 
 	st, err := realStatFile(t, root, "big.txt")
@@ -1378,7 +1380,7 @@ func TestStatFile_ShouldReportNotFoundDirAndTooLarge_Without_Content(t *testing.
 }
 
 func TestListFiles_ShouldReturnOnlyInTreeRelativeSymlinkTargets_And_NeverHostPaths(t *testing.T) {
-	dir, outside := newResolverFixture(t)
+	dir, outside := fsopstest.NewResolverFixture(t)
 	got, err := realListFiles(t, dir, "")
 	require.NoError(t, err)
 	targets := map[string]string{}

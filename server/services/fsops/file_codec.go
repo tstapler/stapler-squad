@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"bytes"
@@ -22,25 +22,25 @@ type fileReadSeeker interface {
 	io.Seeker
 }
 
-// isKnownTextFile reports whether the file's extension (or, for extension-less
+// IsKnownTextFile reports whether the file's extension (or, for extension-less
 // names like Makefile, its basename) is on the always-text allowlist.
-func isKnownTextFile(fullPath string) bool {
+func IsKnownTextFile(fullPath string) bool {
 	ext := strings.ToLower(filepath.Ext(fullPath))
 	if ext == "" {
 		base := strings.ToLower(filepath.Base(fullPath))
-		if knownTextExtensions["."+base] {
+		if KnownTextExtensions["."+base] {
 			ext = "." + base
 		}
 	}
-	return knownTextExtensions[ext]
+	return KnownTextExtensions[ext]
 }
 
-// sniffContent returns the sniffed content type and whether the file is binary:
+// SniffContent returns the sniffed content type and whether the file is binary:
 // MIME sniff first, then a null-byte scan of the first 8000 bytes (which overrides
 // a text MIME). Known-text files skip both checks. Leaves f's offset unspecified.
-func sniffContent(f fileReadSeeker, isText bool) (contentType string, isBinary bool) {
+func SniffContent(f fileReadSeeker, isText bool) (contentType string, isBinary bool) {
 	sniffBuf := make([]byte, 512)
-	sniffN, _ := readFull(f, sniffBuf)
+	sniffN, _ := ReadFull(f, sniffBuf)
 	sniffBuf = sniffBuf[:sniffN]
 	contentType = http.DetectContentType(sniffBuf)
 	if isText {
@@ -53,7 +53,7 @@ func sniffContent(f fileReadSeeker, isText bool) (contentType string, isBinary b
 	if len(sniffBuf) < 8000 {
 		_, _ = f.Seek(0, 0)
 		scanBuf = make([]byte, 8000)
-		n, _ := readFull(f, scanBuf)
+		n, _ := ReadFull(f, scanBuf)
 		scanBuf = scanBuf[:n]
 	}
 	for _, b := range scanBuf {
@@ -64,19 +64,19 @@ func sniffContent(f fileReadSeeker, isText bool) (contentType string, isBinary b
 	return contentType, false
 }
 
-// readTextCapped reads f from the start, capped at truncateSize; truncated reports
+// ReadTextCapped reads f from the start, capped at TruncateSize; truncated reports
 // that the file was longer than the cap. The caller has already enforced maxFileSize.
-func readTextCapped(f fileReadSeeker, size int64) (buf []byte, truncated bool, err error) {
+func ReadTextCapped(f fileReadSeeker, size int64) (buf []byte, truncated bool, err error) {
 	readLimit := size
-	if size > truncateSize {
-		readLimit = truncateSize
+	if size > TruncateSize {
+		readLimit = TruncateSize
 		truncated = true
 	}
 	if _, err = f.Seek(0, 0); err != nil {
 		return nil, false, err
 	}
 	buf = make([]byte, readLimit)
-	n, readErr := readFull(f, buf)
+	n, readErr := ReadFull(f, buf)
 	if readErr != nil && n == 0 {
 		return nil, false, readErr
 	}
@@ -95,7 +95,7 @@ type FileVersionToken struct {
 const (
 	tokenPrefix  = "v1"
 	tokenNoHash  = "-"
-	sha256HexLen = 64
+	Sha256HexLen = 64
 )
 
 // NewFileVersionToken hashes the raw on-disk bytes (BOM and line endings included).
@@ -138,7 +138,7 @@ func ParseFileVersionToken(s string) (FileVersionToken, error) {
 	if parts[3] == tokenNoHash {
 		return tok, nil
 	}
-	if !isLowerHex(parts[3], sha256HexLen) {
+	if !isLowerHex(parts[3], Sha256HexLen) {
 		return FileVersionToken{}, fmt.Errorf("malformed version token hash")
 	}
 	tok.SHA256 = parts[3]
@@ -158,9 +158,9 @@ func isLowerHex(s string, n int) bool {
 	return true
 }
 
-// detectLineEnding classifies raw bytes. A lone CR (not followed by LF) makes the
+// DetectLineEnding classifies raw bytes. A lone CR (not followed by LF) makes the
 // file Mixed so the LF-normalize/re-apply round trip can never change bytes.
-func detectLineEnding(b []byte) sessionv1.LineEnding {
+func DetectLineEnding(b []byte) sessionv1.LineEnding {
 	var crlf, lf, cr int
 	for i := 0; i < len(b); i++ {
 		switch b[i] {
@@ -185,12 +185,12 @@ func detectLineEnding(b []byte) sessionv1.LineEnding {
 	}
 }
 
-var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+var UTF8BOM = []byte{0xEF, 0xBB, 0xBF}
 
-// detectBOM reports a leading UTF-8 BOM and returns b without it.
-func detectBOM(b []byte) (hasBOM bool, rest []byte) {
-	if bytes.HasPrefix(b, utf8BOM) {
-		return true, b[len(utf8BOM):]
+// DetectBOM reports a leading UTF-8 BOM and returns b without it.
+func DetectBOM(b []byte) (hasBOM bool, rest []byte) {
+	if bytes.HasPrefix(b, UTF8BOM) {
+		return true, b[len(UTF8BOM):]
 	}
 	return false, b
 }
@@ -211,8 +211,8 @@ func validateEditableUTF8(b []byte) error {
 	return nil
 }
 
-// truncateOnRuneBoundary drops a trailing incomplete UTF-8 sequence (at most 3 bytes).
-func truncateOnRuneBoundary(b []byte) []byte {
+// TruncateOnRuneBoundary drops a trailing incomplete UTF-8 sequence (at most 3 bytes).
+func TruncateOnRuneBoundary(b []byte) []byte {
 	end := len(b)
 	for back := 1; back <= utf8.UTFMax && back <= end; back++ {
 		if utf8.RuneStart(b[end-back]) {
@@ -225,16 +225,16 @@ func truncateOnRuneBoundary(b []byte) []byte {
 	return b
 }
 
-// readFacts is what classifyReadOnly needs; Body is the raw bytes read, BOM stripped.
-type readFacts struct {
+// ReadFacts is what ClassifyReadOnly needs; Body is the raw bytes read, BOM stripped.
+type ReadFacts struct {
 	Binary    bool
 	Truncated bool
 	ViaLink   bool
 	Body      []byte
 }
 
-// classifyReadOnly picks the first applicable reason, or NONE when editable.
-func classifyReadOnly(f readFacts) sessionv1.ReadOnlyReason {
+// ClassifyReadOnly picks the first applicable reason, or NONE when editable.
+func ClassifyReadOnly(f ReadFacts) sessionv1.ReadOnlyReason {
 	switch {
 	case f.Binary:
 		return sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY
@@ -248,7 +248,7 @@ func classifyReadOnly(f readFacts) sessionv1.ReadOnlyReason {
 		return sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8
 	}
 	switch {
-	case detectLineEnding(f.Body) == sessionv1.LineEnding_LINE_ENDING_MIXED:
+	case DetectLineEnding(f.Body) == sessionv1.LineEnding_LINE_ENDING_MIXED:
 		return sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL
 	case f.ViaLink:
 		return sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK

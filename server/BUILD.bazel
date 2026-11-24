@@ -111,6 +111,7 @@ go_library(
         "//server/services/devtools",
         "//server/services/featureflags",
         "//server/services/federation",
+        "//server/services/fsops",
         "//server/services/importsvc",
         "//server/services/insights",
         "//server/services/sessionbundle",

@@ -21,6 +21,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -1055,7 +1056,7 @@ func InjectHookConfig(rootDir, sessionTitle, sessionUUID string) error {
 	// RemoveHooksConfig, which independently read-modify-write the same settingsPath —
 	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
 	// this closes.
-	defer lockSettingsPath(settingsPath)()
+	defer fsops.LockSettingsPath(settingsPath)()
 
 	url := hookApprovalURL()
 	// Desired hook entry for this session.
@@ -1098,7 +1099,7 @@ func InjectHookConfig(rootDir, sessionTitle, sessionUUID string) error {
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return fmt.Errorf("re-parse merged settings: %w", err)
 	}
-	if err := writeSettingsAtomic(settingsPath, claudeDir, raw); err != nil {
+	if err := fsops.WriteSettingsAtomic(settingsPath, claudeDir, raw); err != nil {
 		return err
 	}
 	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)

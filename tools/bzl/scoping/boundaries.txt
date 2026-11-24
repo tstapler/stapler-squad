@@ -22,6 +22,7 @@ server/services/importsvc !server/web
 server/services/unfinishedwork !server/web
 server/services/federation !server/web
 server/services/secretscan !server/web
+server/services/fsops !server/web
 session/ptyio !server
 session/ptydiscovery !server
 session/hostclaim !server

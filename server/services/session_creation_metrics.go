@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -27,33 +28,13 @@ const (
 // call before telemetry.Initialize (returns a no-op-safe delegating meter
 // until a real MeterProvider is installed via otel.SetMeterProvider).
 var (
-	sessionCreationOutcome = mustInt64Counter(telemetry.GetMeter(), "session.creation.outcome",
+	sessionCreationOutcome = streammetrics.MustInt64Counter(telemetry.GetMeter(), "session.creation.outcome",
 		metric.WithDescription("Count of session-creation pipeline runs by terminal outcome (success, failed, stale, cancelled)"))
 
-	sessionCreationDurationMS = mustFloat64Histogram(telemetry.GetMeter(), "session.creation.duration_ms",
+	sessionCreationDurationMS = streammetrics.MustFloat64Histogram(telemetry.GetMeter(), "session.creation.duration_ms",
 		metric.WithDescription("Wall-clock duration from session-creation start to the terminal write, in milliseconds"),
 		metric.WithUnit("ms"))
 )
-
-func mustInt64Counter(meter metric.Meter, name string, opts ...metric.Int64CounterOption) metric.Int64Counter {
-	counter, err := meter.Int64Counter(name, opts...)
-	if err != nil {
-		// Only returned for a malformed instrument name/config, a
-		// build-time-constant programmer error — panicking at package init
-		// surfaces it immediately in tests rather than silently dropping the
-		// metric forever.
-		panic(err)
-	}
-	return counter
-}
-
-func mustFloat64Histogram(meter metric.Meter, name string, opts ...metric.Float64HistogramOption) metric.Float64Histogram {
-	histogram, err := meter.Float64Histogram(name, opts...)
-	if err != nil {
-		panic(err)
-	}
-	return histogram
-}
 
 // RecordSessionCreationMetrics increments session.creation.outcome and
 // records session.creation.duration_ms, both tagged with the same "outcome"

@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"io"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
 )
 
 // backendUnderTest builds the same tiny tree on both backends and returns each root.
@@ -17,14 +18,14 @@ func backendsWithTree(t *testing.T) map[string]FileRoot {
 	t.Helper()
 	mtime := time.Unix(1_700_000_000, 0)
 	dir := t.TempDir()
-	mustMkdir(t, filepath.Join(dir, "sub"))
-	writeFixtureFile(t, filepath.Join(dir, "sub", "f.txt"), []byte("hello"))
+	fsopstest.MustMkdir(t, filepath.Join(dir, "sub"))
+	fsopstest.WriteFixtureFile(t, filepath.Join(dir, "sub", "f.txt"), []byte("hello"))
 	require.NoError(t, os.Chtimes(filepath.Join(dir, "sub", "f.txt"), mtime, mtime))
 	require.NoError(t, os.Symlink("sub/f.txt", filepath.Join(dir, "link")))
-	osRoot, err := osRootBackend{}.OpenRoot(dir)
+	osRoot, err := OsRootBackend{}.OpenRoot(dir)
 	require.NoError(t, err)
 
-	mem := newMemBackend()
+	mem := NewMemBackend()
 	mem.AddFile("/mem", "sub/f.txt", []byte("hello"), mtime)
 	mem.AddSymlink("/mem", "link", "sub/f.txt")
 	memRoot, err := mem.OpenRoot("/mem")
@@ -81,7 +82,7 @@ func TestFileBackend_ShouldBehaveTheSame_When_OsRootAndMemServeOneTree(t *testin
 func TestMemBackend_ShouldNotChangeClassification_When_ReadsComeBackShort(t *testing.T) {
 	text := []byte(strings.Repeat("line of text\n", 1000))
 	for _, short := range []int{0, 1, 7, 511} {
-		mem := newMemBackend()
+		mem := NewMemBackend()
 		mem.ShortRead = short
 		mem.AddFile("/m", "a.txt", text, time.Unix(1, 0))
 		root, err := mem.OpenRoot("/m")
@@ -89,10 +90,10 @@ func TestMemBackend_ShouldNotChangeClassification_When_ReadsComeBackShort(t *tes
 		h, err := root.Open("a.txt")
 		require.NoError(t, err)
 
-		ct, binary := sniffContent(h, false)
+		ct, binary := SniffContent(h, false)
 		assert.False(t, binary, "short=%d", short)
 		assert.True(t, strings.HasPrefix(ct, "text/plain"), "short=%d: %s", short, ct)
-		got, truncated, err := readTextCapped(h, int64(len(text)))
+		got, truncated, err := ReadTextCapped(h, int64(len(text)))
 		require.NoError(t, err)
 		assert.False(t, truncated)
 		assert.Equal(t, text, got, "short=%d", short)
@@ -101,13 +102,13 @@ func TestMemBackend_ShouldNotChangeClassification_When_ReadsComeBackShort(t *tes
 }
 
 func TestMemBackend_ShouldSniffBinary_When_NulAfterShortReads(t *testing.T) {
-	mem := newMemBackend()
+	mem := NewMemBackend()
 	mem.ShortRead = 5
 	mem.AddFile("/m", "x.dat", append([]byte("text then "), 0, 'x'), time.Unix(1, 0))
 	root, _ := mem.OpenRoot("/m")
 	h, err := root.Open("x.dat")
 	require.NoError(t, err)
-	_, binary := sniffContent(h, false)
+	_, binary := SniffContent(h, false)
 	assert.True(t, binary)
 	_, err = io.ReadAll(h)
 	assert.NoError(t, err)

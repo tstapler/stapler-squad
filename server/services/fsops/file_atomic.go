@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"crypto/rand"
@@ -29,21 +29,21 @@ const (
 	atomicTempAttempts = 8
 )
 
-// isAtomicTempName matches ".<name>.ssq-tmp-<rand>".
-func isAtomicTempName(name string) bool {
+// IsAtomicTempName matches ".<name>.ssq-tmp-<rand>".
+func IsAtomicTempName(name string) bool {
 	return strings.HasPrefix(name, ".") && strings.Contains(name, atomicTempMarker)
 }
 
-// withoutAtomicTemps hides in-flight and orphaned temp files from listings. It returns
+// WithoutAtomicTemps hides in-flight and orphaned temp files from listings. It returns
 // entries itself when there is nothing to hide, so cached slices are never mutated.
-func withoutAtomicTemps(entries []os.DirEntry) []os.DirEntry {
+func WithoutAtomicTemps(entries []os.DirEntry) []os.DirEntry {
 	for i, e := range entries {
-		if !isAtomicTempName(e.Name()) {
+		if !IsAtomicTempName(e.Name()) {
 			continue
 		}
 		kept := append([]os.DirEntry(nil), entries[:i]...)
 		for _, rest := range entries[i+1:] {
-			if !isAtomicTempName(rest.Name()) {
+			if !IsAtomicTempName(rest.Name()) {
 				kept = append(kept, rest)
 			}
 		}
@@ -68,7 +68,7 @@ func newAtomicWriter(root *WorktreeRoot) atomicWriter {
 }
 
 // atomicReplace writes data over rel (or creates it), keeping an existing file's mode.
-// Callers hold the per-path lock (pathLocks) around their own check-then-write sequence.
+// Callers hold the per-path lock (PathLocks) around their own check-then-write sequence.
 func atomicReplace(root *WorktreeRoot, rel ResolvedPath, data []byte) error {
 	return newAtomicWriter(root).replace(rel, data)
 }
@@ -182,7 +182,7 @@ func (w atomicWriter) sweepStale(dir string) {
 	}
 	cutoff := w.now().Add(-atomicStaleAfter)
 	for _, e := range entries {
-		if !isAtomicTempName(e.Name()) || !e.Type().IsRegular() {
+		if !IsAtomicTempName(e.Name()) || !e.Type().IsRegular() {
 			continue
 		}
 		if info, ierr := e.Info(); ierr == nil && info.ModTime().Before(cutoff) {
@@ -205,19 +205,19 @@ func (w atomicWriter) syncDir(dir string) error {
 	return nil
 }
 
-// pathKey identifies one file for write serialization: two sessions editing README.md
+// PathKey identifies one file for write serialization: two sessions editing README.md
 // in different worktrees must not block each other.
-type pathKey struct {
+type PathKey struct {
 	ActiveDir string
 	Path      ResolvedPath
 }
 
-// pathMutexRegistry hands out one mutex per pathKey and drops entries when idle, so it
+// PathMutexRegistry hands out one mutex per PathKey and drops entries when idle, so it
 // cannot grow without bound. It serializes writers inside this process only; an agent
 // process writing the same file is not covered (ADR-031).
-type pathMutexRegistry struct {
+type PathMutexRegistry struct {
 	mu      sync.Mutex
-	entries map[pathKey]*pathLock
+	entries map[PathKey]*pathLock
 }
 
 type pathLock struct {
@@ -225,14 +225,14 @@ type pathLock struct {
 	refs int
 }
 
-// pathLocks is the process-wide registry the FileWriter locks through.
-var pathLocks = &pathMutexRegistry{}
+// PathLocks is the process-wide registry the FileWriter locks through.
+var PathLocks = &PathMutexRegistry{}
 
 // Lock blocks until key is free and returns its unlock.
-func (r *pathMutexRegistry) Lock(key pathKey) (unlock func()) {
+func (r *PathMutexRegistry) Lock(key PathKey) (unlock func()) {
 	r.mu.Lock()
 	if r.entries == nil {
-		r.entries = map[pathKey]*pathLock{}
+		r.entries = map[PathKey]*pathLock{}
 	}
 	l := r.entries[key]
 	if l == nil {
@@ -253,8 +253,8 @@ func (r *pathMutexRegistry) Lock(key pathKey) (unlock func()) {
 	}
 }
 
-// size reports live entries; tests use it to prove idle entries are released.
-func (r *pathMutexRegistry) size() int {
+// Size reports live entries; tests use it to prove idle entries are released.
+func (r *PathMutexRegistry) Size() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.entries)
