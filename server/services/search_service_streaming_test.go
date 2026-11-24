@@ -138,13 +138,29 @@ func TestSearchClaudeHistory_should_WaitForFirstSync_When_SyncCompletesWithinGra
 	seedManySessions(t, 1)
 	ss := setupSearchService()
 	ss.unarySyncWait = 5 * time.Second
+	type searchResult struct {
+		resp *connect.Response[sessionv1.SearchClaudeHistoryResponse]
+		err  error
+	}
+	done := make(chan searchResult, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_ = ss.SyncNow(context.Background())
+		resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
+		done <- searchResult{resp, err}
 	}()
 
-	resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
+	// The search must block on the first sync rather than fail or return empty.
+	select {
+	case r := <-done:
+		t.Fatalf("search returned before the first sync completed: err=%v", r.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.NoError(t, ss.SyncNow(context.Background()))
 
-	require.NoError(t, err)
-	require.Len(t, resp.Msg.Results, 1)
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.Len(t, r.resp.Msg.Results, 1)
+	case <-time.After(5 * time.Second):
+		t.Fatal("search did not complete after sync")
+	}
 }
