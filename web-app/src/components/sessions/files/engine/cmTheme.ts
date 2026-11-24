@@ -26,9 +26,10 @@ const chrome = EditorView.theme(
     },
     ".cm-lineNumbers .cm-gutterElement": { color: vars.color.terminalTextMuted },
     // Touch targets: coarse pointers only, so the desktop gutter is unchanged. 44px line numbers + the 10px diff
-    // strip (CodeEditor.css.ts) + 1px border = 55px, within the 56px budget on ≤390px viewports.
+    // strip (CodeEditor.css.ts) + 1px border = 55px, within the 56px budget on ≤390px viewports
+    // for files under 10,000 lines (the column grows with more digits).
     "@media (pointer: coarse)": {
-      ".cm-lineNumbers .cm-gutterElement": { boxSizing: "border-box", minWidth: "44px", padding: "0 6px" },
+      ".cm-lineNumbers .cm-gutterElement": { boxSizing: "border-box", minWidth: "44px", padding: "0 4px" },
       // If foldGutter() is ever added, give its elements the same 44px-tall target here:
       //   ".cm-foldGutter .cm-gutterElement": { minHeight: "44px", minWidth: "44px" }
     },

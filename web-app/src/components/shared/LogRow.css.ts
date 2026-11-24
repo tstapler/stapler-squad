@@ -110,6 +110,10 @@ export const gutterAbsolute = style({
     "(max-width: 380px)": {
       width: GUTTER_WIDTH_NARROW_PX,
     },
+    // The 44px badge must fit the 44px narrow gutter, or its tap area overlaps the log text beside it.
+    "(max-width: 380px) and (pointer: coarse)": {
+      padding: "2px 0",
+    },
   },
 });
 

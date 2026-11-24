@@ -15,6 +15,7 @@ describe("LogRow level badge", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Filter by ERROR" }));
 
+    expect(screen.getByRole("button", { name: "Filter by ERROR" })).toHaveAttribute("tabindex", "-1");
     expect(onFilterByLevel).toHaveBeenCalledWith("ERROR");
     expect(onToggle).not.toHaveBeenCalled();
   });
