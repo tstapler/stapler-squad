@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -143,7 +144,7 @@ func (s *BacklogService) endItemSessionForCallError(ctx context.Context, itemSes
 // absolute path, or "" if there was nothing to capture or the write failed.
 // Deliberately swallow-and-log rather than propagate: a failure to persist
 // diagnostic data about a failure must never mask or block handling of the
-// original failure itself. See session.WriteHeadlessFailureCapture's doc
+// original failure itself. See backlogaux.WriteHeadlessFailureCapture's doc
 // comment for why this exists (log rotation + the ~200-byte preview
 // previously logged on parse failure are not enough to diagnose a failed
 // call after the fact).
@@ -156,7 +157,7 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 		log.Warn("[captureHeadlessFailure] resolve capture dir failed", "error", dirErr)
 		return ""
 	}
-	path, writeErr := session.WriteHeadlessFailureCapture(dir, sessionUUID, raw, session.DefaultHeadlessFailureCaptureMaxBytes)
+	path, writeErr := backlogaux.WriteHeadlessFailureCapture(dir, sessionUUID, raw, backlogaux.DefaultHeadlessFailureCaptureMaxBytes)
 	if writeErr != nil {
 		log.Warn("[captureHeadlessFailure] write capture file failed", "session", sessionUUID, "error", writeErr)
 		return ""

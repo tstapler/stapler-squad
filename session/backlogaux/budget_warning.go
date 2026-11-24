@@ -1,4 +1,4 @@
-package session
+package backlogaux
 
 // EvaluateBudgetThreshold is the pure, advisory-only comparison behind the
 // per-item soft budget warning (ADR-003) — never blocks, retries, or errors

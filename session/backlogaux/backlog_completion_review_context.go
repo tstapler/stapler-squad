@@ -1,4 +1,4 @@
-package session
+package backlogaux
 
 import (
 	"fmt"
@@ -11,9 +11,8 @@ import (
 
 // BuildCompletionReviewContext assembles the text the completion reviewer reads for a
 // backlog item that reached done: title, description, AC checklist, triage notes, the most
-// recent review verdict, and a best-effort diff summary. Adapted from BuildSessionInitialPrompt;
-// lives in package session to reuse its unexported formatting helpers. Each optional section
-// is omitted entirely (no placeholder) when its data is absent — the SkipReviewGate path has
+// recent review verdict, and a best-effort diff summary. Adapted from BuildSessionInitialPrompt.
+// Each optional section is omitted entirely (no placeholder) when its data is absent — the SkipReviewGate path has
 // no verdict, and a cleaned-up worktree is why the diff summary uses persisted commit fields
 // instead of a live diff.
 func BuildCompletionReviewContext(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary) string {

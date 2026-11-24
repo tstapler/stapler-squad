@@ -11,7 +11,7 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -76,8 +76,8 @@ func (s *BacklogService) ParseBacklogItemIntent(
 
 	raw, callErr := s.headlessPool.CallBlocking(callCtx,
 		headless.FeatureKeyBacklogIntentParse,
-		session.BuildBacklogIntentSystemPrompt(),
-		session.BuildBacklogIntentUserPrompt(message, strings.TrimSpace(req.Msg.RepoPath), knownRepoPaths),
+		backlogaux.BuildBacklogIntentSystemPrompt(),
+		backlogaux.BuildBacklogIntentUserPrompt(message, strings.TrimSpace(req.Msg.RepoPath), knownRepoPaths),
 		headless.CallOptions{},
 		headless.DiscardCost,
 	)
@@ -86,7 +86,7 @@ func (s *BacklogService) ParseBacklogItemIntent(
 		return parseIntentFailure("couldn't parse this into a structured item"), nil
 	}
 
-	draft, parseErr := session.ParseBacklogItemIntentDraft(raw)
+	draft, parseErr := backlogaux.ParseBacklogItemIntentDraft(raw)
 	if parseErr != nil {
 		log.WarningLog().Printf("[ParseBacklogItemIntent] parse failed: %v", parseErr)
 		return parseIntentFailure("couldn't parse this into a structured item"), nil

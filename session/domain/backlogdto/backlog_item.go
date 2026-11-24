@@ -149,7 +149,7 @@ type BacklogItemData struct {
 	// CostBudgetThresholdUsd is a per-item, optional soft-budget-warning
 	// threshold in USD. Nil = no threshold configured, no warning ever fires
 	// for this item. Same single-pointer-presence convention as
-	// ReworkCapOverride. See session.EvaluateBudgetThreshold.
+	// ReworkCapOverride. See backlogaux.EvaluateBudgetThreshold.
 	CostBudgetThresholdUsd *float64
 	// PipelineMode is the slug of the PipelineMode this item uses to drive
 	// triage/work/review content (see session/pipeline_engine.go). Empty
