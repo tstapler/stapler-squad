@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndPeerExists
@@ -40,7 +41,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 	require.NoError(t, storage.AddInstance(peer))
 	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "refactor the widget loader", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
-	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
+	require.NoError(t, workspacepeers.New(storage).SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 
 	item := &backlogdto.BacklogItemData{
 		ID:                 "item-1",

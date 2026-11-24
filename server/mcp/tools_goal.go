@@ -14,11 +14,13 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // goalHandlers implements session goal MCP tools.
 type goalHandlers struct {
 	storage      GoalStore
+	peers        PeerLister
 	store        session.InstanceStore
 	eventBus     *events.EventBus
 	enabledCheck func() bool // optional; nil means always-enabled (tests)
@@ -291,7 +293,7 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 
 // --- list_workspace_peers ---
 
-// WorkspacePeerResult is the wire representation of a session.WorkspacePeer for MCP callers.
+// WorkspacePeerResult is the wire representation of a workspacepeers.WorkspacePeer for MCP callers.
 type WorkspacePeerResult struct {
 	SessionUUID   string `json:"session_uuid"`
 	Title         string `json:"title"`
@@ -319,6 +321,9 @@ func (h *goalHandlers) listWorkspacePeers(ctx context.Context, _ mcpgo.CallToolR
 	if err != nil {
 		return errResult(ErrPermissionDenied, err.Error(), "This tool can only be called from within a Stapler Squad session."), nil
 	}
+	if h.peers == nil {
+		return errResult(ErrUnavailable, "workspace peer lookup is not wired in this process", ""), nil
+	}
 
 	data, err := h.store.ListInstanceData()
 	if err != nil {
@@ -335,11 +340,11 @@ func (h *goalHandlers) listWorkspacePeers(ctx context.Context, _ mcpgo.CallToolR
 		return okResult(ListWorkspacePeersResult{MCPResult: MCPResult{Success: true}, Peers: []WorkspacePeerResult{}}), nil
 	}
 
-	peers, err := h.storage.ListWorkspacePeers(ctx, workspaceKey, callerUUID)
+	peers, err := h.peers.ListWorkspacePeers(ctx, workspaceKey, callerUUID)
 	if err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("failed to list workspace peers: %v", err), ""), nil
 	}
-	session.ApplyTmuxLiveness(peers, session.LiveTmuxSessionUUIDs(ctx))
+	workspacepeers.ApplyTmuxLiveness(peers, workspacepeers.LiveTmuxSessionUUIDs(ctx))
 
 	out := make([]WorkspacePeerResult, 0, len(peers))
 	for _, p := range peers {

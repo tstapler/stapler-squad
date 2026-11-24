@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // piSupportFlagName mirrors config.FeaturePiSupport so the flag registry (feature_flag_specs.go)
@@ -111,13 +112,16 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
-// drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
+// drift on the gate itself, the same way workspacepeers.Lister.BlockForPath already keeps
 // them from drifting on how the nudge is rendered.
 func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
 	if !config.LoadConfig().GetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName) {
 		return ""
 	}
-	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
+	if storage == nil {
+		return ""
+	}
+	return workspacepeers.New(storage).BlockForPath(ctx, repoPath)
 }
 
 // Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by

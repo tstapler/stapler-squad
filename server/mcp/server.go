@@ -18,8 +18,10 @@ import (
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
 	// userPRs backs the GitHub PR tools; nil leaves them unregistered.
-	userPRs   UserPRSource
-	flowSvc   FlowService
+	userPRs UserPRSource
+	flowSvc FlowService
+	// peers backs list_workspace_peers; nil makes the tool answer ErrUnavailable.
+	peers     PeerLister
 	plugins   *session.PluginRegistry
 	refParser TrackerRefParser
 	// wakeMetrics is the process-wide wake counter mirror; nil drops counts (a nil *wakes.Metrics is a no-op).
@@ -43,6 +45,17 @@ type CoreOption func(*coreConfig)
 // nil or a non-nil value: a typed-nil pointer defeats the absent-service guard.
 func WithFlowService(svc FlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
+}
+
+// WithWorkspacePeers supplies the query behind list_workspace_peers. Without it the tool
+// answers ErrUnavailable. Pass an untyped nil or a non-nil value.
+func WithWorkspacePeers(p PeerLister) CoreOption {
+	return func(c *coreConfig) { c.peers = p }
+}
+
+// WorkspacePeersFromOptions returns the peer lister the options carry, or nil.
+func WorkspacePeersFromOptions(opts ...CoreOption) PeerLister {
+	return newCoreConfig(opts).peers
 }
 
 // WithUserPRCache enables the GitHub PR tools. Without it they are not

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo covers AC0: the MCP tool
@@ -32,7 +33,7 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 	require.NoError(t, storage.AddInstance(unrelated))
 	_, err := storage.SetSessionGoal(context.Background(), "peer-uuid", "fix the bug", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
-	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "peer-uuid", peer.WorkspaceKey()))
+	require.NoError(t, workspacepeers.New(storage).SetSessionGoalWorkspaceKey(context.Background(), "peer-uuid", peer.WorkspaceKey()))
 
 	ctx := WithSessionUUID(context.Background(), callerUUID)
 	result, err := h.listWorkspacePeers(ctx, makeToolReq(nil))
@@ -73,6 +74,20 @@ func TestListWorkspacePeersMCP_returnsEmptyWhenCallerHasNoWorkspace(t *testing.T
 	peers, ok := m["peers"].([]interface{})
 	require.True(t, ok)
 	assert.Empty(t, peers)
+}
+
+func TestListWorkspacePeersMCP_returnsUnavailableWhenPeerListerNotWired(t *testing.T) {
+	callerUUID := "caller-uuid"
+	store := &stubStore{instances: []*instance.Instance{makeTestInstance("caller-session", callerUUID)}}
+	h, _ := makeGoalHandlers(t, store)
+	h.peers = nil
+
+	result, err := h.listWorkspacePeers(WithSessionUUID(context.Background(), callerUUID), makeToolReq(nil))
+	require.NoError(t, err)
+
+	m := parseResult(t, result)
+	assert.False(t, m["success"].(bool))
+	assert.Equal(t, ErrUnavailable, m["error"].(map[string]interface{})["code"])
 }
 
 func TestListWorkspacePeersMCP_errorsWithoutCallerSessionUUID(t *testing.T) {
