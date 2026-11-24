@@ -38,6 +38,7 @@ go_test(
     srcs = [
         "artifact_records_utf8_test.go",
         "instance_adapter_test.go",
+        "main_test.go",
         "review_queue_adapter_test.go",
         "session_pull_requests_test.go",
     ],

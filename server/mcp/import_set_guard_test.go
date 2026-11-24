@@ -49,6 +49,7 @@ var allowedImports = map[string]string{
 	modulePrefix + "session/instance":                    "instance types",
 	modulePrefix + "session/itemlink":                    "item-link ownership resolution",
 	modulePrefix + "session/nudgeoutcomes":               "nudge outcome counter",
+	modulePrefix + "session/terminalstate":               "terminal-status predicate",
 }
 
 // nonTestImports returns the sorted unique non-stdlib import paths of the non-test .go files in dir.

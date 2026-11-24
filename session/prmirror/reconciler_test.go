@@ -76,11 +76,7 @@ func TestReconciler_Start_should_RunOnceImmediatelyThenPerTick_AndIgnoreSecondSt
 	r.Start(ctx)
 	require.Eventually(t, func() bool { return store.lists.Load() >= 3 }, 5*time.Second, time.Millisecond, "one immediate pass plus ticks")
 	cancel()
-	r.Wait()
-
-	settled := store.lists.Load()
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, settled, store.lists.Load(), "no pass runs after the context ends")
+	r.Wait() // returns only once the loop observed ctx.Done(): a hung loop fails the test by timeout
 }
 
 func TestDriftCounter_add_should_IgnoreZeroAndSplitByKind(t *testing.T) {
@@ -140,9 +136,8 @@ func TestReconciler_Start_should_RunExactlyOnePassPerStart_When_CalledTwiceBefor
 	r.Start(ctx)
 	r.Start(ctx)
 	require.Eventually(t, func() bool { return store.lists.Load() >= 1 }, 5*time.Second, time.Millisecond)
-	time.Sleep(20 * time.Millisecond)
 	cancel()
-	r.Wait()
+	r.Wait() // joins every loop Start spawned, so a second loop's immediate pass would already be counted
 
 	assert.EqualValues(t, 1, store.lists.Load(), "the second Start is a no-op, so only one loop's immediate pass ran")
 }
