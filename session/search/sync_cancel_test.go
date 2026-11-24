@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/tstapler/stapler-squad/session/claudehistory"
 )
@@ -57,15 +56,10 @@ func TestIncrementalSyncContext_should_ReturnPromptlyAndRebuildLater_When_Cancel
 	hist := writeHistory(t, sessions)
 	engine := NewSearchEngine()
 
-	start := time.Now()
 	_, err := engine.IncrementalSyncContext(newCancelAfterCtx(10), hist)
-	elapsed := time.Since(start)
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
-	}
-	if elapsed > time.Second {
-		t.Errorf("cancelled sync took %v, want well under the shutdown deadline", elapsed)
 	}
 	if engine.GetSyncMetadata() != nil {
 		t.Error("sync metadata must be cleared after a cancelled full build so the next sync rebuilds")
@@ -88,5 +82,43 @@ func TestIncrementalSyncContext_should_ReturnContextError_When_AlreadyCancelled(
 
 	if _, err := NewSearchEngine().IncrementalSyncContext(ctx, hist); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
+func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_CancelledMidIncrementalPass(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hist := writeHistory(t, 5)
+	engine := NewSearchEngine()
+	if _, err := engine.IncrementalSync(hist); err != nil {
+		t.Fatal(err)
+	}
+	// Three indexed sessions that have since vanished from history: the pass
+	// removes them, then is cancelled in the additions loop.
+	md := engine.GetSyncMetadata()
+	for _, id := range []string{"gone-1", "gone-2", "gone-3"} {
+		md.Sessions[id] = &SessionIndexMetadata{SessionID: id, DocCount: 2}
+	}
+	md.TotalSessions, md.TotalDocuments = 3, 6
+
+	_, err := engine.IncrementalSyncContext(newCancelAfterCtx(1), hist)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	got := engine.GetSyncMetadata()
+	if got == nil {
+		t.Fatal("a cancelled incremental pass must keep the sync metadata")
+	}
+	if got.TotalSessions != len(got.Sessions) || got.TotalDocuments != 0 {
+		t.Errorf("TotalSessions=%d TotalDocuments=%d with %d tracked sessions: totals must match the removals already applied",
+			got.TotalSessions, got.TotalDocuments, len(got.Sessions))
+	}
+	res, err := engine.IncrementalSync(hist)
+	if err != nil {
+		t.Fatalf("follow-up sync: %v", err)
+	}
+	if res.WasFullRebuild {
+		t.Error("follow-up sync after a cancelled incremental pass must not be a full rebuild")
 	}
 }

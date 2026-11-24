@@ -100,7 +100,6 @@ type SearchService struct {
 	syncInterval  time.Duration
 	unarySyncWait time.Duration // how long unary search waits for the first sync
 	syncedOnce    sync.Once
-	loopStarted   atomic.Bool
 	loopDone      atomic.Pointer[chan struct{}] // closed when the sync loop goroutine exits; nil until started
 	syncedCh      chan struct{}                 // closed after the first successful sync
 }

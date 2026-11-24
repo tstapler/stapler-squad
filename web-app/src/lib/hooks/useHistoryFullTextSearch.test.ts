@@ -209,6 +209,23 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     expect(hook.current.results.map((r) => r.sessionId)).toEqual(["ranked"]);
   });
 
+  it("useHistoryFullTextSearch_should_KeepLoadedPages_When_AppendStreamStartsWithWarmingPreview", async () => {
+    mockStreamingFlag = true;
+    mockStreamSearchClaudeHistory.mockImplementationOnce(async function* () {
+      yield { results: [result("page1")], totalMatches: 2, queryTimeMs: 1n, hasMore: true, isFinal: true, indexWarming: false };
+    });
+    mockStreamSearchClaudeHistory.mockImplementationOnce(async function* () {
+      yield { results: [result("preview")], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      yield { results: [result("page2")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    await act(async () => { await hook.current.search({ query: "x" }); });
+    await act(async () => { await hook.current.search({ query: "x", append: true }); });
+
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["page1", "preview", "page2"]);
+  });
+
   it("useHistoryFullTextSearch_should_StopLoadingAndClearWarming_When_StreamEndsWithoutFinal", async () => {
     mockStreamingFlag = true;
     mockStreamSearchClaudeHistory.mockImplementation(async function* () {

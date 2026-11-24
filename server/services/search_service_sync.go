@@ -53,9 +53,6 @@ func (ss *SearchService) SyncNow(ctx context.Context) error {
 // StartSyncLoop syncs once immediately and then every sync interval until ctx
 // ends. It returns at once; the loop runs in its own goroutine.
 func (ss *SearchService) StartSyncLoop(ctx context.Context) {
-	if !ss.loopStarted.CompareAndSwap(false, true) {
-		return
-	}
 	interval := ss.syncInterval
 	if interval <= 0 {
 		interval = searchSyncIntervalFromEnv()
@@ -64,7 +61,9 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 		interval = defaultSearchSyncInterval
 	}
 	done := make(chan struct{})
-	ss.loopDone.Store(&done)
+	if !ss.loopDone.CompareAndSwap(nil, &done) {
+		return
+	}
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(interval)
@@ -102,7 +101,8 @@ func (ss *SearchService) markSynced() {
 func (ss *SearchService) indexSynced() bool {
 	select {
 	case <-ss.syncedCh:
-		return true
+		// A cancelled full rebuild clears the metadata and leaves a partial index.
+		return ss.searchEngine.GetSyncMetadata() != nil
 	default:
 	}
 	if ss.searchEngine.GetSyncMetadata() != nil {

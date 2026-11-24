@@ -461,10 +461,10 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 }
 
 // IncrementalSyncContext is IncrementalSync that checks ctx between sessions
-// and returns ctx.Err() once cancelled, before updating counts or persisting.
+// (not within one) and returns ctx.Err() once cancelled, without persisting.
 // A cancelled full build clears the sync metadata so the next sync rebuilds; a
-// cancelled incremental pass leaves per-session metadata consistent, so the
-// next sync picks up the remainder.
+// cancelled incremental pass refreshes the totals and the next sync picks up
+// the remainder.
 func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
 	e.ensureLoaded()
 	startTime := time.Now()
@@ -501,6 +501,7 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 	// Process additions
 	for _, entry := range added {
 		if err := ctx.Err(); err != nil {
+			e.refreshAggregatesLocked() // keep counts and avg doc length true to the partial index
 			return nil, err
 		}
 		docCount, err := e.indexSessionLocked(history, entry)
@@ -522,6 +523,7 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 	// Process updates (re-index modified sessions)
 	for _, entry := range updated {
 		if err := ctx.Err(); err != nil {
+			e.refreshAggregatesLocked() // keep counts and avg doc length true to the partial index
 			return nil, err
 		}
 		if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
@@ -545,17 +547,8 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 		result.DocumentsAdded += docCount
 	}
 
-	// Update aggregate counts
-	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
-	totalDocs := 0
-	for _, meta := range e.syncMetadata.Sessions {
-		totalDocs += meta.DocCount
-	}
-	e.syncMetadata.TotalDocuments = totalDocs
+	e.refreshAggregatesLocked()
 	e.syncMetadata.LastIncrementalSync = time.Now()
-
-	// Update scorer
-	e.scorer.UpdateAvgDocLength()
 
 	// Persist index and metadata
 	if e.indexStore != nil {
@@ -569,6 +562,19 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 
 	result.SyncDuration = time.Since(startTime)
 	return result, nil
+}
+
+// refreshAggregatesLocked recomputes the session/document totals and the
+// scorer's average document length from the sync metadata.
+// Must be called with lock held.
+func (e *SearchEngine) refreshAggregatesLocked() {
+	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
+	totalDocs := 0
+	for _, meta := range e.syncMetadata.Sessions {
+		totalDocs += meta.DocCount
+	}
+	e.syncMetadata.TotalDocuments = totalDocs
+	e.scorer.UpdateAvgDocLength()
 }
 
 // computeChangesLocked analyzes history vs index state to determine what changed.
@@ -714,16 +720,7 @@ func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehist
 		}
 	}
 
-	// Update aggregate counts
-	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
-	totalDocs := 0
-	for _, meta := range e.syncMetadata.Sessions {
-		totalDocs += meta.DocCount
-	}
-	e.syncMetadata.TotalDocuments = totalDocs
-
-	// Update scorer with new average document length
-	e.scorer.UpdateAvgDocLength()
+	e.refreshAggregatesLocked()
 
 	// Persist if store is configured
 	if e.indexStore != nil {
