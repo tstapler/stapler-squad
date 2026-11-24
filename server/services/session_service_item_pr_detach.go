@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // DetachItemPullRequest removes the item-direct link to pr and tombstones it for
@@ -49,7 +50,7 @@ func (s *SessionService) DetachItemPullRequest(
 	log.Info("item PR detached by user", "item", itemID, "pr", ref.String())
 	// The detach may have released the last hold on a finished item's worktrees: re-run
 	// the gate now instead of waiting for the sweep. The gate decides; this never forces.
-	if c := s.prRefs.itemCleaner; c != nil && session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+	if c := s.prRefs.itemCleaner; c != nil && terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		c.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathDetach), itemID)
 	}
 	return connect.NewResponse(&sessionv1.DetachItemPullRequestResponse{}), nil

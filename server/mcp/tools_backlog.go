@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/itemlink"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // --- Session UUID context injection ---
@@ -752,7 +753,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 	if payload.Item != nil {
 		res.Status = payload.Item.Status
 		status := domain.BacklogStatus(payload.Item.Status)
-		if session.IsTerminalStatus(status) {
+		if terminalstate.IsTerminalStatus(status) {
 			res.IsTerminal = true
 		}
 	}
@@ -785,7 +786,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 // pre-satisfies.
 func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdto.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
 	status := domain.BacklogStatus(item.Status)
-	terminal := session.IsTerminalStatus(status)
+	terminal := terminalstate.IsTerminalStatus(status)
 
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
 		return &WaitForBacklogEventResult{
@@ -800,7 +801,7 @@ func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdt
 			IsTerminal:       terminal,
 		}
 	}
-	// Deliberately Archived-only, not session.IsTerminalStatus: this branch
+	// Deliberately Archived-only, not terminalstate.IsTerminalStatus: this branch
 	// matches the "item_archived" event kind specifically, not general
 	// terminal-ness — a "done" (or custom-terminal) item must not satisfy an
 	// eventTypeItemArchived wait (Epic 2.1, Story 2.1.3 sweep — reviewed,

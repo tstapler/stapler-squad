@@ -225,6 +225,18 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent
             - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/shell
+        # session/credentialstore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_credentialstore:
+          list-mode: strict
+          files:
+            - "**/session/credentialstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/integrationcredential
         # session/projectstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_projectstore:

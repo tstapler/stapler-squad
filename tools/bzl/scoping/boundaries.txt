@@ -85,3 +85,6 @@ session/conflictretry !server
 session/nudgeoutcomes !server
 session/slowops !server
 session/itemlink !server
+session/credentialstore !server
+session/prmirror !server
+session/terminalstate !server

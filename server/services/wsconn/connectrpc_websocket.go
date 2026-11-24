@@ -35,7 +35,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -43,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -427,7 +427,7 @@ func (h *ConnectRPCWebSocketHandler) writerFor(instance *instance.Instance) serv
 // writerDecision is writerFor plus whether a nil writer may become non-nil
 // later: true only when a tymux instance is not Active yet (see upgradableWriter).
 func (h *ConnectRPCWebSocketHandler) writerDecision(instance *instance.Instance) (writer services.TerminalWriter, upgradable bool) {
-	if blocked, recoverable := session.TerminalInputBlock(instance.Snapshot()); blocked {
+	if blocked, recoverable := terminalstate.TerminalInputBlock(instance.Snapshot()); blocked {
 		return nil, recoverable
 	}
 	writer, err := services.AccessFor(instance).Writer(h.tmuxSender)

@@ -17,7 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
@@ -51,7 +51,7 @@ func newMgmtHarness(t *testing.T) *mgmtHarness {
 
 	root := t.TempDir()
 	token, err := infra.EntRepo.IssueIntegrationCredential(context.Background(),
-		session.IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: root})
+		domain.IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: root})
 	require.NoError(t, err)
 	return &mgmtHarness{infra: infra, svc: svc, handler: handler, mux: mux, root: root, token: token}
 }
@@ -277,7 +277,7 @@ func TestWebhookManagement_should_Return401Uniformly_When_CredentialIsNotValid(t
 	h := newMgmtHarness(t)
 	require.NoError(t, h.infra.EntRepo.RevokeIntegrationCredential(context.Background(), "gh-signal"))
 	otherWS, err := h.infra.EntRepo.IssueIntegrationCredential(context.Background(),
-		session.IntegrationCredentialInfo{PrincipalID: "elsewhere", WorkspaceID: "some-other-workspace", AllowedDirRoot: h.root})
+		domain.IntegrationCredentialInfo{PrincipalID: "elsewhere", WorkspaceID: "some-other-workspace", AllowedDirRoot: h.root})
 	require.NoError(t, err)
 
 	routes := []struct{ method, path string }{
@@ -444,7 +444,7 @@ func TestWebhookManagement_should_HideAndProtectRegistration_When_AnotherPrincip
 	h := newMgmtHarness(t)
 	require.Equal(t, http.StatusCreated, h.reconcile(t, h.token, h.reconcileReq("req-00000001", 0, testMgmtSecret)).Code)
 	other, err := h.infra.EntRepo.IssueIntegrationCredential(context.Background(),
-		session.IntegrationCredentialInfo{PrincipalID: "intruder", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: h.root})
+		domain.IntegrationCredentialInfo{PrincipalID: "intruder", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: h.root})
 	require.NoError(t, err)
 
 	insp := h.do(t, http.MethodGet, mgmtBase+testInstance, other, nil)

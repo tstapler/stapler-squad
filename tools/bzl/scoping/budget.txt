@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=60 loc=10657 imports=50
+session files=55 loc=10307 imports=51
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/procbackend files=9 loc=2214 imports=10
@@ -18,14 +18,14 @@ session/projectstore files=2 loc=136 imports=5
 session/rulestore files=2 loc=233 imports=6
 session/analyticsstore files=1 loc=271 imports=5
 session/instancestore files=8 loc=1596 imports=11
-session/domain files=47 loc=5965 imports=0
+session/domain files=48 loc=5973 imports=0
 session/sessionpr files=6 loc=1900 imports=14
 session/backlogstore files=31 loc=5956 imports=21
 session/claudectl files=3 loc=1400 imports=9
 session/claudectl/claudectltest files=1 loc=45 imports=3
 session/panereply files=6 loc=1303 imports=7
 session/jules files=1 loc=671 imports=6
-session/wtconsistency files=1 loc=960 imports=9
+session/wtconsistency files=1 loc=961 imports=10
 session/dialogpresence files=1 loc=149 imports=0
 session/summaries files=8 loc=1539 imports=12
 session/migrations files=9 loc=572 imports=5
@@ -36,7 +36,7 @@ session/ptyio files=6 loc=1254 imports=4
 session/ptydiscovery files=1 loc=853 imports=7
 session/importer files=13 loc=2173 imports=10
 session/itemsources files=8 loc=1731 imports=7
-session/backlog files=13 loc=8148 imports=22
+session/backlog files=13 loc=8148 imports=23
 session/backlog/chains files=3 loc=733 imports=9
 session/backlog/reviewgate files=3 loc=990 imports=10
 session/backlog/pipeline files=8 loc=2565 imports=16
@@ -46,12 +46,12 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=263 loc=65857 imports=87
+server/services files=263 loc=66014 imports=88
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
 server/services/wsconn files=23 loc=9895 imports=26
-server/services/backlogsvc files=37 loc=15666 imports=36
+server/services/backlogsvc files=37 loc=15666 imports=37
 server/services/internal/svctest files=36 loc=1582 imports=23
 server/services/sessionbundle files=4 loc=862 imports=9
 server/services/devtools files=4 loc=501 imports=4
@@ -80,3 +80,6 @@ session/conflictretry files=1 loc=171 imports=0
 session/nudgeoutcomes files=1 loc=224 imports=3
 session/slowops files=3 loc=281 imports=3
 session/itemlink files=2 loc=198 imports=4
+session/credentialstore files=2 loc=115 imports=4
+session/prmirror files=2 loc=148 imports=4
+session/terminalstate files=4 loc=115 imports=2

@@ -77,6 +77,7 @@ go_library(
         "//session/pipelinemode",
         "//session/scrollback",
         "//session/stagecfg",
+        "//session/terminalstate",
         "//session/tokens",
         "//session/workflowengine",
         "//session/wtconsistency",

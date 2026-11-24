@@ -404,36 +404,6 @@ func TestReconcileWebhookRegistration_should_AllowOnlyOneWinner_When_DifferentRe
 	assert.Equal(t, []int{1, 1}, []int{w, g})
 }
 
-func TestIntegrationCredential_should_AuthenticateOnlyWhileActive_When_IssuedAndRevoked(t *testing.T) {
-	r := NewTestEntRepository(t)
-	ctx := context.Background()
-	info := IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: "ws-1", AllowedDirRoot: "/tmp/repo"}
-
-	token, err := r.IssueIntegrationCredential(ctx, info)
-	require.NoError(t, err)
-	assert.Contains(t, token, integrationTokenPrefix)
-
-	got, err := r.AuthenticateIntegrationToken(ctx, token)
-	require.NoError(t, err)
-	assert.Equal(t, info, *got)
-
-	stored, err := r.Client.IntegrationCredential.Query().Only(ctx)
-	require.NoError(t, err)
-	assert.NotContains(t, stored.TokenSha256, token, "the plaintext token must never be stored")
-
-	_, err = r.AuthenticateIntegrationToken(ctx, token+"x")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-	_, err = r.AuthenticateIntegrationToken(ctx, "")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-
-	_, err = r.IssueIntegrationCredential(ctx, info)
-	assert.ErrorIs(t, err, domain.ErrConflict, "re-issuing must not silently rotate an existing principal")
-
-	require.NoError(t, r.RevokeIntegrationCredential(ctx, "gh-signal"))
-	_, err = r.AuthenticateIntegrationToken(ctx, token)
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-}
-
 // A constructor that sets Client but misses initStores would leave an embedded store
 // nil and panic only at the first call.
 func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(t *testing.T) {

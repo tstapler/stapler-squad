@@ -45,6 +45,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/prmirror"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -281,7 +282,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("PRStatusPoller started")
 
 	if deps.Storage != nil {
-		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
+		mirrorReconciler := prmirror.NewReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
 		mirrorReconciler.Start(serverCtx)
 		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
 

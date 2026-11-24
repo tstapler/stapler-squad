@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/pipelinemode"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // resolveStuckOnManualTransition immediately resolves the durable stuck
@@ -1097,7 +1098,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
-	if session.IsTerminalStatus(to) {
+	if terminalstate.IsTerminalStatus(to) {
 		s.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathTransition), req.Msg.ItemId)
 	}
 

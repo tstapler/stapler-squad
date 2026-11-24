@@ -1,4 +1,6 @@
-package session
+// Package prmirror asserts every session's legacy PR columns equal its ActivePR projection
+// and counts the drift it corrects (ssq_session_pr_mirror_drift_total).
+package prmirror
 
 import (
 	"context"
@@ -20,33 +22,33 @@ import (
 const MetricSessionPRMirrorDrift = "ssq_session_pr_mirror_drift_total"
 
 const (
-	mirrorKindCorrected            = "corrected"
-	mirrorKindUnrepresentedSkipped = "unrepresented_skipped"
+	kindCorrected            = "corrected"
+	kindUnrepresentedSkipped = "unrepresented_skipped"
 )
 
 // prMirrorReconcileInterval is the slow ticker period; drift is a safety net, not a hot path.
 const prMirrorReconcileInterval = 30 * time.Minute
 
-var prMirrorDrift = newPRMirrorDriftCounter()
+var prMirrorDrift = newDriftCounter()
 
-type prMirrorDriftCounter struct {
+type driftCounter struct {
 	corrected, skipped atomic.Int64
 	otel               metric.Int64Counter
 }
 
-func newPRMirrorDriftCounter() *prMirrorDriftCounter {
-	c := &prMirrorDriftCounter{}
+func newDriftCounter() *driftCounter {
+	c := &driftCounter{}
 	if oc, err := telemetry.GetMeter().Int64Counter(MetricSessionPRMirrorDrift); err == nil {
 		c.otel = oc
 	}
 	return c
 }
 
-func (c *prMirrorDriftCounter) add(kind string, n int64) {
+func (c *driftCounter) add(kind string, n int64) {
 	if n == 0 {
 		return
 	}
-	if kind == mirrorKindCorrected {
+	if kind == kindCorrected {
 		c.corrected.Add(n)
 	} else {
 		c.skipped.Add(n)
@@ -56,11 +58,11 @@ func (c *prMirrorDriftCounter) add(kind string, n int64) {
 	}
 }
 
-// PRMirrorDriftCorrected is ssq_session_pr_mirror_drift_total{kind="corrected"} in this process.
-func PRMirrorDriftCorrected() int64 { return prMirrorDrift.corrected.Load() }
+// DriftCorrected is ssq_session_pr_mirror_drift_total{kind="corrected"} in this process.
+func DriftCorrected() int64 { return prMirrorDrift.corrected.Load() }
 
-// PRMirrorDriftSkipped is ssq_session_pr_mirror_drift_total{kind="unrepresented_skipped"} in this process.
-func PRMirrorDriftSkipped() int64 { return prMirrorDrift.skipped.Load() }
+// DriftSkipped is ssq_session_pr_mirror_drift_total{kind="unrepresented_skipped"} in this process.
+func DriftSkipped() int64 { return prMirrorDrift.skipped.Load() }
 
 // prMirrorStore is what the reconciler needs from storage.
 type prMirrorStore interface {
@@ -68,10 +70,10 @@ type prMirrorStore interface {
 	ListPRMirrors(ctx context.Context) (map[string]instance.PRMirror, error)
 }
 
-// PRMirrorReconciler asserts every session's legacy PR columns equal its
+// Reconciler asserts every session's legacy PR columns equal its
 // ActivePR projection. It always runs (no scope condition), corrects drift
 // through the instance actor, and imports nothing (the boot backfill does).
-type PRMirrorReconciler struct {
+type Reconciler struct {
 	instances func() []*instance.Instance
 	store     prMirrorStore
 	interval  time.Duration
@@ -79,15 +81,15 @@ type PRMirrorReconciler struct {
 	started   atomic.Bool
 }
 
-// NewPRMirrorReconciler builds a reconciler over the instances instances returns.
-func NewPRMirrorReconciler(instances func() []*instance.Instance, store prMirrorStore) *PRMirrorReconciler {
-	return &PRMirrorReconciler{instances: instances, store: store, interval: prMirrorReconcileInterval}
+// NewReconciler builds a reconciler over the instances instances returns.
+func NewReconciler(instances func() []*instance.Instance, store prMirrorStore) *Reconciler {
+	return &Reconciler{instances: instances, store: store, interval: prMirrorReconcileInterval}
 }
 
 // RunOnce reconciles every instance and returns how many were corrected and how
 // many were skipped as unrepresented. A failed stored-column read degrades to
 // comparing the in-memory fields only.
-func (r *PRMirrorReconciler) RunOnce(ctx context.Context) (corrected, skipped int) {
+func (r *Reconciler) RunOnce(ctx context.Context) (corrected, skipped int) {
 	stored, err := r.store.ListPRMirrors(ctx)
 	if err != nil {
 		log.Warn("pr mirror reconciler: stored columns unreadable; comparing in-memory fields only", "err", err)
@@ -108,8 +110,8 @@ func (r *PRMirrorReconciler) RunOnce(ctx context.Context) (corrected, skipped in
 		case instance.MirrorInSync:
 		}
 	}
-	prMirrorDrift.add(mirrorKindCorrected, int64(corrected))
-	prMirrorDrift.add(mirrorKindUnrepresentedSkipped, int64(skipped))
+	prMirrorDrift.add(kindCorrected, int64(corrected))
+	prMirrorDrift.add(kindUnrepresentedSkipped, int64(skipped))
 	if corrected > 0 || skipped > 0 {
 		log.Info("session pr mirror reconcile", "corrected", corrected, "unrepresented_skipped", skipped)
 	}
@@ -118,7 +120,7 @@ func (r *PRMirrorReconciler) RunOnce(ctx context.Context) (corrected, skipped in
 
 // Start runs one pass at once and then one per interval until ctx ends. A second
 // call is a no-op.
-func (r *PRMirrorReconciler) Start(ctx context.Context) {
+func (r *Reconciler) Start(ctx context.Context) {
 	if !r.started.CompareAndSwap(false, true) {
 		return
 	}
@@ -138,4 +140,4 @@ func (r *PRMirrorReconciler) Start(ctx context.Context) {
 }
 
 // Wait blocks until the loop has exited (after its context is cancelled).
-func (r *PRMirrorReconciler) Wait() { r.wg.Wait() }
+func (r *Reconciler) Wait() { r.wg.Wait() }
