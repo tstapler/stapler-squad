@@ -88,4 +88,3 @@ session/itemlink !server
 session/jsonmigrate !server
 session/jsonmigrate !github
 session/workspacepeers !server
-session/workspacepeers !github

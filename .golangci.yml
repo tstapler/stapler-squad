@@ -208,7 +208,8 @@ linters:
             - github.com/tstapler/stapler-squad/log
             - github.com/tstapler/stapler-squad/session/domain
         # session/workspacepeers answers list_workspace_peers and the session-start peer nudge over a
-        # consumer-side Store port: it never imports session, github or server.
+        # consumer-side Store port: it never imports session or server, and no github directly
+        # (session/instance reaches it, so boundaries.txt has no !github row).
         isolate_workspacepeers:
           list-mode: strict
           files:
