@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -360,6 +361,58 @@ func TestCreateSessionForPR_should_InjectOnlyTheDefaultHook_When_PipelineReached
 	assert.Equal(t, 1, f.injected)
 	assert.Nil(t, f.injectHooks, "the PR path requests no extra hooks")
 	assert.Equal(t, f.live.GetEffectiveRootDir(), f.injectRoot)
+}
+
+func TestCreateSessionForPR_should_ReturnUIURL_When_PublicURLConfigured(t *testing.T) {
+	t.Parallel()
+	const want = "https://workspace.example.com/?session=created-id"
+	tests := []struct {
+		name  string
+		setup func(f *recordingSessionRPC)
+	}{
+		{"still creating", func(f *recordingSessionRPC) { f.awaitErr = domain.ErrCreationAwaitTimeout }},
+		{"active", func(f *recordingSessionRPC) {
+			f.outcome = domain.CreationOutcome{Status: domain.Active}
+			f.live = liveCreated(t)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newRecordingSessionRPC()
+			tc.setup(f)
+			gh := &githubHandlers{cache: &fakeUserPRSource{}, store: &stubStore{}, svc: f, publicURL: "https://workspace.example.com"}
+
+			res, err := gh.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "pr-ui-url", 14, nil)))
+			require.NoError(t, err)
+
+			assert.Equal(t, want, parseResult(t, res)["ui_url"])
+		})
+	}
+}
+
+func TestCreateSessionForPR_should_LinkTheExistingSessionByStableID_When_PRAlreadyHasOne(t *testing.T) {
+	t.Parallel()
+	existing := &instance.Instance{Title: "pr-existing", UUID: "existing-uuid", Path: t.TempDir(), Status: domain.Active}
+	cache := &fakeUserPRSource{prs: []githubpkg.UserPR{{Owner: "tstapler", Repo: "stapler-squad", Number: 16, SessionIDs: []string{"pr-existing"}}}}
+	gh := &githubHandlers{cache: cache, store: &stubStore{instances: []*instance.Instance{existing}}, svc: newRecordingSessionRPC(), publicURL: "https://workspace.example.com"}
+
+	res, err := gh.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "pr-existing", 16, nil)))
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://workspace.example.com/?session=existing-uuid", parseResult(t, res)["ui_url"])
+}
+
+func TestCreateSessionForPR_should_OmitUIURL_When_PublicURLUnset(t *testing.T) {
+	t.Parallel()
+	f := newRecordingSessionRPC()
+	f.awaitErr = domain.ErrCreationAwaitTimeout
+	gh := &githubHandlers{cache: &fakeUserPRSource{}, store: &stubStore{}, svc: f}
+
+	res, err := gh.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "pr-no-ui-url", 15, nil)))
+	require.NoError(t, err)
+
+	assert.NotContains(t, parseResult(t, res), "ui_url")
 }
 
 func TestCreateSessionForPR_should_MapOutcomeErrors_When_AwaitDoesNotSucceed(t *testing.T) {

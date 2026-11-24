@@ -443,3 +443,4 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md` an
 | Phone keyboard input layer: seam contract, flags, `?mobile_input=0\|1`, input-site table, `cm.input`/`cm.ime_anomaly` metrics, `/actuator/terminal-input` (debug procedure in `docs/how-to/debug-phone-typing.md`) | `docs/reference/mobile-input-layer.md` |
 | Session multi-PR model: SessionPR/PullRequestState/tombstone, ActivePR, legacy mirror, flags and scopes, RPCs, metrics | `docs/reference/session-pull-requests.md` |
 | Roll out session multi-PR tracking: backup, first deploy with scopes off, enabling order, rollback | `docs/how-to/roll-out-session-multi-pr.md` |
+| Dispatch sessions over MCP from an agent on the same machine and return a UI link (`STAPLER_SQUAD_PUBLIC_URL`, `ui_url`) | `docs/how-to/dispatch-sessions-over-mcp-and-return-ui-links.md` |
