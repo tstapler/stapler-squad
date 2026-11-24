@@ -25,7 +25,7 @@ func TestListWorkspacePeersMCP_returnsOtherSessionsOnSameRepo(t *testing.T) {
 	store := &stubStore{instances: []*instance.Instance{caller, peer, unrelated}}
 	h, _ := makeGoalHandlers(t, store)
 	storage := h.storage.(*session.Storage) // real Ent-backed (AddInstance is hidden by the port); panics if makeGoalHandlers ever returns a fake
-	// Storage.ListWorkspacePeers queries its own real ent-backed ListInstanceData, so the
+	// workspacepeers.Lister queries its own real ent-backed ListInstanceData, so the
 	// same instances need to be persisted there too (mirrors how caller resolution uses
 	// `store` while goal/peer data lives in `storage` throughout this file).
 	require.NoError(t, storage.AddInstance(caller))

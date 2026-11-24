@@ -260,10 +260,10 @@ func BuildWorkspacePeersBlock(peers []WorkspacePeer) string {
 
 // BlockForPath resolves repoPath's workspace identity, looks up its peers
 // with authoritative tmux liveness applied, and renders the one-time initial-prompt nudge.
-// Shared by both SessionService.CreateSession and BacklogService's initialPromptFor (both
-// gated behind the workspacePeersNudgeFlagName feature flag) so the two callers can't drift
-// on how the nudge is built. Returns "" on any detection/lookup failure, when storage is
-// nil, or when repoPath is empty — this is a best-effort convenience nudge, not required
+// Shared by SessionService.CreateSession and BacklogService's initialPromptFor (via
+// services.WorkspacePeersBlockFor, which holds the feature-flag gate) so the two callers
+// can't drift on how the nudge is built. Returns "" on any detection/lookup failure, when
+// the Lister or its store is nil, or when repoPath is empty — this is a best-effort convenience nudge, not required
 // session context, so failures are logged and swallowed rather than blocking session
 // creation.
 func (l *Lister) BlockForPath(ctx context.Context, repoPath string) string {

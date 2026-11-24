@@ -20,7 +20,7 @@ const maxHostAdvertisementBody = 64 << 10
 // Task 1 confirmation: the --remote-port HTTPS server (main.go's
 // startRemoteAccess) registering routes via this package's RegisterRoutes
 // on srv.Mux() is the only genuinely cross-host-reachable HTTP surface in
-// this codebase -- session/workspace_peers.go's WorkspacePeer is local-only
+// this codebase -- session/workspacepeers/workspace_peers.go's WorkspacePeer is local-only
 // (DB + `tmux list-sessions`, no network transport). So the advertisement
 // endpoint is served here, as a sibling registration alongside RegisterRoutes
 // (not folded into it, to avoid growing that function's already-long

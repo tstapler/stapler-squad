@@ -154,7 +154,7 @@ type SessionService struct {
 	sessionTagPoller *tagpoller.SessionTagClassificationPoller
 
 	// concStorage is the concrete backing store, used for operations (like
-	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
+	// GetItemSessionBySessionUUID) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
 
