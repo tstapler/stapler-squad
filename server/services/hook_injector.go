@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // HookName is a typed constant for the built-in hooks that can be injected.
@@ -286,7 +287,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 	// RemoveHooksConfig, which independently read-modify-write the same settingsPath —
 	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
 	// this closes.
-	defer lockSettingsPath(settingsPath)()
+	defer fsops.LockSettingsPath(settingsPath)()
 
 	wanted := wantedHookSet(hooks)
 
@@ -333,7 +334,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName, opts ...I
 	}
 	raw["hooks"] = json.RawMessage(hooksJSON)
 
-	return writeSettingsAtomic(settingsPath, claudeDir, raw)
+	return fsops.WriteSettingsAtomic(settingsPath, claudeDir, raw)
 }
 
 // wantedHookSet builds the set of hooks to inject from hooks, always including
@@ -566,7 +567,7 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 	// InjectHooksConfig, which independently read-modify-write the same settingsPath —
 	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
 	// this closes.
-	defer lockSettingsPath(settingsPath)()
+	defer fsops.LockSettingsPath(settingsPath)()
 
 	// #nosec G304 -- settingsPath is rootDir/.claude/settings.local.json, where rootDir is
 	// the session's own worktree/directory (Instance.GetEffectiveRootDir()), established by
@@ -660,5 +661,5 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 	}
 	raw["hooks"] = json.RawMessage(hooksJSON)
 
-	return writeSettingsAtomic(settingsPath, claudeDir, raw)
+	return fsops.WriteSettingsAtomic(settingsPath, claudeDir, raw)
 }

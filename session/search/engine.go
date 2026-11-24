@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -456,6 +457,15 @@ func (e *SearchEngine) GetTokenizer() *Tokenizer {
 // It only indexes new/modified sessions and removes deleted ones.
 // On first run or when metadata is missing, falls back to full rebuild.
 func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
+	return e.IncrementalSyncContext(context.Background(), history)
+}
+
+// IncrementalSyncContext is IncrementalSync that checks ctx between sessions
+// (not within one) and returns ctx.Err() once cancelled, without persisting.
+// A cancelled full build clears the sync metadata so the next sync rebuilds; a
+// cancelled incremental pass refreshes the totals and the next sync picks up
+// the remainder.
+func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
 	e.ensureLoaded()
 	startTime := time.Now()
 	result := &SyncResult{}
@@ -465,7 +475,7 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	// If no sync metadata, need full rebuild
 	if e.syncMetadata == nil || e.ShouldRebuildLocked() {
-		if err := e.buildIndexLocked(history); err != nil {
+		if err := e.buildIndexLocked(ctx, history); err != nil {
 			return nil, err
 		}
 		result.WasFullRebuild = true
@@ -490,6 +500,10 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	// Process additions
 	for _, entry := range added {
+		if err := ctx.Err(); err != nil {
+			e.refreshAggregatesLocked() // keep counts and avg doc length true to the partial index
+			return nil, err
+		}
 		docCount, err := e.indexSessionLocked(history, entry)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
@@ -508,6 +522,10 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	// Process updates (re-index modified sessions)
 	for _, entry := range updated {
+		if err := ctx.Err(); err != nil {
+			e.refreshAggregatesLocked() // keep counts and avg doc length true to the partial index
+			return nil, err
+		}
 		if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
 			result.DocumentsRemoved += meta.DocCount
 		}
@@ -529,17 +547,8 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 		result.DocumentsAdded += docCount
 	}
 
-	// Update aggregate counts
-	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
-	totalDocs := 0
-	for _, meta := range e.syncMetadata.Sessions {
-		totalDocs += meta.DocCount
-	}
-	e.syncMetadata.TotalDocuments = totalDocs
+	e.refreshAggregatesLocked()
 	e.syncMetadata.LastIncrementalSync = time.Now()
-
-	// Update scorer
-	e.scorer.UpdateAvgDocLength()
 
 	// Persist index and metadata
 	if e.indexStore != nil {
@@ -553,6 +562,19 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 
 	result.SyncDuration = time.Since(startTime)
 	return result, nil
+}
+
+// refreshAggregatesLocked recomputes the session/document totals and the
+// scorer's average document length from the sync metadata.
+// Must be called with lock held.
+func (e *SearchEngine) refreshAggregatesLocked() {
+	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
+	totalDocs := 0
+	for _, meta := range e.syncMetadata.Sessions {
+		totalDocs += meta.DocCount
+	}
+	e.syncMetadata.TotalDocuments = totalDocs
+	e.scorer.UpdateAvgDocLength()
 }
 
 // computeChangesLocked analyzes history vs index state to determine what changed.
@@ -666,7 +688,7 @@ func (e *SearchEngine) ShouldRebuildLocked() bool {
 
 // buildIndexLocked performs a full index build and initializes sync metadata.
 // Must be called with lock held.
-func (e *SearchEngine) buildIndexLocked(history *claudehistory.ClaudeSessionHistory) error {
+func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehistory.ClaudeSessionHistory) error {
 	// Clear existing index
 	e.index.Clear()
 	e.docStore.Clear()
@@ -679,6 +701,10 @@ func (e *SearchEngine) buildIndexLocked(history *claudehistory.ClaudeSessionHist
 	entries := history.GetAll()
 
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			e.syncMetadata = nil // partial index: force a full rebuild next time
+			return err
+		}
 		docCount, err := e.indexSessionLocked(history, entry)
 		if err != nil {
 			// Log and continue - don't fail entire index build
@@ -694,16 +720,7 @@ func (e *SearchEngine) buildIndexLocked(history *claudehistory.ClaudeSessionHist
 		}
 	}
 
-	// Update aggregate counts
-	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
-	totalDocs := 0
-	for _, meta := range e.syncMetadata.Sessions {
-		totalDocs += meta.DocCount
-	}
-	e.syncMetadata.TotalDocuments = totalDocs
-
-	// Update scorer with new average document length
-	e.scorer.UpdateAvgDocLength()
+	e.refreshAggregatesLocked()
 
 	// Persist if store is configured
 	if e.indexStore != nil {

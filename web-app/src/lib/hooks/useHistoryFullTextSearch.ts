@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import {
+import type {
   SearchResult,
   SearchSnippet,
   HighlightRange,
@@ -242,7 +242,7 @@ export function useHistoryFullTextSearch(
               setState((prev) => ({ ...prev, loading: true, indexWarming: true }));
               continue;
             }
-            previewShown = msg.indexWarming;
+            previewShown = msg.indexWarming && !searchOptions.append; // never wipe already-loaded pages
             first = false;
             setState((prev) => ({
               results: replace ? batch : [...prev.results, ...batch],

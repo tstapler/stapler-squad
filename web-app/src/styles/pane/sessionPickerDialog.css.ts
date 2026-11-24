@@ -27,7 +27,7 @@ export const emptyPaneButton = style({
   minHeight: "40px",
   padding: `0 ${vars.space["4"]}`,
   background: vars.color.primary,
-  color: vars.color.textInverse,
+  color: vars.color.onPrimaryFill,
   border: "none",
   borderRadius: vars.radii.md,
   fontFamily: vars.font.sans,

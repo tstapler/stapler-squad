@@ -24,15 +24,12 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const (
 	// maxFileSize is the hard limit; files larger than this are rejected.
 	maxFileSize = 10 * 1024 * 1024 // 10 MB
-
-	// truncateSize is the soft limit; text files larger than this are served
-	// truncated with is_truncated=true.
-	truncateSize = 1 * 1024 * 1024 // 1 MB
 
 	// maxDirEntries is the cap on entries returned per ListFiles call.
 	maxDirEntries = 10_000
@@ -67,26 +64,6 @@ var videoMIMEOverrides = map[string]string{
 	".ogv":  "video/ogg",
 }
 
-// knownTextExtensions is the allowlist for extensions we know are always text.
-// Files with these extensions skip the MIME and null-byte binary checks.
-var knownTextExtensions = map[string]bool{
-	".go": true, ".py": true, ".js": true, ".ts": true, ".tsx": true, ".jsx": true,
-	".html": true, ".htm": true, ".css": true, ".scss": true, ".sass": true, ".less": true,
-	".json": true, ".yaml": true, ".yml": true, ".toml": true, ".xml": true, ".csv": true,
-	".md": true, ".markdown": true, ".rst": true, ".txt": true, ".text": true,
-	".sh": true, ".bash": true, ".zsh": true, ".fish": true, ".bat": true, ".cmd": true,
-	".c": true, ".cpp": true, ".cc": true, ".cxx": true, ".h": true, ".hpp": true,
-	".java": true, ".kt": true, ".kts": true, ".scala": true, ".groovy": true,
-	".rb": true, ".rs": true, ".swift": true, ".m": true, ".mm": true,
-	".php": true, ".lua": true, ".r": true, ".R": true, ".pl": true, ".pm": true,
-	".sql": true, ".graphql": true, ".gql": true, ".proto": true,
-	".tf": true, ".tfvars": true, ".hcl": true, ".Dockerfile": true, ".dockerfile": true,
-	".makefile": true, ".mk": true, ".env": true, ".envrc": true,
-	".gitignore": true, ".gitattributes": true, ".editorconfig": true,
-	".mod": true, ".sum": true, ".lock": true,
-	".log": true, ".diff": true, ".patch": true,
-}
-
 // FileService handles ListFiles and GetFileContent RPCs.
 type FileService struct {
 	workspace      WorkspaceProvider
@@ -102,7 +79,7 @@ type FileService struct {
 func NewFileService(workspace WorkspaceProvider) *FileService {
 	guard, _ := workspace.(WriteGuard)
 	invalidator, _ := workspace.(StatusInvalidator)
-	ops := NewFileOps(FilePolicy{Workspace: workspace, Guard: guard}, osRootBackend{})
+	ops := NewFileOps(FilePolicy{Workspace: workspace, Guard: guard}, fsops.OsRootBackend{})
 	return &FileService{
 		workspace:      workspace,
 		ops:            ops,
@@ -148,7 +125,7 @@ func (fs *FileService) ListFiles(
 	if requestedPath == "" {
 		requestedPath = "."
 	}
-	rr, err := resolveFileRequest(ctx, fs.workspace, FileRef{SessionID: req.Msg.SessionId, Path: requestedPath}, AccessRead)
+	rr, err := fsops.ResolveFileRequest(ctx, fs.workspace, fsops.FileRef{SessionID: req.Msg.SessionId, Path: requestedPath}, fsops.AccessRead)
 	if err != nil {
 		return nil, err
 	}
@@ -172,14 +149,14 @@ func (fs *FileService) ListFiles(
 			if os.IsPermission(readErr) {
 				return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", requestedPath))
 			}
-			return nil, internalIOError("read_dir", rr.Resolved, readErr, "failed to read directory")
+			return nil, fsops.InternalIOError("read_dir", rr.Resolved, readErr, "failed to read directory")
 		}
 		if stat, statErr := rr.Root.Stat(rr.Resolved); statErr == nil {
 			fs.dirCache.Put(fullPath, entries, stat.ModTime())
 		}
 	}
 
-	entries = withoutAtomicTemps(entries)
+	entries = fsops.WithoutAtomicTemps(entries)
 
 	var matcher gitignore.Matcher
 	if !req.Msg.IncludeIgnored {
@@ -306,27 +283,11 @@ func (fs *FileService) StatFile(
 ) (*connect.Response[sessionv1.StatFileResponse], error) {
 	start := time.Now()
 	resp, err := fs.ops.StatWith(ctx, req.Msg)
-	recordStatMetrics(ctx, err, time.Since(start))
+	fsops.RecordStatMetrics(ctx, err, time.Since(start))
 	if err != nil {
 		return nil, err
 	}
 	return connect.NewResponse(resp), nil
-}
-
-// readFull reads up to len(buf) bytes from r. Returns bytes read and any non-EOF error.
-func readFull(r interface{ Read([]byte) (int, error) }, buf []byte) (int, error) {
-	total := 0
-	for total < len(buf) {
-		n, err := r.Read(buf[total:])
-		total += n
-		if err != nil {
-			if err.Error() == "EOF" {
-				return total, nil
-			}
-			return total, err
-		}
-	}
-	return total, nil
 }
 
 // SearchFiles performs a recursive name-substring search in the session's worktree.
@@ -403,7 +364,7 @@ func searchFilesInWorktree(ctx context.Context, basePath, query string, includeI
 	truncated := false
 	totalMatches := int32(0)
 
-	root, rootErr := OpenWorktreeRoot(basePath)
+	root, rootErr := fsops.OpenWorktreeRoot(basePath)
 	if rootErr != nil {
 		return nil, false, 0, rootErr
 	}
@@ -621,7 +582,7 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rr, err := resolveFileRequest(r.Context(), fs.workspace, FileRef{SessionID: sessionID, Path: relPath}, AccessRead)
+	rr, err := fsops.ResolveFileRequest(r.Context(), fs.workspace, fsops.FileRef{SessionID: sessionID, Path: relPath}, fsops.AccessRead)
 	if err != nil {
 		http.Error(w, err.Error(), httpStatusForFileError(err))
 		return

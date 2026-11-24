@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
@@ -875,11 +876,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
 	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
 	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
-	var promptBuilder RulePromptBuilder
-	var aiClientImpl AIClient
+	var promptBuilder anthropicwire.RulePromptBuilder
+	var aiClientImpl anthropicwire.AIClient
 	{
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if c, backend := NewBestAvailableAIClient(apiKey, knownCLIAgents); c != nil {
+		if c, backend := anthropicwire.NewBestAvailableAIClient(apiKey, anthropicwire.KnownCLIAgents); c != nil {
 			promptBuilder = &DefaultRulePromptBuilder{}
 			aiClientImpl = c
 			log.Info("[SessionService] AI rule generation enabled", "backend", backend)
@@ -887,7 +888,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, WrapRulesAIClient(aiClientImpl))
+	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
@@ -964,11 +965,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// h2 connection they leave in the shared transport pool shows up as a leaked
 	// goroutine in whichever goleak-checked test runs next.
 	if !config.IsTestMode() {
-		capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
-		capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("anthropic", anthropicwire.NewAnthropicLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("google", anthropicwire.NewGeminiLimitsClient(credChain, ""))
 	}
 
-	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
+	if anthropicClient, ok := aiClientImpl.(*anthropicwire.AnthropicAIClient); ok {
 		anthropicClient.OnResponseHeaders = func(h http.Header) {
 			capacityMonitor.UpdateFromResponseHeaders("anthropic", h)
 		}

@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 // rangeRead is one ReadRange's resolved file and analysis, shared by its helpers.
 type rangeRead struct {
 	rr       *opsRequest
-	file     FileHandle
+	file     fsops.FileHandle
 	info     os.FileInfo
 	src      fileSource
 	analysis *Analysis // nil until the background pass is ready
@@ -58,7 +59,7 @@ func (o *FileOps) ReadRange(ctx context.Context, req *sessionv1.ReadFileRangeReq
 	if req.SessionId == "" || req.Path == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id and path are required"))
 	}
-	rr, err := o.resolve(FileRef{SessionID: req.SessionId, Path: req.Path}, AccessRead)
+	rr, err := o.resolve(fsops.FileRef{SessionID: req.SessionId, Path: req.Path}, fsops.AccessRead)
 	if err != nil {
 		return nil, err
 	}
@@ -90,14 +91,14 @@ func (o *FileOps) ReadRange(ctx context.Context, req *sessionv1.ReadFileRangeReq
 
 func (o *FileOps) serveRange(ctx context.Context, rd *rangeRead, req *sessionv1.ReadFileRangeRequest) (*sessionv1.ReadFileRangeResponse, error) {
 	size := rd.info.Size()
-	if _, binary := sniffContent(rd.file, isKnownTextFile(req.Path)); binary {
+	if _, binary := fsops.SniffContent(rd.file, fsops.IsKnownTextFile(req.Path)); binary {
 		return &sessionv1.ReadFileRangeResponse{
 			IsBinary:       true,
-			VersionToken:   NonEditableToken(size, rd.info.ModTime().UnixNano()).String(),
+			VersionToken:   fsops.NonEditableToken(size, rd.info.ModTime().UnixNano()).String(),
 			ReadOnlyReason: sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY,
 		}, nil
 	}
-	if req.PreferFullIfLe > 0 && size <= min(req.PreferFullIfLe, truncateSize) {
+	if req.PreferFullIfLe > 0 && size <= min(req.PreferFullIfLe, fsops.TruncateSize) {
 		return o.rangeWhole(rd, req.Path)
 	}
 	o.attachAnalysis(rd)
@@ -146,13 +147,13 @@ func (o *FileOps) lineRangeWindow(ctx context.Context, rd *rangeRead, a *session
 	if first > 1 {
 		off, err := rd.analysis.LineToByte(rd.file, first-1)
 		if err != nil {
-			return rangeWindow{}, internalIOError("locate_line", rd.rr.Resolved, err, "failed to locate line")
+			return rangeWindow{}, fsops.InternalIOError("locate_line", rd.rr.Resolved, err, "failed to locate line")
 		}
 		start = off
 	}
 	raw, err := readAtFull(rd.file, start, min(lim.Bytes, size-start))
 	if err != nil {
-		return rangeWindow{}, internalIOError("read_range", rd.rr.Resolved, err, "failed to read file range")
+		return rangeWindow{}, fsops.InternalIOError("read_range", rd.rr.Resolved, err, "failed to read file range")
 	}
 	raw, partial := cutAtLines(raw, lim.Lines, start+int64(len(raw)) >= size)
 	return rangeWindow{Start: start, Raw: raw, StartLine: first, Partial: partial}, nil
@@ -163,7 +164,7 @@ func (o *FileOps) byteRangeWindow(rd *rangeRead, a *sessionv1.ByteAnchor, lim ra
 	start, length := byteWindowStart(a, size, lim)
 	win, err := readByteWindow(rd.file, size, start, length)
 	if err != nil {
-		return rangeWindow{}, internalIOError("read_range", rd.rr.Resolved, err, "failed to read file range")
+		return rangeWindow{}, fsops.InternalIOError("read_range", rd.rr.Resolved, err, "failed to read file range")
 	}
 	switch {
 	case win.Start == 0:
@@ -184,7 +185,7 @@ func (o *FileOps) rangeWhole(rd *rangeRead, relPath string) (*sessionv1.ReadFile
 	}
 	raw := fr.Body
 	if fr.HasBOM {
-		raw = append(append([]byte(nil), utf8BOM...), raw...)
+		raw = append(append([]byte(nil), fsops.UTF8BOM...), raw...)
 	}
 	resp := o.windowResponse(rd, rangeWindow{Start: 0, Raw: raw, StartLine: 1})
 	resp.VersionToken = fr.Token.String()
@@ -198,7 +199,7 @@ func (o *FileOps) rangeWhole(rd *rangeRead, relPath string) (*sessionv1.ReadFile
 func (o *FileOps) finishRange(rd *rangeRead, win rangeWindow) *sessionv1.ReadFileRangeResponse {
 	resp := o.windowResponse(rd, win)
 	resp.Analysis = rd.state
-	token := NonEditableToken(rd.info.Size(), rd.info.ModTime().UnixNano())
+	token := fsops.NonEditableToken(rd.info.Size(), rd.info.ModTime().UnixNano())
 	if rd.analysis != nil {
 		resp.LineCountKnown, resp.LineCount = true, rd.analysis.LineCount
 		if rd.info.Size() <= rangeHashCapBytes {
@@ -206,9 +207,9 @@ func (o *FileOps) finishRange(rd *rangeRead, win rangeWindow) *sessionv1.ReadFil
 		}
 	}
 	resp.VersionToken = token.String()
-	_, body := detectBOM(win.Raw)
-	resp.ReadOnlyReason = classifyReadOnly(readFacts{
-		Truncated: !resp.Bof || !resp.Eof || rd.info.Size() > truncateSize || resp.LongLine,
+	_, body := fsops.DetectBOM(win.Raw)
+	resp.ReadOnlyReason = fsops.ClassifyReadOnly(fsops.ReadFacts{
+		Truncated: !resp.Bof || !resp.Eof || rd.info.Size() > fsops.TruncateSize || resp.LongLine,
 		ViaLink:   rd.rr.ViaLink,
 		Body:      body,
 	})
@@ -230,13 +231,13 @@ func (o *FileOps) windowResponse(rd *rangeRead, win rangeWindow) *sessionv1.Read
 		Bof:             win.Start == 0,
 		Eof:             end >= size,
 		ChunkCrc32C:     crc32.Checksum(win.Raw, crc32.MakeTable(crc32.Castagnoli)),
-		EolClass:        detectLineEnding(win.Raw),
+		EolClass:        fsops.DetectLineEnding(win.Raw),
 		NonUtf8:         !utf8.Valid(body),
 		PartialLastLine: win.Partial,
 		LongLine:        win.Partial || maxLineLen(body) > longLineBytes,
 	}
 	if win.Start == 0 {
-		resp.HasBom, body = detectBOM(body)
+		resp.HasBom, body = fsops.DetectBOM(body)
 	}
 	if i := bytes.IndexByte(win.Raw, 0); i >= 0 {
 		resp.ContainsNulAt = proto64(win.Start + int64(i))
@@ -257,7 +258,7 @@ func proto64(v int64) *int64 { return &v }
 // rangeValidator is the (size, mtime_ns, inode) identity a window was read from.
 func rangeValidator(info os.FileInfo) string {
 	return strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10) +
-		":" + strconv.FormatUint(fileInode(info), 10)
+		":" + strconv.FormatUint(fsops.FileInode(info), 10)
 }
 
 // openReadError maps an Open failure to the same Connect codes GetContent uses.
@@ -265,5 +266,5 @@ func openReadError(err error, relPath string) error {
 	if os.IsNotExist(err) {
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("file no longer exists: %s", relPath))
 	}
-	return internalIOError("open", ResolvedPath(relPath), err, "failed to open file")
+	return fsops.InternalIOError("open", fsops.ResolvedPath(relPath), err, "failed to open file")
 }

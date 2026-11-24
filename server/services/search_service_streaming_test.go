@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -214,4 +215,51 @@ func TestStreamSearchClaudeHistory_should_OmitPreview_When_RequestHasFilters(t *
 	require.NoError(t, ss.SyncNow(t.Context()))
 	for st.Receive() {
 	}
+}
+
+func TestSearchService_should_ReturnFromWaitSyncLoop_When_ContextCancelled(t *testing.T) {
+	seedManySessions(t, 1)
+	ss := setupSearchService()
+	ss.SetSyncInterval(10 * time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
+	ss.StartSyncLoop(ctx)
+	ss.StartSyncLoop(ctx) // second start is a no-op, not a second goroutine
+
+	cancel()
+	done := make(chan struct{})
+	go func() { ss.WaitSyncLoop(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitSyncLoop did not return after the loop context was cancelled")
+	}
+}
+
+func TestSearchService_should_ReturnImmediately_When_WaitSyncLoopWithoutStart(t *testing.T) {
+	t.Parallel()
+	ss := setupSearchService()
+	done := make(chan struct{})
+	go func() { ss.WaitSyncLoop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitSyncLoop blocked though the loop was never started")
+	}
+}
+
+func TestSearchService_should_ReportUnsynced_When_FullRebuildCancelledAfterFirstSync(t *testing.T) {
+	seedManySessions(t, 5)
+	ss := setupSyncedSearchService(t)
+	require.True(t, ss.indexSynced())
+	ss.searchEngine.GetSyncMetadata().Version = -1 // next sync takes the full-rebuild path
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	hist, err := claudehistory.NewClaudeSessionHistoryFromClaudeDir()
+	require.NoError(t, err)
+	_, err = ss.searchEngine.IncrementalSyncContext(ctx, hist)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, ss.indexSynced(), "a cancelled rebuild leaves a partial index; searches must not trust the closed syncedCh")
 }

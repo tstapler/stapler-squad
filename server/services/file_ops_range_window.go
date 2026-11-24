@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // Range constants from ADR-036: 400-line / 128 KiB default windows, 4,000-line /
@@ -96,7 +97,7 @@ func cutAtLines(raw []byte, wantLines int, atEOF bool) (out []byte, partial bool
 	if last := bytes.LastIndexByte(raw, '\n'); last >= 0 {
 		return raw[:last+1], false
 	}
-	return truncateOnRuneBoundary(raw), true
+	return fsops.TruncateOnRuneBoundary(raw), true
 }
 
 // byteWindowStart resolves a byte anchor to a raw start offset and length.
@@ -132,7 +133,7 @@ func readByteWindow(f io.ReaderAt, size, start, length int64) (rangeWindow, erro
 	raw := buf[k:]
 	win := rangeWindow{Start: start - pre + k, Raw: raw}
 	if win.Start+int64(len(raw)) < size {
-		win.Raw = truncateOnRuneBoundary(raw)
+		win.Raw = fsops.TruncateOnRuneBoundary(raw)
 		win.Partial = len(win.Raw) == 0 || win.Raw[len(win.Raw)-1] != '\n'
 	}
 	return win, nil
