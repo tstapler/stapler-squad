@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// memBackend is an in-memory FileBackend for tests, with an injectable short-read fault.
-type memBackend struct {
+// MemBackend is an in-memory FileBackend for tests, with an injectable short-read fault.
+type MemBackend struct {
 	mu    sync.Mutex
 	roots map[string]*memTree
 	// ShortRead, when > 0, caps the bytes any single Read returns (ReadAt must stay whole by contract).
@@ -30,9 +30,9 @@ type memNode struct {
 
 type memTree struct{ nodes map[string]*memNode }
 
-func newMemBackend() *memBackend { return &memBackend{roots: map[string]*memTree{}} }
+func NewMemBackend() *MemBackend { return &MemBackend{roots: map[string]*memTree{}} }
 
-func (m *memBackend) tree(dir string) *memTree {
+func (m *MemBackend) tree(dir string) *memTree {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.roots[dir]
@@ -52,7 +52,7 @@ func (t *memTree) mkParents(rel string) {
 }
 
 // AddFile creates dir/rel (and its parents) with the given bytes and mtime.
-func (m *memBackend) AddFile(dir, rel string, data []byte, mtime time.Time) {
+func (m *MemBackend) AddFile(dir, rel string, data []byte, mtime time.Time) {
 	t := m.tree(dir)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -61,26 +61,26 @@ func (m *memBackend) AddFile(dir, rel string, data []byte, mtime time.Time) {
 }
 
 // AddSymlink creates dir/rel as a symlink to target.
-func (m *memBackend) AddSymlink(dir, rel, target string) {
+func (m *MemBackend) AddSymlink(dir, rel, target string) {
 	t := m.tree(dir)
 	t.mkParents(rel)
 	t.nodes[rel] = &memNode{mode: fs.ModeSymlink | 0o777, target: target}
 }
 
 // SetOnRead installs (or, with nil, clears) the pre-Read fault-injection hook.
-func (m *memBackend) SetOnRead(fn func(readLen int)) {
+func (m *MemBackend) SetOnRead(fn func(readLen int)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onRead = fn
 }
 
-func (m *memBackend) readHook() func(int) {
+func (m *MemBackend) readHook() func(int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.onRead
 }
 
-func (m *memBackend) OpenRoot(dir string) (FileRoot, error) {
+func (m *MemBackend) OpenRoot(dir string) (FileRoot, error) {
 	m.mu.Lock()
 	t, ok := m.roots[dir]
 	m.mu.Unlock()
@@ -91,7 +91,7 @@ func (m *memBackend) OpenRoot(dir string) (FileRoot, error) {
 }
 
 type memRoot struct {
-	b *memBackend
+	b *MemBackend
 	t *memTree
 }
 

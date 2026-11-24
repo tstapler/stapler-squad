@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
@@ -172,7 +173,7 @@ func openAnalyticsStores(sessionService *services.SessionService) analyticsWirin
 	if analyticsClient != nil {
 		filesAnalytics = analytics.NewSQLiteAnalyticsProvider(analyticsClient)
 	}
-	sessionService.GetFileService().SetTelemetry(services.NewFilesTelemetry(filesAnalytics))
+	sessionService.GetFileService().SetTelemetry(fsops.NewFilesTelemetry(filesAnalytics))
 
 	return analyticsWiring{
 		client:    analyticsClient,

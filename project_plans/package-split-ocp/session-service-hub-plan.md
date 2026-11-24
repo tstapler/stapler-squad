@@ -167,6 +167,8 @@ The first draft called five packages "L0 kernels" and an L1 layer without cycles
 | `questionkit` | `ActionResult`, `applied`, `notWired`, `outcome`, `replyOutcomeResult`, `StaleReasonAnswerPartial`, `tabbedQuestions`, `itemSessionLookup`(+`GetItemSessionBySessionUUID`), `metaGuidanceRequestID`, `metaQuestionID`, `metaReplyUnavailable`, `sanitizeNotificationText`; consumer-side ports replacing `AnswerRouter`, `answerRows`, `deliverySink` (7 symbols) | `notification_action_service.go`, `pane_reply_core.go`, `question_answer_sequence.go`, `hidden_review_steer.go`, `approval_question.go`, `approval_handler.go`, `question_answer_router.go` |
 | `anthropicwire` | `RuleSpec` (lower to `session/domain`, as the DTO-lowering plans do for value types) | `rules_store.go` |
 
+Deferred from the `fsops` kernel PR (#1797): the `fsops` row for `expandTilde`, `parseJSONLogHeader`, `deployID` and `validateTargetDirectory` is owned by the Stage 5 `adminrpc`/`filesvc`/`workflows` PRs, which create the edges it cuts.
+
 #### 3.3.3 L1 cycle cuts (each edge below is a symbol set that becomes a kernel symbol, a move, or a consumer-side port)
 
 | Edge cut | Symbols | Cut |

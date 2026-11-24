@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"go.uber.org/goleak"
 )
 
@@ -43,7 +44,7 @@ func requireMatchesNaive(t *testing.T, data []byte, probes []int64) *Analysis {
 	starts := naiveLineStarts(data)
 	assert.Equal(t, int64(len(starts)), a.LineCount)
 	assert.Equal(t, int64(len(data)), a.Size)
-	assert.Equal(t, NewFileVersionToken(int64(len(data)), 7, data).SHA256, a.SHA256)
+	assert.Equal(t, fsops.NewFileVersionToken(int64(len(data)), 7, data).SHA256, a.SHA256)
 	assert.Len(t, a.SHA256, 64)
 	r := bytes.NewReader(data)
 	for _, line := range probes {

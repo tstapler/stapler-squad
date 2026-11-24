@@ -39,7 +39,7 @@ func (ss *SearchService) SyncNow(ctx context.Context) error {
 	}
 	ss.historySnap.Store(&historySnapshot{cache: hist, at: time.Now()})
 
-	result, err := ss.searchEngine.IncrementalSync(hist)
+	result, err := ss.searchEngine.IncrementalSyncContext(ctx, hist)
 	if err != nil {
 		return fmt.Errorf("sync search index: %w", err)
 	}
@@ -53,9 +53,6 @@ func (ss *SearchService) SyncNow(ctx context.Context) error {
 // StartSyncLoop syncs once immediately and then every sync interval until ctx
 // ends. It returns at once; the loop runs in its own goroutine.
 func (ss *SearchService) StartSyncLoop(ctx context.Context) {
-	if !ss.loopStarted.CompareAndSwap(false, true) {
-		return
-	}
 	interval := ss.syncInterval
 	if interval <= 0 {
 		interval = searchSyncIntervalFromEnv()
@@ -63,9 +60,12 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 	if interval <= 0 {
 		interval = defaultSearchSyncInterval
 	}
-	ss.loopDone = make(chan struct{})
+	done := make(chan struct{})
+	if !ss.loopDone.CompareAndSwap(nil, &done) {
+		return
+	}
 	go func() {
-		defer close(ss.loopDone)
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -85,8 +85,8 @@ func (ss *SearchService) StartSyncLoop(ctx context.Context) {
 // context given to StartSyncLoop ends and any in-flight sync finishes. It
 // returns at once if the loop was never started.
 func (ss *SearchService) WaitSyncLoop() {
-	if ss.loopStarted.Load() && ss.loopDone != nil {
-		<-ss.loopDone
+	if done := ss.loopDone.Load(); done != nil {
+		<-*done
 	}
 }
 
@@ -101,7 +101,8 @@ func (ss *SearchService) markSynced() {
 func (ss *SearchService) indexSynced() bool {
 	select {
 	case <-ss.syncedCh:
-		return true
+		// A cancelled full rebuild clears the metadata and leaves a partial index.
+		return ss.searchEngine.GetSyncMetadata() != nil
 	default:
 	}
 	if ss.searchEngine.GetSyncMetadata() != nil {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 // <config dir>/delivery-gate-stats.json. It never blocks the publish path and
 // never fails startup: every fault ends in a WARN and Status().Writable=false.
 type FileStatsStore struct {
-	fs     fsOps
+	fs     fsops.FSOps
 	dir    string
 	pid    int
 	now    func() time.Time
@@ -44,7 +45,7 @@ type FileStatsStore struct {
 type StatsStoreOption func(*FileStatsStore)
 
 // WithStatsFS injects the file system (fault-injecting fake in tests).
-func WithStatsFS(f fsOps) StatsStoreOption { return func(s *FileStatsStore) { s.fs = f } }
+func WithStatsFS(f fsops.FSOps) StatsStoreOption { return func(s *FileStatsStore) { s.fs = f } }
 
 // WithStatsClock injects the clock.
 func WithStatsClock(now func() time.Time) StatsStoreOption {
@@ -69,7 +70,7 @@ func WithStatsLogger(l *slog.Logger) StatsStoreOption {
 // by the caller (the test-mode directory when STAPLER_SQUAD_TEST_DIR is set).
 func NewFileStatsStore(dir string, opts ...StatsStoreOption) *FileStatsStore {
 	s := &FileStatsStore{
-		fs: osFS{}, dir: dir, pid: os.Getpid(), now: time.Now, alive: ProcessWriterAlive, logger: deliverygate.NewRepoLogger(),
+		fs: fsops.OSFS{}, dir: dir, pid: os.Getpid(), now: time.Now, alive: ProcessWriterAlive, logger: deliverygate.NewRepoLogger(),
 		warnedAt: map[string]time.Time{},
 	}
 	for _, o := range opts {

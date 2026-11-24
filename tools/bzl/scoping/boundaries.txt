@@ -23,6 +23,7 @@ server/services/unfinishedwork !server/web
 server/services/federation !server/web
 server/services/secretscan !server/web
 server/services/credkit !server/web
+server/services/fsops !server/web
 server/services/anthropicwire !server/web
 session/ptyio !server
 session/ptydiscovery !server

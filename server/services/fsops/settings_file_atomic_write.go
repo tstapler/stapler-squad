@@ -1,4 +1,4 @@
-package services
+package fsops
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 
 // settingsFileLocks serializes the read-merge-write sequence each of InjectHookConfig,
 // InjectHooksConfig, and RemoveHooksConfig performs against a given settings.local.json,
-// keyed by absolute path. writeSettingsAtomic's unique-tmp-filename write only prevents
+// keyed by absolute path. WriteSettingsAtomic's unique-tmp-filename write only prevents
 // two concurrent writers from tearing/corrupting the file on rename; it does nothing to
 // stop a classic lost update, where both callers read the same pre-image, merge
 // independently, and the second writer's rename silently clobbers the first caller's
@@ -23,16 +23,16 @@ import (
 // locking is needed, since all callers run within one stapler-squad server process.
 var settingsFileLocks sync.Map // map[string]*sync.Mutex
 
-// lockSettingsPath acquires (creating if needed) the mutex for path and returns a
-// function that unlocks it — call via `defer lockSettingsPath(settingsPath)()`.
-func lockSettingsPath(path string) func() {
+// LockSettingsPath acquires (creating if needed) the mutex for path and returns a
+// function that unlocks it — call via `defer LockSettingsPath(settingsPath)()`.
+func LockSettingsPath(path string) func() {
 	v, _ := settingsFileLocks.LoadOrStore(path, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
 }
 
-func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.RawMessage) error {
+func WriteSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.RawMessage) error {
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
@@ -67,6 +67,6 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 	}
 	// Shared by InjectHooksConfig, RemoveHooksConfig, and InjectHookConfig — no single
 	// caller-specific tag applies, so this stays generic.
-	log.Info("[writeSettingsAtomic] wrote settings", "path", settingsPath)
+	log.Info("[WriteSettingsAtomic] wrote settings", "path", settingsPath)
 	return nil
 }

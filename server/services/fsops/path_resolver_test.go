@@ -1,9 +1,8 @@
-package services
+package fsops
 
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,46 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// newResolverFixture builds a worktree with the symlink classes found in the
-// owner's live worktrees (ADR-031 "Spike outcomes", Task 0.2.1d).
-func newResolverFixture(t *testing.T) (dir, outside string) {
-	t.Helper()
-	outside = t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret"), []byte("TOPSECRET"), 0o644))
-	dir = t.TempDir()
-	mustMkdir(t, filepath.Join(dir, "src"))
-	mustMkdir(t, filepath.Join(dir, "docs"))
-	mustMkdir(t, filepath.Join(dir, "pkg", "shared"))
-	mustMkdir(t, filepath.Join(dir, ".git", "hooks"))
-	writeFixtureFile(t, filepath.Join(dir, "src", "a.go"), []byte("package a\n"))
-	writeFixtureFile(t, filepath.Join(dir, "CLAUDE.md"), []byte("claude\n"))
-	writeFixtureFile(t, filepath.Join(dir, "README.md"), []byte("readme\n"))
-	writeFixtureFile(t, filepath.Join(dir, "pkg", "shared", "x.txt"), []byte("shared\n"))
-	writeFixtureFile(t, filepath.Join(dir, ".git", "config"), []byte("[core]\n"))
-	links := map[string]string{
-		"AGENTS.md":       "CLAUDE.md",                      // in-tree file link (257/335 in the live inventory)
-		"docs/alias.md":   "../README.md",                   // in-tree file link via ..
-		"shared":          "pkg/shared",                     // in-tree directory link
-		"chain1":          "chain2",                         // chained in-tree links
-		"chain2":          "CLAUDE.md",                      //
-		"leak":            filepath.Join(outside, "secret"), // absolute target outside (AGENTS.md -> ~/.claude/CLAUDE.md class)
-		"leak_rel":        "../" + filepath.Base(outside) + "/secret",
-		"dir_leak":        outside,                  // directory link out of the root
-		"dangling":        "../shared/slidev-theme", // dangling relative link above the root
-		"dangling_inside": "nope.txt",               // dangling link that stays inside
-		"gitlink":         ".git",
-		"linkdir":         ".git/hooks",
-		"loop1":           "loop2",
-		"loop2":           "loop1",
-	}
-	for name, target := range links {
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, name)))
-	}
-	return dir, outside
-}
 
 func openFixtureRoot(t *testing.T, dir string) *WorktreeRoot {
 	t.Helper()
@@ -61,7 +23,7 @@ func openFixtureRoot(t *testing.T, dir string) *WorktreeRoot {
 }
 
 func TestResolveInWorktree_ShouldReturnResolvedPath_When_PlainRelativePath(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	root := openFixtureRoot(t, dir)
 	got, err := resolveInWorktree(root, "src/a.go", AccessRead)
 	require.NoError(t, err)
@@ -77,7 +39,7 @@ func TestResolveInWorktree_ShouldReturnResolvedPath_When_PlainRelativePath(t *te
 }
 
 func TestResolveInWorktree_ShouldReject_When_DotGitDotDotAbsoluteNulOrSymlinkToGit(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	root := openFixtureRoot(t, dir)
 	cases := []struct {
 		name string
@@ -111,7 +73,7 @@ func TestResolveInWorktree_ShouldReject_When_DotGitDotDotAbsoluteNulOrSymlinkToG
 }
 
 func TestResolveInWorktree_ShouldCarryLinkTargetAndNoBytes_When_SymlinkDenied(t *testing.T) {
-	dir, outside := newResolverFixture(t)
+	dir, outside := fsopstest.NewResolverFixture(t)
 	root := openFixtureRoot(t, dir)
 	_, err := resolveInWorktree(root, "leak", AccessRead)
 	var denied *SymlinkDeniedError
@@ -121,7 +83,7 @@ func TestResolveInWorktree_ShouldCarryLinkTargetAndNoBytes_When_SymlinkDenied(t 
 }
 
 func TestResolveInWorktree_ShouldFollowInTreeLinks_When_ReadMode(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	root := openFixtureRoot(t, dir)
 	cases := map[string]ResolvedPath{
 		"AGENTS.md":       "CLAUDE.md",
@@ -133,19 +95,19 @@ func TestResolveInWorktree_ShouldFollowInTreeLinks_When_ReadMode(t *testing.T) {
 	}
 	for in, want := range cases {
 		t.Run(in, func(t *testing.T) {
-			got, viaLink, err := resolveInWorktreeLinks(root, in, AccessRead)
+			got, viaLink, err := ResolveInWorktreeLinks(root, in, AccessRead)
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
 			assert.True(t, viaLink)
 		})
 	}
-	_, viaLink, err := resolveInWorktreeLinks(root, "src/a.go", AccessRead)
+	_, viaLink, err := ResolveInWorktreeLinks(root, "src/a.go", AccessRead)
 	require.NoError(t, err)
 	assert.False(t, viaLink)
 }
 
 func TestResolveInWorktree_ShouldRefuseAnySymlink_When_WriteMode(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	root := openFixtureRoot(t, dir)
 	for _, p := range []string{"AGENTS.md", "shared/x.txt", "shared", "linkdir/pre-commit", "leak"} {
 		t.Run(p, func(t *testing.T) {
@@ -161,29 +123,29 @@ type stubWorkspaceProvider struct{ ws domain.Workspace }
 func (s stubWorkspaceProvider) GetWorkspace(string) (domain.Workspace, error) { return s.ws, nil }
 
 func TestResolveFileRequest_ShouldUseExistingDirForRead_And_RequireActiveEqualsExistingForWrite(t *testing.T) {
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	ctx := context.Background()
 	ref := FileRef{SessionID: "s1", Path: "src/a.go"}
 
-	read, err := resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{ExistingDir: dir}}, ref, AccessRead)
+	read, err := ResolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{ExistingDir: dir}}, ref, AccessRead)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = read.Root.Close() })
 	assert.Equal(t, ResolvedPath("src/a.go"), read.Resolved)
 
 	// Directory mode: no WorktreeDir, ActiveDir == ExistingDir == RepoRoot is editable.
-	write, err := resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{RepoRoot: dir, ActiveDir: dir, ExistingDir: dir}}, ref, AccessWrite)
+	write, err := ResolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{RepoRoot: dir, ActiveDir: dir, ExistingDir: dir}}, ref, AccessWrite)
 	require.NoError(t, err)
 	_ = write.Root.Close()
 
 	// Paused worktree: ExistingDir fell back to the repo root.
-	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{RepoRoot: dir, ActiveDir: "/gone/worktree", ExistingDir: dir}}, ref, AccessWrite)
+	_, err = ResolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{RepoRoot: dir, ActiveDir: "/gone/worktree", ExistingDir: dir}}, ref, AccessWrite)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "WorktreeMissing")
 
-	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{ExistingDir: dir}}, FileRef{}, AccessRead)
+	_, err = ResolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{ExistingDir: dir}}, FileRef{}, AccessRead)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
-	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{}, ref, AccessRead)
+	_, err = ResolveFileRequest(ctx, stubWorkspaceProvider{}, ref, AccessRead)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -38,7 +39,7 @@ func rangeBusyReason(t *testing.T, err error) string {
 }
 
 func TestReadRange_ShouldRefuseWithRangeBusy_When_FifthCallPerClientOrNinthPerIP(t *testing.T) {
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	mem.AddFile(rangeTestDir, "a.txt", []byte("x\n"), readCorpusMTime)
 	ops := NewFileOps(FilePolicy{Workspace: anySessionProvider{rangeTestDir}, Flags: &stubFilesFlags{rangeRead: true}}, mem)
 	t.Cleanup(ops.analysis.Close)

@@ -1,6 +1,6 @@
 # buf lint findings tolerated until the owner decides to fix them (tools/bzl/proto/buf_lint.sh ratchet).
 # Regenerate: bazel run //proto/session/v1:buf_lint_update_baseline. Entries only ever leave this file.
-# Owner decision 2026-11-06: the 8 enum findings are permanent exceptions in buf.yaml (ignore_only); the 44 RPC findings stay here until a versioned migration.
+# Owner decision 2026-11-06: the 8 enum findings are permanent exceptions in buf.yaml (ignore_only); the 48 RPC findings stay here until a versioned migration.
 # so none was applied (all 52 re-verified with `buf lint`; `buf breaking` flags each fix). Needs a versioned migration, not an in-place edit:
 #   RPC_*_STANDARD_NAME / RPC_REQUEST_RESPONSE_UNIQUE: rename/split shared messages (PRActionResponse, StreamHubRolloutStatus, TymuxRolloutStatus,
 #     TerminalData, *Event stream types). Binary wire/Connect paths are unaffected, but Go/TS/mobile generated type names change.
@@ -27,12 +27,16 @@ proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type 
 proto/session/v1/insights.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"InsightsEvent\" should be named \"WatchInsightsResponse\" or \"InsightsServiceWatchInsightsResponse\".
 proto/session/v1/rum_bundle.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"BundleChunk\" should be named \"ExportSessionBundleResponse\" or \"SessionBundleServiceExportSessionBundleResponse\".
 proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE RPC \"StreamTerminal\" has the same type \"session.v1.TerminalData\" for the request and response.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.SearchClaudeHistoryRequest\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.SearchClaudeHistoryRequest\" is used as the request or response type for multiple RPCs.
 proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
 proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
 proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
 proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_STANDARD_NAME RPC request type \"SearchClaudeHistoryRequest\" should be named \"StreamSearchClaudeHistoryRequest\" or \"SessionServiceStreamSearchClaudeHistoryRequest\".
 proto/session/v1/session.proto RPC_REQUEST_STANDARD_NAME RPC request type \"TerminalData\" should be named \"StreamTerminalRequest\" or \"SessionServiceStreamTerminalRequest\".
 proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"ReviewQueueEvent\" should be named \"WatchReviewQueueResponse\" or \"SessionServiceWatchReviewQueueResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"SearchClaudeHistoryStreamResponse\" should be named \"StreamSearchClaudeHistoryResponse\" or \"SessionServiceStreamSearchClaudeHistoryResponse\".
 proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"SessionEvent\" should be named \"WatchSessionsResponse\" or \"SessionServiceWatchSessionsResponse\".
 proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"CompleteStreamHubRollbackRehearsalResponse\" or \"SessionServiceCompleteStreamHubRollbackRehearsalResponse\".
 proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"GetStreamHubRolloutStatusResponse\" or \"SessionServiceGetStreamHubRolloutStatusResponse\".

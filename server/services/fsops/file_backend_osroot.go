@@ -1,9 +1,9 @@
-package services
+package fsops
 
-// osRootBackend serves files through os.Root, wrapping WorktreeRoot by composition.
-type osRootBackend struct{}
+// OsRootBackend serves files through os.Root, wrapping WorktreeRoot by composition.
+type OsRootBackend struct{}
 
-func (osRootBackend) OpenRoot(dir string) (FileRoot, error) {
+func (OsRootBackend) OpenRoot(dir string) (FileRoot, error) {
 	root, err := OpenWorktreeRoot(dir)
 	if err != nil {
 		return nil, err
