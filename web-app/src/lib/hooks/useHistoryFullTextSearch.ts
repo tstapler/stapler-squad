@@ -193,12 +193,14 @@ export function useHistoryFullTextSearch(
     async (searchOptions: SearchOptions): Promise<void> => {
       if (!clientRef.current) return;
       if (!searchOptions.query.trim()) {
+        abortControllerRef.current?.abort();
         setState((prev) => ({
           ...prev,
           results: [],
           totalMatches: 0,
           hasMore: false,
           loading: false,
+          indexWarming: false,
           error: null,
         }));
         return;
@@ -232,6 +234,7 @@ export function useHistoryFullTextSearch(
           // than clearing the list, so the top hits show immediately.
           let first = !searchOptions.append;
           for await (const msg of clientRef.current.streamSearchClaudeHistory(request, { signal })) {
+            if (signal.aborted) return;
             const batch = msg.results.map(convertResult);
             const replace = first && !msg.indexWarming;
             if (!msg.indexWarming) first = false;
@@ -245,6 +248,10 @@ export function useHistoryFullTextSearch(
               error: null,
             }));
             if (msg.isFinal) break;
+          }
+          // A stream cut before is_final must not leave the spinner on forever.
+          if (!signal.aborted) {
+            setState((prev) => (prev.loading || prev.indexWarming ? { ...prev, loading: false, indexWarming: false } : prev));
           }
           return;
         }
@@ -290,6 +297,7 @@ export function useHistoryFullTextSearch(
         setState((prev) => ({
           ...prev,
           loading: false,
+          indexWarming: false,
           error,
         }));
       }
@@ -332,6 +340,7 @@ export function useHistoryFullTextSearch(
         results: [],
         totalMatches: 0,
         hasMore: false,
+        indexWarming: false,
       }));
     }
   }, [autoSearch, debouncedQuery, search]);

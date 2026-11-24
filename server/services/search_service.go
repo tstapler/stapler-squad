@@ -97,9 +97,10 @@ type SearchService struct {
 	branchCacheTTL time.Duration
 
 	// Background index sync (see search_service_sync.go).
-	syncInterval time.Duration
-	syncedOnce   sync.Once
-	syncedCh     chan struct{} // closed after the first successful sync
+	syncInterval  time.Duration
+	unarySyncWait time.Duration // how long unary search waits for the first sync
+	syncedOnce    sync.Once
+	syncedCh      chan struct{} // closed after the first successful sync
 }
 
 // SetResolveConversationUUID wires the tmux-UUID → Claude-UUID resolver.
@@ -119,6 +120,7 @@ func NewSearchService(
 		historyCacheTTL:  historyCacheTTL,
 		branchCacheTTL:   60 * time.Second,
 		syncedCh:         make(chan struct{}),
+		unarySyncWait:    unarySyncWait,
 	}
 }
 
@@ -561,7 +563,7 @@ func (ss *SearchService) searchClaudeHistory(
 			fmt.Errorf("offset is not supported together with group_by_session, exclude_automation_sessions, or project"))
 	}
 
-	if err := ss.requireIndexSynced(); err != nil {
+	if err := ss.requireIndexSynced(ctx); err != nil {
 		return nil, err
 	}
 

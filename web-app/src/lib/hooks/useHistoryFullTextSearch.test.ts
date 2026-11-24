@@ -133,18 +133,55 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     expect(mockSearchClaudeHistory).not.toHaveBeenCalled();
   });
 
-  it("useHistoryFullTextSearch_should_ShowWarmingWithoutDroppingResults_When_IndexWarmingMessage", async () => {
+  it("useHistoryFullTextSearch_should_ExposeIndexWarmingUntilResultsArrive_When_ColdStartStream", async () => {
+    mockStreamingFlag = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      await gate;
+      yield { results: [result("a")], totalMatches: 1, queryTimeMs: 2n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    await waitFor(() => expect(hook.current.indexWarming).toBe(true));
+    expect(hook.current.loading).toBe(true);
+    expect(hook.current.results).toEqual([]);
+
+    release();
+    await act(async () => { await done; });
+    expect(hook.current.indexWarming).toBe(false);
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  it("useHistoryFullTextSearch_should_StopLoadingAndClearWarming_When_StreamEndsWithoutFinal", async () => {
+    mockStreamingFlag = true;
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [result("a")], totalMatches: 5, queryTimeMs: 1n, hasMore: true, isFinal: false, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    await act(async () => { await hook.current.search({ query: "x" }); });
+
+    expect(hook.current.loading).toBe(false);
+    expect(hook.current.results).toHaveLength(1);
+  });
+
+  it("useHistoryFullTextSearch_should_ClearWarming_When_StreamErrors", async () => {
     mockStreamingFlag = true;
     mockStreamSearchClaudeHistory.mockImplementation(async function* () {
       yield { results: [], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
-      yield { results: [result("a")], totalMatches: 1, queryTimeMs: 2n, hasMore: false, isFinal: true, indexWarming: false };
+      throw new Error("unavailable");
     });
 
     const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
     await act(async () => { await hook.current.search({ query: "x" }); });
 
     expect(hook.current.indexWarming).toBe(false);
-    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a"]);
+    expect(hook.current.error).not.toBeNull();
   });
 
   it("useHistoryFullTextSearch_should_UseUnaryCall_When_FlagOff", async () => {

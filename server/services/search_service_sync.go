@@ -89,11 +89,27 @@ func (ss *SearchService) indexSynced() bool {
 	return false
 }
 
-// requireIndexSynced is the cold-start guard: searches before the first sync
-// get CodeUnavailable instead of silently returning nothing.
-func (ss *SearchService) requireIndexSynced() error {
+// unarySyncWait is how long the unary search waits for the first background
+// sync before returning CodeUnavailable, so a search right after a restart
+// usually succeeds instead of failing.
+const unarySyncWait = 5 * time.Second
+
+// requireIndexSynced is the cold-start guard: a search before the first sync
+// waits briefly (ss.unarySyncWait) then gets CodeUnavailable instead of
+// silently returning nothing.
+func (ss *SearchService) requireIndexSynced(ctx context.Context) error {
 	if ss.indexSynced() {
 		return nil
+	}
+	if ss.unarySyncWait > 0 {
+		timer := time.NewTimer(ss.unarySyncWait)
+		defer timer.Stop()
+		select {
+		case <-ss.syncedCh:
+			return nil
+		case <-ctx.Done():
+		case <-timer.C:
+		}
 	}
 	return connect.NewError(connect.CodeUnavailable,
 		fmt.Errorf("search index is warming up (first sync has not completed); retry shortly"))

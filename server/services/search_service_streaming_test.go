@@ -111,6 +111,7 @@ func TestStreamSearchClaudeHistory_should_SendWarmingBatchBeforeSyncCompletes_Wh
 func TestSearchClaudeHistory_should_ReturnUnavailable_When_IndexNeverSynced(t *testing.T) {
 	seedManySessions(t, 1)
 	ss := setupSearchService()
+	ss.unarySyncWait = 0
 
 	_, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
 
@@ -129,6 +130,21 @@ func TestSearchService_should_IndexNewSessions_When_BackgroundSyncLoopRuns(t *te
 
 	require.Eventually(t, ss.indexSynced, 5*time.Second, 10*time.Millisecond)
 	resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Results, 1)
+}
+
+func TestSearchClaudeHistory_should_WaitForFirstSync_When_SyncCompletesWithinGrace(t *testing.T) {
+	seedManySessions(t, 1)
+	ss := setupSearchService()
+	ss.unarySyncWait = 5 * time.Second
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = ss.SyncNow(context.Background())
+	}()
+
+	resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
+
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Results, 1)
 }
