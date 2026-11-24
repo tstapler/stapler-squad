@@ -571,7 +571,8 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 }
 
 // finalizeCancelledIncrementalLocked keeps the totals true to the partial index
-// and stamps LastIncrementalSync, since the pass did apply some changes.
+// and stamps LastIncrementalSync to record that a pass ran, even if cancelled
+// before its first change.
 // Must be called with lock held.
 func (e *SearchEngine) finalizeCancelledIncrementalLocked() {
 	e.refreshAggregatesLocked()
