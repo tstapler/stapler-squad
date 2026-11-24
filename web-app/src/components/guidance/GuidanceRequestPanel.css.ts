@@ -98,8 +98,6 @@ const lineClamp = {
   overflow: "hidden",
 };
 
-export const questionText = style({ ...questionTextBase, flex: 1 });
-
 /** Wraps the question text and its toggle so the badge/text flex layout is unchanged. */
 export const questionWrapper = style({ flex: 1, minWidth: 0 });
 

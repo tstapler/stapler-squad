@@ -170,5 +170,21 @@ describe("GuidanceRequestPanel", () => {
       expect(first).toHaveAttribute("aria-expanded", "true");
       expect(second).toHaveAttribute("aria-expanded", "false");
     });
+
+    it("clamps long question text on an answered structured request", () => {
+      mockRequests = [
+        row({
+          status: "answered",
+          answer: "ok",
+          questionText: "s".repeat(301),
+          questions: [{ question: "Pick", header: "", multiSelect: false, options: [{ label: "A", description: "" }] }],
+        } as Partial<PlainGuidanceRequest>),
+      ];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      const toggle = screen.getByTestId("guidance-question-toggle");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
   });
 });

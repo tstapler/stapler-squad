@@ -120,6 +120,19 @@ function ExpandToggle({ expanded, onToggle, subject, testId }: { expanded: boole
   );
 }
 
+/** Clamped question text with its toggle; shared by the legacy and structured rows. */
+function ExpandableQuestion({ text }: { text: string }) {
+  const q = useExpandable(text);
+  return (
+    <div className={styles.questionWrapper}>
+      <p className={q.expanded ? styles.questionExpanded : styles.questionClamped} data-testid="guidance-question-text">
+        {text}
+      </p>
+      {q.isLong && <ExpandToggle expanded={q.expanded} onToggle={q.toggle} subject="question" testId="guidance-question-toggle" />}
+    </div>
+  );
+}
+
 function GuidanceRequestItem({
   request,
   busy,
@@ -133,7 +146,6 @@ function GuidanceRequestItem({
   const ownerAction = isOwnerActionRequest(request);
   const questionStr = ownerActionQuestion(request);
   const answerStr = request.answer ?? "";
-  const q = useExpandable(questionStr);
   const a = useExpandable(answerStr);
   if ((request.questions?.length ?? 0) > 0) return <StructuredRequestItem request={request} busy={busy} onSubmit={onSubmit} />;
   return (
@@ -148,12 +160,7 @@ function GuidanceRequestItem({
         >
           {isPending ? (ownerAction ? "Waiting for your decision" : "Pending") : "Answered"}
         </span>
-        <div className={styles.questionWrapper}>
-          <p className={q.expanded ? styles.questionExpanded : styles.questionClamped} data-testid="guidance-question-text">
-            {questionStr}
-          </p>
-          {q.isLong && <ExpandToggle expanded={q.expanded} onToggle={q.toggle} subject="question" testId="guidance-question-toggle" />}
-        </div>
+        <ExpandableQuestion text={questionStr} />
       </div>
       {isPending ? (
         <LegacyAnswerForm request={request} busy={busy} onSubmit={onSubmit} />
@@ -186,7 +193,7 @@ function StructuredRequestItem({ request, busy, onSubmit }: { request: PlainGuid
         <span className={pending ? styles.badgePending : styles.badgeAnswered} data-testid="guidance-request-status">
           {pending ? "Pending" : "Answered"}
         </span>
-        {!pending && <p className={styles.questionText}>{request.questionText}</p>}
+        {!pending && <ExpandableQuestion text={request.questionText} />}
       </div>
       <GuidanceQuestionForm
         id={request.id}
