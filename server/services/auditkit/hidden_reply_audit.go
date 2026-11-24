@@ -1,4 +1,4 @@
-package services
+package auditkit
 
 import (
 	"context"
@@ -23,45 +23,45 @@ import (
 // land here from the first PR in which the gate can flip, Reply and the steer
 // extend it later.
 const (
-	auditFileName    = "hidden-session-replies.jsonl"
+	AuditFileName    = "hidden-session-replies.jsonl"
 	auditBootSeqName = "boot_seq"
 	auditDirMode     = 0o700
 	auditFileMode    = 0o600
 	auditRotateBytes = 5 << 20
 	auditFilesKept   = 3
-	auditQueueSize   = 64
+	AuditQueueSize   = 64
 	auditAppendBound = 2 * time.Second
-	auditKindFlagChg = "flag_change"
-	// auditKindReply is a Reply to a hidden session's question (ADR-010): a
+	AuditKindFlagChg = "flag_change"
+	// AuditKindReply is a Reply to a hidden session's question (ADR-010): a
 	// `requested` line (fsynced) before the one digit is written, a `result` after.
-	auditKindReply = "reply"
+	AuditKindReply = "reply"
 	// Steer line kinds (plan Story 5.2). Both carry a `requested` line before the
 	// write and a `result` line after it.
-	auditKindBacklogSteer = "backlog_steer"
-	auditKindGuardBypass  = "guard_bypass"
-	// auditKindPrune is an operator-triggered history prune apply (plan Story
+	AuditKindBacklogSteer = "backlog_steer"
+	AuditKindGuardBypass  = "guard_bypass"
+	// AuditKindPrune is an operator-triggered history prune apply (plan Story
 	// 2.7): a `requested` line before any row is deleted, a `result` line after.
-	auditKindPrune = "prune"
-	// auditKindNotificationAction is one InvokeNotificationAction call (Story 2.3):
+	AuditKindPrune = "prune"
+	// AuditKindNotificationAction is one InvokeNotificationAction call (Story 2.3):
 	// a `requested` line (Tier B only, before any byte) and a `result` line.
-	auditKindNotificationAction = "notification_action"
-	auditPhaseRequest           = "requested"
-	auditPhaseResult            = "result"
+	AuditKindNotificationAction = "notification_action"
+	AuditPhaseRequest           = "requested"
+	AuditPhaseResult            = "result"
 )
 
 // Degraded-mode label values of hidden_session_audit_degraded_total.
 const (
-	auditModeQueued      = "flag_change_queued"
-	auditModeFallbackLog = "flag_change_fallback_log"
-	auditModeSteerLog    = "steer_fallback_log"
+	AuditModeQueued      = "flag_change_queued"
+	AuditModeFallbackLog = "flag_change_fallback_log"
+	AuditModeSteerLog    = "steer_fallback_log"
 )
 
 // Outcomes of a flag flip, recorded on the result line.
 const (
-	flagOutcomeApplied          = "applied"
-	flagOutcomePersistFailed    = "aborted_persist_failed"
-	flagOutcomeControllerFailed = "aborted_controller_failed"
-	flagOutcomeRolledBack       = "aborted_rolled_back"
+	FlagOutcomeApplied          = "applied"
+	FlagOutcomePersistFailed    = "aborted_persist_failed"
+	FlagOutcomeControllerFailed = "aborted_controller_failed"
+	FlagOutcomeRolledBack       = "aborted_rolled_back"
 )
 
 // Errors a caller maps to Internal (nothing was written or persisted).
@@ -187,7 +187,7 @@ func NewAuditSink(dirFn func() (string, error), opts ...AuditSinkOption) *AuditS
 	s := &AuditSink{
 		fs: fsops.OSFS{}, dirFn: dirFn, now: time.Now, logger: deliverygate.NewRepoLogger(),
 		after: time.After, degraded: func(string) {},
-		queue: make(chan AuditLine, auditQueueSize), stop: make(chan struct{}), closed: make(chan struct{}),
+		queue: make(chan AuditLine, AuditQueueSize), stop: make(chan struct{}), closed: make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(s)
@@ -303,7 +303,7 @@ func (s *AuditSink) write(line []byte) error {
 // rotateLocked opens the file, first shifting .1 -> .2 and the live file -> .1
 // when it is full. Any failure leaves nothing written.
 func (s *AuditSink) rotateLocked(incoming int64) error {
-	path := filepath.Join(s.dir, auditFileName)
+	path := filepath.Join(s.dir, AuditFileName)
 	if s.file != nil {
 		_ = s.file.Close()
 		s.file = nil
@@ -370,17 +370,17 @@ func (s *AuditSink) Enqueue(l AuditLine) {
 	})
 	select {
 	case <-s.closed:
-		s.fallback(l, errors.New("sink closed"))
+		s.Fallback(l, errors.New("sink closed"))
 		return
 	default:
 	}
 	select {
 	case s.queue <- l:
 		if len(s.queue) > 1 {
-			s.degraded(auditModeQueued)
+			s.degraded(AuditModeQueued)
 		}
 	default:
-		s.fallback(l, errors.New("queue full"))
+		s.Fallback(l, errors.New("queue full"))
 	}
 }
 
@@ -418,16 +418,16 @@ func (s *AuditSink) drainOne(l AuditLine) {
 		err = s.write(append(b, '\n'))
 	}
 	if err != nil {
-		s.fallback(l, err)
+		s.Fallback(l, err)
 	}
 }
 
 // Fallback writes the line's fields to the main log as one WARN record and
 // counts it; the main log is not tamper-evident, which the ADR states.
-func (s *AuditSink) fallback(l AuditLine, cause error) {
+func (s *AuditSink) Fallback(l AuditLine, cause error) {
 	bootID, bootSeq := s.bootID, s.bootSeqString()
-	if l.Kind == auditKindBacklogSteer || l.Kind == auditKindGuardBypass {
-		s.degraded(auditModeSteerLog)
+	if l.Kind == AuditKindBacklogSteer || l.Kind == AuditKindGuardBypass {
+		s.degraded(AuditModeSteerLog)
 		s.logger.Warn("steer_audit_degraded",
 			"cause", cause.Error(), "kind", l.Kind, "phase", l.Phase, "change_id", l.ChangeID, "outcome", l.Outcome,
 			"session_uuid", l.SessionUUID, "session_title", l.SessionTitle, "item_id", l.ItemID,
@@ -437,7 +437,7 @@ func (s *AuditSink) fallback(l AuditLine, cause error) {
 			"host", l.Host, "origin", l.Origin, "user_agent", l.UserAgent, "auth_mode", l.AuthMode)
 		return
 	}
-	s.degraded(auditModeFallbackLog)
+	s.degraded(AuditModeFallbackLog)
 	s.logger.Warn("flag_change_audit_degraded",
 		"cause", cause.Error(), "phase", l.Phase, "change_id", l.ChangeID, "flag", l.Flag, "scope", l.Scope,
 		"previous", boolPtrString(l.Previous), "new", boolPtrString(l.New), "outcome", l.Outcome, "seq", l.Seq,

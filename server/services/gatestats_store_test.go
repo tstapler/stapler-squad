@@ -15,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -73,7 +74,7 @@ func (h gateMsgCapture) WithGroup(string) slog.Handler      { return h }
 
 const testStatsDir = "/cfg"
 
-func newTestStore(t *testing.T, mfs *memFS, clk *gateTestClock, pid int) (*FileStatsStore, func(string) int) {
+func newTestStore(t *testing.T, mfs *memfs.MemFS, clk *gateTestClock, pid int) (*FileStatsStore, func(string) int) {
 	t.Helper()
 	lg, count := newLogCapture()
 	return NewFileStatsStore(testStatsDir, WithStatsFS(mfs), WithStatsClock(clk.Now), WithStatsPID(pid), WithStatsLogger(lg),
@@ -92,31 +93,31 @@ func sampleStats(clk *gateTestClock) deliverygate.PersistedStats {
 
 func TestStatsFile_ShouldWriteAtomicallyAndKeepPreviousFile_WhenCrashBetweenTempWriteAndRename(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	store, _ := newTestStore(t, mfs, clk, 100)
 	require.NoError(t, store.Save(sampleStats(clk)))
-	before, ok := mfs.get(testStatsDir + "/" + statsFileName)
+	before, ok := mfs.Get(testStatsDir + "/" + statsFileName)
 	require.True(t, ok)
 
-	mfs.failRename = errDiskFull
+	mfs.FailRename = errDiskFull
 	next := sampleStats(clk)
 	next.Buckets[0].RoutineWhileOn = 99
 	require.Error(t, store.Save(next))
 
-	after, _ := mfs.get(testStatsDir + "/" + statsFileName)
+	after, _ := mfs.Get(testStatsDir + "/" + statsFileName)
 	assert.Equal(t, string(before), string(after), "previous file must be intact")
-	assert.Empty(t, mfs.names(testStatsDir+"/"+statsFileName+"."), "failed write must not leave a temp file")
+	assert.Empty(t, mfs.Names(testStatsDir+"/"+statsFileName+"."), "failed write must not leave a temp file")
 	assert.False(t, store.Status().Writable)
-	assert.Equal(t, os.FileMode(0o600), mfs.modes[testStatsDir+"/"+statsFileName+".100.tmp"]|0o600)
+	assert.Equal(t, os.FileMode(0o600), mfs.Modes[testStatsDir+"/"+statsFileName+".100.tmp"]|0o600)
 }
 
 func TestStatsFile_ShouldStartEmptyQuarantineCorruptFileAndWarnOnce_WhenInvalidJsonUnknownVersionOrBadChecksum(t *testing.T) {
 	t.Parallel()
 	good := func(clk *gateTestClock) []byte {
-		mfs := newMemFS()
+		mfs := memfs.New()
 		store, _ := newTestStore(t, mfs, clk, 1)
 		require.NoError(t, store.Save(sampleStats(clk)))
-		b, _ := mfs.get(testStatsDir + "/" + statsFileName)
+		b, _ := mfs.Get(testStatsDir + "/" + statsFileName)
 		return b
 	}
 	mutate := func(b []byte, f func(map[string]any)) []byte {
@@ -136,25 +137,25 @@ func TestStatsFile_ShouldStartEmptyQuarantineCorruptFileAndWarnOnce_WhenInvalidJ
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			mfs, clk := newMemFS(), newGateTestClock()
-			mfs.put(testStatsDir+"/"+statsFileName, mk(clk))
-			mfs.put(testStatsDir+"/"+statsFileName+".corrupt-20200101T000000Z", []byte("old"))
+			mfs, clk := memfs.New(), newGateTestClock()
+			mfs.Put(testStatsDir+"/"+statsFileName, mk(clk))
+			mfs.Put(testStatsDir+"/"+statsFileName+".corrupt-20200101T000000Z", []byte("old"))
 			store, warns := newTestStore(t, mfs, clk, 2)
 
 			_, ok := store.Load()
 			assert.False(t, ok)
 			assert.Equal(t, 1, warns("delivery_gate_stats_corrupt"))
 			assert.True(t, store.Status().Quarantined)
-			_, still := mfs.get(testStatsDir + "/" + statsFileName)
+			_, still := mfs.Get(testStatsDir + "/" + statsFileName)
 			assert.False(t, still, "corrupt file must be moved aside")
-			assert.Len(t, mfs.names(testStatsDir+"/"+statsFileName+".corrupt-"), 1, "at most one quarantined file is kept")
+			assert.Len(t, mfs.Names(testStatsDir+"/"+statsFileName+".corrupt-"), 1, "at most one quarantined file is kept")
 		})
 	}
 }
 
 func TestStatsFile_ShouldRoundTripAndLoadStatus_WhenValidFileExists(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	store, _ := newTestStore(t, mfs, clk, 1)
 	require.NoError(t, store.Save(sampleStats(clk)))
 	assert.True(t, store.Status().Writable)
@@ -169,14 +170,14 @@ func TestStatsFile_ShouldRoundTripAndLoadStatus_WhenValidFileExists(t *testing.T
 
 func TestStatsStore_ShouldNeverBlockPanicOrFailStartupAndWarnOncePer10Minutes_WhenDirUnwritableOrDiskFull(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
-	mfs.setFailWrite(errDiskFull)
+	mfs, clk := memfs.New(), newGateTestClock()
+	mfs.SetFailWrite(errDiskFull)
 	store, warns := newTestStore(t, mfs, clk, 1)
-	mfs.put(testStatsDir+"/"+statsFileName+".5.tmp", []byte("stale"))
+	mfs.Put(testStatsDir+"/"+statsFileName+".5.tmp", []byte("stale"))
 
 	_, ok := store.Load() // removes the stale temp, no file: starts empty
 	assert.False(t, ok)
-	assert.Empty(t, mfs.names(testStatsDir+"/"+statsFileName+"."))
+	assert.Empty(t, mfs.Names(testStatsDir+"/"+statsFileName+"."))
 
 	for i := 0; i < 5; i++ {
 		require.Error(t, store.Save(sampleStats(clk)))
@@ -191,14 +192,14 @@ func TestStatsStore_ShouldNeverBlockPanicOrFailStartupAndWarnOncePer10Minutes_Wh
 
 func TestStatsStore_ShouldUsePidSpecificTempNameDefinedChecksumAndForeignWriterRule_WhenTwoProcessesShareTheDirectory(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	a, _ := newTestStore(t, mfs, clk, 100)
 	b, bWarns := newTestStore(t, mfs, clk, 200)
 	assert.Equal(t, testStatsDir+"/"+statsFileName+".100.tmp", a.tmpPath())
 	assert.Equal(t, testStatsDir+"/"+statsFileName+".200.tmp", b.tmpPath())
 
 	require.NoError(t, a.Save(sampleStats(clk)))
-	raw, _ := mfs.get(testStatsDir + "/" + statsFileName)
+	raw, _ := mfs.Get(testStatsDir + "/" + statsFileName)
 	var p deliverygate.PersistedStats
 	require.NoError(t, json.Unmarshal(raw, &p))
 	want, err := statsChecksum(p)
@@ -207,7 +208,7 @@ func TestStatsStore_ShouldUsePidSpecificTempNameDefinedChecksumAndForeignWriterR
 
 	require.ErrorIs(t, b.Save(sampleStats(clk)), errForeignWriter)
 	assert.Equal(t, 1, bWarns("delivery_gate_stats_foreign_writer"))
-	after, _ := mfs.get(testStatsDir + "/" + statsFileName)
+	after, _ := mfs.Get(testStatsDir + "/" + statsFileName)
 	assert.Equal(t, string(raw), string(after), "the foreign-owned file is left alone")
 
 	clk.Advance(3 * time.Minute) // writer pid 100 is gone: last write older than 2 minutes
@@ -216,7 +217,7 @@ func TestStatsStore_ShouldUsePidSpecificTempNameDefinedChecksumAndForeignWriterR
 
 func TestStatsStore_ShouldWriteImmediately_WhenForeignWriterPidIsDead(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	a, _ := newTestStore(t, mfs, clk, 100)
 	require.NoError(t, a.Save(sampleStats(clk)))
 
@@ -254,7 +255,7 @@ func TestStatsStore_ShouldDefaultToNoopStoreWithNoDiskOrGoroutine_WhenUnitTestsB
 	assert.False(t, s.Status().Writable)
 }
 
-func newWriterEnv(t *testing.T, pid int, mfs *memFS, clk *gateTestClock) (*StatsWriter, *deliverygate.Stats, *FileStatsStore) {
+func newWriterEnv(t *testing.T, pid int, mfs *memfs.MemFS, clk *gateTestClock) (*StatsWriter, *deliverygate.Stats, *FileStatsStore) {
 	t.Helper()
 	store, _ := newTestStore(t, mfs, clk, pid)
 	stats := deliverygate.NewStats(clk.Now)
@@ -264,7 +265,7 @@ func newWriterEnv(t *testing.T, pid int, mfs *memFS, clk *gateTestClock) (*Stats
 
 func TestStatsWriter_ShouldReloadBucketsAfterRestartWhileUptimeStartsAtZero_WhenStatsFilePersisted(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	w1, s1, _ := newWriterEnv(t, 1, mfs, clk)
 	tick := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -296,9 +297,9 @@ func TestStatsWriter_ShouldReloadBucketsAfterRestartWhileUptimeStartsAtZero_When
 
 func TestShutdownFlush_ShouldReturnWithinStatsFlushTimeout_WhenFsyncStallsDuringTheDeferredFinalFlush(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
-	mfs.syncStall = make(chan struct{})
-	mfs.syncEntered = make(chan struct{}, 1)
+	mfs, clk := memfs.New(), newGateTestClock()
+	mfs.SyncStall = make(chan struct{})
+	mfs.SyncEntered = make(chan struct{}, 1)
 	store, _ := newTestStore(t, mfs, clk, 1)
 	stats := deliverygate.NewStats(clk.Now)
 	timeout := make(chan time.Time, 1)
@@ -310,28 +311,28 @@ func TestShutdownFlush_ShouldReturnWithinStatsFlushTimeout_WhenFsyncStallsDuring
 
 	returned := make(chan struct{})
 	go func() { w.FlushFinal(); close(returned) }()
-	<-mfs.syncEntered
+	<-mfs.SyncEntered
 	timeout <- clk.Now() // the bound fires while the fsync is still stalled
 	<-returned
 	assert.Equal(t, 1, warns("delivery_gate_stats_final_flush_timed_out"))
-	close(mfs.syncStall) // release the abandoned write so it can finish
+	close(mfs.SyncStall) // release the abandoned write so it can finish
 
-	// memFS stores the temp only after the stall releases, then renames it; wait
+	// memfs.MemFS stores the temp only after the stall releases, then renames it; wait
 	// for that rename so the assertion below doesn't race the in-flight write.
 	wait.RequireEventually(t, func() bool {
-		_, ok := mfs.get(testStatsDir + "/" + statsFileName)
+		_, ok := mfs.Get(testStatsDir + "/" + statsFileName)
 		return ok
 	}, 5*time.Second, time.Millisecond, "the abandoned write should finish once released")
 
 	// The abandoned write leaves at most a stale temp; the next start removes it.
 	store2, _ := newTestStore(t, mfs, clk, 1)
 	store2.Load()
-	assert.Empty(t, mfs.names(testStatsDir+"/"+statsFileName+".1.tmp"))
+	assert.Empty(t, mfs.Names(testStatsDir+"/"+statsFileName+".1.tmp"))
 }
 
 func TestStatsStore_ShouldSerializeSaveAndFlush_WhenWriterTickAndFinalFlushRace(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	w, stats, store := newWriterEnv(t, 1, mfs, clk)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -350,7 +351,7 @@ func TestStatsStore_ShouldSerializeSaveAndFlush_WhenWriterTickAndFinalFlushRace(
 
 func TestStatsStore_ShouldMergeBucketsByHourStart_WhenForeignWriterExitsAndProcessResumes(t *testing.T) {
 	t.Parallel()
-	mfs, clk := newMemFS(), newGateTestClock()
+	mfs, clk := memfs.New(), newGateTestClock()
 	foreign, _ := newTestStore(t, mfs, clk, 900)
 	fp := sampleStats(clk)
 	fp.Buckets[0].UptimeMs = 3000_000
@@ -370,14 +371,14 @@ func TestStatsStore_ShouldMergeBucketsByHourStart_WhenForeignWriterExitsAndProce
 
 	// Within the foreign window a flush keeps stats in memory and writes nothing.
 	w.flush()
-	raw, _ := mfs.get(testStatsDir + "/" + statsFileName)
+	raw, _ := mfs.Get(testStatsDir + "/" + statsFileName)
 	var p deliverygate.PersistedStats
 	require.NoError(t, json.Unmarshal(raw, &p))
 	assert.Equal(t, 900, p.WriterPID)
 
 	clk.Advance(3 * time.Minute)
 	w.flush() // foreign is gone: merge on resume, then write as pid 1
-	raw, _ = mfs.get(testStatsDir + "/" + statsFileName)
+	raw, _ = mfs.Get(testStatsDir + "/" + statsFileName)
 	require.NoError(t, json.Unmarshal(raw, &p))
 	assert.Equal(t, 1, p.WriterPID)
 	assert.LessOrEqual(t, p.Buckets[0].UptimeMs, int64(3600_000), "seconds are clamped to one hour")

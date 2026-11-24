@@ -14,6 +14,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -107,7 +108,9 @@ func (e *replyEnv) counter(label string) uint64 {
 	return e.gate.Metrics().Value(deliverygate.CounterReply, label)
 }
 
-func replyLines(all []AuditLine) []AuditLine { return steerLines(all, auditKindReply) }
+func replyLines(all []auditkit.AuditLine) []auditkit.AuditLine {
+	return steerLines(all, auditkit.AuditKindReply)
+}
 
 // T-RP-02, T-RP-07, T-RP-10
 func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSessionHasASingleSelectQuestionAndTheDialogCloses(t *testing.T) {
@@ -126,8 +129,8 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	lines := replyLines(e.auditLines())
 	require.Len(t, lines, 2)
 	req, res := lines[0], lines[1]
-	assert.Equal(t, auditPhaseRequest, req.Phase)
-	assert.Equal(t, auditPhaseResult, res.Phase)
+	assert.Equal(t, auditkit.AuditPhaseRequest, req.Phase)
+	assert.Equal(t, auditkit.AuditPhaseResult, res.Phase)
 	assert.Equal(t, req.ChangeID, res.ChangeID)
 	assert.Equal(t, "sent", res.Outcome)
 	assert.Equal(t, replyStageDialogClosed, res.Stage)
@@ -302,7 +305,7 @@ func TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSec
 // T-RP-08: no audit, no write.
 func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWriteAuditAppendFails(t *testing.T) {
 	e := newReplyEnv(t)
-	e.mfs.failMkdir = errors.New("disk full")
+	e.mfs.FailMkdir = errors.New("disk full")
 
 	_, err := e.reply(e.inst.UUID, e.qid, "2", "r-audit")
 
@@ -315,7 +318,7 @@ func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWrite
 	instance.AssertLeaseFree(t, e.inst)
 
 	// With the sink back, the same reply_id attempts the write again.
-	e.mfs.failMkdir = nil
+	e.mfs.FailMkdir = nil
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("2", "r-audit").Outcome)
 	assert.Equal(t, []string{"2"}, e.pm.writes())
 }

@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "auditkit",
+    srcs = ["hidden_reply_audit.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/auditkit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//server/deliverygate",
+        "//server/services/fsops",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":auditkit",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "auditkit_test",
+    srcs = [
+        "golden_test.go",
+        "hidden_reply_audit_test.go",
+        "queue_boot_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":auditkit"],
+    deps = [
+        "//server/services/fsops/memfs",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
