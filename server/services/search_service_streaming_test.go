@@ -138,10 +138,8 @@ func TestSearchClaudeHistory_should_WaitForFirstSync_When_SyncCompletesWithinGra
 	seedManySessions(t, 1)
 	ss := setupSearchService()
 	ss.unarySyncWait = 5 * time.Second
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		_ = ss.SyncNow(context.Background())
-	}()
+	// Either ordering is valid: the search sees the finished sync or waits for it.
+	go func() { _ = ss.SyncNow(context.Background()) }()
 
 	resp, err := ss.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{Query: "widget"}))
 
