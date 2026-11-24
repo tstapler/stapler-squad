@@ -14,7 +14,7 @@ import (
 	"go.uber.org/goleak"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // stuckBurst equals the harness in-flight cap: the burst that used to exhaust it.
@@ -45,7 +45,7 @@ func requireHealthyCall(t *testing.T, c *websocket.Conn, id uint32) {
 }
 
 func TestUnaryWsBridge_should_FreeSlots_When_CtxIgnoringHandlersAreCanceled(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxInFlight(stuckBurst), WithUnaryZombieGrace(testGrace))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxInFlight(stuckBurst), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < stuckBurst; i++ {
@@ -66,7 +66,7 @@ func TestUnaryWsBridge_should_FreeSlots_When_CtxIgnoringHandlersAreCanceled(t *t
 }
 
 func TestUnaryWsBridge_should_ReplyDeadlineExceeded_And_FreeSlots_When_HandlerIgnoresCtx(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxInFlight(stuckBurst), WithUnaryZombieGrace(testGrace))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxInFlight(stuckBurst), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < stuckBurst; i++ {
@@ -86,7 +86,7 @@ func TestUnaryWsBridge_should_ReplyDeadlineExceeded_And_FreeSlots_When_HandlerIg
 }
 
 func TestUnaryWsBridge_should_CloseSocket_And_Recover_When_ZombieCapReached(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxInFlight(4), WithUnaryMaxZombies(2), WithUnaryZombieGrace(testGrace))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxInFlight(4), WithUnaryMaxZombies(2), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < 4; i++ {
@@ -113,17 +113,17 @@ func TestUnaryWsBridge_should_CloseSocket_And_Recover_When_ZombieCapReached(t *t
 }
 
 func TestUnaryWsBridge_should_RefuseUpgrade_When_SocketOrZombieLimitReached(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxSockets(1))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxSockets(1))
 	_ = h.connect(nil)
 	_, _, err := h.dial(nil)
 	require.Error(t, err)
-	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(services.ListenerLocal, "socket_limit"))
+	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(access.ListenerLocal, "socket_limit"))
 
-	h2 := newBridgeHarness(t, services.ListenerLocal)
+	h2 := newBridgeHarness(t, access.ListenerLocal)
 	h2.bridge.Metrics().zombieDelta(wsUnaryMaxZombiesTotal)
 	_, _, err = h2.dial(nil)
 	require.Error(t, err)
-	assert.EqualValues(t, 1, h2.bridge.Metrics().UpgradeDenied(services.ListenerLocal, "zombie_limit"))
+	assert.EqualValues(t, 1, h2.bridge.Metrics().UpgradeDenied(access.ListenerLocal, "zombie_limit"))
 	h2.bridge.Metrics().zombieDelta(-wsUnaryMaxZombiesTotal)
 }
 
@@ -137,7 +137,7 @@ func TestParseMaxInFlight_should_ClampAndDefault(t *testing.T) {
 
 func TestUnaryWsBridge_should_ReturnResourceExhausted_And_ReleaseBudget_When_BufferBudgetExceeded(t *testing.T) {
 	const budget = 1 << 20
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryBufferBudget(budget))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryBufferBudget(budget))
 	c := h.connect(nil)
 
 	sendRequest(t, c, 1, fileContentMethod, unaryRequestMeta{}, mustProto(t, &sessionv1.GetFileContentRequest{Path: strconv.Itoa(2 * budget)}))
@@ -152,7 +152,7 @@ func TestUnaryWsBridge_should_ReturnResourceExhausted_And_ReleaseBudget_When_Buf
 }
 
 func TestUnaryWsBridge_should_ReleaseBudget_When_ZombieHandlerReturns(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	key := startStuck(t, h, c, 1, unaryRequestMeta{TimeoutMs: 20})
 	assert.Equal(t, "deadline_exceeded", readFrame(t, c).Error.Code)
@@ -173,7 +173,7 @@ func TestUnarySession_should_NotAccountZombie_When_HandlerAlreadyFinished(t *tes
 // each returning zombie decrements the per-socket count.
 func TestUnarySession_should_DecrementZombieCount_When_AbandonedHandlerReturns(t *testing.T) {
 	b := &UnaryWsBridge{metrics: newUnaryMetrics(), maxZombies: 2, zombieGrace: time.Hour}
-	s := &unarySession{inflight: map[uint32]*inflightCall{}, b: b, listener: services.ListenerLocal,
+	s := &unarySession{inflight: map[uint32]*inflightCall{}, b: b, listener: access.ListenerLocal,
 		upgrade: httptest.NewRequest("GET", "/api/ws/unary", nil)}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	defer s.cancel()
@@ -194,7 +194,7 @@ func TestUnarySession_should_DecrementZombieCount_When_AbandonedHandlerReturns(t
 }
 
 func TestUnaryWsBridge_should_NotCountOrClose_When_CooperativeCallsAreCanceledInABurst(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxZombies(2), WithUnaryZombieGrace(5*time.Second))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxZombies(2), WithUnaryZombieGrace(5*time.Second))
 	c := h.connect(nil)
 	const n = 40
 	for i := 0; i < n; i++ {
@@ -215,7 +215,7 @@ func TestUnaryWsBridge_should_NotCountOrClose_When_CooperativeCallsAreCanceledIn
 }
 
 func TestUnaryWsBridge_should_AnswerOnce_When_CancelFollowsDeadline(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	key := startStuck(t, h, c, 1, unaryRequestMeta{TimeoutMs: 20})
 	f := readFrame(t, c)
@@ -231,7 +231,7 @@ func TestUnaryWsBridge_should_AnswerOnce_When_CancelFollowsDeadline(t *testing.T
 
 func TestUnaryWsBridge_should_NotLeakGoroutines_Over100StuckCancelCycles(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxZombies(1000), WithUnaryZombieGrace(testGrace))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxZombies(1000), WithUnaryZombieGrace(testGrace))
 	c := h.connect(nil)
 	var keys []string
 	for i := 0; i < 100; i++ {

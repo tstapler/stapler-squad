@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -81,7 +82,7 @@ func (s *SessionService) clearTerminalStatusOne(id string, liveProbe func(*insta
 		return res
 	}
 	// Same hidden/background-session guard RestartSession uses: a revival is a UI write.
-	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(inst, s.guards).Writer(nil); err != nil {
 		res.Outcome, res.Message = clearTerminalOutcomeReadOnly, "session is a background session and is read-only"
 		log.Info("audit: ClearTerminalStatusIfLive", "session", inst.Title, "uuid", inst.UUID, "outcome", res.Outcome)
 		return res

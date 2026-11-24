@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -95,7 +96,7 @@ func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target Answ
 	if !ok {
 		return notSent(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, replyStageLeaseBusy)
 	}
-	if !target.admits(AccessFor(inst)) {
+	if !target.admits(access.AccessFor(inst)) {
 		lease.Release()
 		o, stage := target.mismatchOutcome()
 		return notSent(o, stage)
@@ -113,7 +114,7 @@ func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target Answ
 // first step's frame check is the structural match.
 func (c *PaneReplyCore) sequenceChecks(target AnswerTarget, in sequenceInput, inst *instance.Instance) func() error {
 	return func() error {
-		if !target.admits(AccessFor(inst)) {
+		if !target.admits(access.AccessFor(inst)) {
 			out, stage := target.mismatchOutcome()
 			return &replyWriteError{out, stage}
 		}

@@ -1,4 +1,4 @@
-package services
+package access
 
 import (
 	"container/list"
@@ -397,9 +397,9 @@ func RenderTerminalInputText(rows []TerminalInputSession) string {
 	return b.String()
 }
 
-// newInputSourceFromContext builds a source for a Connect stream, whose listener comes
+// NewInputSourceFromContext builds a source for a Connect stream, whose listener comes
 // from the request record stamped on ctx (none: counted under "unknown").
-func newInputSourceFromContext(ctx context.Context, path InputPath, sessionID string) *InputSource {
+func NewInputSourceFromContext(ctx context.Context, path InputPath, sessionID string) *InputSource {
 	rec, _ := RequestRecordFrom(ctx)
 	return NewInputSource(path, rec.Listener, sessionID)
 }

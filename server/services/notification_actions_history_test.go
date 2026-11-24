@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // The same stored history page is served to both listeners; only the stamped
@@ -42,8 +43,8 @@ func TestGetNotificationHistory_ShouldMarkTierBDesktopOnlyOnRemoteAndAvailableOn
 		return acts[0]
 	}
 
-	local := serve(stampedContext(t, nil, ListenerLocal, false, "localhost:8543", nil))
-	remote := serve(stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil))
+	local := serve(StampedContext(t, nil, access.ListenerLocal, false, "localhost:8543", nil))
+	remote := serve(StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil))
 
 	assert.True(t, local.Available)
 	assert.False(t, remote.Available)

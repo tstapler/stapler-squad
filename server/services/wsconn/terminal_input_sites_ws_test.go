@@ -18,23 +18,23 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/tstapler/stapler-squad/server/protocol"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // inputRow returns the default tally's row for a session (zero row when absent).
-func inputRow(id string) services.TerminalInputSession {
-	for _, row := range services.TerminalInputReport() {
+func inputRow(id string) access.TerminalInputSession {
+	for _, row := range access.TerminalInputReport() {
 		if row.SessionID == id {
 			return row
 		}
 	}
-	return services.TerminalInputSession{}
+	return access.TerminalInputSession{}
 }
 
-func assertPathCounts(t *testing.T, id string, path services.InputPath, received, forwarded int64) {
+func assertPathCounts(t *testing.T, id string, path access.InputPath, received, forwarded int64) {
 	t.Helper()
-	assert.Equal(t, services.TerminalInputPathCounts{Received: received, Forwarded: forwarded}, inputRow(id).ByPath[path.String()])
+	assert.Equal(t, access.TerminalInputPathCounts{Received: received, Forwarded: forwarded}, inputRow(id).ByPath[path.String()])
 }
 
 func newSiteSessionID(prefix string) string { return prefix + "-" + uuid.NewString()[:8] }
@@ -47,12 +47,12 @@ func TestInputSites_ShouldRecordReceivedAndForwarded_When_PermittedWriterAtShare
 	inst := hiddenInstance(t, false)
 	p := inputReadLoopParams{
 		writer:    writerForHandler(t, &fakeTmuxSender{}, inst),
-		stream:    &connectWebSocketStream{listener: services.ListenerRemote},
+		stream:    &connectWebSocketStream{listener: access.ListenerRemote},
 		sessionID: id,
 		onInput:   func([]byte) bool { return true },
 	}
 	require.NoError(t, dispatchInputReadLoopFrame(p, inputFrame("ls\r")))
-	assertPathCounts(t, id, services.PathCM, 1, 1)
+	assertPathCounts(t, id, access.PathCM, 1, 1)
 }
 
 func TestInputSites_ShouldRecordReceivedWithoutForwarded_When_ReadOnlyOrCanSendCommandFalse(t *testing.T) {
@@ -62,13 +62,13 @@ func TestInputSites_ShouldRecordReceivedWithoutForwarded_When_ReadOnlyOrCanSendC
 		id := newSiteSessionID("site-cm-ro")
 		called := false
 		p := inputReadLoopParams{
-			stream:    &connectWebSocketStream{listener: services.ListenerRemote},
+			stream:    &connectWebSocketStream{listener: access.ListenerRemote},
 			sessionID: id,
 			onInput:   func([]byte) bool { called = true; return true },
 		}
 		require.NoError(t, dispatchInputReadLoopFrame(p, inputFrame("x")))
 		assert.False(t, called)
-		assertPathCounts(t, id, services.PathCM, 1, 0)
+		assertPathCounts(t, id, access.PathCM, 1, 0)
 		assert.EqualValues(t, map[string]int64{"text": 1}, inputRow(id).ByKind)
 	})
 	t.Run("writer attached but CanSendCommand false", func(t *testing.T) {
@@ -77,12 +77,12 @@ func TestInputSites_ShouldRecordReceivedWithoutForwarded_When_ReadOnlyOrCanSendC
 		inst := hiddenInstance(t, false)
 		p := inputReadLoopParams{
 			writer:    writerForHandler(t, &fakeTmuxSender{}, inst),
-			stream:    &connectWebSocketStream{listener: services.ListenerRemote},
+			stream:    &connectWebSocketStream{listener: access.ListenerRemote},
 			sessionID: id,
 			onInput:   func([]byte) bool { return false }, // what both closures return on denial
 		}
 		require.NoError(t, dispatchInputReadLoopFrame(p, inputFrame("x")))
-		assertPathCounts(t, id, services.PathCM, 1, 0)
+		assertPathCounts(t, id, access.PathCM, 1, 0)
 	})
 }
 
@@ -93,16 +93,16 @@ func TestInputSites_ShouldRecordReceivedAndForwarded_When_PermittedWriterAtCaptu
 	sender := &fakeTmuxSender{}
 	p := capturePaneParamsFor(inst, writerForHandler(t, sender, inst), false)
 	p.cpt.sessionID = id
-	p.stream = &connectWebSocketStream{listener: services.ListenerLocal}
+	p.stream = &connectWebSocketStream{listener: access.ListenerLocal}
 
 	handleCapturePaneInput(p, []byte("ls\r"))
-	assertPathCounts(t, id, services.PathCapture, 1, 1)
+	assertPathCounts(t, id, access.PathCapture, 1, 1)
 
 	denied := *p.snap
 	denied.Permissions.CanSendCommand = false
 	p.snap = &denied
 	handleCapturePaneInput(p, []byte("ls\r"))
-	assertPathCounts(t, id, services.PathCapture, 2, 1)
+	assertPathCounts(t, id, access.PathCapture, 2, 1)
 	inputs, _ := sender.counts()
 	assert.Equal(t, 1, inputs)
 }
@@ -113,9 +113,9 @@ func TestInputSites_ShouldRecordReceivedWithoutForwarded_When_HiddenSessionAtCap
 	inst := hiddenInstance(t, true)
 	p := capturePaneParamsFor(inst, writerForHandler(t, &fakeTmuxSender{}, inst), false)
 	p.cpt.sessionID = id
-	p.stream = &connectWebSocketStream{listener: services.ListenerLocal}
+	p.stream = &connectWebSocketStream{listener: access.ListenerLocal}
 	handleCapturePaneInput(p, []byte("x"))
-	assertPathCounts(t, id, services.PathCapture, 1, 0)
+	assertPathCounts(t, id, access.PathCapture, 1, 0)
 }
 
 func shellParamsFor(t *testing.T, id string, hidden, canSend bool) shellStreamParams {
@@ -124,7 +124,7 @@ func shellParamsFor(t *testing.T, id string, hidden, canSend bool) shellStreamPa
 	inst.Permissions.CanSendCommand = canSend
 	return shellStreamParams{
 		writer:               writerForHandler(t, &fakeTmuxSender{}, inst),
-		stream:               &connectWebSocketStream{listener: services.ListenerLocal},
+		stream:               &connectWebSocketStream{listener: access.ListenerLocal},
 		instance:             inst,
 		shellSess:            tmux.NewTmuxSessionFromExisting("obs-shell-missing"),
 		sessionID:            id,
@@ -138,18 +138,18 @@ func TestInputSites_ShouldRecordReceivedAndForwarded_When_PermittedWriterAtShell
 	t.Parallel()
 	id := newSiteSessionID("site-shell")
 	handleShellInput(shellParamsFor(t, id, false, true), []byte("ls\r"))
-	assertPathCounts(t, id, services.PathShell, 1, 1)
+	assertPathCounts(t, id, access.PathShell, 1, 1)
 }
 
 func TestInputSites_ShouldRecordReceivedWithoutForwarded_When_DeniedOrHiddenAtShellSite(t *testing.T) {
 	t.Parallel()
 	denied := newSiteSessionID("site-shell-deny")
 	handleShellInput(shellParamsFor(t, denied, false, false), []byte("x"))
-	assertPathCounts(t, denied, services.PathShell, 1, 0)
+	assertPathCounts(t, denied, access.PathShell, 1, 0)
 
 	hidden := newSiteSessionID("site-shell-ro")
 	handleShellInput(shellParamsFor(t, hidden, true, true), []byte("x"))
-	assertPathCounts(t, hidden, services.PathShell, 1, 0)
+	assertPathCounts(t, hidden, access.PathShell, 1, 0)
 }
 
 func inputEnvelope(t *testing.T, data string) []byte {
@@ -163,12 +163,12 @@ func inputEnvelope(t *testing.T, data string) []byte {
 func TestMuxInput_ShouldIncrementTally_When_TerminalMuxClientSendsInput(t *testing.T) {
 	t.Parallel()
 	id := newSiteSessionID("mux-tally")
-	served := make(chan *services.InputSource, 1)
+	served := make(chan *access.InputSource, 1)
 	serve := func(conn streamConn, _ string) {
 		stream := &connectWebSocketStream{conn: conn}
 		errChan := make(chan error, 1)
 		readOneInputFrame(inputReadLoopParams{stream: stream, errChan: errChan, sessionID: id, writer: writerForHandler(t, &fakeTmuxSender{}, hiddenInstance(t, false)), onInput: func([]byte) bool { return true }})
-		served <- stream.inputSource(services.PathCM, id)
+		served <- stream.inputSource(access.PathCM, id)
 	}
 	c, _ := newMuxTestClient(t, serve, 1)
 	c.send(encodeMuxEmpty(muxFrameOpen, 1))
@@ -176,11 +176,11 @@ func TestMuxInput_ShouldIncrementTally_When_TerminalMuxClientSendsInput(t *testi
 
 	select {
 	case src := <-served:
-		assert.Equal(t, services.ListenerLocal, src.ListenerName())
+		assert.Equal(t, access.ListenerLocal, src.ListenerName())
 	case <-time.After(muxTestWait):
 		t.Fatal("mux stream never served the input frame")
 	}
-	assertPathCounts(t, id, services.PathCM, 1, 1)
+	assertPathCounts(t, id, access.PathCM, 1, 1)
 	assert.EqualValues(t, 1, inputRow(id).Frames)
 }
 
@@ -188,18 +188,18 @@ func TestInputSites_ShouldRecordListenerRemote_When_MuxAndRemoteListenerPaths(t 
 	t.Parallel()
 	t.Run("mux socket on the remote listener", func(t *testing.T) {
 		t.Parallel()
-		sock := newMuxSocket(NewTerminalMuxBridge(echoServe, 1), nil, httptest.NewRequest(http.MethodGet, "/", nil), services.ListenerRemote)
+		sock := newMuxSocket(NewTerminalMuxBridge(echoServe, 1), nil, httptest.NewRequest(http.MethodGet, "/", nil), access.ListenerRemote)
 		stream := &connectWebSocketStream{conn: newMuxStreamConn(1, sock)}
-		assert.Equal(t, services.ListenerRemote, stream.inputSource(services.PathCM, "mux-remote").ListenerName())
+		assert.Equal(t, access.ListenerRemote, stream.inputSource(access.PathCM, "mux-remote").ListenerName())
 	})
 	t.Run("direct websocket on the remote listener", func(t *testing.T) {
 		t.Parallel()
 		var got string
-		h := services.WithRequestRecord(services.ListenerRemote, true)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = requestListener(r) }))
+		h := access.WithRequestRecord(access.ListenerRemote, true)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = requestListener(r) }))
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-		assert.Equal(t, services.ListenerRemote, got)
+		assert.Equal(t, access.ListenerRemote, got)
 		stream := &connectWebSocketStream{listener: got}
-		assert.Equal(t, services.ListenerRemote, stream.inputSource(services.PathCM, "ws-remote").ListenerName())
+		assert.Equal(t, access.ListenerRemote, stream.inputSource(access.PathCM, "ws-remote").ListenerName())
 	})
 }
 
@@ -208,7 +208,7 @@ func TestInputSites_ShouldExposeRegisteredCounters_When_MetricsGathered(t *testi
 	id := newSiteSessionID("site-gather")
 	p := inputReadLoopParams{
 		writer:    writerForHandler(t, &fakeTmuxSender{}, hiddenInstance(t, false)),
-		stream:    &connectWebSocketStream{listener: services.ListenerRemote},
+		stream:    &connectWebSocketStream{listener: access.ListenerRemote},
 		sessionID: id,
 		onInput:   func([]byte) bool { return true },
 	}

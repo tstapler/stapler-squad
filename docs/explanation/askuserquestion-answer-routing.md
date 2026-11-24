@@ -102,7 +102,7 @@ state is `aborted_partial`.
   `human_active` when browser input reached that pane in the last 5 s. This matters because
   an answer to a visible session can collide with a person typing; hidden sessions have no
   person. The signal is the last browser-originated pane input recorded in
-  `paneWriter.SendInput` (`server/services/human_activity.go`). A person who attaches with
+  `paneWriter.SendInput` (`server/services/access/human_activity.go`). A person who attaches with
   their own `tmux attach` or types through ssq-mux is not covered; ADR-004 lists that as a
   residual risk. Each refusal increments `human_active_refusal_total`.
 - **Tier B local only.** A keystroke is Tier B and is refused on the remote listener

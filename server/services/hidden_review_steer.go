@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -80,7 +81,7 @@ func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *in
 // steerRequestFacts are the per-request facts an audit line records, carried
 // to the writer through the context.
 type steerRequestFacts struct {
-	refusal   LocalWriteRefusal
+	refusal   access.LocalWriteRefusal
 	userAgent string
 }
 
@@ -107,11 +108,11 @@ type BacklogSteerWriter struct {
 	run  backlogSteerRunner
 }
 
-// BacklogSteerWriter returns the writer for link, or ErrReadOnly for a zero
+// newBacklogSteerWriter returns the writer for link, or ErrReadOnly for a zero
 // link (a link nobody resolved).
-func (a TerminalAccess) BacklogSteerWriter(link BacklogReviewLink, run backlogSteerRunner) (*BacklogSteerWriter, error) {
+func newBacklogSteerWriter(_ access.TerminalAccess, link BacklogReviewLink, run backlogSteerRunner) (*BacklogSteerWriter, error) {
 	if link.inst == nil || run == nil {
-		return nil, ErrReadOnly
+		return nil, access.ErrReadOnly
 	}
 	return &BacklogSteerWriter{link: link, run: run}, nil
 }

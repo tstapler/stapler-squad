@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -31,7 +32,7 @@ var guardsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 
 // guardsFlagController applies the persisted flag to the injected atomic the
 // unary handlers read.
-type guardsFlagController struct{ flag *UnaryGuardsFlag }
+type guardsFlagController struct{ flag *access.UnaryGuardsFlag }
 
 func (c guardsFlagController) Enable(context.Context) error { c.flag.SetEnabled(true); return nil }
 func (c guardsFlagController) Disable() error               { c.flag.SetEnabled(false); return nil }

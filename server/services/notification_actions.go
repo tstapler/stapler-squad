@@ -8,6 +8,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -21,14 +22,14 @@ import (
 type ListenerClass string
 
 const (
-	ListenerClassLocal  ListenerClass = ListenerLocal
-	ListenerClassRemote ListenerClass = ListenerRemote
+	ListenerClassLocal  ListenerClass = access.ListenerLocal
+	ListenerClassRemote ListenerClass = access.ListenerRemote
 )
 
 // ListenerClassFrom derives the class from the request record stamped by the
 // listener chain. A request nobody stamped is treated as remote (fail closed).
 func ListenerClassFrom(ctx context.Context) ListenerClass {
-	if rec, ok := RequestRecordFrom(ctx); ok && rec.Listener == ListenerLocal {
+	if rec, ok := access.RequestRecordFrom(ctx); ok && rec.Listener == access.ListenerLocal {
 		return ListenerClassLocal
 	}
 	return ListenerClassRemote

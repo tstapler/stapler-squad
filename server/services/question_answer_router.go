@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -71,7 +72,7 @@ type AnswerRouter struct {
 	ensure    func(ctx context.Context, key QuestionKey) bool
 	hidden    replyFunc
 	visible   func() *PaneReplyCore
-	guard     *HumanActiveGuard
+	guard     *access.HumanActiveGuard
 	flags     actionFlags
 	rows      answerRows
 	acks      deliverySink
@@ -82,7 +83,7 @@ func (r *AnswerRouter) RouteFor(sessionID string) (answerRoute, bool) {
 	s := r.sessions(sessionID)
 	switch s.phase {
 	case phaseLive:
-		if AccessFor(s.inst) == TerminalReadOnly {
+		if access.AccessFor(s.inst) == access.TerminalReadOnly {
 			return routeLiveKeystrokeHidden, true
 		}
 		return routeLiveKeystrokeVisible, true
@@ -158,7 +159,7 @@ func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in Qu
 	if digit == "" {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
 	}
-	visible := AccessFor(s.inst) == TerminalReadWrite
+	visible := access.AccessFor(s.inst) == access.TerminalReadWrite
 	if visible && r.guard != nil && r.guard.Active(ctx, s.inst) {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, detailHumanActive), nil
 	}
@@ -197,7 +198,7 @@ func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit
 // dispatcher already ran the local-caller verdict on the real peer; the core's
 // audit line records the in-process peer as the hidden path does.
 func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in QuestionAnswer, digit byte) (ActionResult, error) {
-	refusal, err := EvaluateLocalWrite(ctx, inProcessPeerAddr, LocalWriteLocalCaller)
+	refusal, err := access.EvaluateLocalWrite(ctx, inProcessPeerAddr, access.LocalWriteLocalCaller)
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}

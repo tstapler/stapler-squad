@@ -1,4 +1,4 @@
-package services
+package access
 
 import (
 	"context"
@@ -37,7 +37,7 @@ func (f *fakeTmuxSender) counts() (inputs, resizes int) {
 	return len(f.inputs), len(f.resizes)
 }
 
-func hiddenInstance(t *testing.T, hidden bool) *instance.Instance {
+func accessInstance(t *testing.T, hidden bool) *instance.Instance {
 	t.Helper()
 	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:   "access-" + t.Name(),
@@ -51,8 +51,8 @@ func hiddenInstance(t *testing.T, hidden bool) *instance.Instance {
 
 // T-RO-06
 func TestAccessFor_ShouldReturnReadOnlyForHiddenAndReadWriteForVisibleViaSnapshotOnly(t *testing.T) {
-	assert.Equal(t, TerminalReadOnly, AccessFor(hiddenInstance(t, true)))
-	assert.Equal(t, TerminalReadWrite, AccessFor(hiddenInstance(t, false)))
+	assert.Equal(t, TerminalReadOnly, AccessFor(accessInstance(t, true)))
+	assert.Equal(t, TerminalReadWrite, AccessFor(accessInstance(t, false)))
 	assert.Equal(t, TerminalReadOnly, AccessFor(nil), "a missing instance fails closed")
 	var zero TerminalAccess
 	assert.Equal(t, TerminalReadOnly, zero, "the zero value fails closed")

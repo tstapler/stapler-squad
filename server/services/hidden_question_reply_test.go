@@ -14,6 +14,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -140,8 +141,8 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	assert.Equal(t, e.qid, req.QuestionID)
 	assert.Equal(t, "r-1", req.ReplyID)
 	assert.Equal(t, e.inst.UUID, req.SessionUUID)
-	assert.Equal(t, ListenerLocal, req.Listener)
-	assert.Equal(t, AuthModeNone, req.AuthMode)
+	assert.Equal(t, access.ListenerLocal, req.Listener)
+	assert.Equal(t, access.AuthModeNone, req.AuthMode)
 	assert.Equal(t, "localhost:8543", req.Host)
 	assert.Empty(t, req.MessageSHA256, "a digit is brute-forceable: no hash")
 	assert.Empty(t, req.MessagePreview)
@@ -400,7 +401,7 @@ func TestReply_ShouldReturnPermissionDeniedAndCountRefused_WhenAuthModeNoneAndPe
 	}
 	// A loopback peer behind a proxy header is remote too.
 	e.fix.svc.replyPeerAddr = func(connect.AnyRequest) string { return replyLoopbackPeer }
-	ctx := e.requestCtx(ListenerLocal, false, "localhost:8543", map[string]string{"X-Forwarded-For": "203.0.113.9"})
+	ctx := e.requestCtx(access.ListenerLocal, false, "localhost:8543", map[string]string{"X-Forwarded-For": "203.0.113.9"})
 	_, err := e.fix.svc.ReplyToPendingQuestion(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: e.inst.UUID, QuestionId: e.qid, ReplyText: "1", ReplyId: "r-proxy",
 	}))
@@ -413,7 +414,7 @@ func TestReply_ShouldReturnPermissionDeniedAndCountRefused_WhenAuthModeNoneAndPe
 // T-RP-21: the guards flag has no effect on Reply in either state.
 func TestReply_ShouldIgnoreTheGuardsFlag_WhenItIsOffAndWhenOn(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.guards = &UnaryGuardsFlag{}
+	e.fix.svc.guards = &access.UnaryGuardsFlag{}
 	e.fix.svc.guards.SetEnabled(false)
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("1", "r-g-off").Outcome)
 }

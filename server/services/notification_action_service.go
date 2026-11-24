@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
@@ -347,7 +348,7 @@ func (d *NotificationActionDispatcher) tierGate(ctx context.Context, call Action
 		}
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, unavailableDesktopOnly), true
 	}
-	if _, err := EvaluateLocalWrite(ctx, call.Peer, LocalWriteLocalCaller); err != nil {
+	if _, err := access.EvaluateLocalWrite(ctx, call.Peer, access.LocalWriteLocalCaller); err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, "local caller required"), true
 	}
 	return ActionResult{}, false

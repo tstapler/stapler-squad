@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -26,7 +27,7 @@ type TerminalService struct {
 	poller       *session.ReviewQueuePoller
 	extDiscovery *external.ExternalSessionDiscovery
 	// guards is the live hidden_session_readonly_guards value; nil means on.
-	guards GuardsFlag
+	guards access.GuardsFlag
 	// nudges records user-originated writes as manual-nudge flow markers; nil is a no-op.
 	nudges NudgeRecorder
 }
@@ -49,7 +50,7 @@ func NewTerminalService() *TerminalService {
 }
 
 // SetGuardsFlag injects the live read-only guards flag.
-func (ts *TerminalService) SetGuardsFlag(f GuardsFlag) {
+func (ts *TerminalService) SetGuardsFlag(f access.GuardsFlag) {
 	ts.guards = f
 }
 
@@ -140,7 +141,7 @@ func (ts *TerminalService) WriteToSession(
 
 	// A hidden (background) session is read-only for UI input; the flag
 	// hidden_session_readonly_guards turns this off at runtime.
-	if _, err := AccessForUnary(inst, ts.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(inst, ts.guards).Writer(nil); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}

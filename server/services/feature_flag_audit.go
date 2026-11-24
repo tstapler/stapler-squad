@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 )
 
@@ -20,7 +21,7 @@ type flagAudit struct {
 
 func flagRequestFields(ctx context.Context, peer string, header http.Header) auditkit.AuditLine {
 	l := auditkit.AuditLine{PeerAddr: peer, UserAgent: header.Get("User-Agent")}
-	if rec, ok := RequestRecordFrom(ctx); ok {
+	if rec, ok := access.RequestRecordFrom(ctx); ok {
 		l.Listener, l.Host, l.Origin, l.AuthMode = rec.Listener, rec.Host, rec.Origin, rec.AuthMode
 	}
 	return l

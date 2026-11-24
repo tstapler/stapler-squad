@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -34,7 +35,7 @@ func tierFixture(ev flagEvidence) *dispatchFixture {
 
 func remoteCtx(t *testing.T) context.Context {
 	t.Helper()
-	return stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)
+	return StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 }
 
 // ADR-004 / S6 finding 3: the dispatcher itself refuses a live keystroke on the
@@ -100,8 +101,8 @@ func TestTierPolicy_ShouldRunLocalVerdict_WhenListenerLocalAndTierB(t *testing.T
 	assert.EqualValues(t, 1, f.questions.writes.Load())
 
 	// A local-listener request whose Host is not loopback is the rebinding case.
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	rebinding := stampedContext(t, &cfg, ListenerLocal, false, "evil.example:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	rebinding := StampedContext(t, &cfg, access.ListenerLocal, false, "evil.example:8543", nil)
 	g := tierFixture(flagEvidence{})
 	assert.Equal(t, outForbid, g.invoke(t, rebinding, answerReq("k2"), nil).Outcome)
 	assert.Zero(t, g.questions.writes.Load())

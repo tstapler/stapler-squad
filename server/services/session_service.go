@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
@@ -110,7 +111,7 @@ type SessionService struct {
 
 	// guards is the live hidden_session_readonly_guards value the unary handlers
 	// read through AccessForUnary; the zero value is "on".
-	guards *UnaryGuardsFlag
+	guards *access.UnaryGuardsFlag
 	// guardBypass counts and rate-limits the guards-off bypass writes.
 	guardBypass guardBypassState
 	// reply is the Reply machinery (pending questions, idempotency, limiters,
@@ -1019,7 +1020,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
 
-	svc.guards = &UnaryGuardsFlag{}
+	svc.guards = &access.UnaryGuardsFlag{}
 	svc.terminalSvc.SetGuardsFlag(svc.guards)
 	if concStorage != nil {
 		svc.terminalSvc.SetNudgeRecorder(concStorage)

@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -98,12 +99,12 @@ func (e *steerEnv) endRow(id string) {
 
 // requestCtx is the context the real server chain gives a handler.
 func (e *steerEnv) requestCtx(listener string, requiresAuth bool, host string, hdr map[string]string) context.Context {
-	cfg := verdictServiceConfig("0.0.0.0:8543", []string{"onyx.lan"})
-	return stampedContext(e.t, &cfg, listener, requiresAuth, host, hdr)
+	cfg := VerdictServiceConfig("0.0.0.0:8543", []string{"onyx.lan"})
+	return StampedContext(e.t, &cfg, listener, requiresAuth, host, hdr)
 }
 
 func (e *steerEnv) localCtx() context.Context {
-	return e.requestCtx(ListenerLocal, false, "localhost:8543", nil)
+	return e.requestCtx(access.ListenerLocal, false, "localhost:8543", nil)
 }
 
 func (e *steerEnv) steer(ctx context.Context, id, msg string) error {
@@ -187,9 +188,9 @@ func TestBacklogSteer_ShouldSucceedWithOneAuditPairAndMetric_WhenHiddenLiveLinke
 	assert.Equal(t, len(msg), req.MessageLen)
 	assert.Len(t, req.MessageSHA256, 64)
 	assert.Equal(t, msg, req.MessagePreview)
-	assert.Equal(t, ListenerLocal, req.Listener)
+	assert.Equal(t, access.ListenerLocal, req.Listener)
 	assert.Equal(t, "localhost:8543", req.Host)
-	assert.Equal(t, AuthModeNone, req.AuthMode)
+	assert.Equal(t, access.AuthModeNone, req.AuthMode)
 	require.NotNil(t, req.PeerLoopback)
 	require.NotNil(t, req.Proxied)
 }
@@ -330,9 +331,9 @@ func TestBacklogSteer_ShouldReturnPermissionDeniedWithZeroWritesOnHostRebindingO
 		name string
 		ctx  context.Context
 	}{
-		{"rebinding host", e.requestCtx(ListenerLocal, false, "evil.example:8543", nil)},
-		{"unverified lan host", e.requestCtx(ListenerLocal, false, "attacker.lan:8543", nil)},
-		{"foreign origin", e.requestCtx(ListenerLocal, false, "onyx.lan:8543", map[string]string{"Origin": "https://evil.example"})},
+		{"rebinding host", e.requestCtx(access.ListenerLocal, false, "evil.example:8543", nil)},
+		{"unverified lan host", e.requestCtx(access.ListenerLocal, false, "attacker.lan:8543", nil)},
+		{"foreign origin", e.requestCtx(access.ListenerLocal, false, "onyx.lan:8543", map[string]string{"Origin": "https://evil.example"})},
 	}
 	for _, c := range denied {
 		err := e.steer(c.ctx, review.inst.Title, "go")
@@ -342,8 +343,8 @@ func TestBacklogSteer_ShouldReturnPermissionDeniedWithZeroWritesOnHostRebindingO
 	assert.Empty(t, review.pm.writes())
 	assert.EqualValues(t, 3, e.count(steerOutcomeRefused))
 
-	require.NoError(t, e.steer(e.requestCtx(ListenerLocal, false, "onyx.lan:8543", nil), review.inst.Title, "from the lan"))
-	require.NoError(t, e.steer(e.requestCtx(ListenerRemote, true, "onyx.staplerhome.internal:8444", nil), review.inst.Title, "from the tailnet"))
+	require.NoError(t, e.steer(e.requestCtx(access.ListenerLocal, false, "onyx.lan:8543", nil), review.inst.Title, "from the lan"))
+	require.NoError(t, e.steer(e.requestCtx(access.ListenerRemote, true, "onyx.staplerhome.internal:8444", nil), review.inst.Title, "from the tailnet"))
 	assert.Len(t, review.pm.writes(), 4)
 
 	req := steerLines(e.auditLines(), auditkit.AuditKindBacklogSteer)[0]

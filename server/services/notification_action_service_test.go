@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -208,8 +209,8 @@ func answerReq(key string) *sessionv1.InvokeNotificationActionRequest {
 
 func localCtx(t *testing.T) context.Context {
 	t.Helper()
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	return stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	return StampedContext(t, &cfg, access.ListenerLocal, false, "localhost:8543", nil)
 }
 
 func TestInvokeNotificationAction_ShouldResolveOnce_WhenSameKeyAndPayloadRepeated(t *testing.T) {
@@ -279,7 +280,7 @@ func TestInvokeNotificationAction_ShouldReturnFlagOff_WhenActionScopeOffOrRemote
 
 	g := newDispatchFixture()
 	g.flags.off[scopeChannelRemote] = true
-	remote := stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)
+	remote := StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 	assert.Equal(t, outFlagOff, g.invoke(t, remote, approveReq("k1"), nil).Outcome)
 	assert.Zero(t, g.approvals.calls.Load())
 }
@@ -520,7 +521,7 @@ func TestInvokeNotificationAction_ShouldPassConfirmToTheAnswerRouter_WhenRetryAn
 
 func TestInvokeNotificationAction_ShouldStoreAnswerRemotely_WhenRouteIsDurableRecord(t *testing.T) {
 	t.Parallel()
-	remote := stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)
+	remote := StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 
 	stored := newDispatchFixture()
 	stored.questions.route = routeDurableRecord
