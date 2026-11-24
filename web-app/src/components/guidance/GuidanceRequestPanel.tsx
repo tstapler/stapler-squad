@@ -95,6 +95,31 @@ export function GuidanceRequestPanel({ scope, scopeKey, title = "Guidance reques
   );
 }
 
+const EXPAND_THRESHOLD = 300; // chars; jsdom has no layout, so length (not scrollHeight) decides
+
+/** Session-local expand state; resets on reload by design (not persisted). */
+function useExpandable(text: string) {
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((v) => !v), []);
+  return { isLong: text.length > EXPAND_THRESHOLD, expanded, toggle };
+}
+
+function ExpandToggle({ expanded, onToggle, subject, testId }: { expanded: boolean; onToggle: () => void; subject: string; testId: string }) {
+  return (
+    // analytics-exempt
+    <button
+      type="button"
+      className={styles.expandToggle}
+      aria-expanded={expanded}
+      aria-label={`${expanded ? "Show less" : "Show more"} ${subject} text`}
+      data-testid={testId}
+      onClick={onToggle}
+    >
+      {expanded ? "Show less" : "Show more"}
+    </button>
+  );
+}
+
 function GuidanceRequestItem({
   request,
   busy,
@@ -106,6 +131,10 @@ function GuidanceRequestItem({
 }) {
   const isPending = request.status === "pending";
   const ownerAction = isOwnerActionRequest(request);
+  const questionStr = ownerActionQuestion(request);
+  const answerStr = request.answer ?? "";
+  const q = useExpandable(questionStr);
+  const a = useExpandable(answerStr);
   if ((request.questions?.length ?? 0) > 0) return <StructuredRequestItem request={request} busy={busy} onSubmit={onSubmit} />;
   return (
     <li
@@ -119,12 +148,22 @@ function GuidanceRequestItem({
         >
           {isPending ? (ownerAction ? "Waiting for your decision" : "Pending") : "Answered"}
         </span>
-        <p className={styles.questionText}>{ownerActionQuestion(request)}</p>
+        <div className={styles.questionWrapper}>
+          <p className={q.expanded ? styles.questionExpanded : styles.questionClamped} data-testid="guidance-question-text">
+            {questionStr}
+          </p>
+          {q.isLong && <ExpandToggle expanded={q.expanded} onToggle={q.toggle} subject="question" testId="guidance-question-toggle" />}
+        </div>
       </div>
       {isPending ? (
         <LegacyAnswerForm request={request} busy={busy} onSubmit={onSubmit} />
       ) : (
-        <p className={styles.answerText}>Answer: {request.answer}</p>
+        <>
+          <p className={a.expanded ? styles.answerExpanded : styles.answerClamped} data-testid="guidance-answer-text">
+            Answer: {answerStr}
+          </p>
+          {a.isLong && <ExpandToggle expanded={a.expanded} onToggle={a.toggle} subject="answer" testId="guidance-answer-toggle" />}
+        </>
       )}
     </li>
   );
