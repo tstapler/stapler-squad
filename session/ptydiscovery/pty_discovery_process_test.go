@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,7 +80,13 @@ func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 	if err != nil {
 		t.Skip("sleep not on PATH")
 	}
-	dir := t.TempDir()
+	// ps truncates "command" to the terminal width when COLUMNS is set, and Bazel's
+	// TEST_TMPDIR is long enough to cut the basename off, so keep the path short.
+	dir, err := os.MkdirTemp("/tmp", "pd")
+	if err != nil {
+		t.Skipf("cannot create short temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	start := func(name string) int {
 		link := filepath.Join(dir, name)
 		if err := os.Symlink(sleepBin, link); err != nil {
@@ -99,7 +107,12 @@ func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 	upperPID := start("CLAUDE")
 	wrapperPID := start("claude-code")
 
-	got := batchIsClaudeProcess([]int{claudePID, mixedPID, upperPID, wrapperPID})
+	pids := []int{claudePID, mixedPID, upperPID, wrapperPID}
+	got := batchIsClaudeProcess(pids)
+	if t.Failed() || !got[claudePID] {
+		raw, _ := safeexec.CommandContext(context.Background(), "ps", "-p", joinPIDs(pids), "-o", "pid=,command=").CombinedOutput()
+		t.Logf("batchIsClaudeProcess=%v; raw ps output:\n%s", got, raw)
+	}
 	for _, pid := range []int{claudePID, mixedPID, upperPID} {
 		if !got[pid] {
 			t.Errorf("pid %d running a claude-named binary (any case) should be detected", pid)
@@ -108,4 +121,12 @@ func TestBatchIsClaudeProcess_MatchesBasenameExactly(t *testing.T) {
 	if got[wrapperPID] {
 		t.Errorf("pid %d running claude-code must not match (exact basename)", wrapperPID)
 	}
+}
+
+func joinPIDs(pids []int) string {
+	parts := make([]string, len(pids))
+	for i, p := range pids {
+		parts[i] = strconv.Itoa(p)
+	}
+	return strings.Join(parts, ",")
 }
