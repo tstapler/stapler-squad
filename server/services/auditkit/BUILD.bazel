@@ -24,6 +24,7 @@ go_test(
         "golden_test.go",
         "hidden_reply_audit_test.go",
         "queue_boot_test.go",
+        "rotate_boundary_test.go",
     ],
     data = glob(["testdata/**"]),
     embed = [":auditkit"],

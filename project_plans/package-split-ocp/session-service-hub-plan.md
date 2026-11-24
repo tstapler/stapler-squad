@@ -216,7 +216,7 @@ The per-file assignment is [session-service-hub-assignment.csv](session-service-
 | | `secretscan` | 107 | `secret_scanner`, `redaction_sentinels` (the sentinels moved in from `ai_interfaces.go`, #1798) |
 | | `credkit` | 589 | `credentials`, `provider_limits` |
 | | `access` | 1,128 | `terminal_access`, `human_activity`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, `tmux_input_send`, `external_pane_resize`, plus the symbols in 3.3.2 |
-| | `auditkit` | 468 | `hidden_reply_audit` (imports `fsops`; the `AuditKind*`, `AuditPhase*`, `AuditMode*`, `FlagOutcome*` values, `AuditFileName`, `AuditQueueSize` and `Fallback` are exported because the staying callers cross the package boundary; the audit-focused tests of the sink moved with it, the flag-flip tests stay in `feature_flag_audit_test.go`) |
+| | `auditkit` | 468 | `hidden_reply_audit` (imports `fsops`; `AuditKind*`, `AuditPhase*`, `FlagOutcome*` and `Fallback` are exported because the staying callers cross the package boundary, and `AuditFileName`, `AuditQueueSize`, `AuditModeQueued` and `AuditModeFallbackLog` only because the staying tests read them; the audit-focused tests of the sink moved with it, the flag-flip tests stay in `feature_flag_audit_test.go`) |
 | | `approvalkit` | 460 | `approval_store` |
 | | `flagsvc` | 1,695 | `feature_flag_*`, `feature_flags_*` (imports `auditkit`, `access`) |
 | | `questionkit` | 1,716 | `pending_question_store`, `askuserquestion_parser`, `question_delivery_track`, `answer_listener`, `guidance_request_hook_mirror`, `guidance_request_mirror_proto`, `guidance_dialog_*`, `notification_quality_metrics`, `reply_idempotency` (imports `flagsvc`, `secretscan`) |

@@ -53,7 +53,7 @@ const (
 const (
 	AuditModeQueued      = "flag_change_queued"
 	AuditModeFallbackLog = "flag_change_fallback_log"
-	AuditModeSteerLog    = "steer_fallback_log"
+	auditModeSteerLog    = "steer_fallback_log"
 )
 
 // Outcomes of a flag flip, recorded on the result line.
@@ -427,7 +427,7 @@ func (s *AuditSink) drainOne(l AuditLine) {
 func (s *AuditSink) Fallback(l AuditLine, cause error) {
 	bootID, bootSeq := s.bootID, s.bootSeqString()
 	if l.Kind == AuditKindBacklogSteer || l.Kind == AuditKindGuardBypass {
-		s.degraded(AuditModeSteerLog)
+		s.degraded(auditModeSteerLog)
 		s.logger.Warn("steer_audit_degraded",
 			"cause", cause.Error(), "kind", l.Kind, "phase", l.Phase, "change_id", l.ChangeID, "outcome", l.Outcome,
 			"session_uuid", l.SessionUUID, "session_title", l.SessionTitle, "item_id", l.ItemID,

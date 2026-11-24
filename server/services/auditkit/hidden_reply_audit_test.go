@@ -112,7 +112,7 @@ func TestAuditSink_ShouldRotateAt5MiBKeepingThreeFilesAndRefuseWithZeroWrites_Wh
 	for i := 0; i < 8; i++ {
 		require.NoError(t, s.Append(big))
 	}
-	assert.Len(t, mfs.Names(testAuditFile), auditFilesKept, "live file plus two rotated")
+	assert.Len(t, mfs.Names(testAuditFile), 3, "live file plus two rotated")
 
 	before, _ := mfs.Get(testAuditFile)
 	mfs.FailRename = errDiskFull
@@ -142,7 +142,7 @@ func TestAuditSink_ShouldShiftRotatedFilesOldestFirst_WhenLiveFileIsFull(t *test
 	assert.Len(t, one, auditRotateBytes-10, "the full live file becomes .1")
 	assert.Equal(t, "one", string(two), "the old .1 becomes .2 and the old .2 is overwritten")
 	assert.Len(t, readLines(t, mfs), 1, "the new live file holds only the new line")
-	assert.Len(t, mfs.Names(live), auditFilesKept)
+	assert.Len(t, mfs.Names(live), 3)
 }
 
 func TestAuditSink_ShouldKeepAppendingToLiveFile_WhenItFitsUnderTheRotateBound(t *testing.T) {
@@ -272,7 +272,7 @@ func TestAuditSink_ShouldPinWireLiterals_WhenKindsPhasesAndOutcomesAreWritten(t 
 		"notification_action": AuditKindNotificationAction, "requested": AuditPhaseRequest, "result": AuditPhaseResult,
 		"applied": FlagOutcomeApplied, "aborted_persist_failed": FlagOutcomePersistFailed,
 		"aborted_controller_failed": FlagOutcomeControllerFailed, "aborted_rolled_back": FlagOutcomeRolledBack,
-		"flag_change_queued": AuditModeQueued, "flag_change_fallback_log": AuditModeFallbackLog, "steer_fallback_log": AuditModeSteerLog,
+		"flag_change_queued": AuditModeQueued, "flag_change_fallback_log": AuditModeFallbackLog, "steer_fallback_log": auditModeSteerLog,
 	}
 	for want, have := range got {
 		if want == "file" {
@@ -365,7 +365,7 @@ func TestAuditSink_ShouldFallBackToLogWithSteerFieldsOrFlagFields_WhenSinkIsClos
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, []string{AuditModeSteerLog, AuditModeSteerLog, AuditModeFallbackLog, AuditModeFallbackLog}, modes)
+	assert.Equal(t, []string{auditModeSteerLog, auditModeSteerLog, AuditModeFallbackLog, AuditModeFallbackLog}, modes)
 	require.Len(t, lg.recs, 4)
 	assert.Contains(t, lg.recs[0], "WARN steer_audit_degraded cause=sink closed kind=backlog_steer")
 	assert.Contains(t, lg.recs[0], "session_uuid=su")
