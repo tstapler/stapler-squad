@@ -492,9 +492,23 @@ type fakeProber struct {
 	// enough is closed once five probes ran while a build was in flight
 	enough chan struct{}
 	busyN  int
+	// started, when set, makes every probe after the first idleN wait for a build to be in flight, so the
+	// loaded sample set holds only load readings regardless of goroutine scheduling.
+	started chan struct{}
+	idleN   int
 }
 
 func (p *fakeProber) Probe() (time.Duration, error) {
+	p.mu.Lock()
+	n := p.n + 1
+	p.mu.Unlock()
+	if p.started != nil && n > p.idleN {
+		select {
+		case <-p.started:
+		case <-time.After(30 * time.Second):
+			return 0, fmt.Errorf("no build started")
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.n++
@@ -509,24 +523,27 @@ func (p *fakeProber) Probe() (time.Duration, error) {
 
 func queuedRun(t *testing.T, idle, load time.Duration) *Report {
 	t.Helper()
+	const idleSamples = 100
 	var running int32
 	var mu sync.Mutex
-	enough := make(chan struct{})
+	enough, started := make(chan struct{}), make(chan struct{})
 	fx := bazelFake(t, map[string]string{"root": t.TempDir()}, nil)
 	inner := fx.fn
 	fx.fn = func(c Cmd) Out {
 		if len(c.Args) > 0 && c.Args[0] == "build" {
 			mu.Lock()
-			running++
+			if running++; running == 1 {
+				close(started)
+			}
 			mu.Unlock()
 			<-enough
 		}
 		return inner(c)
 	}
 	host := quietHost()
-	p := &fakeProber{enough: enough, idle: idle, load: load, busy: func() bool { mu.Lock(); defer mu.Unlock(); return running > 0 }}
+	p := &fakeProber{enough: enough, started: started, idleN: idleSamples, idle: idle, load: load, busy: func() bool { mu.Lock(); defer mu.Unlock(); return running > 0 }}
 	h := newHarness(t, fx, host)
-	return Queued(h, QueuedOpts{Target: "//:t", Invocations: 8, Worktrees: 4, IdleSamples: 100, Gap: time.Millisecond, Prober: p})
+	return Queued(h, QueuedOpts{Target: "//:t", Invocations: 8, Worktrees: 4, IdleSamples: idleSamples, Gap: time.Millisecond, Prober: p})
 }
 
 func TestQueuedStreamRatioAndUnevaluatedRSS(t *testing.T) {
