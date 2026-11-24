@@ -25,12 +25,15 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
@@ -39,11 +42,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -90,7 +96,7 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
-	federation        *FederatedSessions // nil unless host gossip is running
+	federation        *federation.FederatedSessions // nil unless host gossip is running
 
 	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
 	prRefs prRefsSeams
@@ -146,10 +152,10 @@ type SessionService struct {
 	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
 	// claude binary found) — every AddInstance/RemoveInstance call site below
 	// guards for nil the same way reviewQueuePoller does.
-	sessionTagPoller *session.SessionTagClassificationPoller
+	sessionTagPoller *tagpoller.SessionTagClassificationPoller
 
 	// concStorage is the concrete backing store, used for operations (like
-	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
+	// GetItemSessionBySessionUUID) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
 
@@ -201,7 +207,7 @@ type SessionService struct {
 	taggingEngine *classifier.TaggingEngine
 
 	// External session discovery (for mux-enabled sessions from external terminals)
-	externalDiscovery *session.ExternalSessionDiscovery
+	externalDiscovery *external.ExternalSessionDiscovery
 
 	// historyLinker tracks JSONL conversation files per session.
 	// Must be kept in sync with deletions so the shutdown hook does not
@@ -223,7 +229,7 @@ type SessionService struct {
 	// name (main sessions and shell siblings alike). Wired in so StopShell can
 	// evict a shell's streamer on close instead of letting a stale/degraded one
 	// persist across shell restarts.
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager
 
 	// userPRCache supplies enterprise hosts from dynamically-added GitHub
 	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL
@@ -260,7 +266,7 @@ type SessionService struct {
 	// swaps that for the process-wide instance once dependencies.go builds it,
 	// so this chain never resolves the Jules OS-keychain entry through a
 	// second, independent cache/circuit-breaker.
-	credChain *CredentialChain
+	credChain *credkit.CredentialChain
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
@@ -338,7 +344,7 @@ type SessionService struct {
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
-	memoryCacheReader session.MemoryCacheReader
+	memoryCacheReader sweeper.MemoryCacheReader
 
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
@@ -365,7 +371,7 @@ type SessionService struct {
 
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
-	registry *session.Registry
+	registry *registry.Registry
 
 	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
 	// goroutines so Shutdown can await them instead of letting them outlive the
@@ -927,7 +933,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(directCfg)
+	credChain := credkit.NewDefaultChain(directCfg)
 
 	var capRoleResolver SessionRoleResolver
 	var capTerminator SessionTerminator
@@ -1339,4 +1345,4 @@ func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host strin
 }
 
 // Federation returns the federated-sessions view, nil unless host gossip is running.
-func (s *SessionService) Federation() *FederatedSessions { return s.federation }
+func (s *SessionService) Federation() *federation.FederatedSessions { return s.federation }

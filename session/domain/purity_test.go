@@ -37,9 +37,12 @@ func TestDomainImportsNoOtherModulePackage(t *testing.T) {
 func TestSentinelMessagesStable(t *testing.T) {
 	t.Parallel()
 	for err, want := range map[error]string{
-		ErrNotFound:           "not found",
-		ErrConflict:           "conflict",
-		ErrPreconditionFailed: "precondition failed: concurrent modification detected",
+		ErrNotFound:             "not found",
+		ErrConflict:             "conflict",
+		ErrPreconditionFailed:   "precondition failed: concurrent modification detected",
+		ErrAnswererForbidden:    "answerer is not permitted to answer this request",
+		ErrCreationAwaitTimeout: "timed out waiting for session creation to reach a terminal status",
+		ErrCreationVanished:     "session creation was cancelled while waiting for it to complete",
 	} {
 		if err.Error() != want {
 			t.Errorf("got %q, want %q", err.Error(), want)

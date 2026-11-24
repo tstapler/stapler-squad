@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -95,6 +96,24 @@ func checkModule(root string, data map[string]map[string]bool) ([]string, error)
 			out = append(out, fmt.Sprintf("%s: not in %s/BUILD.bazel go_test %s data", aggregatorLabel, s, scannerTests[s]))
 		}
 	}
+	consumers, err := aggregatorConsumers(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, pkg := range consumers {
+		if msg := visibleTo(vis, pkg); msg != "" {
+			out = append(out, fmt.Sprintf("%s: %s %s //%s", aggregatorLabel, aggregatorName, msg, pkg))
+		}
+	}
+	wanted := map[string]bool{}
+	for _, dir := range dirs {
+		wanted[labelFor(dir)] = true
+	}
+	for label := range listed {
+		if !wanted[label] {
+			out = append(out, fmt.Sprintf("%s: stale entry in %s srcs (no such package with Go files)", label, aggregatorLabel))
+		}
+	}
 	for _, dir := range dirs {
 		out = append(out, checkModuleDir(root, dir, listed)...)
 	}
@@ -136,9 +155,53 @@ filegroup(
 
 var aggregatorRe = regexp.MustCompile(`(?ms)^filegroup\(\n    name = "` + aggregatorName + `",.*?^\)\n`)
 
+var aggregatorRefRe = regexp.MustCompile(`"` + aggregatorLabel + `"`)
+
+// aggregatorConsumers lists the packages outside the scanners and the aggregator
+// itself whose BUILD.bazel names the aggregator label, sorted.
+func aggregatorConsumers(root string) ([]string, error) {
+	builds, err := buildFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, pkg := range builds {
+		if isScanner(pkg) {
+			continue
+		}
+		b, rerr := os.ReadFile(filepath.Join(root, pkg, "BUILD.bazel"))
+		if rerr != nil {
+			return nil, rerr
+		}
+		if aggregatorRefRe.MatchString(stripComments(string(b))) {
+			out = append(out, pkg)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// aggregatorVisibility is the scanners plus every package that references the
+// aggregator, as "//pkg:__pkg__" specs in sorted order.
+func aggregatorVisibility(root string) ([]string, error) {
+	consumers, err := aggregatorConsumers(root)
+	if err != nil {
+		return nil, err
+	}
+	var vis []string
+	for _, pkg := range append(append([]string{}, scanners...), consumers...) {
+		vis = append(vis, "//"+pkg+":__pkg__")
+	}
+	sort.Strings(vis)
+	return vis, nil
+}
+
 // fix appends the missing go_sources filegroups and rewrites the aggregator.
 // It does not touch an existing group's visibility; check reports that.
 func fix(root string) error {
+	if err := fixSessionLeaves(root); err != nil {
+		return err
+	}
 	dirs, err := moduleDirs(root)
 	if err != nil {
 		return err
@@ -148,7 +211,11 @@ func fix(root string) error {
 			return err
 		}
 	}
-	return writeAggregator(filepath.Join(root, aggregatorDir, "BUILD.bazel"), dirs)
+	vis, err := aggregatorVisibility(root)
+	if err != nil {
+		return err
+	}
+	return writeAggregator(filepath.Join(root, aggregatorDir, "BUILD.bazel"), dirs, vis)
 }
 
 func appendLeafGroup(buildPath string) error {
@@ -163,13 +230,17 @@ func appendLeafGroup(buildPath string) error {
 	return os.WriteFile(buildPath, []byte(text+"\n"+leafGroup), 0o644)
 }
 
-func writeAggregator(p string, dirs []string) error {
+func writeAggregator(p string, dirs, vis []string) error {
 	var srcs strings.Builder
 	for _, dir := range dirs {
 		fmt.Fprintf(&srcs, "        %q,\n", labelFor(dir))
 	}
+	var visList strings.Builder
+	for _, v := range vis {
+		fmt.Fprintf(&visList, "        %q,\n", v)
+	}
 	block := "filegroup(\n    name = \"" + aggregatorName + "\",\n    srcs = [\n" + srcs.String() +
-		"    ],\n    visibility = [\n        \"//server/services:__pkg__\",\n        \"//session:__pkg__\",\n    ],\n)\n"
+		"    ],\n    visibility = [\n" + visList.String() + "    ],\n)\n"
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return err

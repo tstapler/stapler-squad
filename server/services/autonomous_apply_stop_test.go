@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -37,7 +37,7 @@ func TestApplyInstanceStop_WireOutcomeSetClosed(t *testing.T) {
 				t.Parallel()
 				svc, inst, _, ch := newApplyStopFixture(t)
 
-				require.NoError(t, svc.applyInstanceStop(inst, action, session.AutonomousDriverOutcome{StopReason: reason}))
+				require.NoError(t, svc.applyInstanceStop(inst, action, autonomous.AutonomousDriverOutcome{StopReason: reason}))
 
 				var ev *events.Event
 				select {
@@ -64,7 +64,7 @@ func TestApplyInstanceStop_WriteFailed_NoEventAndWarns(t *testing.T) {
 	li.Stop() // actor ctx done: the instance is going away
 	buf := svctest.CaptureLogs(t)
 
-	err := svc.applyInstanceStop(inst, domain.StallActionNone, session.AutonomousDriverOutcome{StopReason: domain.StopReasonOrchestratorError})
+	err := svc.applyInstanceStop(inst, domain.StallActionNone, autonomous.AutonomousDriverOutcome{StopReason: domain.StopReasonOrchestratorError})
 
 	require.ErrorIs(t, err, context.Canceled)
 	select {

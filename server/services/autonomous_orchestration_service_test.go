@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -102,7 +103,7 @@ func TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister(t *
 		UUID:  "reg-uuid-5678",
 	}
 	pool := &instantDonePool{}
-	driver := session.NewAutonomousDriver(inst, pool, "fix it", 1)
+	driver := autonomous.NewAutonomousDriver(inst, pool, "fix it", 1)
 
 	// Register the driver without starting it (Start() would require a controller).
 	svc.AutonomousSvc.registerDriver("reg-test", driver)
@@ -131,7 +132,7 @@ func TestAutonomousOrchestrationService_DeleteSession_StopsRegisteredDriver(t *t
 		UUID:  title + "-uuid-1234",
 	}
 	pool := &instantDonePool{}
-	driver := session.NewAutonomousDriver(inst, pool, "fix it", 1)
+	driver := autonomous.NewAutonomousDriver(inst, pool, "fix it", 1)
 	svc.AutonomousSvc.registerDriver(title, driver)
 
 	req := connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: title})
@@ -159,12 +160,12 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DeregistersDr
 		UUID:  title + "-uuid-9999",
 	}
 	pool := &instantDonePool{}
-	driver := session.NewAutonomousDriver(inst, pool, "fix it", 1)
+	driver := autonomous.NewAutonomousDriver(inst, pool, "fix it", 1)
 	svc.AutonomousSvc.registerDriver(title, driver)
 
 	// Fire the completion callback (simulates driver goroutine finishing).
 	// instanceFinder returns nil here — expected when the session exited before callback fires.
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	// The driver must have been removed from the registry.
@@ -219,7 +220,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	// onAutonomousDriverComplete also publishes a session.updated event before the
@@ -284,7 +285,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	})
 	require.NoError(t, err)
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -333,7 +334,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	})
 	require.NoError(t, err)
 
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 5}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 5}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -396,7 +397,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 
 	// Simulate the orchestrator's premature DONE verdict — the exact signal that forced
 	// the live bug's in_progress→review transition.
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "looks complete from the terminal tail", Turns: 1}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "looks complete from the terminal tail", Turns: 1}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
@@ -431,7 +432,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
 	buf := svctest.CaptureLogs(t)
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+	svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
 
 	assert.Contains(t, buf.String(), "no linked backlog item session")
 	assert.NotContains(t, buf.String(), "level=WARN", "the expected not-linked case must not escalate to Warn")
@@ -482,7 +483,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	}
 
 	buf := svctest.CaptureLogs(t)
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+	svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
 
 	assert.Contains(t, buf.String(), "failed to load linked backlog item")
 	assert.Contains(t, buf.String(), "level=WARN", "a genuine lookup failure must be diagnosable, not silent")
@@ -529,7 +530,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
+	svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1})
 
 	assert.Contains(t, buf.String(), "unrecognized session role")
 	assert.Contains(t, buf.String(), "level=WARN", "an unrecognized role must be diagnosable, not silent")
@@ -606,7 +607,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	require.Len(t, open, 1, "precondition: the stuck row must be open before the success run")
 
 	// The item resumes and this time the work driver actually finishes.
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 3}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "task complete", Turns: 3}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err = storage.FindOpenStuckStates(ctx)
@@ -663,7 +664,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	require.NoError(t, err)
 	require.Len(t, open, 1, "precondition: the stuck row must be open before the success run")
 
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "review complete", Turns: 2}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "review complete", Turns: 2}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err = storage.FindOpenStuckStates(ctx)
@@ -713,7 +714,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	})
 	require.NoError(t, err)
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -768,7 +769,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	})
 	require.NoError(t, err)
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -827,7 +828,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	require.NoError(t, err)
 	require.Nil(t, is.EndedAt, "precondition: the review ItemSession is still active (autonomous driver never ended it)")
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	// The autonomous_stuck row must survive — the item is genuinely still stuck.
@@ -889,7 +890,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 5, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 5, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	var notif *events.Event
@@ -944,7 +945,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	// The session.updated badge event still fires (unrelated to the Hidden gate); only the
@@ -1005,7 +1006,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	outcome := session.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
+	outcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "test done", Turns: 1}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	var notif *events.Event
@@ -1178,7 +1179,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	outcome := session.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
+	outcome := autonomous.AutonomousDriverOutcome{Done: false, Reason: "no DONE signal", Turns: 20, Stuck: true}
 	svc.AutonomousSvc.OnAutonomousDriverComplete(title, outcome)
 
 	var notif *events.Event
@@ -1207,12 +1208,12 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 // Task 1.5.6a: the only status write a completed driver run makes is the
 // triage-role idea->ready; the work and review roles perform none.
 func TestOnAutonomousDriverComplete_should_WriteExactlyOneStatusOnlyForTriageDone(t *testing.T) {
-	doneOutcome := session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}
+	doneOutcome := autonomous.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3}
 	cases := []struct {
 		name       string
 		role       string
 		start      domain.BacklogStatus
-		outcome    session.AutonomousDriverOutcome
+		outcome    autonomous.AutonomousDriverOutcome
 		wantStatus domain.BacklogStatus
 		wantWrites int
 	}{

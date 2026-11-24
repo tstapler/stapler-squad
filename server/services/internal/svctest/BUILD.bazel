@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "svctest",
@@ -37,6 +38,7 @@ go_library(
         "tmuxreap_unix.go",
         "tmuxreap_windows.go",
         "utility_service.go",
+        "webhook_infra.go",
         "workspace_service.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/server/services/internal/svctest",
@@ -50,16 +52,20 @@ go_library(
         "//log",
         "//proto/session/v1:sessionv1_go",
         "//server/events",
+        "//server/workflows",
         "//session",
         "//session/domain",
         "//session/domain/backlogdto",
+        "//session/driver",
         "//session/headless",
         "//session/hostclaim",
         "//session/instance",
         "//session/queue",
+        "//session/stagecfg",
         "//session/tmux",
         "//session/tokens",
         "//testutil/wait",
+        "//tools/bzl/ent",
         "@com_connectrpc_connect//:connect",
         "@com_github_go_git_go_git_v5//:go-git",
         "@com_github_go_git_go_git_v5//config",
@@ -127,4 +133,16 @@ filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = ["//tools/bzl/scandata:__pkg__"],
+)
+
+go_test(
+    name = "svctest_test",
+    srcs = ["driver_leak_test.go"],
+    embed = [":svctest"],
+    deps = [
+        "//session/domain",
+        "//session/driver",
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
+    ],
 )

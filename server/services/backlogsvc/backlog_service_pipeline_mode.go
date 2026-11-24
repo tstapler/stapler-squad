@@ -18,7 +18,7 @@ package backlogsvc
 //
 // Story 2.3.1 (structural validation of content-template fields — slug
 // format, shell-metacharacter blocklist, and placeholder allow-list) is
-// enforced by session.ValidatePipelineModeContent, called from both
+// enforced by pipelinemode.ValidatePipelineModeContent, called from both
 // CreatePipelineMode and UpdatePipelineMode before any repository write.
 
 import (
@@ -32,10 +32,10 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
@@ -176,7 +176,7 @@ func (s *BacklogService) CreatePipelineMode(
 
 	stageExecutors := stageExecutorsFromProto(req.Msg.StageExecutors)
 
-	if err := session.ValidatePipelineModeContent(session.PipelineModeContentFields{
+	if err := pipelinemode.ValidatePipelineModeContent(pipelinemode.PipelineModeContentFields{
 		Slug:                  req.Msg.Slug,
 		ValidateSlug:          true,
 		StatusCommandTemplate: req.Msg.StatusCommandTemplate,
@@ -248,7 +248,7 @@ func (s *BacklogService) UpdatePipelineMode(
 	// contentFields, which trivially passes validation (see
 	// PipelineModeContentFields' doc comment) so a partial update is never
 	// rejected over a field it isn't touching.
-	contentFields := session.PipelineModeContentFields{}
+	contentFields := pipelinemode.PipelineModeContentFields{}
 	if req.Msg.StatusCommandTemplate != nil {
 		contentFields.StatusCommandTemplate = *req.Msg.StatusCommandTemplate
 	}
@@ -288,7 +288,7 @@ func (s *BacklogService) UpdatePipelineMode(
 		contentFields.StageExecutors = stageExecutors
 	}
 	contentFields.ForceUnknownModel = req.Msg.GetForceUnknownModel()
-	if err := session.ValidatePipelineModeContent(contentFields); err != nil {
+	if err := pipelinemode.ValidatePipelineModeContent(contentFields); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 

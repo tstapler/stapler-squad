@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "jsonmigrate",
+    srcs = ["migrate.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/jsonmigrate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/domain",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jsonmigrate",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "jsonmigrate_test",
+    srcs = ["migrate_test.go"],
+    embed = [":jsonmigrate"],
+    deps = [
+        "//session/domain",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

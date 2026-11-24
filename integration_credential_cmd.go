@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var integrationPrincipalRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -75,7 +76,7 @@ func newIssueCredentialCmd() *cobra.Command {
 			defer repo.Close()
 
 			workspaceID := services.WebhookWorkspaceID(configDir)
-			token, err := repo.IssueIntegrationCredential(cmd.Context(), session.IntegrationCredentialInfo{
+			token, err := repo.IssueIntegrationCredential(cmd.Context(), domain.IntegrationCredentialInfo{
 				PrincipalID: principal, WorkspaceID: workspaceID, AllowedDirRoot: allowedDir,
 			})
 			if err != nil {

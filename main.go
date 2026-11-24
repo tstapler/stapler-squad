@@ -35,12 +35,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/ptydiscovery"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -732,7 +734,7 @@ var (
 
 			// Test PTY discovery
 			fmt.Println("=== PTY Discovery Test ===")
-			discovery := session.NewPTYDiscovery()
+			discovery := ptydiscovery.NewPTYDiscovery()
 			discovery.SetSessions(instances)
 			err = discovery.Refresh()
 			if err != nil {
@@ -1576,11 +1578,11 @@ func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity ho
 	if sessionSvc == nil {
 		return
 	}
-	mux.HandleFunc("GET "+hostclaim.SessionFederationEndpointPath, services.SessionFederationHandler(registry, sessionSvc.LocalSessions))
-	mux.HandleFunc("GET "+hostclaim.SessionFederationTerminalPath, services.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
-	federated := services.NewFederatedSessions(identity, registry)
+	mux.HandleFunc("GET "+hostclaim.SessionFederationEndpointPath, federation.SessionFederationHandler(registry, sessionSvc.LocalSessions))
+	mux.HandleFunc("GET "+hostclaim.SessionFederationTerminalPath, federation.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
+	federated := federation.NewFederatedSessions(identity, registry)
 	sessionSvc.SetFederation(federated)
-	go federated.Run(ctx, services.DefaultFederationRefreshInterval)
+	go federated.Run(ctx, federation.DefaultFederationRefreshInterval)
 }
 
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey

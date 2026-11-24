@@ -1,0 +1,16 @@
+{
+  "id": "history:stream-search",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "StreamSearchClaudeHistory",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_delegates.go",
+  "tested": true,
+  "testIds": [
+    "TestStreamSearchClaudeHistory_should_EmitBatchesAndFinalFlag_When_IndexWarm",
+    "TestStreamSearchClaudeHistory_should_EmitFinalEmptyMessage_When_NoMatches",
+    "TestStreamSearchClaudeHistory_should_SendWarmingBatchBeforeSyncCompletes_When_ColdStart"
+  ],
+  "lastModified": "2026-11-23T19:00:51.070770235-08:00"
+}

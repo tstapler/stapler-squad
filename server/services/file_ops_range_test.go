@@ -17,13 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const rangeTestDir = "/w"
 
 // rangeOpsOver builds FileOps over mem with files:range-read on; the analysis
 // cache is closed with the test.
-func rangeOpsOver(t *testing.T, mem *memBackend) *FileOps {
+func rangeOpsOver(t *testing.T, mem *fsops.MemBackend) *FileOps {
 	t.Helper()
 	ops := NewFileOps(FilePolicy{
 		Workspace: &fakeWorkspaceProvider{existingDir: rangeTestDir},
@@ -60,9 +61,9 @@ func castagnoli(b []byte) uint32 { return crc32.Checksum(b, crc32.MakeTable(crc3
 
 func TestReadRange_ShouldReturnLineAlignedLfWindowWithRawOffsets_When_CrlfBomFile(t *testing.T) {
 	t.Parallel()
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	var doc bytes.Buffer
-	doc.Write(utf8BOM)
+	doc.Write(fsops.UTF8BOM)
 	for i := 1; i <= 10_000; i++ {
 		doc.WriteString("row " + strconv.Itoa(i) + "\r\n")
 	}
@@ -78,7 +79,7 @@ func TestReadRange_ShouldReturnLineAlignedLfWindowWithRawOffsets_When_CrlfBomFil
 	assert.True(t, first.Bof)
 	assert.False(t, first.Eof)
 	assert.Equal(t, int64(0), first.StartByte)
-	rawLen := int64(len(utf8BOM) + len("row 1\r\nrow 2\r\nrow 3\r\n"))
+	rawLen := int64(len(fsops.UTF8BOM) + len("row 1\r\nrow 2\r\nrow 3\r\n"))
 	assert.Equal(t, rawLen, first.EndByte, "offsets are raw: the BOM and CRs count")
 	assert.Equal(t, castagnoli(raw[:rawLen]), first.ChunkCrc32C)
 	assert.Equal(t, []int64{1, 3}, []int64{first.StartLine, first.EndLine})
@@ -97,7 +98,7 @@ func TestReadRange_ShouldReturnLineAlignedLfWindowWithRawOffsets_When_CrlfBomFil
 	assert.Equal(t, int64(10_000), mid.LineCount)
 	assert.Equal(t, analysisStateReady, mid.Analysis)
 	assert.Equal(t, castagnoli(raw[mid.StartByte:mid.EndByte]), mid.ChunkCrc32C)
-	assert.Equal(t, NewFileVersionToken(int64(len(raw)), readCorpusMTime.UnixNano(), raw).String(), mid.VersionToken)
+	assert.Equal(t, fsops.NewFileVersionToken(int64(len(raw)), readCorpusMTime.UnixNano(), raw).String(), mid.VersionToken)
 
 	huge, err := ops.ReadRange(ctx, linesReq("crlf.txt", 1, sessionv1.RangeDir_RANGE_DIR_FORWARD, 100_000, 100<<20))
 	require.NoError(t, err)
@@ -111,7 +112,7 @@ func TestReadRange_ShouldReturnLineAlignedLfWindowWithRawOffsets_When_CrlfBomFil
 
 func mustInfo(t *testing.T, ops *FileOps, path string) os.FileInfo {
 	t.Helper()
-	rr, err := ops.resolve(FileRef{SessionID: "test-session", Path: path}, AccessRead)
+	rr, err := ops.resolve(fsops.FileRef{SessionID: "test-session", Path: path}, fsops.AccessRead)
 	require.NoError(t, err)
 	defer func() { _ = rr.Root.Close() }()
 	info, err := rr.Root.Lstat(rr.Resolved)
@@ -127,7 +128,7 @@ func TestReadRange_ShouldReturnWindowAroundMillionthLine_When_TwoMillionLineFile
 		buf.WriteString(strconv.Itoa(i))
 		buf.WriteByte('\n')
 	}
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	mem.AddFile(rangeTestDir, "big.log", buf.Bytes(), readCorpusMTime)
 	ops := rangeOpsOver(t, mem)
 	waitReady(t, ops, "big.log")
@@ -146,7 +147,7 @@ func TestReadRange_ShouldReturnWindowAroundMillionthLine_When_TwoMillionLineFile
 
 func TestReadRange_ShouldSnapByteAnchorToRuneStart_And_SetEofOnLastWindow(t *testing.T) {
 	t.Parallel()
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	rune4 := "\U0001F600" // F0 9F 98 80
 	mem.AddFile(rangeTestDir, "emoji.txt", []byte("ab"+rune4+"cd\n"), readCorpusMTime)
 	late := append([]byte(strings.Repeat("a\n", 5000)), 'x', 0, 'y', '\n') // NUL at 10,001, after 8 KB
@@ -188,7 +189,7 @@ func TestReadRange_ShouldSnapByteAnchorToRuneStart_And_SetEofOnLastWindow(t *tes
 
 func TestReadRange_ShouldSetTorn_When_FileChangesBetweenFstats_And_ReturnWholeFile_When_PreferFullIfLe(t *testing.T) {
 	t.Parallel()
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	small := []byte(strings.Repeat("line\n", 60_000))     // 300 KB
 	medium := []byte(strings.Repeat("line\n", 1_000_000)) // 5 MB
 	mem.AddFile(rangeTestDir, "small.txt", small, readCorpusMTime)
@@ -202,7 +203,7 @@ func TestReadRange_ShouldSetTorn_When_FileChangesBetweenFstats_And_ReturnWholeFi
 	require.NoError(t, err)
 	assert.Equal(t, string(small), resp.Content, "whole file in one response")
 	assert.True(t, resp.Bof && resp.Eof)
-	assert.Equal(t, NewFileVersionToken(int64(len(small)), readCorpusMTime.UnixNano(), small).String(), resp.VersionToken, "normal token, hash inline")
+	assert.Equal(t, fsops.NewFileVersionToken(int64(len(small)), readCorpusMTime.UnixNano(), small).String(), resp.VersionToken, "normal token, hash inline")
 
 	over := linesReq("medium.txt", 1, sessionv1.RangeDir_RANGE_DIR_FORWARD, 10, 0)
 	over.PreferFullIfLe = 1 << 20
@@ -234,7 +235,7 @@ func TestReadRange_ShouldSetTorn_When_FileChangesBetweenFstats_And_ReturnWholeFi
 
 func TestReadRange_ShouldRefuseAnchorlessRequest_And_UnindexedFarLine(t *testing.T) {
 	t.Parallel()
-	mem := newMemBackend()
+	mem := fsops.NewMemBackend()
 	mem.AddFile(rangeTestDir, "a.txt", []byte(strings.Repeat("x\n", 100)), readCorpusMTime)
 	ops := rangeOpsOver(t, mem)
 	_, err := ops.ReadRange(context.Background(), &sessionv1.ReadFileRangeRequest{SessionId: "test-session", Path: "a.txt"})

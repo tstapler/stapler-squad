@@ -295,7 +295,6 @@ func createSessionForPRArgs(t *testing.T, title string, prNumber int, extra map[
 // pins AC2: create_session_for_pr must accept a custom program, for parity
 // with create_session's identical AC1 coverage.
 func TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertProgramConfig(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	ghHandlers := newProgramTestGithubHandlers(t)
 	upsertTestCustomProgram(t, ghHandlers.svc)
 
@@ -307,7 +306,7 @@ func TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertP
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	assert.Empty(t, m["program_warning"])
 }
@@ -315,7 +314,6 @@ func TestCreateSessionForPR_should_AcceptCustomProgram_When_RegisteredViaUpsertP
 // TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider
 // is AC3's parity regression pin for create_session_for_pr.
 func TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitlyAider(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	ghHandlers := newProgramTestGithubHandlers(t)
 
 	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-aider", 102, map[string]interface{}{
@@ -326,7 +324,7 @@ func TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitly
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	assert.Empty(t, m["program_warning"])
 }
@@ -334,7 +332,6 @@ func TestCreateSessionForPR_should_AcceptAiderUnchanged_When_ProgramIsExplicitly
 // TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted
 // pins AC3's default-unchanged claim, parity with create_session.
 func TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	ghHandlers := newProgramTestGithubHandlers(t)
 
 	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-default", 103, nil)))
@@ -343,7 +340,7 @@ func TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted(t 
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "expected success, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	assert.Empty(t, m["program_warning"], "the default program must never itself warn")
 }
@@ -351,7 +348,6 @@ func TestCreateSessionForPR_should_DefaultToClaudeProgram_When_ProgramOmitted(t 
 // TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList
 // pins AC4's non-fatal-warning mechanism, parity with create_session.
 func TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList(t *testing.T) {
-	resetCreateSessionLimiterForTest(t)
 	ghHandlers := newProgramTestGithubHandlers(t)
 
 	res, err := ghHandlers.createSessionForPR(context.Background(), makeToolReq(createSessionForPRArgs(t, "program-pr-test-typo", 104, map[string]interface{}{
@@ -362,7 +358,7 @@ func TestCreateSessionForPR_should_SetProgramWarning_When_ProgramNotInKnownList(
 	m := parseResult(t, res)
 	require.True(t, m["success"].(bool), "an unrecognized program must warn, not reject, got: %+v", m)
 	t.Cleanup(func() {
-		destroyMCPCreatedSession(t, &lifecycleHandlers{svc: ghHandlers.svc}, m["session"].(map[string]interface{})["id"].(string))
+		destroyMCPCreatedSession(t, ghHandlers.svc, m["session"].(map[string]interface{})["id"].(string))
 	})
 	warning, _ := m["program_warning"].(string)
 	assert.Contains(t, warning, "clade")

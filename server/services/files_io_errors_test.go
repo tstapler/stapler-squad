@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 func TestRangeOutcome_ShouldLabelEachFailedPreconditionByCause(t *testing.T) {
@@ -27,7 +28,7 @@ func TestRangeOutcome_ShouldLabelEachFailedPreconditionByCause(t *testing.T) {
 }
 
 func TestInternalIOError_ShouldKeepCauseOffTheWire(t *testing.T) {
-	err := internalIOError("read", "dir/f.txt", errors.New("read /home/u/secret/dir/f.txt: input/output error"), "failed to read file")
+	err := fsops.InternalIOError("read", "dir/f.txt", errors.New("read /home/u/secret/dir/f.txt: input/output error"), "failed to read file")
 
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
 	assert.Equal(t, "internal: failed to read file", err.Error())
@@ -39,8 +40,8 @@ func TestInternalIOError_ShouldLogOpPathAndCauseServerSide(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	_ = internalIOError("read_range", "dir/f.txt", errors.New("read dir/f.txt: input/output error"), "failed to read file range")
-	_ = openRootError(errors.New("open /srv/worktree: permission denied"))
+	_ = fsops.InternalIOError("read_range", "dir/f.txt", errors.New("read dir/f.txt: input/output error"), "failed to read file range")
+	_ = fsops.OpenRootError(errors.New("open /srv/worktree: permission denied"))
 
 	out := logs.String()
 	assert.Contains(t, out, "op=read_range")

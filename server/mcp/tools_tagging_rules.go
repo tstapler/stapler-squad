@@ -9,7 +9,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 )
 
 // taggingRulesHandlers implements session-tagging-rule-management MCP tools, sibling to
@@ -17,7 +16,7 @@ import (
 // new MCP namespace"). Tagging rules govern which tags auto-apply to a session based on its
 // name/branch/path/program — a different decision from approval rules' tool-call gating.
 type taggingRulesHandlers struct {
-	svc *services.SessionService
+	svc TaggingRulesRPC
 }
 
 // registerTaggingRulesTools registers the session-tagging-rule-related MCP tools.

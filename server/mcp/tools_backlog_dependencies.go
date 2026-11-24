@@ -11,7 +11,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -163,7 +162,7 @@ func (h *backlogHandlers) transitionBacklogItemStatus(ctx context.Context, req m
 	if expected == "" {
 		return errResult(ErrInvalidArgument, "expected_status is required", "Pass the status you last observed via get_backlog_item; the transition is rejected if the item has moved since."), nil
 	}
-	resp, err := h.backlogSvc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, instance.TriggeredByAgent), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+	resp, err := h.backlogSvc.TransitionBacklogItemStatus(domain.WithTransitionActor(ctx, instance.TriggeredByAgent), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         itemID,
 		TargetStatus:   target,
 		ExpectedStatus: expected,

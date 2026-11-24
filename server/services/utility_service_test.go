@@ -223,7 +223,7 @@ func TestParseLogLine_JSON_should_ExtractSource_When_SourceIsSlogAddSourceObject
 }
 
 // TestParseLogLine_JSON_should_LeaveSourceEmpty_When_SourceIsAPlainStringAttribute
-// guards against the wrong fix: several call sites (credentials.go,
+// guards against the wrong fix: several call sites (credkit/credentials.go,
 // database_service.go) already pass a plain-string "source" attribute for
 // unrelated domain data — treating that as a caller location would show a
 // credential name or directory path as if it were "file.go:42".

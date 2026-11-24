@@ -1,7 +1,7 @@
 import { Page } from "@playwright/test";
 
 /**
- * Mocks GET /api/deep-link/resolve (server/services/deep_link_resolver.go)
+ * Mocks GET /api/deep-link/resolve (server/services/federation/deep_link_resolver.go)
  * for deterministic e2e coverage of Surfaces 2-9
  * (project_plans/backlog-deep-linking) without needing a real second host
  * or Workspace Host Registry entry — response shapes mirror

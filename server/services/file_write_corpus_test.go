@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const corpusDir = "testdata/files_roundtrip"
@@ -100,10 +101,10 @@ func TestWriteFile_ShouldRoundTripEmptyFile_And_WriteLfWithoutBom_When_TextSaved
 	require.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE, read.ReadOnlyReason, "a zero-byte file is editable")
 	assert.Equal(t, sessionv1.LineEnding_LINE_ENDING_LF, read.LineEnding)
 	assert.False(t, read.HasBom)
-	tok, err := ParseFileVersionToken(read.VersionToken)
+	tok, err := fsops.ParseFileVersionToken(read.VersionToken)
 	require.NoError(t, err)
 	assert.True(t, tok.Editable())
-	assert.Equal(t, NewFileVersionToken(0, 0, nil).SHA256, tok.SHA256, "hash of zero bytes, not the dash form")
+	assert.Equal(t, fsops.NewFileVersionToken(0, 0, nil).SHA256, tok.SHA256, "hash of zero bytes, not the dash form")
 
 	infoBefore, err := os.Stat(filepath.Join(r.dir, "empty.txt"))
 	require.NoError(t, err)
@@ -140,7 +141,7 @@ func TestWriteFile_ShouldRejectAndLeaveTargetUnchanged_When_SymlinkEscapeMatrix(
 	} {
 		require.NoError(t, os.Symlink(target, filepath.Join(r.dir, link)))
 	}
-	goodToken := "v1:1:1:" + strings.Repeat("0", sha256HexLen)
+	goodToken := "v1:1:1:" + strings.Repeat("0", fsops.Sha256HexLen)
 	gitBefore := treeDigest(t, filepath.Join(r.dir, ".git"))
 	outFileBefore, outDirBefore := treeDigest(t, filepath.Dir(outsideFile)), treeDigest(t, outsideDir)
 
@@ -191,5 +192,5 @@ func TestWriteFile_ShouldYieldOneSavedAnd19Conflicts_When_20ConcurrentSavesSameT
 	got := string(r.disk("crlf.txt"))
 	assert.Regexp(t, `^writer \d+\r\n$`, got, "one writer's content, CRLF re-applied, never interleaved")
 	assert.Empty(t, tempNames(t, r.dir))
-	assert.Zero(t, pathLocks.size(), "idle registry entries are released")
+	assert.Zero(t, fsops.PathLocks.Size(), "idle registry entries are released")
 }

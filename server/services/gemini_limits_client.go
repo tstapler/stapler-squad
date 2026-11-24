@@ -14,17 +14,18 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 )
 
 type GeminiLimitsClient struct {
-	chain  *CredentialChain
+	chain  *credkit.CredentialChain
 	client *http.Client
 	model  string
 	mu     sync.Mutex
-	cached ProviderLimits
+	cached credkit.ProviderLimits
 }
 
-func NewGeminiLimitsClient(chain *CredentialChain, model string) *GeminiLimitsClient {
+func NewGeminiLimitsClient(chain *credkit.CredentialChain, model string) *GeminiLimitsClient {
 	if model == "" {
 		model = "gemini-2.0-flash"
 	}
@@ -36,7 +37,7 @@ func NewGeminiLimitsClient(chain *CredentialChain, model string) *GeminiLimitsCl
 		chain:  chain,
 		client: &http.Client{Timeout: 10 * time.Second},
 		model:  model,
-		cached: ProviderLimits{
+		cached: credkit.ProviderLimits{
 			Provider:  "google",
 			Model:     model,
 			Available: true,
@@ -48,7 +49,7 @@ func (c *GeminiLimitsClient) Provider() string {
 	return "google"
 }
 
-func (c *GeminiLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits, error) {
+func (c *GeminiLimitsClient) QueryLimits(ctx context.Context) (credkit.ProviderLimits, error) {
 	cred, err := c.chain.Resolve(ctx, "google")
 	if err != nil {
 		c.mu.Lock()
@@ -126,7 +127,7 @@ func (c *GeminiLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits, e
 }
 
 // resolveToken handles token exchange for gcloud ADC or returns BearerToken.
-func (c *GeminiLimitsClient) resolveToken(ctx context.Context, cred Credential) (string, error) {
+func (c *GeminiLimitsClient) resolveToken(ctx context.Context, cred credkit.Credential) (string, error) {
 	if cred.BearerToken != "" {
 		return cred.BearerToken, nil
 	}
@@ -198,7 +199,7 @@ func (c *GeminiLimitsClient) exchangeRefreshToken(ctx context.Context, clientID,
 	return res.AccessToken, nil
 }
 
-func (c *GeminiLimitsClient) UpdateFromResponseHeaders(h http.Header, current ProviderLimits) ProviderLimits {
+func (c *GeminiLimitsClient) UpdateFromResponseHeaders(h http.Header, current credkit.ProviderLimits) credkit.ProviderLimits {
 	out := current
 	out.Provider = "google"
 	out.Model = c.model
@@ -211,23 +212,23 @@ func (c *GeminiLimitsClient) UpdateFromResponseHeaders(h http.Header, current Pr
 	// x-ratelimit-limit-tokens
 	// x-ratelimit-remaining-tokens
 	// x-ratelimit-reset-tokens
-	if reqLimit := parseIntHeader(h, "x-ratelimit-limit-requests"); reqLimit != -1 {
+	if reqLimit := credkit.ParseIntHeader(h, "x-ratelimit-limit-requests"); reqLimit != -1 {
 		out.RequestsLimit = reqLimit
 	}
-	if reqRem := parseIntHeader(h, "x-ratelimit-remaining-requests"); reqRem != -1 {
+	if reqRem := credkit.ParseIntHeader(h, "x-ratelimit-remaining-requests"); reqRem != -1 {
 		out.RequestsRemaining = reqRem
 	}
-	if reqReset := parseTimeHeader(h, "x-ratelimit-reset-requests"); !reqReset.IsZero() {
+	if reqReset := credkit.ParseTimeHeader(h, "x-ratelimit-reset-requests"); !reqReset.IsZero() {
 		out.RequestsReset = reqReset
 	}
 
-	if tokLimit := parseIntHeader(h, "x-ratelimit-limit-tokens"); tokLimit != -1 {
+	if tokLimit := credkit.ParseIntHeader(h, "x-ratelimit-limit-tokens"); tokLimit != -1 {
 		out.TokensLimit = tokLimit
 	}
-	if tokRem := parseIntHeader(h, "x-ratelimit-remaining-tokens"); tokRem != -1 {
+	if tokRem := credkit.ParseIntHeader(h, "x-ratelimit-remaining-tokens"); tokRem != -1 {
 		out.TokensRemaining = tokRem
 	}
-	if tokReset := parseTimeHeader(h, "x-ratelimit-reset-tokens"); !tokReset.IsZero() {
+	if tokReset := credkit.ParseTimeHeader(h, "x-ratelimit-reset-tokens"); !tokReset.IsZero() {
 		out.TokensReset = tokReset
 	}
 

@@ -53,18 +53,18 @@ var pinnedCallers = map[string]callerRow{
 	"server/services:TerminalService.WriteToSession":                        {kind: kindUI, acquires: true, reason: "UI raw input; refused for a hidden target (Story 5.2); also its own acquirer"},
 	"session/detection/ratelimit:Manager.sendRecoveryInput":                 {kind: kindReceiverViaWrapper, reason: "the lease is taken by the claudectl accessor wrapper (via Instance.WriteRateLimitRecovery) that implements SessionAccessor, so this call is lease-held by construction"},
 	"session/instance:AssertLeaseFree":                                      {kind: kindAcquirer, reason: "test helper in a non-test file: takes and releases the lease to assert none leaked"},
-	"session:AutonomousDriver.run":                                          {kind: kindAcquirer, reason: "automated writer: takes the lease once per turn"},
+	"session/autonomous:AutonomousDriver.run":                               {kind: kindAcquirer, reason: "automated writer: takes the lease once per turn"},
 	"session/instance:Instance.Restart":                                     {kind: kindLifecycle, reason: "restart marker typed into the pane Restart just started; reached only from guarded or internal entries (T-RO-46)"},
 	"session/instance:Instance.changeDirectory":                             {kind: kindLifecycle, reason: "cd typed for a directory switch; reached only from SwitchWorkspace, guarded by Story 5.2"},
-	"session:NudgeStalledAutonomousSession":                                 {kind: kindAcquirer, reason: "autonomous stall nudge: gates, one Try lease, atomic slot claim, fixed text; reached only from the service stall path behind diagnose_nudge_enabled"},
-	"session:attemptBacklogNudge":                                           {kind: kindAcquirer, reason: "session driver idle nudge: takes the lease once"},
+	"session/autonomous:NudgeStalledAutonomousSession":                      {kind: kindAcquirer, reason: "autonomous stall nudge: gates, one Try lease, atomic slot claim, fixed text; reached only from the service stall path behind diagnose_nudge_enabled"},
+	"session/driver:attemptBacklogNudge":                                    {kind: kindAcquirer, reason: "session driver idle nudge: takes the lease once"},
 	"session/instance:Instance.WriteRateLimitRecovery":                      {kind: kindAcquirer, reason: "implements claudectl.RateLimitWriter for ratelimit.SessionAccessor: takes the lease, writes, releases"},
 	"session/claudectl:recoveryAccessor.WriteToPTY":                         {kind: kindReceiverViaWrapper, reason: "delegates to Instance.WriteRateLimitRecovery, which takes the lease; the direct write only serves contexts with no lease to serialize against (test fakes)"},
-	"session:sendAnswerKeyUnderLease":                                       {kind: kindAcquirer, reason: "session driver answer key: takes the lease once"},
-	"session:sendInitialPromptTick":                                         {kind: kindAcquirer, reason: "session driver initial prompt: takes the lease once, before the attempt counter"},
+	"session/driver:sendAnswerKeyUnderLease":                                {kind: kindAcquirer, reason: "session driver answer key: takes the lease once"},
+	"session/driver:sendInitialPromptTick":                                  {kind: kindAcquirer, reason: "session driver initial prompt: takes the lease once, before the attempt counter"},
 	"session/panereply:sequenceRun.write":                                   {kind: kindReceiver, reason: "SubmitReplySequence's writing goroutine: one Enter or Down per step under the lease PaneReplyCore.writeSequenceUnderLease took, a frame check before every key, no retry"},
 	"session/panereply:replyRun.execute":                                    {kind: kindReceiver, reason: "SubmitReplyOnce's writing goroutine: one digit under the lease PaneReplyCore.writeUnderLease took, no Enter, no retry"},
-	"session:submitInitialPrompt.func1":                                     {kind: kindReceiver, reason: "initial-prompt submit under the lease sendInitialPromptTick took (a variable only so a test can force a lease error)"},
+	"session/driver:submitInitialPrompt.func1":                              {kind: kindReceiver, reason: "initial-prompt submit under the lease sendInitialPromptTick took (a variable only so a test can force a lease error)"},
 	"session/instance:switchWorkspaceLocked":                                {kind: kindLifecycle, reason: "directory switch under the workspace lock; reached only from SwitchWorkspace, guarded by Story 5.2"},
 }
 
@@ -76,7 +76,7 @@ var pinnedLifecycleCallers = map[string]callerRow{
 	"server/services:SessionService.UpdateSessionProgram": {kind: kindLifecycle, reason: "capacity guardrail's own CLI fallback; not UI-reachable"},
 	"session/instance:Instance.SetAutoApprove":            {kind: kindLifecycle, reason: "restarts an Active pane; reached from UpdateSession only"},
 	"session/instance:Instance.SwitchProgram":             {kind: kindLifecycle, reason: "restarts an Active pane; reached from UpdateSession and UpdateSessionProgram"},
-	"session:restartForRetry":                             {kind: kindLifecycle, reason: "internal retry (Restart(false)): no marker"},
+	"session/driver:restartForRetry":                      {kind: kindLifecycle, reason: "internal retry (Restart(false)): no marker"},
 	"session/instance:switchWorkspaceLocked":              {kind: kindLifecycle, reason: "directory switch; reached only from SwitchWorkspace"},
 }
 

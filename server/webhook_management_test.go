@@ -20,7 +20,9 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
@@ -55,7 +57,7 @@ func newWiringHarness(t *testing.T, flags map[string]bool) *wiringHarness {
 	}
 	configDir, err := config.GetConfigDir()
 	require.NoError(t, err)
-	h.token, err = repo.IssueIntegrationCredential(context.Background(), session.IntegrationCredentialInfo{
+	h.token, err = repo.IssueIntegrationCredential(context.Background(), domain.IntegrationCredentialInfo{
 		PrincipalID: "wiring", WorkspaceID: services.WebhookWorkspaceID(configDir), AllowedDirRoot: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -130,7 +132,7 @@ func TestRegisterWebhookManagement_should_ProduceRegistrationsTheReceiverCanVeri
 	h := newWiringHarness(t, map[string]bool{config.FeatureWebhookManagement: true, "webhook_triggers": true})
 	require.Empty(t, h.cfg.MachineEncryptionKey, "precondition: no key yet, as on a fresh instance")
 	fireEvents := session.NewEntTriggerFireEventRepository(h.repo.GetEntClient())
-	receiver := services.NewGenericWebhookHandler(stagecfg.NewEntWorkflowRepository(h.repo.GetEntClient()), nil, fireEvents, h.cfg)
+	receiver := webhooktrigger.NewGenericWebhookHandler(stagecfg.NewEntWorkflowRepository(h.repo.GetEntClient()), nil, fireEvents, h.cfg)
 	receiver.RegisterRoutes(h.srv.mux) // the receiver holds h.cfg, exactly as server.go wires it
 	registerWebhookManagement(h.srv, h.deps, h.cfg)
 

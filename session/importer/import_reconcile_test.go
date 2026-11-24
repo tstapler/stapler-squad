@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -23,7 +22,7 @@ func TestReconcileSuspendedProcesses_ResumesProcessAndRemovesRecord_When_Process
 	if err := suspended.Add(SuspendedProcessRecord{PID: pid, InstanceID: "imported-reconcile-1"}); err != nil {
 		t.Fatalf("failed to seed suspended process record: %v", err)
 	}
-	if err := session.SuspendOriginalProcess(pid); err != nil {
+	if err := SuspendOriginalProcess(pid); err != nil {
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
 
@@ -58,7 +57,7 @@ func TestReconcileSuspendedProcesses_ReturnsErrorButContinues_When_OneResumeFail
 	if err := suspended.Add(SuspendedProcessRecord{PID: realPID, InstanceID: "imported-reconcile-real"}); err != nil {
 		t.Fatalf("failed to seed suspended process record: %v", err)
 	}
-	if err := session.SuspendOriginalProcess(realPID); err != nil {
+	if err := SuspendOriginalProcess(realPID); err != nil {
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
 
@@ -108,10 +107,10 @@ func TestReconcileSuspendedProcesses_LeavesProcessSuspended_When_CommittedInstan
 	if err := suspended.Add(SuspendedProcessRecord{PID: pid, InstanceID: instanceID}); err != nil {
 		t.Fatalf("failed to seed suspended process record: %v", err)
 	}
-	if err := session.SuspendOriginalProcess(pid); err != nil {
+	if err := SuspendOriginalProcess(pid); err != nil {
 		t.Fatalf("failed to suspend original process: %v", err)
 	}
-	t.Cleanup(func() { _ = session.ResumeOriginalProcess(pid) })
+	t.Cleanup(func() { _ = ResumeOriginalProcess(pid) })
 
 	store := &fakeInstanceStore{
 		instances: []domain.InstanceData{{Title: instanceID}},

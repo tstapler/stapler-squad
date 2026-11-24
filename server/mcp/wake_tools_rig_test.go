@@ -110,7 +110,11 @@ type toolRig struct {
 	answered []string
 }
 
-func newToolRig(t *testing.T) *toolRig {
+func newToolRig(t *testing.T) *toolRig { return newToolRigWithGuidance(t, nil) }
+
+// newToolRigWithGuidance builds the rig with the peer-help and owner-action handlers reading
+// the GuidanceStore that wrap returns for the real storage (nil wrap: the real storage).
+func newToolRigWithGuidance(t *testing.T, wrap func(*session.Storage) GuidanceStore) *toolRig {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
@@ -137,7 +141,11 @@ func newToolRig(t *testing.T) *toolRig {
 	deps := func() *WakeToolDeps { return r.deps }
 	r.server = mcpserver.NewMCPServer("test", "0.0.0")
 	registerWakeTools(r.server, &wakeHandlers{gate: gate, flags: flags, deps: deps, now: func() time.Time { return wakeToolsNow }})
-	peerHelp := &peerHelpHandlers{gate: gate, flags: flags, deps: deps, storage: storage, now: func() time.Time { return wakeToolsNow }}
+	var gs GuidanceStore = storage
+	if wrap != nil {
+		gs = wrap(storage)
+	}
+	peerHelp := &peerHelpHandlers{gate: gate, flags: flags, deps: deps, storage: gs, now: func() time.Time { return wakeToolsNow }}
 	registerPeerHelpTools(r.server, peerHelp)
 	registerOwnerActionTools(r.server, peerHelp)
 	return r

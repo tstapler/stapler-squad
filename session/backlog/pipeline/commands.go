@@ -11,17 +11,17 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 // renderDefault renders a section for the Go-built prompts, substituting placeholder values.
 func renderDefault(section string, values map[string]string) string {
-	return renderTemplate(session.ForDefault(section), values)
+	return renderTemplate(pipelinemode.ForDefault(section), values)
 }
 
 // backlogCommandsDir is the relative path from worktree root for slash command files.
@@ -228,16 +228,16 @@ func buildDefaultSlashCommandSet(item *backlogdto.BacklogItemData) (map[string]s
 	// Per-criterion done-N.md and fail-N.md
 	for _, c := range criteria {
 		values := map[string]string{"item_id": itemID, "criteria_index": strconv.Itoa(c.Index)}
-		files[fmt.Sprintf("done-%d.md", c.Index)] = renderDefault(session.SecDoneNote, values) + "\n"
-		files[fmt.Sprintf("fail-%d.md", c.Index)] = renderDefault(session.SecFailNote, values) + "\n"
+		files[fmt.Sprintf("done-%d.md", c.Index)] = renderDefault(pipelinemode.SecDoneNote, values) + "\n"
+		files[fmt.Sprintf("fail-%d.md", c.Index)] = renderDefault(pipelinemode.SecFailNote, values) + "\n"
 	}
 
 	// review.md
 	files["review.md"] = withWakeGuidance(fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n", itemID) +
-		"Then " + session.ForDefault(session.SecAwaitVerdict) + "\n\n" + session.ForDefault(session.SecOnPass) + "\n\n" + session.ForDefault(session.OnFailSection()) + "\n")
+		"Then " + pipelinemode.ForDefault(pipelinemode.SecAwaitVerdict) + "\n\n" + pipelinemode.ForDefault(pipelinemode.SecOnPass) + "\n\n" + pipelinemode.ForDefault(pipelinemode.OnFailSection()) + "\n")
 
 	// ship.md
-	files["ship.md"] = withWakeGuidance(renderDefault(session.SecShipIntro+"\n\n"+session.SecShipSteps, map[string]string{"item_id": itemID}) + "\n")
+	files["ship.md"] = withWakeGuidance(renderDefault(pipelinemode.SecShipIntro+"\n\n"+pipelinemode.SecShipSteps, map[string]string{"item_id": itemID}) + "\n")
 
 	// help.md — list all available commands
 	var helpSb strings.Builder
@@ -250,7 +250,7 @@ func buildDefaultSlashCommandSet(item *backlogdto.BacklogItemData) (map[string]s
 	helpSb.WriteString("- `/backlog/review` — Submit for review with a summary\n")
 	helpSb.WriteString("- `/backlog/ship` — Create a PR with /github:pr-ship and submit for review\n")
 	helpSb.WriteString("- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)\n")
-	helpSb.WriteString("- " + session.HelpOwnerActionLine + "\n")
+	helpSb.WriteString("- " + pipelinemode.HelpOwnerActionLine + "\n")
 	helpSb.WriteString("- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit\n")
 	files["help.md"] = helpSb.String()
 
@@ -324,7 +324,7 @@ func WriteBacklogContextFile(item *backlogdto.BacklogItemData, priorSessions []b
 	sb.WriteString("If MCP tools are unavailable, continue using the acceptance criteria above.\n")
 	sb.WriteString("Record completed criteria in commit messages. Run git commit after each criterion is done.\n")
 	sb.WriteString("\n## Before You Start\n")
-	sb.WriteString(session.ForDefault(session.SecSyncMain) + "\n")
+	sb.WriteString(pipelinemode.ForDefault(pipelinemode.SecSyncMain) + "\n")
 
 	content := sb.String()
 

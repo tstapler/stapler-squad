@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
@@ -415,7 +416,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (webhookstore.We
 		return invalid("webhook.session_type is not supported")
 	}
 	if b.Model != nil {
-		if len(*b.Model) > maxWebhookModelBytes || session.ValidateModel(*b.Model) != nil {
+		if len(*b.Model) > maxWebhookModelBytes || stagecfg.ValidateModel(*b.Model) != nil {
 			return invalid("webhook.model is invalid")
 		}
 	}

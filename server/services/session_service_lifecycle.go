@@ -132,7 +132,7 @@ func (s *SessionService) ResumeHibernatedSession(
 }
 
 // ResumeCrashedSession re-launches the AI process for a Crashed session (dead
-// tmux pane detected by SessionHealthChecker, session/health.go), transitioning
+// tmux pane detected by SessionHealthChecker, session/autonomous/health.go), transitioning
 // it back to Active status. The tmux session was already killed when the
 // instance was marked Crashed, so Start(false) takes the cold-restore path and
 // threads --resume automatically when a conversation UUID is known.
@@ -404,7 +404,7 @@ func (s *SessionService) DeleteSession(
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 			// Release this instance's actor from the SessionService-wide
-			// *session.Registry (Epic 6.2's goleak hammer test caught this
+			// *registry.Registry (Epic 6.2's goleak hammer test caught this
 			// missing entirely): Registry.Register (called from
 			// CreateManagedInstance for every CreateSession) has no
 			// corresponding release anywhere on the delete path, so every
@@ -527,7 +527,7 @@ func (s *SessionService) CancelSessionCreation(
 	}
 
 	// Release this instance's actor from the SessionService-wide
-	// *session.Registry -- see DeleteSession's identical comment (Epic 6.2's
+	// *registry.Registry -- see DeleteSession's identical comment (Epic 6.2's
 	// goleak hammer test) for why this is required: without it, a cancelled
 	// creation leaks its runActor goroutine exactly like a deleted session
 	// did. cleanupPartialCreation above already ran synchronously (unlike

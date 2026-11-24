@@ -24,7 +24,7 @@ import (
 
 // newWorktreeConsistencyTestStorage returns a Storage backed by an isolated in-memory
 // EntRepository, mirroring the pattern other sweeper tests use (e.g.
-// server/services/session_retention_sweeper_test.go's fixture) but scoped to this file's
+// server/services/sessionretention/session_retention_sweeper_test.go's fixture) but scoped to this file's
 // own tests. Delegates to newWorktreeConsistencyTestRepo (refactor-candidates review: the
 // two constructors were byte-identical) and discards the *EntRepository handle callers that
 // only need *Storage don't use.
@@ -36,7 +36,7 @@ func newWorktreeConsistencyTestStorage(t *testing.T) *session.Storage {
 
 // seedCandidateInstance persists a session directly into storage via AddInstance,
 // applying field mutations via opts before persisting — mirrors
-// server/services/session_retention_sweeper_test.go's addArchivedInstance helper.
+// server/services/sessionretention/session_retention_sweeper_test.go's addArchivedInstance helper.
 func seedCandidateInstance(t *testing.T, storage *session.Storage, title string, opts ...func(*instance.Instance)) {
 	t.Helper()
 	inst := &instance.Instance{

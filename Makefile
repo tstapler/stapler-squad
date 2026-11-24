@@ -876,22 +876,22 @@ test-delivery-guards-run: $(GOTESTSUM_BIN)
 	done
 
 test-triage-harness: proto-gen ## Run all backlog triage harness phases (no UI/browser needed)
-	go test -v -tags=harness -run TestTriageHarness ./server/services/
+	go test -v -tags=harness -run TestTriageHarness ./server/services/backlogsvc/
 
 test-triage-gate: proto-gen ## Phase 1: verify TriggerTriage is blocked when repoPath is empty
-	go test -v -tags=harness -run TestTriageHarness/Gate ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/Gate ./server/services/backlogsvc/
 
 test-triage-trigger: proto-gen ## Phase 2: trigger triage and poll until item reaches ready status
-	go test -v -tags=harness -run TestTriageHarness/TriggerAndPoll ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/TriggerAndPoll ./server/services/backlogsvc/
 
 test-triage-parser: proto-gen ## Phase 3: verify parser tolerates LLM preamble before JSON block
-	go test -v -tags=harness -run TestTriageHarness/ParserRobust ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/ParserRobust ./server/services/backlogsvc/
 
 test-triage-flow: proto-gen ## Phase 4: full flow — create, gate, set repoPath, trigger, verify
-	go test -v -tags=harness -run TestTriageHarness/FullFlow ./server/services/
+	go test -v -tags=harness -run TestTriageHarness/FullFlow ./server/services/backlogsvc/
 
 test-triage-real: proto-gen ## Run triage with a REAL Claude session (requires claude in PATH, ~30s)
-	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
+	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/backlogsvc/ -timeout 5m
 
 coverage-integration: ensure-tools proto-gen ## Run integration tests, emit integration.out
 	go test -race -tags integration -coverprofile=integration.out -covermode=atomic ./...
@@ -1065,7 +1065,23 @@ fmt-check: ## Verify all Go files are gofmt-formatted (non-destructive; exits 1 
 	fi
 	@echo "✅ All Go files are properly formatted"
 
-vet: gen-gate-strict ensure-tools proto-gen ## Run go vet with all analyzers
+# Opt-in feature tags whose files `go vet ./...` never compiles; a tagged file
+# that stops compiling is otherwise silently dead (the harness suite rotted so).
+# The tag list is derived from the tracked sources so a new tag is covered
+# automatically. Excluded: GOOS/GOARCH/race constraints (not opt-in), embed_tmux
+# and embed_tymux (need built embed/ artifacts), tools (clashes with package
+# main), ignore (never built).
+space := $(subst ,, )
+VET_TAGS_EXCLUDE := darwin linux unix windows race embed_tmux embed_tymux tools ignore
+VET_TAGS = $(shell git ls-files -z '*.go' | xargs -0 grep -hoE '^//go:build [a-z0-9_]+$$' | awk '{print $$2}' | sort -u | grep -vxE '$(subst $(space),|,$(VET_TAGS_EXCLUDE))' | paste -sd, -)
+
+.PHONY: vet-tags
+vet-tags: ## go vet every opt-in feature build tag in one pass (needs gen/, session/ent and server/web/dist already present; make vet provides them)
+	@test -n "$(VET_TAGS)" || { echo "vet-tags: derived build-tag list is empty (is this a git checkout?)" >&2; exit 1; }
+	@echo "go vet -tags=$(VET_TAGS) ./..."
+	go vet -tags=$(VET_TAGS) ./...
+
+vet: gen-gate-strict ensure-tools proto-gen server/web/dist vet-tags ## Run go vet with all analyzers, default build and every opt-in feature tag
 	go vet ./...
 
 # Nil safety analysis
@@ -1250,7 +1266,7 @@ FILES_VIEWER_GO_TEST_RUN ?= ^(TestOsRoot|TestResolveInWorktree|TestResolveFileRe
 .PHONY: files-viewer-go-tests files-viewer-perf files-viewer-gates files-viewer-server-length-probe
 
 files-viewer-go-tests: ensure-tools proto-gen ## Iterate on the files-viewer Go tests only, with -race (fixed -run prefix list)
-	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services
+	go test -race -short -timeout=20m -run '$(FILES_VIEWER_GO_TEST_RUN)' ./server/services ./server/services/fsops
 
 files-viewer-perf: ensure-tools proto-gen ## Files-viewer benchmarks on full 50k-file fixtures (non-race, run in the background)
 	go test -run '^$$' -bench 'ContentSearch|Transport|Scan64MiB' -benchtime=1x -timeout=30m ./server/services
@@ -1298,22 +1314,28 @@ quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens regi
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
 	@echo "✅ Pre-commit checks passed"
 
+# Hard-coded on purpose; the recipe fails when a listed file is missing (a move out of server/services must update this list).
+ACTOR_FIELD_GUARD_FILES := \
+	server/services/session_service.go \
+	server/services/workflow_service.go \
+	session/prpoller/pr_status_poller.go \
+	session/review_queue_poller.go \
+	session/autonomous/autonomous_driver.go \
+	daemon/daemon.go
+
 actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exist outside session/instance/ (incl. actor.go)
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
-	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
-	    server/services/session_service.go \
-	    server/services/workflow_service.go \
-	    session/prpoller/pr_status_poller.go \
-	    session/review_queue_poller.go \
-	    session/autonomous_driver.go \
-	    daemon/daemon.go \
-	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	@for f in $(ACTOR_FIELD_GUARD_FILES); do \
+	    [ -f "$$f" ] || { echo "❌ actor-field-guard: listed file $$f no longer exists; it moved or was deleted, so the guard would silently skip it — update ACTOR_FIELD_GUARD_FILES in the Makefile"; exit 1; }; \
+	done
+	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' $(ACTOR_FIELD_GUARD_FILES) \
+	    | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
 	    echo "❌ actor-field-guard: direct Instance field writes found — route through actor setters (see IAC Epic 5)"; \
 	    exit 1; \
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
 
-# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
+# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session/driver/session_driver.go do not trip it.
 # Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
 pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance/ and session/session_pr_*.go
 	@echo "pr-field-guard: scanning for direct PR field writes..."

@@ -29,6 +29,18 @@ func TestPathsMatch(t *testing.T) {
 	}
 }
 
+// A change moved into a leaf target must still count as touching //server/services (hub-split guard).
+func TestHasTargetIn_MatchesLeafPackagesBelowPrefix(t *testing.T) {
+	t.Parallel()
+	s := Selection{Targets: []string{"//server/services/backlogsvc:backlogsvc_test"}}
+	if !s.hasTargetIn("//server/mcp", "//server/services") {
+		t.Error("leaf target under //server/services must match the prefix")
+	}
+	if (Selection{Targets: []string{"//server/servicesx:t"}}).hasTargetIn("//server/services") {
+		t.Error("a sibling package sharing the name prefix must not match")
+	}
+}
+
 func TestRegexFromWorkflow(t *testing.T) {
 	t.Parallel()
 	re, err := RegexFromWorkflow("run: |\n  if echo \"$C\" | grep -qE '\\.go$|^Makefile$|^proto/'; then\n")

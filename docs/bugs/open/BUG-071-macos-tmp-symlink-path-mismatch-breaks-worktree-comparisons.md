@@ -11,9 +11,9 @@
 ## Reproduction Steps
 
 1. `go test ./server/services/... -run 'TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession|TestSessionRetentionSweeper_SkipsDirtyWorktree|TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound' -v -timeout 60s` on macOS (Darwin) — all 3 fail deterministically.
-2. Confirmed reproducing identically on `main` (checked out `main`'s copies of `server/services/backlog_service_test.go` and `server/services/session_retention_sweeper_test.go` into an otherwise-unrelated branch and re-ran) — not caused by any in-flight diff.
+2. Confirmed reproducing identically on `main` (checked out `main`'s copies of `server/services/backlog_service_test.go` and `server/services/sessionretention/session_retention_sweeper_test.go` into an otherwise-unrelated branch and re-ran) — not caused by any in-flight diff.
 3. `TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession` (`backlog_service_test.go:3376`) fails with an explicit `/var/...` vs `/private/var/...` string diff — the clearest direct evidence of the root cause.
-4. `TestSessionRetentionSweeper_SkipsDirtyWorktree` (`session_retention_sweeper_test.go:143`) and `TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound` (`session_retention_sweeper_test.go:233`) fail with plain `Should be true` assertions — consistent with the same underlying path mismatch causing the sweeper's dirty-check / shared-worktree-path lookup to silently treat two references to the same directory as different, and skip the "retain" branch. Not yet confirmed which specific comparison line does the mismatched lookup in the sweeper code — needs a debug print of both path strings at the comparison site to nail down exactly (see Fix Approach).
+4. `TestSessionRetentionSweeper_SkipsDirtyWorktree` (`sessionretention/session_retention_sweeper_test.go:143`) and `TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound` (`sessionretention/session_retention_sweeper_test.go:233`) fail with plain `Should be true` assertions — consistent with the same underlying path mismatch causing the sweeper's dirty-check / shared-worktree-path lookup to silently treat two references to the same directory as different, and skip the "retain" branch. Not yet confirmed which specific comparison line does the mismatched lookup in the sweeper code — needs a debug print of both path strings at the comparison site to nail down exactly (see Fix Approach).
 
 ## Root Cause
 
@@ -22,7 +22,7 @@ Likely (not yet 100% confirmed for the two sweeper tests, but consistent with th
 ## Files Likely Affected
 
 - `server/services/backlog_service_test.go:3376` — direct evidence, `SpawnSessionFromItem`'s creator-call path vs. the triage-time `pool.firstCall().workDir`.
-- `server/services/session_retention_sweeper_test.go:143,233` — the dirty-worktree and shared-worktree-with-sibling checks in the retention sweeper's implementation (file not yet identified — likely `server/services/session_retention_sweeper.go`).
+- `server/services/sessionretention/session_retention_sweeper_test.go:143,233` — the dirty-worktree and shared-worktree-with-sibling checks in the retention sweeper's implementation (file not yet identified — likely `server/services/sessionretention/session_retention_sweeper.go`).
 
 ## Fix Approach
 

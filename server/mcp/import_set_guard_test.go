@@ -38,16 +38,19 @@ var allowedImports = map[string]string{
 	modulePrefix + "log":                                 "logging",
 	modulePrefix + "pkg/events":                          "event bus (outside the measured set)",
 	modulePrefix + "pkg/localtoken":                      "local token",
-	modulePrefix + "server/services":                     "M4b-5: SessionService and creation helpers",
-	modulePrefix + "server/services/backlogsvc":          "M4b-3: BacklogService",
 	modulePrefix + "server/wakes":                        "wake metrics",
 	modulePrefix + "session":                             "M4b-4: Storage, InstanceStore",
 	modulePrefix + "session/backlog/pipeline":            "pipeline helpers",
 	modulePrefix + "session/domain":                      "domain values",
 	modulePrefix + "session/domain/backlogdto":           "backlog DTOs",
 	modulePrefix + "session/flow":                        "flow query types and SanitizeText",
+	modulePrefix + "session/hostclaim":                   "claim verdict values",
 	modulePrefix + "session/git":                         "worktree types",
 	modulePrefix + "session/instance":                    "instance types",
+	modulePrefix + "session/itemlink":                    "item-link ownership resolution",
+	modulePrefix + "session/nudgeoutcomes":               "nudge outcome counter",
+	modulePrefix + "session/terminalstate":               "terminal-status predicate",
+	modulePrefix + "session/workspacepeers":              "workspace peer lister behind list_workspace_peers",
 }
 
 // nonTestImports returns the sorted unique non-stdlib import paths of the non-test .go files in dir.

@@ -20,7 +20,7 @@ func NewFlagGatedForeignClaimLookup(inner session.ForeignClaimLookup) session.Fo
 }
 
 func (f flagGatedForeignClaimLookup) ForeignClaim(externalURL string) (hostclaim.ClaimRecord, bool) {
-	if !config.LoadConfig().GetFeatureFlag(CrossHostClaimDedupFlagName) {
+	if !config.LoadConfig().GetFeatureFlag(featureflags.CrossHostClaimDedupFlagName) {
 		return hostclaim.ClaimRecord{}, false
 	}
 	return f.inner.ForeignClaim(externalURL)

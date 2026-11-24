@@ -146,6 +146,11 @@ func (s *Storage) SetCallbackDispatcher(d backlogdto.CallbackDispatcher) {
 // (for example WireChainFirer).
 func (s *Storage) Repository() *EntRepository { return s.Repo }
 
+// ShellRepository and InitialPromptRepository expose the backing repository to registry.Store.
+func (s *Storage) ShellRepository() instance.ShellRepository { return s.Repo }
+
+func (s *Storage) InitialPromptRepository() instance.InitialPromptRepository { return s.Repo }
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*instance.Instance) error {
 	return s.saveInstancesToRepo(instances)
@@ -200,7 +205,7 @@ func (s *Storage) LoadInstances() ([]*instance.Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
-	s.hydrateSessionPRs(ctx, dataSlice)
+	s.HydrateSessionPRs(ctx, dataSlice)
 	instances := make([]*instance.Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
@@ -295,13 +300,13 @@ func (s *Storage) applyBulkArtifacts(instances []*instance.Instance) {
 	}
 }
 
-// hydrateSessionPRs attaches each session's PR links to its InstanceData before
+// HydrateSessionPRs (exported only to satisfy registry.Store; not for general callers) attaches each session's PR links to its InstanceData before
 // the Instance (and so its first snapshot) is built: one bulk read of links+states
 // (and one of tombstones) instead of a query per session. A legacy PR number with
 // neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves
 // leave the legacy columns alone. If the bulk read fails, every legacy number is
 // treated as unrepresented (protected) rather than guessed at.
-func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
+func (s *Storage) HydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
 	uuids := make([]string, 0, len(rows))
 	for i := range rows {
 		if rows[i].UUID != "" {

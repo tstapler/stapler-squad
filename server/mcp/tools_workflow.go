@@ -9,14 +9,13 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 )
 
 // workflowHandlers implements workflow-management MCP tools. Workflows are
 // reusable session-creation presets (e.g. "design doc session") that a
 // session can define once and re-run with a different input each time.
 type workflowHandlers struct {
-	svc *services.SessionService
+	svc WorkflowRPC
 }
 
 // registerWorkflowTools registers the workflow-related MCP tools.

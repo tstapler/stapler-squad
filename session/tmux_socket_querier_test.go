@@ -5,10 +5,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// fakeTmuxSocketQuerier is an in-memory TmuxSocketQuerier for tests. It lets tests
+// fakeTmuxSocketQuerier is an in-memory tmux.SocketQuerier for tests. It lets tests
 // declare independent live-session sets and down/up states per socket, so
 // multi-socket behavior (e.g. reconcileSessions, CheckAllSessions) is exercisable
 // without a real tmux server.
@@ -83,7 +85,7 @@ func (f *fakeTmuxSocketQuerier) IsServerDown(serverSocket string) bool {
 }
 
 // makeSocketTestInstance builds a minimal managed Instance whose GetTmuxSessionName()
-// returns tmuxSessionName (via a mockTmuxManager-backed process manager) without
+// returns tmuxSessionName (via a procbackendtest.MockTmuxManager-backed process manager) without
 // touching a real tmux server, for reconcileSessions/health-check tests.
 func makeSocketTestInstance(title, tmuxSessionName, socket string, status domain.Status) *instance.Instance {
 	inst := &instance.Instance{
@@ -92,6 +94,6 @@ func makeSocketTestInstance(title, tmuxSessionName, socket string, status domain
 		IsManaged:        true,
 		TmuxServerSocket: socket,
 	}
-	inst.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: tmuxSessionName}))
+	inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(&procbackendtest.MockTmuxManager{TmuxSessionName: tmuxSessionName}))
 	return inst
 }

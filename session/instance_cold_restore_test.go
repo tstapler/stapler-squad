@@ -19,8 +19,7 @@ import (
 
 // TestColdRestore_WithUUID verifies that when the tmux session is dead and a
 // Claude conversation UUID is present, Start(false) performs a cold restore by
-// launching a new tmux session. Note: --resume flag injection is verified at the
-// unit level in claude_command_builder_test.go; this test verifies the lifecycle
+// launching a new tmux session. This test verifies the lifecycle
 // (dead tmux → HasClaudeSession=true → Running).
 func TestColdRestore_WithUUID(t *testing.T) {
 	t.Parallel()
@@ -49,9 +48,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 
 	// Attach a valid Claude session UUID — no live tmux session exists yet.
 	// Uses a valid UUID-v4 so HasClaudeSession() returns true and the cold-restore
-	// branch logs "Cold restoring with --resume". The --resume flag itself is only
-	// appended by ClaudeCommandBuilder for Program="claude"; that is unit-tested
-	// separately in claude_command_builder_test.go.
+	// branch logs "Cold restoring with --resume".
 	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),

@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -54,7 +55,7 @@ func (n *fakeStallNudger) NudgeStalledSession(ctx context.Context, _ *instance.I
 		return cerr
 	}
 	if !ok {
-		return session.ErrNudgeSlotUnavailable
+		return autonomous.ErrNudgeSlotUnavailable
 	}
 	return nil
 }
@@ -154,8 +155,8 @@ func snapshotFor(state domain.ObservedState) domain.StopSnapshot {
 	return s
 }
 
-func stallIn(state domain.ObservedState, reason domain.StopReason) session.AutonomousDriverOutcome {
-	return session.AutonomousDriverOutcome{StopReason: reason, Turns: 2, Snapshot: snapshotFor(state), RunID: 9}
+func stallIn(state domain.ObservedState, reason domain.StopReason) autonomous.AutonomousDriverOutcome {
+	return autonomous.AutonomousDriverOutcome{StopReason: reason, Turns: 2, Snapshot: snapshotFor(state), RunID: 9}
 }
 
 func TestStallRecovery_IdlePromptNudgesAndKeepsAutonomy(t *testing.T) {
@@ -242,11 +243,11 @@ func TestStallRecovery_NudgeFailureFallsBackOrLeavesPane(t *testing.T) {
 		wantOutcome string
 		wantAction  string
 	}{
-		{"not idle", session.ErrNudgeTargetNotIdle, true, "nudge_outcome=not_idle", "action=respawned"},
+		{"not idle", autonomous.ErrNudgeTargetNotIdle, true, "nudge_outcome=not_idle", "action=respawned"},
 		{"lease busy", instance.ErrLeaseBusy, true, "nudge_outcome=lease_busy", "action=respawned"},
-		{"slot unavailable", session.ErrNudgeSlotUnavailable, true, "nudge_outcome=slot_unavailable", "action=respawned"},
+		{"slot unavailable", autonomous.ErrNudgeSlotUnavailable, true, "nudge_outcome=slot_unavailable", "action=respawned"},
 		{"ownership", errors.New("pane owned by another session"), true, "nudge_outcome=ownership", "action=respawned"},
-		{"uncertain delivery", fmt.Errorf("%w: boom", session.ErrNudgeSubmitUncertain), false, "nudge_outcome=uncertain", "action=none"},
+		{"uncertain delivery", fmt.Errorf("%w: boom", domain.ErrNudgeSubmitUncertain), false, "nudge_outcome=uncertain", "action=none"},
 		{"cancelled", context.Canceled, false, "nudge_outcome=ctx_cancelled", "action=none"},
 	}
 	for i, tc := range cases {
@@ -346,15 +347,15 @@ func TestClassifyNudgeError(t *testing.T) {
 		wantLeave   bool
 	}{
 		{"nil", nil, nudgeOutcomeSuccess, false},
-		{"not idle", fmt.Errorf("x: %w", session.ErrNudgeTargetNotIdle), nudgeOutcomeNotIdle, false},
+		{"not idle", fmt.Errorf("x: %w", autonomous.ErrNudgeTargetNotIdle), nudgeOutcomeNotIdle, false},
 		{"lease busy", instance.ErrLeaseBusy, nudgeOutcomeLeaseBusy, false},
-		{"slot unavailable", session.ErrNudgeSlotUnavailable, nudgeOutcomeSlotUnavailable, false},
-		{"claim failed", fmt.Errorf("%w: db down", session.ErrNudgeClaimFailed), nudgeOutcomeSlotUnavailable, false},
-		{"uncertain", fmt.Errorf("%w: %w", session.ErrNudgeSubmitUncertain, errors.New("io")), nudgeOutcomeUncertain, true},
-		{"uncertain wrapping cancel", fmt.Errorf("%w: %w", session.ErrNudgeSubmitUncertain, context.Canceled), nudgeOutcomeUncertain, true},
+		{"slot unavailable", autonomous.ErrNudgeSlotUnavailable, nudgeOutcomeSlotUnavailable, false},
+		{"claim failed", fmt.Errorf("%w: db down", autonomous.ErrNudgeClaimFailed), nudgeOutcomeSlotUnavailable, false},
+		{"uncertain", fmt.Errorf("%w: %w", domain.ErrNudgeSubmitUncertain, errors.New("io")), nudgeOutcomeUncertain, true},
+		{"uncertain wrapping cancel", fmt.Errorf("%w: %w", domain.ErrNudgeSubmitUncertain, context.Canceled), nudgeOutcomeUncertain, true},
 		{"deadline", context.DeadlineExceeded, nudgeOutcomeCtxCancelled, true},
 		{"cancelled", context.Canceled, nudgeOutcomeCtxCancelled, true},
-		{"session not active", fmt.Errorf("%w: uuid", session.ErrNudgeSessionNotActive), nudgeOutcomeNotRestartable, true},
+		{"session not active", fmt.Errorf("%w: uuid", autonomous.ErrNudgeSessionNotActive), nudgeOutcomeNotRestartable, true},
 		{"not restartable", errNotRestartable, nudgeOutcomeNotRestartable, true},
 		{"other", errors.New("anything else"), nudgeOutcomeOwnership, false},
 	}
@@ -421,7 +422,7 @@ func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
 	f := newStallNudgeFixture(t, "stop-in-reattach", domain.BacklogStatusInProgress, true, true)
 	svc := f.svc.AutonomousSvc
 	f.restartFn = func() error {
-		svc.registerDriver(f.title, session.NewAutonomousDriver(f.inst, nil, "goal", 1))
+		svc.registerDriver(f.title, autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1))
 		f.inst.SetAutonomousMode(false, "")
 		return nil
 	}
@@ -499,10 +500,10 @@ func TestOnAutonomousDriverComplete_ReplacedDriverCallbackLeavesNewDriver(t *tes
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	svc := f.svc.AutonomousSvc
-	oldDriver := session.NewAutonomousDriver(f.inst, nil, "goal", 1)
-	newDriver := session.NewAutonomousDriver(f.inst, nil, "goal", 1)
-	session.TestSetAutonomousDriverRunID(t, oldDriver, 1)
-	session.TestSetAutonomousDriverRunID(t, newDriver, 2)
+	oldDriver := autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1)
+	newDriver := autonomous.NewAutonomousDriver(f.inst, nil, "goal", 1)
+	autonomous.TestSetAutonomousDriverRunID(t, oldDriver, 1)
+	autonomous.TestSetAutonomousDriverRunID(t, newDriver, 2)
 	svc.registerDriver(f.title, oldDriver)
 	svc.registerDriver(f.title, newDriver)
 

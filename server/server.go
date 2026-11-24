@@ -30,21 +30,28 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
+	"github.com/tstapler/stapler-squad/server/services/sessionretention"
+	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/prmirror"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -218,7 +225,7 @@ func (s *Server) joinAfterCancel(ctx context.Context, join func()) {
 }
 
 // sessionHealthCheckInterval is how often SessionHealthChecker polls for dead
-// tmux panes and stale sessions. With failureThreshold (session/health.go) at 2
+// tmux panes and stale sessions. With failureThreshold (session/autonomous/health.go) at 2
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
@@ -275,7 +282,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("PRStatusPoller started")
 
 	if deps.Storage != nil {
-		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
+		mirrorReconciler := prmirror.NewReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
 		mirrorReconciler.Start(serverCtx)
 		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
 
@@ -291,6 +298,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.StopPRMaintenance != nil {
 		srv.joinAfterCancel(serverCtx, deps.StopPRMaintenance)
 	}
+	if deps.StopBootInit != nil {
+		srv.joinAfterCancel(serverCtx, deps.StopBootInit)
+	}
 
 	if deps.SessionTagClassificationPoller != nil {
 		deps.SessionTagClassificationPoller.Start(serverCtx)
@@ -303,9 +313,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// started-but-tmux-missing instances, marking dead panes Crashed/Stopped so
 	// the UI can surface a banner instead of raw pane text. Previously this
 	// checker was constructed only in tests and never actually started in
-	// production -- see session/health.go.
+	// production -- see session/autonomous/health.go.
 	if deps.Storage != nil {
-		healthChecker := session.NewSessionHealthChecker(deps.Storage, session.WithDeadPaneRecorder(deps.SessionService.DeadPaneRecorder()))
+		healthChecker := autonomous.NewSessionHealthChecker(deps.Storage, autonomous.WithDeadPaneRecorder(deps.SessionService.DeadPaneRecorder()))
 		srv.goBackground(func() {
 			healthChecker.ScheduledHealthCheck(sessionHealthCheckInterval, serverCtx.Done())
 		})
@@ -467,6 +477,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		srv.startGateStatsWriter(serverCtx, deps, gate, configDir, configErr)
 	}
 	srv.startLeaseWedgeWatcher(serverCtx, deps)
+	deps.SessionService.StartSearchIndexSync(serverCtx)
+	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.WaitSearchIndexSync)
 
 	// Initialize push notification service.
 	if configErr == nil {
@@ -952,7 +964,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	} else if err := importer.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
 		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
 	}
-	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
+	importSvc := importsvc.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
 	importOpts := append(
 		ConnectOptions(deps.ErrorRegistry),
 		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
@@ -1191,9 +1203,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		if webhookCfg.GetFeatureFlag("webhook_triggers") {
 			// deps.BacklogLifecycleListener is nil-guarded (rather than passed directly)
 			// to avoid boxing a nil *session.BacklogLifecycleListener into a non-nil
-			// services.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
+			// webhooktrigger.PRFixEventRouter interface value (a "typed nil" — handlePRFixEvent's
 			// `h.prFixRouter == nil` check would then never trip).
-			var prFixRouter services.PRFixEventRouter
+			var prFixRouter webhooktrigger.PRFixEventRouter
 			if deps.BacklogLifecycleListener != nil {
 				prFixRouter = deps.BacklogLifecycleListener
 			}
@@ -1204,9 +1216,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// be nil (not constructed when no GitHub token is available at startup);
 			// the adapter itself nil-guards it.
 			pollerInvalidator := prpoller.NewPollerInvalidationAdapter(deps.PRStatusPoller, deps.WorktreePRPoller)
-			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter, pollerInvalidator)
+			githubWebhookHandler := webhooktrigger.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter, pollerInvalidator)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
-			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
+			genericWebhookHandler := webhooktrigger.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
 			genericWebhookHandler.RegisterRoutes(srv.mux)
 			log.Info("Registered webhook-trigger receivers at POST /webhooks/{github,{slug}}")
 		} else {
@@ -1248,6 +1260,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
 	// being skipped.
 	autoReopener := mcpAutoReopener(deps.BacklogService)
+	backlogRPC := mcpBacklogRPC(deps.BacklogService)
 	// Reuses the same liveness primitive wired onto BacklogLifecycleListener
 	// (see newSessionLivenessChecker's doc comment in dependencies.go) so
 	// link_session_to_item's exclusivity check doesn't trust a stale
@@ -1256,7 +1269,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Registry != nil {
 		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck, mcpCoreOptions(deps)...)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, mcpSessionRPC(deps.SessionService), deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.BacklogEnabledCheck, autoReopener, backlogRPC, mcpLiveCheck, mcpCoreOptions(deps)...)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)
@@ -1299,13 +1312,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// (every cross-host lookup reports "not-registered") only if configDir
 	// couldn't be determined.
 	if deps.Storage != nil {
-		var hostResolver services.HostResolver
+		var hostResolver federation.HostResolver
 		if configErr == nil {
-			hostResolver = services.NewRegistryHostResolver(configDir, hostclaim.DefaultHostRegistryTTL)
+			hostResolver = federation.NewRegistryHostResolver(configDir, hostclaim.DefaultHostRegistryTTL)
 		} else {
 			log.Warn("Deep-link resolver falling back to unimplemented host resolver: config dir unavailable", "err", configErr)
 		}
-		deepLinkResolver := services.NewDeepLinkResolver(deps.Storage, hostResolver)
+		deepLinkResolver := federation.NewDeepLinkResolver(deps.Storage, hostResolver)
 		deepLinkResolver.RegisterRoutes(srv.mux)
 		log.Info("Registered deep-link resolver at /api/deep-link/resolve")
 	}
@@ -1507,12 +1520,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
-		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
+		hibSweeper := sweeper.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())
 		if deps.ReviewQueuePoller != nil {
-			sweeper.SetLiveProvider(deps.ReviewQueuePoller)
+			hibSweeper.SetLiveProvider(deps.ReviewQueuePoller)
 		}
-		deps.SessionService.SetMemoryCacheReader(sweeper)
-		srv.goBackground(func() { sweeper.Start(serverCtx) })
+		deps.SessionService.SetMemoryCacheReader(hibSweeper)
+		srv.goBackground(func() { hibSweeper.Start(serverCtx) })
 		log.Info("Hibernation sweeper started",
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}
@@ -1523,7 +1536,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// instance (OrphanedTmuxSweeper.Start re-checks this itself; ReviewQueuePoller
 	// nil-check here just avoids starting a sweeper that could never sweep).
 	if deps.ReviewQueuePoller != nil {
-		orphanSweeper := session.NewOrphanedTmuxSweeper()
+		orphanSweeper := sweeper.NewOrphanedTmuxSweeper()
 		orphanSweeper.SetLiveProvider(deps.ReviewQueuePoller)
 		srv.goBackground(func() { orphanSweeper.Start(serverCtx) })
 	}
@@ -1540,7 +1553,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Start session retention sweeper (deletes archived sessions past the retention
 	// window once they pass safety checks — see SessionRetentionSweeper doc comment).
 	if cfg.SessionRetention.EnabledOrDefault() {
-		retentionSweeper := services.NewSessionRetentionSweeper(deps.Storage, cfg, deps.SessionService)
+		retentionSweeper := sessionretention.NewSessionRetentionSweeper(deps.Storage, cfg, deps.SessionService)
 		srv.goBackground(func() { retentionSweeper.Start(serverCtx) })
 		log.Info("Session retention sweeper started",
 			"retention_days", cfg.SessionRetention.RetentionDaysOrDefault())
@@ -1818,7 +1831,7 @@ const shutdownHooksTimeout = 30 * time.Second
 // zombie_detector.go's ScanZombies shells out to `ps` under its own 10s
 // timeout, so this value is not generous headroom above that — a stuck `ps`
 // call can consume the whole budget. Kept at 10s to match stopJoinTimeout's
-// order of magnitude (session/pty_discovery.go) rather than guessing a larger
+// order of magnitude (session/ptydiscovery/pty_discovery.go) rather than guessing a larger
 // number; revisit if the join-timeout warning fires in practice.
 //
 // This is the production default, set on Server.backgroundTasksJoinTimeout by

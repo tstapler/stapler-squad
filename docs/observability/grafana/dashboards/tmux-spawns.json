@@ -136,7 +136,7 @@
     {
       "id": 3,
       "title": "tmux spawns per minute by site",
-      "description": "site = the function that built the command (tmux_exec_site_total), e.g. CapturePaneContentContext vs batchPaneActivity.",
+      "description": "site = the function that built the command (tmux_exec_site_total), e.g. CapturePaneContentContext vs ListAllPanes.",
       "type": "timeseries",
       "gridPos": {
         "h": 8,

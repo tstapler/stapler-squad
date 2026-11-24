@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // memFS is an in-memory fsOps with injectable faults. A stalled fsync is a
@@ -174,7 +176,7 @@ type memAppend struct {
 	path string
 }
 
-func (m *memFS) OpenAppend(path string, perm os.FileMode) (appendFile, error) {
+func (m *memFS) OpenAppend(path string, perm os.FileMode) (fsops.AppendFile, error) {
 	m.mu.Lock()
 	if _, ok := m.files[path]; !ok {
 		m.files[path] = nil

@@ -8,9 +8,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/registry"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // commitMu serializes the collision-check-then-create critical section in
@@ -55,11 +57,11 @@ var ErrAmbiguousWithoutChoice = errors.New("import commit: correlation is ambigu
 type CommitImportParams struct {
 	Detector     *instance.HistoryFileDetector
 	Storage      session.InstanceStore
-	Registry     *session.Registry
+	Registry     *registry.Registry
 	Linker       *HistoryLinker
 	Suspended    *SuspendedProcessStore
 	AliveChecker AliveChecker
-	TmuxQuerier  session.TmuxSocketQuerier
+	TmuxQuerier  tmux.SocketQuerier
 
 	Candidate            ExternalSessionCandidate
 	ExpectedCorrelation  CorrelationResult
@@ -259,7 +261,7 @@ func startAndSuspend(_ context.Context, params CommitImportParams, instance *ins
 		}
 	}
 
-	if err := session.SuspendOriginalProcess(params.OriginalPID); err != nil {
+	if err := SuspendOriginalProcess(params.OriginalPID); err != nil {
 		if params.Suspended != nil {
 			_ = params.Suspended.Remove(instance.Title)
 		}

@@ -5,7 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/paneactivity"
 )
 
 // coreFlagSpecs are the flags whose name constants live in package services. A flag owned by a leaf package
@@ -71,7 +71,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
-		Name:        CrossHostClaimDedupFlagName,
+		Name:        featureflags.CrossHostClaimDedupFlagName,
 		Description: "Cross-host duplicate-work prevention: before importing a GitHub issue or creating an item with an external URL, and before dequeuing a queued item, check whether another stapler-squad host already claimed that URL. A blocked import offers 'Import anyway' with an audited reason; a blocked dequeue shows up as a stuck item with an override. Claims are always recorded regardless. Default: off.",
 	},
 	{
@@ -133,7 +133,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "pi coding agent support: program picker entry, resume across restarts, and approval-rule enforcement parity with Claude Code. Default: off. Disabling does not remove an already-installed global pi approval extension — see the settings UI warning.",
 	},
 	{
-		Name:        session.FeatureFlagDriverPaneActivityGate,
+		Name:        paneactivity.FeatureFlagDriverPaneActivityGate,
 		Description: "Session driver: skip the per-tick capture-pane when the pane has produced no output since the last capture (one shared list-panes snapshot for all sessions instead of one capture-pane per session per 2 s tick). Kill switch: turn off to capture every tick as before. Default: on.",
 		Default:     config.DriverPaneActivityGateDefault,
 	},
@@ -157,6 +157,10 @@ var coreFlagSpecTable = []featureflags.Spec{
 	{
 		Name:        "batch_unary",
 		Description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		Name:        "history_search_streaming",
+		Description: "History page full-text search uses the server-streaming StreamSearchClaudeHistory RPC and renders result batches as they arrive, instead of one unary SearchClaudeHistory call. Kill switch: turn off to fall back to the unary call. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
 		Name:        "diagnose-session-panel",

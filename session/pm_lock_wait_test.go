@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 )
 
 func pmLockWaitTotal() uint64 {
@@ -23,7 +24,7 @@ func pmLockWaitTotal() uint64 {
 func TestInstancePM_should_RecordTheWaitOnlyWhenPmMuIsContended(t *testing.T) {
 	t.Parallel()
 	inst := &instance.Instance{Title: "pm-wait"}
-	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
+	inst.SetProcessManagerForTest(&procbackendtest.FakeSendKeysProcessManager{})
 	before := pmLockWaitTotal()
 
 	inst.PMForTest()

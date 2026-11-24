@@ -1,12 +1,12 @@
 ---
 title: 'GitHub Webhooks — Scoping Public Reachability'
-description: 'Enabling webhook_triggers registers POST /webhooks/github (server/server.go, server/services/github_webhook_handler.go) so GitHub can push delivery notifications to your stapler-squad instance instead of it having to poll.'
+description: 'Enabling webhook_triggers registers POST /webhooks/github (server/server.go, server/services/webhooktrigger/github_webhook_handler.go) so GitHub can push delivery notifications to your stapler-squad instance instead of it having to poll.'
 ---
 
 # GitHub Webhooks — Scoping Public Reachability
 
 Enabling `webhook_triggers` registers `POST /webhooks/github`
-(`server/server.go`, `server/services/github_webhook_handler.go`) so GitHub can push
+(`server/server.go`, `server/services/webhooktrigger/github_webhook_handler.go`) so GitHub can push
 delivery notifications to your stapler-squad instance instead of it having to poll.
 GitHub calls this endpoint from GitHub's own servers, not from your LAN — the instance
 must be reachable from the public internet at that path for deliveries to arrive.

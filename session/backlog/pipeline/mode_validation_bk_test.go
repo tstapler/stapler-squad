@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 // TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_When_TableDrivenOverAllPlaceholdersPlusOneBogusToken
@@ -37,7 +37,7 @@ func TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_W
 			rendered := renderTemplate(tmpl, placeholders)
 			substituted := !strings.Contains(rendered, "{{"+token+"}}")
 
-			err := session.ValidatePipelineModeContent(session.PipelineModeContentFields{
+			err := pipelinemode.ValidatePipelineModeContent(pipelinemode.PipelineModeContentFields{
 				TriagePromptTemplate: tmpl,
 			})
 			accepted := err == nil

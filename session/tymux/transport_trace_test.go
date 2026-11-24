@@ -39,7 +39,7 @@ var traceSpanRecorder *tracetest.SpanRecorder
 
 // installTraceProvider sets the process-global provider and W3C propagator
 // once; OTel's global only takes the first SetTracerProvider (see
-// session/backend_observability_test.go for the same constraint).
+// session/procbackend/backend_observability_test.go for the same constraint).
 func installTraceProvider() *tracetest.SpanRecorder {
 	traceProviderOnce.Do(func() {
 		traceSpanRecorder = tracetest.NewSpanRecorder()

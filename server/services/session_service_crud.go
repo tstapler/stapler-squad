@@ -9,11 +9,12 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 )
 
 // hiddenVisibleInList applies include_hidden / hidden_only to one session. hidden_only
@@ -63,7 +64,7 @@ func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries
 		if row, ok := byUUID[e.uuid]; ok {
 			is = &row
 		}
-		e.proto.BackgroundOutcome = string(session.ComputeBackgroundOutcome(e.status, is))
+		e.proto.BackgroundOutcome = string(itemlink.ComputeBackgroundOutcome(e.status, is))
 	}
 }
 
@@ -78,7 +79,7 @@ func (s *SessionService) ListSessions(
 	if err != nil || s.federation == nil || req.Msg.HiddenOnly {
 		return resp, err
 	}
-	resp.Msg.Sessions = append(resp.Msg.Sessions, s.federation.filtered(req.Msg)...)
+	resp.Msg.Sessions = append(resp.Msg.Sessions, s.federation.Filtered(req.Msg)...)
 	return resp, nil
 }
 
@@ -106,7 +107,7 @@ func (s *SessionService) LocalPaneSnapshot(sessionID string) (string, error) {
 }
 
 // SetFederation enables merging peer sessions into ListSessions.
-func (s *SessionService) SetFederation(f *FederatedSessions) { s.federation = f }
+func (s *SessionService) SetFederation(f *federation.FederatedSessions) { s.federation = f }
 
 // instanceMatchesListFilters applies ListSessions' status, category, hidden,
 // archived and workflow filters to a managed instance.
@@ -284,7 +285,7 @@ func (s *SessionService) GetSession(
 // feature flag is off (default), on any detection/lookup failure, when there's no concrete
 // storage backing this service, or when there are no peers. Best-effort: this is a
 // convenience nudge, not required session context. Delegates to
-// session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
+// workspacepeers.Lister.BlockForPath, shared with BacklogService's initialPromptFor so the
 // two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
 	return WorkspacePeersBlockFor(ctx, s.concStorage, repoPath)

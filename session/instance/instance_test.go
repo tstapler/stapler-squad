@@ -634,7 +634,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 // server/dependencies.go's Step 6 startup loop unconditionally calls Start(false)
 // on every !Started() instance, which would have silently auto-resumed every
 // Crashed session on the very next server restart -- exactly what the Crashed
-// status (session/health.go's "must not be silently respawned" comment, and
+// status (session/autonomous/health.go's "must not be silently respawned" comment, and
 // ResumeCrashedSession requiring an explicit user/automation action) is meant
 // to prevent. Pins that a Crashed instance loaded via LoadInstances() (which
 // always uses deferStart=true) comes back with Started()==true, so Step 6

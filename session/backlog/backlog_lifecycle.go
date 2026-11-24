@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
+	"github.com/tstapler/stapler-squad/session/conflictretry"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -27,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -154,12 +156,12 @@ type BacklogLifecycleListener struct {
 	ciReruns   ciRerunLedger
 
 	// conflictRetries throttles conflict-only PR fixes (see remediatePRFixWithBackoffGate).
-	conflictRetries    session.ConflictRetryLedger
+	conflictRetries    conflictretry.ConflictRetryLedger
 	conflictRetryClock func() time.Time // nil: time.Now
 
 	// terminalSettled lets the 60s done/archived safety-net sweeps skip items they
 	// already fully handled (see terminalSweepSettleTTL); sweepClock nil: time.Now.
-	terminalSettled session.SettledTracker
+	terminalSettled terminalstate.SettledTracker
 	sweepClock      func() time.Time
 
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
@@ -217,7 +219,7 @@ type BacklogLifecycleListener struct {
 	sessionLivenessCheckerMu sync.RWMutex
 	// sessionLivenessChecker reports whether the tmux/CLI process backing a
 	// session UUID is still alive. Injected via SetSessionLivenessChecker;
-	// wired in production to session.Registry (Instance.TmuxSessionExists) —
+	// wired in production to registry.Registry (Instance.TmuxSessionExists) —
 	// reused, not reinvented, per pre-mortem F3 / Task 2.1.3d. Nil-safe: when
 	// unset, the zombie-session detector treats liveness as unknown and does
 	// not flag (conservative default for tests that don't wire this).
@@ -2057,7 +2059,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 		return
 	}
 	for _, row := range open {
-		if session.IsTerminalStatus(row.ItemStatus) {
+		if terminalstate.IsTerminalStatus(row.ItemStatus) {
 			// Blanket terminal rule — see doc comment above. An item that has
 			// truly finished has nothing left needing operator attention,
 			// regardless of which reason its stuck row is for.

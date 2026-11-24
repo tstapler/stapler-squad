@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 )
 
 // knownEndReasonProducers lists every end_reason value passed to
@@ -24,11 +24,11 @@ var knownEndReasonProducers = []string{
 func TestEndReasonClassification_ShouldCoverEveryKnownProducer(t *testing.T) {
 	t.Parallel()
 	for _, r := range knownEndReasonProducers {
-		_, fail := session.FailureEndReasons[r]
-		_, non := session.NonFailureEndReasons[r]
+		_, fail := itemlink.FailureEndReasons[r]
+		_, non := itemlink.NonFailureEndReasons[r]
 		assert.Truef(t, fail != non, "end_reason %q must be in exactly one of the failure/non-failure maps", r)
 	}
-	for r := range session.FailureEndReasons {
-		assert.NotContains(t, session.NonFailureEndReasons, r)
+	for r := range itemlink.FailureEndReasons {
+		assert.NotContains(t, itemlink.NonFailureEndReasons, r)
 	}
 }

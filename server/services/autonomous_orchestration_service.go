@@ -12,6 +12,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -44,7 +45,7 @@ type AutonomousOrchestrationService struct {
 
 	// mu guards drivers (registry membership only — not Instance state).
 	mu      sync.Mutex
-	drivers map[string]*session.AutonomousDriver
+	drivers map[string]*autonomous.AutonomousDriver
 
 	// lifecycleCtx is the server's root context. Set via SetLifecycleContext.
 	// Autonomous driver goroutines are bound to this so they exit with the server.
@@ -117,7 +118,7 @@ func (a *AutonomousOrchestrationService) TriggerReviewForSession(sessionUUID str
 func NewAutonomousOrchestrationService(pool *headless.Pool, bus *events.EventBus) *AutonomousOrchestrationService {
 	a := &AutonomousOrchestrationService{
 		bus:     bus,
-		drivers: make(map[string]*session.AutonomousDriver),
+		drivers: make(map[string]*autonomous.AutonomousDriver),
 	}
 	a.SetPool(pool) // nil *Pool must stay an untyped-nil interface
 	return a
@@ -163,7 +164,7 @@ func (a *AutonomousOrchestrationService) driverCtx() context.Context {
 }
 
 // registerDriver records a running AutonomousDriver in the registry so it can be stopped later.
-func (a *AutonomousOrchestrationService) registerDriver(sessionTitle string, d *session.AutonomousDriver) {
+func (a *AutonomousOrchestrationService) registerDriver(sessionTitle string, d *autonomous.AutonomousDriver) {
 	a.mu.Lock()
 	old := a.drivers[sessionTitle]
 	a.drivers[sessionTitle] = d
@@ -222,7 +223,7 @@ func (a *AutonomousOrchestrationService) StopDriverForSession(sessionTitle strin
 // buildTurnCallback returns the TurnCallback wired for inst.
 // Shared by StartAutonomousDriverForInstance and StartAutonomousDriverWithTimeout
 // to prevent divergence over time.
-func (a *AutonomousOrchestrationService) buildTurnCallback(inst *instance.Instance) session.TurnCallback {
+func (a *AutonomousOrchestrationService) buildTurnCallback(inst *instance.Instance) autonomous.TurnCallback {
 	return func(turn, maxTurns int, prompt string) {
 		if a.instanceFinder != nil {
 			if liveInst := a.instanceFinder(inst.Title); liveInst != nil {
@@ -252,15 +253,15 @@ func (a *AutonomousOrchestrationService) buildTurnCallback(inst *instance.Instan
 // cost onto inst's linked ItemSession, if any. Falls back to session.NoopDriverOption
 // when storageGetter isn't wired — same nil-guard shape as onAutonomousDriverComplete's
 // storageGetter lookup above.
-func (a *AutonomousOrchestrationService) withCostSink(inst *instance.Instance) session.DriverOption {
+func (a *AutonomousOrchestrationService) withCostSink(inst *instance.Instance) autonomous.DriverOption {
 	if a.storageGetter == nil {
-		return session.NoopDriverOption
+		return autonomous.NoopDriverOption
 	}
 	concreteStorage := a.storageGetter()
 	if concreteStorage == nil {
-		return session.NoopDriverOption
+		return autonomous.NoopDriverOption
 	}
-	return session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, inst.UUID))
+	return autonomous.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, inst.UUID))
 }
 
 // StartAutonomousDriverForInstance starts an AutonomousDriver on inst if the pool is available.
@@ -270,7 +271,7 @@ func (a *AutonomousOrchestrationService) StartAutonomousDriverForInstance(inst *
 		log.Warn("[AutonomousOrchestrationService] StartAutonomousDriverForInstance: pool is nil", "session", inst.Title)
 		return
 	}
-	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), a.withCostSink(inst))
+	driver := autonomous.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.OnAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {
@@ -298,7 +299,7 @@ func (a *AutonomousOrchestrationService) startDriver(inst *instance.Instance, st
 	if a.pool == nil {
 		return errors.New("headless pool unavailable")
 	}
-	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), session.WithStartupTimeout(startupTimeout), a.withCostSink(inst))
+	driver := autonomous.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), autonomous.WithStartupTimeout(startupTimeout), a.withCostSink(inst))
 	driver.RegisterCompletionCallback(a.OnAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {
@@ -319,7 +320,7 @@ var _ interface {
 
 // onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
 // Updates the linked backlog item status and fires a push notification.
-func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) { //nolint:gocognit,gocyclo,funlen // moved verbatim by the package split; simplification is a separate change
+func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName string, outcome autonomous.AutonomousDriverOutcome) { //nolint:gocognit,gocyclo,funlen // moved verbatim by the package split; simplification is a separate change
 	// One "stopped" line per stop, on every return path, with the final recovery.
 	rec := stopRecord{
 		Session:  instanceName,
@@ -462,7 +463,7 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 						if !outcome.Done {
 							stall = a.handleWorkStall(ctx, recoveryCtx, concreteStorage, inst, item, is, &rec, outcome, applyStop)
 						} else {
-							// The orchestrator LLM (session/autonomous_driver.go's
+							// The orchestrator LLM (session/autonomous/autonomous_driver.go's
 							// autonomousSystemPrompt) judges "done" purely from a raw
 							// terminal-tail snapshot (buildOrchestrationPrompt) — it has no
 							// visibility into acceptance criteria, committed diff state, or
@@ -536,7 +537,7 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 							// BUG-048: still genuinely stuck in review. A review-role autonomous
 							// driver that hits its turn cap without a DONE signal does NOT kill
 							// the underlying tmux/CLI session — AutonomousDriver.run
-							// (session/autonomous_driver.go) simply stops injecting turns — so the
+							// (session/autonomous/autonomous_driver.go) simply stops injecting turns — so the
 							// ItemSession row stays EndedAt == nil ("active") indefinitely. That
 							// single fact hides this item from both existing subsystems that could
 							// otherwise recover it:
@@ -664,7 +665,7 @@ type notifyOverride struct {
 // recovery (ADR-001), writes the stuck row, applies the instance stop once, then
 // nudges the idle session or ends the ItemSession and dispatches a respawn.
 // ctx is the outer Background ctx; every storage write here uses it.
-func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx context.Context, concreteStorage *session.Storage, inst *instance.Instance, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary, rec *stopRecord, outcome session.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
+func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx context.Context, concreteStorage *session.Storage, inst *instance.Instance, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary, rec *stopRecord, outcome autonomous.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
 	if recoveryCtx.Err() != nil {
 		// A stop was requested while this stop was being recorded: the stopper owns the outcome.
 		rec.Recovery = stopRecovery{Action: stopActionNone, NudgeOutcome: nudgeOutcomeCtxCancelled}
@@ -753,7 +754,7 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx contex
 
 // stopObservedAsPlain turns autonomy off after a nudge that did not end in a
 // re-attached driver (no driver is left running for the session).
-func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *instance.Instance, outcome session.AutonomousDriverOutcome, stopRequested bool) {
+func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *instance.Instance, outcome autonomous.AutonomousDriverOutcome, stopRequested bool) {
 	a.mu.Lock()
 	_, running := a.drivers[inst.Snapshot().Title]
 	a.mu.Unlock()
@@ -769,7 +770,7 @@ func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *instance.Inst
 // respawnStalledWork ends the stalled ItemSession and, subject to the
 // remediation backoff, dispatches a respawn (the pre-nudge behaviour, unchanged).
 // It reports whether a respawn was actually dispatched.
-func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary, outcome session.AutonomousDriverOutcome) (dispatched bool) {
+func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary, outcome autonomous.AutonomousDriverOutcome) (dispatched bool) {
 	log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
 	// A stopped driver leaves the pane live; end the ItemSession now so the respawn's
 	// liveness check does not self-block on it (BUG-048).
@@ -821,7 +822,7 @@ func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context,
 // AutonomousMode on (the approval gate reads it), as does a shutdown stop while
 // re-adoption is enabled; every other action ends autonomy.
 // The returned error is non-nil only when the instance actor is gone.
-func (a *AutonomousOrchestrationService) applyInstanceStop(inst *instance.Instance, action domain.StallAction, outcome session.AutonomousDriverOutcome) error {
+func (a *AutonomousOrchestrationService) applyInstanceStop(inst *instance.Instance, action domain.StallAction, outcome autonomous.AutonomousDriverOutcome) error {
 	reason := outcome.NormalizedStopReason()
 	var err error
 	switch {

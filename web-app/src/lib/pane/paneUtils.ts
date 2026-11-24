@@ -1,4 +1,4 @@
-import { PaneId, PaneNode, LeafPane, SplitPane, PaneState, SessionDetailTab, PaneViewKind } from "./paneTypes";
+import type { PaneId, PaneNode, LeafPane, SplitPane, PaneState, SessionDetailTab, PaneViewKind } from "./paneTypes";
 
 export const MIN_RATIO = 0.1;
 export const MAX_RATIO = 0.9;
@@ -209,4 +209,30 @@ function getFirstLeaf(node: PaneNode): LeafPane {
 function getLastLeaf(node: PaneNode): LeafPane {
   if (node.type === "leaf") return node;
   return getLastLeaf(node.second);
+}
+
+/**
+ * Moves the content at leaf position `from` to position `to`, shifting the leaves in between, as a series
+ * of adjacent swaps (the only content-move primitive the reducer has). `focusIndex` is where the content
+ * that was at `focusedIndex` ends up, so focus can follow it.
+ */
+export function planLeafMove(
+  leafIds: PaneId[],
+  from: number,
+  to: number,
+  focusedIndex: number,
+): { swaps: Array<[PaneId, PaneId]>; focusIndex: number } {
+  const last = leafIds.length - 1;
+  if (from === to || from < 0 || to < 0 || from > last || to > last) {
+    return { swaps: [], focusIndex: focusedIndex };
+  }
+  const step = from < to ? 1 : -1;
+  const swaps: Array<[PaneId, PaneId]> = [];
+  for (let k = from; k !== to; k += step) swaps.push([leafIds[k], leafIds[k + step]]);
+
+  let focusIndex = focusedIndex;
+  if (focusedIndex === from) focusIndex = to;
+  else if (step === 1 && focusedIndex > from && focusedIndex <= to) focusIndex = focusedIndex - 1;
+  else if (step === -1 && focusedIndex < from && focusedIndex >= to) focusIndex = focusedIndex + 1;
+  return { swaps, focusIndex };
 }

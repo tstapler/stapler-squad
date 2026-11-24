@@ -86,7 +86,7 @@ In `proto/session/v1/types.proto`, `Session` carries `repeated SessionPullReques
 | `ssq_session_pr_count` | same |
 | `ssq_pr_discovery_list_calls_total` | same |
 | `ssq_pr_unverified_terminal_rows` | same |
-| `ssq_session_pr_mirror_drift_total{kind}` | `session/session_pr_mirror_reconciler.go` |
+| `ssq_session_pr_mirror_drift_total{kind}` | `session/prmirror/reconciler.go` |
 | `ssq_cleanup_gate_blocked_total{path}`, `ssq_cleanup_gate_blocked_items{path}` | `session/pr_cleanup_gate_metrics.go` |
 | `ssq_pr_live_work_hold_total{result}` | `session/pr_live_work_metrics.go` |
 | `ssq_artifact_blob_bytes`, `ssq_artifact_browse_total`, `ssq_artifact_index_docs`, `ssq_artifact_search_queries_total`, `ssq_artifact_search_seconds` | `session/artifacts`, `session/search`, `server/services` |

@@ -275,7 +275,7 @@ func Dynamic(c string)  { _ = TransitionRequest{Caller: pick(c)} }
 
 func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t *testing.T) {
 	for _, actor := range []string{instance.TriggeredByUser, instance.TriggeredByAgent, instance.TriggeredBySystem, "robot", ""} {
-		ctx := WithTransitionActor(t.Context(), actor)
+		ctx := domain.WithTransitionActor(t.Context(), actor)
 		_, ok := domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)
 		ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)

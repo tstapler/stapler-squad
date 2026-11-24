@@ -10,7 +10,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 )
 
 // defaultProgramID is create_session/create_session_for_pr's fallback when
@@ -27,7 +26,7 @@ const programDescription = "Program to run (default: claude). Accepts any regist
 // programIDs returns the program IDs svc currently knows about, live (not
 // cached). Returns nil if svc is nil or the call errs -- a missing enum is
 // non-fatal, matching the hardcoded-enum behavior this replaces.
-func programIDs(ctx context.Context, svc *services.SessionService) []string {
+func programIDs(ctx context.Context, svc ProgramLister) []string {
 	if svc == nil {
 		return nil
 	}
@@ -48,7 +47,7 @@ func programIDs(ctx context.Context, svc *services.SessionService) []string {
 // single source of truth eliminating the two-file hand-copied
 // Enum("claude", "aider") the two tools previously accumulated independently.
 // Runs once at tool-registration time, so its enum is a startup snapshot.
-func programSchemaOptions(svc *services.SessionService) []mcpgo.PropertyOption {
+func programSchemaOptions(svc ProgramLister) []mcpgo.PropertyOption {
 	opts := []mcpgo.PropertyOption{mcpgo.Description(programDescription)}
 	if ids := programIDs(context.Background(), svc); len(ids) > 0 {
 		opts = append(opts, mcpgo.Enum(ids...))
@@ -60,7 +59,7 @@ func programSchemaOptions(svc *services.SessionService) []mcpgo.PropertyOption {
 // programs svc currently knows about (a live check -- unlike
 // programSchemaOptions' registration-time enum), or "" when program is
 // recognized or the known list is unavailable.
-func programWarningFor(ctx context.Context, svc *services.SessionService, program string) string {
+func programWarningFor(ctx context.Context, svc ProgramLister, program string) string {
 	known := programIDs(ctx, svc)
 	if len(known) == 0 || slices.Contains(known, program) {
 		return ""

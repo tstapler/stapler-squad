@@ -21,13 +21,14 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // --- Session UUID context injection ---
@@ -293,6 +294,7 @@ type ReviewTrigger interface {
 
 type backlogHandlers struct {
 	storage       *session.Storage
+	guidance      GuidanceStore // same storage; the guidance tools read only this slice
 	store         session.InstanceStore
 	gate          *callerIdentityGate      // shared identity gate (one wake-metrics instance); nil builds a metrics-less one
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
@@ -311,7 +313,7 @@ type backlogHandlers struct {
 	// AttachSessionToItem call. Concrete type per this package's existing convention
 	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
-	backlogSvc *backlogsvc.BacklogService
+	backlogSvc BacklogRPC
 
 	// plugins resolves the tracker plugins behind import_linear_issue / import_jira_issue.
 	plugins *session.PluginRegistry
@@ -653,7 +655,7 @@ func isStaleVerdict(item *backlogdto.BacklogItemData, verdict *backlogdto.Review
 // re-requested: no reviewer is live and the latest verdict is missing, stale, or
 // not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
 func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary, verdict *backlogdto.ReviewVerdictSummary) bool {
-	if backlogsvc.HasActiveReviewSession(sessions) {
+	if backlogdto.HasActiveReviewSession(sessions) {
 		return false
 	}
 	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(domain.ReviewVerdictPass)
@@ -663,7 +665,7 @@ func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdt
 // ItemSession on success. On failure it returns a ready-to-return
 // *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
 // doesn't exist) from PERMISSION_DENIED (the item exists but this session has
-// no link to it). A thin adapter over session.ResolveItemLink, which holds
+// no link to it). A thin adapter over itemlink.ResolveItemLink, which holds
 // the actual disambiguation logic — see that function's doc comment and
 // project_plans/backlog-link-error-consistency/research/stack.md. Extracted
 // (not reimplemented) so the ConnectRPC GuidanceRequestService's own
@@ -671,14 +673,14 @@ func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdt
 // independently-maintained copy (durable-guidance-request plan, Task
 // 2.1.2a-pre).
 func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
+	itemSession, linkErr := itemlink.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
 	switch linkErr.Code {
-	case session.ItemLinkNotFound:
+	case itemlink.ItemLinkNotFound:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
-	case session.ItemLinkPermissionDenied:
+	case itemlink.ItemLinkPermissionDenied:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
@@ -751,7 +753,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 	if payload.Item != nil {
 		res.Status = payload.Item.Status
 		status := domain.BacklogStatus(payload.Item.Status)
-		if session.IsTerminalStatus(status) {
+		if terminalstate.IsTerminalStatus(status) {
 			res.IsTerminal = true
 		}
 	}
@@ -784,7 +786,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 // pre-satisfies.
 func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdto.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
 	status := domain.BacklogStatus(item.Status)
-	terminal := session.IsTerminalStatus(status)
+	terminal := terminalstate.IsTerminalStatus(status)
 
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
 		return &WaitForBacklogEventResult{
@@ -799,7 +801,7 @@ func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdt
 			IsTerminal:       terminal,
 		}
 	}
-	// Deliberately Archived-only, not session.IsTerminalStatus: this branch
+	// Deliberately Archived-only, not terminalstate.IsTerminalStatus: this branch
 	// matches the "item_archived" event kind specifically, not general
 	// terminal-ness — a "done" (or custom-terminal) item must not satisfy an
 	// eventTypeItemArchived wait (Epic 2.1, Story 2.1.3 sweep — reviewed,
@@ -1490,7 +1492,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if backlogsvc.HasActiveReviewSession(itemSessions) {
+		if backlogdto.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
@@ -1513,7 +1515,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if backlogsvc.HasActiveReviewSession(itemSessions) {
+		if backlogdto.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 	}
@@ -2528,7 +2530,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		// Same live check the web import runs; a disabled flag, an error or an
 		// indeterminate result never blocks (LookupCrossHostClaim reports those
 		// as unclaimed or an error we ignore).
-		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == hostclaim.ClaimHeldByOther {
 			return errResult(ErrInvalidArgument,
 				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", issue.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
 				"Open that link to see the owning item, or import from the web UI with an override reason."), nil

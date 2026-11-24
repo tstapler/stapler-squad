@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/summaries"
 )
@@ -232,7 +232,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 			log.Warn("[CreateDirectorySession] failed to start controller after wiring", "session", opts.Title, "err", ctrlErr)
 		}
 	}
-	session.StartSessionDriver(instance, path)
+	driver.StartSessionDriver(instance, path)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
@@ -299,7 +299,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 			log.Warn("[CreateWorktreeSession] failed to start controller after wiring", "session", opts.Title, "err", ctrlErr)
 		}
 	}
-	session.StartSessionDriver(instance, repoPath)
+	driver.StartSessionDriver(instance, repoPath)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)

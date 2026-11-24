@@ -10,8 +10,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -20,8 +18,10 @@ import (
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
 	// userPRs backs the GitHub PR tools; nil leaves them unregistered.
-	userPRs   UserPRSource
-	flowSvc   FlowService
+	userPRs UserPRSource
+	flowSvc FlowService
+	// peers backs list_workspace_peers; nil makes the tool answer ErrUnavailable.
+	peers     PeerLister
 	plugins   *session.PluginRegistry
 	refParser TrackerRefParser
 	// wakeMetrics is the process-wide wake counter mirror; nil drops counts (a nil *wakes.Metrics is a no-op).
@@ -30,6 +30,8 @@ type coreConfig struct {
 	openWorktree WorktreeOpener
 	// github is the GitHub client for the issue/PR/commit tools; nil reports GitHub unavailable.
 	github GitHub
+	// nudgeGate guards diagnose_nudge_session's write; nil makes the nudge refuse (fail closed).
+	nudgeGate NudgeGate
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }
@@ -45,11 +47,34 @@ func WithFlowService(svc FlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
 }
 
+// WithWorkspacePeers supplies the query behind list_workspace_peers. Without it the tool
+// answers ErrUnavailable. Pass an untyped nil or a non-nil value.
+func WithWorkspacePeers(p PeerLister) CoreOption {
+	return func(c *coreConfig) { c.peers = p }
+}
+
+// WorkspacePeersFromOptions returns the peer lister the options carry, or nil.
+func WorkspacePeersFromOptions(opts ...CoreOption) PeerLister {
+	return newCoreConfig(opts).peers
+}
+
 // WithUserPRCache enables the GitHub PR tools. Without it they are not
 // registered. Pass an untyped nil or a non-nil value: a typed-nil pointer
 // defeats the absent-source guard.
 func WithUserPRCache(src UserPRSource) CoreOption {
 	return func(c *coreConfig) { c.userPRs = src }
+}
+
+// WithNudgeGate supplies the write-time safety check diagnose_nudge_session
+// runs before typing into a pane. Without it the nudge refuses. Pass an untyped
+// nil or a non-nil value: a typed-nil pointer defeats the absent-gate guard.
+func WithNudgeGate(g NudgeGate) CoreOption {
+	return func(c *coreConfig) { c.nudgeGate = g }
+}
+
+// NudgeGateFromOptions returns the nudge gate the options carry, or nil.
+func NudgeGateFromOptions(opts ...CoreOption) NudgeGate {
+	return newCoreConfig(opts).nudgeGate
 }
 
 // WithPluginRegistry supplies the item-source plugins the tracker import tools
@@ -124,13 +149,13 @@ func newCoreConfig(opts []CoreOption) coreConfig {
 // opts carry optional dependencies (see CoreOption).
 func NewCore(
 	store session.InstanceStore,
-	svc *services.SessionService,
+	svc SessionRPC,
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
-	backlogSvc *backlogsvc.BacklogService,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.MCPServer {
@@ -158,13 +183,13 @@ func NewCore(
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore.
 func NewHTTPHandler(
 	store session.InstanceStore,
-	svc *services.SessionService,
+	svc SessionRPC,
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
-	backlogSvc *backlogsvc.BacklogService,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.StreamableHTTPServer {
@@ -189,13 +214,13 @@ func NewHTTPHandler(
 func RunServer(
 	ctx context.Context,
 	store session.InstanceStore,
-	svc *services.SessionService,
+	svc SessionRPC,
 	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 	backlogEnabled func() bool,
 	autoReopener AutoReopener,
-	backlogSvc *backlogsvc.BacklogService,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) error {

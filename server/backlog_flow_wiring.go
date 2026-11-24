@@ -1,6 +1,9 @@
 package server
 
-import servermcp "github.com/tstapler/stapler-squad/server/mcp"
+import (
+	servermcp "github.com/tstapler/stapler-squad/server/mcp"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
+)
 
 // flowMCPOptions hands the RPC handler's flow service to the HTTP MCP core, so
 // both transports share one aggregator and one cache. A nil service adds no
@@ -9,6 +12,9 @@ func flowMCPOptions(deps *ServerDependencies) []servermcp.CoreOption {
 	var opts []servermcp.CoreOption
 	if deps.BacklogFlowService != nil {
 		opts = append(opts, servermcp.WithFlowService(deps.BacklogFlowService))
+	}
+	if deps.Storage != nil {
+		opts = append(opts, servermcp.WithWorkspacePeers(workspacepeers.New(deps.Storage)))
 	}
 	// Without a backlog service the tracker import tools still need their plugins.
 	registry := NewItemSourceRegistry()

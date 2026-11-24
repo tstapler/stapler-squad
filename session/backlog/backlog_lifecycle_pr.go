@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
+	"github.com/tstapler/stapler-squad/session/conflictretry"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // PRFixSpawner can reopen a pr_pending item for rework when CI checks fail or
@@ -1080,7 +1082,7 @@ func (l *BacklogLifecycleListener) handlePRPendingTransitionFailed(ctx context.C
 		return
 	}
 	if item.PrNumber <= 0 || item.PrURL == "" ||
-		item.Status == string(domain.BacklogStatusPRPending) || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+		item.Status == string(domain.BacklogStatusPRPending) || terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return // already recovered, or resolved to a terminal state, by the time we got here
 	}
 	l.recoverDriftedPRItem(ctx, item, caller)
@@ -1637,16 +1639,16 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	// its "needs manual attention" notice then apply.
 	overrideActive, grantedHere := false, false
 	if capOpen, prAttempts := l.conflictRowState(ctx, er, itemID); conflictOnly && !capOpen {
-		switch l.conflictRetries.Take(itemID, l.conflictRetryNow(), session.ConflictRetryInterval, prAttempts) {
-		case session.ConflictRetryGranted:
+		switch l.conflictRetries.Take(itemID, l.conflictRetryNow(), conflictretry.ConflictRetryInterval, prAttempts) {
+		case conflictretry.ConflictRetryGranted:
 			overrideActive, grantedHere, due = true, true, true
-		case session.ConflictRetryThrottled:
+		case conflictretry.ConflictRetryThrottled:
 			overrideActive = true
-		case session.ConflictRetryExhausted:
+		case conflictretry.ConflictRetryExhausted:
 			if l.conflictRetries.MarkExhaustedNotified(itemID) {
 				l.notify(itemID,
 					"Auto-rework paused",
-					session.ConflictExhaustionMessage(itemTitle, l.conflictRetries.SessionsRan(itemID), l.conflictRetries.FailedStarts(itemID)),
+					conflictretry.ConflictExhaustionMessage(itemTitle, l.conflictRetries.SessionsRan(itemID), l.conflictRetries.FailedStarts(itemID)),
 					8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 					true, true, // urgent, important — automated retry gave up; a genuine dead end
 				)
@@ -2140,7 +2142,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *session.EntRepository, r
 	return nil, false
 }
 
-// TriggerPRFixForEvent satisfies services.PRFixEventRouter (defined in the
+// TriggerPRFixForEvent satisfies webhooktrigger.PRFixEventRouter (defined in the
 // consuming package, per the `interface-pollution-checklist` skill). It
 // looks up the pr_pending item tracking (repoFullName, prNumber) and, if
 // found, runs the same per-item reconciliation ReconcilePRPending's 60s tick

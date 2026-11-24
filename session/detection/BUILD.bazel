@@ -73,6 +73,7 @@ go_test(
         "//session/detection/binaries",
         "//session/detection/dtypes",
         "//testutil/wait",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_stretchr_testify//require",
     ],
 )
@@ -82,6 +83,7 @@ filegroup(
     srcs = glob(["testdata/**"]),
     visibility = [
         "//session:__pkg__",
+        "//session/driver:__pkg__",
         "//session/historyadapters:__pkg__",
     ],
 )

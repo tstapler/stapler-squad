@@ -17,6 +17,8 @@ interface HistorySearchResultsProps {
   loading: boolean;
   /** Error state */
   error: Error | null;
+  /** True while the server index is doing its first sync (streaming search) */
+  indexWarming?: boolean;
   /** Called when a result is clicked */
   onResultClick?: (result: SearchResultItem) => void;
   /** Called when "Load More" is clicked */
@@ -139,6 +141,7 @@ export function HistorySearchResults({
   queryTimeMs,
   hasMore,
   loading,
+  indexWarming,
   error,
   onResultClick,
   onLoadMore,
@@ -167,7 +170,7 @@ export function HistorySearchResults({
     return (
       <div className={styles.loadingState}>
         <div className={styles.loadingSpinner} />
-        <p>Searching conversations...</p>
+        <p>{indexWarming ? "Index warming up, search will start shortly..." : "Searching conversations..."}</p>
       </div>
     );
   }
@@ -215,6 +218,7 @@ export function HistorySearchResults({
         <span className={styles.queryTime}>
           ({queryTimeMs}ms)
         </span>
+        {loading && <span className={styles.buttonSpinner} role="status" aria-label="Loading more results" />}
       </div>
 
       {/* Results list */}

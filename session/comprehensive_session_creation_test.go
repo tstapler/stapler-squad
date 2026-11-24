@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -233,7 +234,7 @@ func (b *TestInstanceBuilder) buildWithMockTmux() (*instance.Instance, tmux.Clea
 	mockExecutor.sessionsCreated[mockTmuxSession.GetSanitizedName()] = true
 
 	// Replace the real tmux session with the mock
-	instance.ProcessManagerForTest().(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
+	instance.ProcessManagerForTest().(*procbackend.TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
 
 	return instance, cleanup, nil
 }

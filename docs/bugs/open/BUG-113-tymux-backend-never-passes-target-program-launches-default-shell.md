@@ -53,7 +53,7 @@ in the course of filing this bug.
 `tymuxGRPCSession.Start` (and its sibling `RestoreWithWorkDir`/`recreate` paths, if they build their
 own `CreateSessionRequest`s — worth checking when this is fixed) never populates `Command`. The
 value needed (the session's `Program`) is available at the call site that constructs the tymux
-backend (`session/backend_tymux.go`'s `NewTymuxBackend`/whatever wires up `NewTymuxGRPCSession`),
+backend (`session/procbackend/backend_tymux.go`'s `NewTymuxBackend`/whatever wires up `NewTymuxGRPCSession`),
 but is never threaded through the constructor or `Start`'s own signature down to this RPC call.
 
 ## Files Likely Affected
@@ -61,7 +61,7 @@ but is never threaded through the constructor or `Start`'s own signature down to
 - `session/tymux/session.go` — `Start`, `NewTymuxGRPCSession`, and `tymuxGRPCSession`'s struct
   definition (needs a `program` field, set from the constructor, used in `Start`'s
   `CreateSessionRequest`)
-- `session/backend_tymux.go` — wherever `NewTymuxGRPCSession` is called; needs to pass the
+- `session/procbackend/backend_tymux.go` — wherever `NewTymuxGRPCSession` is called; needs to pass the
   program through, mirroring how `NewTmuxSession(name, program, ...)` already does for the tmux
   backend
 - Any `RestoreWithWorkDir`/session-recreate path in `session/tymux/session.go` that might also
@@ -73,7 +73,7 @@ but is never threaded through the constructor or `Start`'s own signature down to
 Add a `program string` field to `tymuxGRPCSession`, accept it as a parameter on
 `NewTymuxGRPCSession` (matching `NewTmuxSession`'s existing signature shape in the sibling
 package), and set `Command: s.program` in `Start`'s `CreateSessionRequest`. Update
-`session/backend_tymux.go`'s construction call site to pass the instance's actual `Program` value
+`session/procbackend/backend_tymux.go`'s construction call site to pass the instance's actual `Program` value
 through. Add a regression test asserting `CreateSessionRequest.Command` matches the configured
 program (a fake/mock `rpcTransport` that captures the request, mirroring existing `session/tymux`
 test patterns) — this bug's whole failure mode is invisible without one, since nothing currently

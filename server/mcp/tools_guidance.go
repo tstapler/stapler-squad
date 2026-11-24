@@ -180,7 +180,7 @@ func (h *backlogHandlers) createGuidanceRequest(ctx context.Context, req mcpgo.C
 
 	var data *domain.GuidanceRequestData
 	if payload.IsZero() {
-		data, err = h.storage.CreateGuidanceRequest(ctx, in)
+		data, err = h.guidance.CreateGuidanceRequest(ctx, in)
 	} else {
 		data, err = h.createStructuredGuidanceRequest(ctx, in, payload)
 	}
@@ -208,7 +208,7 @@ func (h *backlogHandlers) createStructuredGuidanceRequest(ctx context.Context, i
 	if err != nil {
 		return nil, err
 	}
-	return h.storage.CreateMirroredGuidanceRequest(ctx, req, in.Cap)
+	return h.guidance.CreateMirroredGuidanceRequest(ctx, req, in.Cap)
 }
 
 // getGuidanceRequest implements the get_guidance_request tool: reads a
@@ -229,7 +229,7 @@ func (h *backlogHandlers) getGuidanceRequest(ctx context.Context, req mcpgo.Call
 	if err != nil {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid question_id: %v", err), ""), nil
 	}
-	data, err := h.storage.GetGuidanceRequest(ctx, id)
+	data, err := h.guidance.GetGuidanceRequest(ctx, id)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("guidance request %q not found", idStr), ""), nil

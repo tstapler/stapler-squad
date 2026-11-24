@@ -35,13 +35,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -381,8 +382,8 @@ type ConnectRPCWebSocketHandler struct {
 	scrollbackManager *scrollback.ScrollbackManager
 
 	// External session support (for unified WebSocket streaming)
-	externalDiscovery   *session.ExternalSessionDiscovery
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+	externalDiscovery   *external.ExternalSessionDiscovery
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager
 
 	// ponytail: xsync.Map replaces map+RWMutex — markSnapshotDirty called per terminal frame
 	snapshotCache *xsync.Map[string, sessionSnapshot]
@@ -426,7 +427,7 @@ func (h *ConnectRPCWebSocketHandler) writerFor(instance *instance.Instance) serv
 // writerDecision is writerFor plus whether a nil writer may become non-nil
 // later: true only when a tymux instance is not Active yet (see upgradableWriter).
 func (h *ConnectRPCWebSocketHandler) writerDecision(instance *instance.Instance) (writer services.TerminalWriter, upgradable bool) {
-	if blocked, recoverable := session.TerminalInputBlock(instance.Snapshot()); blocked {
+	if blocked, recoverable := terminalstate.TerminalInputBlock(instance.Snapshot()); blocked {
 		return nil, recoverable
 	}
 	writer, err := services.AccessFor(instance).Writer(h.tmuxSender)
@@ -447,7 +448,7 @@ type controlModeStreamGeneration struct {
 
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
 // tmuxStreamerManager is required for ALL sessions (managed and external) since they all use tmux capture-pane polling
-func NewConnectRPCWebSocketHandler(sessionService *services.SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *session.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
+func NewConnectRPCWebSocketHandler(sessionService *services.SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *external.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
 	flags := sessionService.InjectedFlagRegistry()
 	if flags == nil {
 		flags = services.FlagRegistry() // no session service (tests); production always injects one
@@ -894,7 +895,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 // This enables the handler to discover and stream external sessions (via mux socket monitoring)
 // Note: tmuxStreamerManager is already set in constructor since ALL sessions use it
 func (h *ConnectRPCWebSocketHandler) SetExternalSessionSupport(
-	discovery *session.ExternalSessionDiscovery,
+	discovery *external.ExternalSessionDiscovery,
 ) {
 	h.externalDiscovery = discovery
 	log.Info("external session discovery enabled for ConnectRPC WebSocket handler")
@@ -3800,7 +3801,7 @@ func forceCapturePaneRedrawNudge(stream *connectWebSocketStream, target panePTY,
 // back to the streamer's cached snapshot on failure) or fetches from the
 // streamer (for an external session) the initial pane content, and sends it
 // to the client as the canonical initial snapshot.
-func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *instance.Instance, cpt capturePaneTarget, streamer *session.ExternalTmuxStreamer) error {
+func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *instance.Instance, cpt capturePaneTarget, streamer *external.ExternalTmuxStreamer) error {
 	var initialContent string
 	switch {
 	case cpt.effectiveManaged:
@@ -3836,7 +3837,7 @@ func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *ins
 
 // getOrCreateTmuxStreamer looks up or creates the *ExternalTmuxStreamer for
 // tmuxSessionName.
-func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName string) (*session.ExternalTmuxStreamer, error) {
+func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName string) (*external.ExternalTmuxStreamer, error) {
 	if h.tmuxStreamerManager == nil {
 		return nil, fmt.Errorf("tmux streamer manager not configured (required for capture-pane polling)")
 	}
@@ -3851,7 +3852,7 @@ func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName str
 // forwards each full-content update onto a buffered channel (dropping
 // content if the channel is full, to avoid blocking the streamer), and
 // returns that channel plus the consumer key for later RemoveConsumer.
-func registerCapturePaneConsumer(instance *instance.Instance, streamer *session.ExternalTmuxStreamer, sessionID string) (outputChan chan string, consumerKey string) {
+func registerCapturePaneConsumer(instance *instance.Instance, streamer *external.ExternalTmuxStreamer, sessionID string) (outputChan chan string, consumerKey string) {
 	outputChan = make(chan string, 100)
 	consumer := func(content string) {
 		instance.UpdateTerminalTimestamps(content, true)
@@ -3874,7 +3875,7 @@ type capturePaneStreamParams struct {
 	instance            *instance.Instance
 	snap                *domain.InstanceSnapshot
 	cpt                 capturePaneTarget
-	streamer            *session.ExternalTmuxStreamer
+	streamer            *external.ExternalTmuxStreamer
 	doneChan            chan struct{}
 	errChan             chan error
 	outputChan          chan string

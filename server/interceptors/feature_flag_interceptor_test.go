@@ -42,7 +42,7 @@ func TestNewFeatureFlagInterceptor_FlagDisabled(t *testing.T) {
 // Full end-to-end gating behavior (which requires a real *connect.Request
 // with a populated Spec -- not constructible outside the connect package) is
 // covered by the ImportService-level tests in
-// server/services/import_service_test.go
+// server/services/importsvc/import_service_test.go
 // (TestImportService_ThreeMutatingRPCs_ReturnUnimplemented_When_FeatureFlagUnset
 // and friends), which spin up a real handler+client pair over httptest.
 func TestProcedureMethodName_ExtractsBareMethod_When_GivenFullyQualifiedProcedure(t *testing.T) {

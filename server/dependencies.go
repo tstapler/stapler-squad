@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/insights"
+	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
@@ -28,16 +29,21 @@ import (
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
@@ -71,12 +77,14 @@ type ServerDependencies struct {
 
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker (see
 	// BuildOptions.RunPRMaintenance); nil when maintenance did not run.
-	StopPRMaintenance       func()
+	StopPRMaintenance func()
+	// StopBootInit cancels the background boot-init goroutine and waits for it to exit.
+	StopBootInit            func()
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
-	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
-	ExternalDiscovery       *session.ExternalSessionDiscovery
-	ExternalApprovalMonitor *session.ExternalApprovalMonitor
+	TmuxStreamerManager     *external.ExternalTmuxStreamerManager
+	ExternalDiscovery       *external.ExternalSessionDiscovery
+	ExternalApprovalMonitor *external.ExternalApprovalMonitor
 	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
@@ -94,7 +102,7 @@ type ServerDependencies struct {
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
-	UnfinishedWorkService *services.UnfinishedWorkService
+	UnfinishedWorkService *unfinishedwork.UnfinishedWorkService
 	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher discovers repos under the user-configured
@@ -186,7 +194,7 @@ type ServerDependencies struct {
 	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
-	Registry *session.Registry
+	Registry *registry.Registry
 
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed. Its NotificationDecisionLister/TokenStore
@@ -200,14 +208,14 @@ type ServerDependencies struct {
 	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
 	// BacklogLifecycleListener drives backlog item state transitions and, via its
-	// TriggerPRFixForEvent method, satisfies services.PRFixEventRouter for the
+	// TriggerPRFixForEvent method, satisfies webhooktrigger.PRFixEventRouter for the
 	// pr-event-webhooks feature (immediate PR-fix reconciliation on a GitHub
 	// webhook delivery, instead of waiting for PRStatusPoller's next tick).
 	BacklogLifecycleListener *backlog.BacklogLifecycleListener
 
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
-	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+	SessionTagClassificationPoller *tagpoller.SessionTagClassificationPoller
 
 	// CtxHistoryStore persists per-turn context-window occupancy samples. Nil
 	// when the history directory cannot be resolved at startup (see the
@@ -229,6 +237,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ReviewQueuePoller:              rt.ReviewQueuePoller,
 		PRStatusPoller:                 rt.PRStatusPoller,
 		StopPRMaintenance:              rt.StopPRMaintenance,
+		StopBootInit:                   rt.StopBootInit,
 		ReactiveQueueMgr:               rt.ReactiveQueueMgr,
 		ScrollbackManager:              rt.ScrollbackManager,
 		TmuxStreamerManager:            rt.TmuxStreamerManager,
@@ -446,6 +455,8 @@ type BuildOptions struct {
 // BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
 // Use BuildOptions to inject a pre-built EntClient (for tests).
 func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
+	driver.Register() // the instance package reaches the session driver only through this hook
+
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
 	flagRegistry := services.FlagRegistry()
 
@@ -524,7 +535,7 @@ type ServiceDeps struct {
 	StatusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
-	Registry          *session.Registry
+	Registry          *registry.Registry
 
 	// AttentionOptions is the one cached attention-flag source shared by the review-queue poller and the startup scanner.
 	AttentionOptions session.FlagOptionsSource
@@ -549,8 +560,8 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	reviewQueuePoller.SetOptionsSource(attentionOptions)
 	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
-	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
-	core.SessionService.SetRegistry(registry)
+	reg := registry.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
+	core.SessionService.SetRegistry(reg)
 
 	w := warren.NewWire("ServiceDeps")
 	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
@@ -576,7 +587,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		StatusManager:     statusManager,
 		ReviewQueuePoller: reviewQueuePoller,
 		PRStatusPoller:    prStatusPoller,
-		Registry:          registry,
+		Registry:          reg,
 		AttentionOptions:  attentionOptions,
 	}, nil
 }
@@ -585,12 +596,14 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 // process creation, filesystem I/O, and callback wiring.
 type RuntimeDeps struct {
 	*ServiceDeps
+	// StopBootInit cancels the background boot-init goroutine and waits for it to exit.
+	StopBootInit            func()
 	Instances               []*instance.Instance
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
-	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
-	ExternalDiscovery       *session.ExternalSessionDiscovery
-	ExternalApprovalMonitor *session.ExternalApprovalMonitor
+	TmuxStreamerManager     *external.ExternalTmuxStreamerManager
+	ExternalDiscovery       *external.ExternalSessionDiscovery
+	ExternalApprovalMonitor *external.ExternalApprovalMonitor
 	PRStatusPoller          *prpoller.PRStatusPoller
 	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
@@ -606,7 +619,7 @@ type RuntimeDeps struct {
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
-	UnfinishedWorkService *services.UnfinishedWorkService
+	UnfinishedWorkService *unfinishedwork.UnfinishedWorkService
 	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher (see the identically-named field on
@@ -687,7 +700,7 @@ type RuntimeDeps struct {
 	TriggerFireEventRepo session.TriggerFireEventRepository
 
 	// Registry is the live-handle map for all running sessions.
-	Registry *session.Registry
+	Registry *registry.Registry
 
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
@@ -697,14 +710,14 @@ type RuntimeDeps struct {
 	// (Story 2.2.1). Nil when storage is not ent-backed.
 	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
-	// BacklogLifecycleListener satisfies services.PRFixEventRouter for the
+	// BacklogLifecycleListener satisfies webhooktrigger.PRFixEventRouter for the
 	// pr-event-webhooks feature — see the identical field's doc comment on
 	// ServerDependencies above.
 	BacklogLifecycleListener *backlog.BacklogLifecycleListener
 
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
-	SessionTagClassificationPoller *session.SessionTagClassificationPoller
+	SessionTagClassificationPoller *tagpoller.SessionTagClassificationPoller
 
 	// CtxHistoryStore persists per-turn context-window occupancy samples for use
 	// in diagnostic bundles (RUM session bundle Epic 1.1). Nil when analytics is
@@ -816,7 +829,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// The selector must exist, with its shadow recorder, before NewBacklogService
 	// and the BacklogController's SyncLoop take their engine.
 	workflowEngine := newWorkflowEngineWiring(defaultWorkflowEngine, engines.stageConfigEngine, storage.GetEntClient(), config.LoadConfig)
-	session.InitNudgeOutcomes()
+	nudgeoutcomes.InitNudgeOutcomes()
 
 	llm := buildHeadlessLLM(sessionService)
 
@@ -830,7 +843,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, err
 	}
 
-	startInstanceBootInit(svc, instances)
+	stopBootInit := startInstanceBootInit(svc, instances, nil)
 
 	reactiveQueueMgr, slackNotifier := buildReactiveQueue(svc, cfg)
 
@@ -889,6 +902,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		LLMClient:                      llm.client,
 		GeminiCaller:                   geminiCaller,
 		ServiceDeps:                    svc,
+		StopBootInit:                   stopBootInit,
 		Instances:                      instances,
 		ReactiveQueueMgr:               reactiveQueueMgr,
 		ScrollbackManager:              scrollbackManager,
@@ -936,7 +950,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}, nil
 }
 
-// registryInstanceChecker is the narrow slice of *session.Registry that
+// registryInstanceChecker is the narrow slice of *registry.Registry that
 // newSessionLivenessChecker's fallback path needs — defined here (the consuming
 // package) rather than in session, per this repo's interface-pollution convention,
 // so a fake with no real *session.Storage can stand in for tests.

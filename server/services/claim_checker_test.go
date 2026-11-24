@@ -34,12 +34,12 @@ func newTestLocalCheckerEnrolled(t *testing.T, self hostclaim.HostIdentity, time
 
 func TestUnimplementedClaimChecker_CheckClaim_should_ReturnUnclaimedVerdict_When_NoCheckerWired(t *testing.T) {
 	var c CrossHostClaimChecker = UnimplementedClaimChecker{}
-	for name, check := range map[string]func(context.Context, string) (ClaimVerdict, error){
+	for name, check := range map[string]func(context.Context, string) (hostclaim.ClaimVerdict, error){
 		"live": c.CheckClaim, "local": c.CheckClaimLocalOnly,
 	} {
 		verdict, err := check(context.Background(), claimTestURL)
 		require.NoError(t, err, name)
-		assert.Equal(t, NewUnclaimedVerdict(), verdict, name)
+		assert.Equal(t, hostclaim.NewUnclaimedVerdict(), verdict, name)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnHeldByOtherVerdict_When_Claim
 
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimHeldByOther, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimHeldByOther, verdict.Kind)
 	assert.Equal(t, other.ID.String(), verdict.Record.ClaimingHostID.String())
 	assert.Equal(t, "ssq://hostA/backlog/v1/bl_1", verdict.Record.ItemDeepLink)
 }
@@ -63,18 +63,18 @@ func TestLocalClaimChecker_CheckClaim_should_ReadFromRealClaimIndexOnDisk_When_B
 
 	verdict, err := c.CheckClaimLocalOnly(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimUnclaimed, verdict.Kind, "empty index")
+	assert.Equal(t, hostclaim.ClaimUnclaimed, verdict.Kind, "empty index")
 
 	_, err = index.RecordClaim(hostclaim.NewSignedClaimRecord(self, claimTestURL, "ssq://me/x", time.Now()))
 	require.NoError(t, err)
 	verdict, _ = c.CheckClaimLocalOnly(context.Background(), claimTestURL)
-	assert.Equal(t, ClaimUnclaimed, verdict.Kind, "a claim this host holds itself never blocks it")
+	assert.Equal(t, hostclaim.ClaimUnclaimed, verdict.Kind, "a claim this host holds itself never blocks it")
 
 	const otherURL = "https://github.com/o/r/issues/43"
 	_, err = index.RecordClaim(hostclaim.NewSignedClaimRecord(other, otherURL, "ssq://other/x", time.Now()))
 	require.NoError(t, err)
 	verdict, _ = c.CheckClaimLocalOnly(context.Background(), otherURL)
-	assert.Equal(t, ClaimHeldByOther, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimHeldByOther, verdict.Kind)
 }
 
 func TestLocalClaimChecker_CheckClaim_should_FindRecentClaimViaLivePeerQuery_When_LocalIndexUnclaimedButPeerHasRecord(t *testing.T) {
@@ -85,7 +85,7 @@ func TestLocalClaimChecker_CheckClaim_should_FindRecentClaimViaLivePeerQuery_Whe
 
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimHeldByOther, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimHeldByOther, verdict.Kind)
 	assert.Equal(t, hostA.ID.String(), verdict.Record.ClaimingHostID.String())
 
 	stored, ok := index.CheckClaim(claimTestURL)
@@ -93,7 +93,7 @@ func TestLocalClaimChecker_CheckClaim_should_FindRecentClaimViaLivePeerQuery_Whe
 	assert.Equal(t, hostA.ID.String(), stored.ClaimingHostID.String())
 
 	local, _ := c.CheckClaimLocalOnly(context.Background(), claimTestURL)
-	assert.Equal(t, ClaimHeldByOther, local.Kind)
+	assert.Equal(t, hostclaim.ClaimHeldByOther, local.Kind)
 }
 
 func TestLocalClaimChecker_CheckClaim_should_ReturnIndeterminateVerdict_When_KnownPeerTimesOutAndNoneReportClaim(t *testing.T) {
@@ -104,7 +104,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnIndeterminateVerdict_When_Kno
 
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimCheckIndeterminate, verdict.Kind, "an unreachable peer must never collapse to Unclaimed")
+	assert.Equal(t, hostclaim.ClaimCheckIndeterminate, verdict.Kind, "an unreachable peer must never collapse to Unclaimed")
 }
 
 func TestLocalClaimChecker_CheckClaim_should_ReturnUnclaimed_When_AllPeersAnswerNotFound(t *testing.T) {
@@ -115,7 +115,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnUnclaimed_When_AllPeersAnswer
 
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimUnclaimed, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimUnclaimed, verdict.Kind)
 }
 
 func TestLocalClaimChecker_CheckClaim_should_CompleteWithinOneTimeoutWindow_When_FanningOutToThreePeersConcurrently(t *testing.T) {
@@ -131,7 +131,7 @@ func TestLocalClaimChecker_CheckClaim_should_CompleteWithinOneTimeoutWindow_When
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
-	assert.Equal(t, ClaimCheckIndeterminate, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimCheckIndeterminate, verdict.Kind)
 	assert.GreaterOrEqual(t, elapsed, timeout-50*time.Millisecond, "waited for the hung peers")
 	assert.Less(t, elapsed, timeout+timeout/2, "two hung peers share one deadline; sequential would take 2x")
 }
@@ -147,7 +147,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnHeldByOtherWithoutWaitingForH
 	start := time.Now()
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimHeldByOther, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimHeldByOther, verdict.Kind)
 	assert.Less(t, time.Since(start), timeout/2)
 }
 
@@ -160,7 +160,7 @@ func TestLocalClaimChecker_CheckClaim_should_ReturnIndeterminate_When_PeerReturn
 
 	verdict, err := c.CheckClaim(context.Background(), claimTestURL)
 	require.NoError(t, err)
-	assert.Equal(t, ClaimCheckIndeterminate, verdict.Kind)
+	assert.Equal(t, hostclaim.ClaimCheckIndeterminate, verdict.Kind)
 	_, stored := index.CheckClaim(claimTestURL)
 	assert.False(t, stored, "an unverifiable record is never stored")
 }
@@ -191,7 +191,7 @@ func TestLocalClaimChecker_ResolveDispute_should_ClearDisputedFlag(t *testing.T)
 	require.NoError(t, err)
 
 	verdict, _ := c.CheckClaimLocalOnly(context.Background(), claimTestURL)
-	require.Equal(t, ClaimHeldByOther, verdict.Kind)
+	require.Equal(t, hostclaim.ClaimHeldByOther, verdict.Kind)
 	require.True(t, verdict.Record.Disputed)
 
 	require.NoError(t, c.ResolveDispute(context.Background(), claimTestURL))

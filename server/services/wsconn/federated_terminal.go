@@ -6,7 +6,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/tstapler/stapler-squad/server/protocol"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"google.golang.org/protobuf/proto"
@@ -17,7 +17,7 @@ import (
 func (h *ConnectRPCWebSocketHandler) streamFederatedTerminal(stream *connectWebSocketStream, id hostclaim.FederatedSessionID, wireID string) error {
 	fed := h.sessionService.Federation()
 	if fed == nil {
-		return fmt.Errorf("%w: federation is not enabled", services.ErrFederatedHostUnavailable)
+		return fmt.Errorf("%w: federation is not enabled", federation.ErrFederatedHostUnavailable)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

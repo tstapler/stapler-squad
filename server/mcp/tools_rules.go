@@ -7,14 +7,13 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 )
 
 // rulesHandlers implements auto-approval-rule-management MCP tools. Rules
 // govern whether a tool call is auto-allowed, auto-denied, or escalated for
 // human review during a session.
 type rulesHandlers struct {
-	svc *services.SessionService
+	svc ApprovalRulesRPC
 }
 
 // registerRulesTools registers the approval-rule-related MCP tools.

@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 )
 
 // TestInstance_SetHistoryInfo_FiresCallback_When_UUIDChanges guards the fix
@@ -77,24 +79,32 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 	t.Run("archived_is_not_restarted", func(t *testing.T) {
 		t.Parallel()
 		archivedAt := time.Now()
-		mock := &mockTmuxManager{}
+		mock := &procbackendtest.MockTmuxManager{}
 		inst := &instance.Instance{Title: "archived-stale-resume", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 		inst.RecoverFromStaleResumeForTest()
 
-		assert.Equal(t, 0, mock.startCalls, "an archived session must not be restarted on a stale --resume exit")
+		assert.Equal(t, 0, mock.StartCalls, "an archived session must not be restarted on a stale --resume exit")
 		assert.Equal(t, domain.Stopped, inst.Snapshot().Status, "the archived session's status must be left alone")
 	})
 
 	t.Run("not_archived_is_restarted_control", func(t *testing.T) {
 		t.Parallel()
-		mock := &mockTmuxManager{}
+		mock := &procbackendtest.MockTmuxManager{}
 		inst := &instance.Instance{Title: "live-stale-resume", Status: domain.Stopped}
-		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
+		inst.SetProcessManagerForTest(procbackend.NewTmuxBackend(mock))
 
 		inst.RecoverFromStaleResumeForTest()
 
-		assert.Positive(t, mock.startCalls, "control: a live session must still recover from a stale --resume uuid")
+		assert.Positive(t, mock.StartCalls, "control: a live session must still recover from a stale --resume uuid")
 	})
+}
+
+// makeTestInstance creates a minimal Instance for testing (no tmux, not started).
+func makeTestInstance(title string) *instance.Instance {
+	return &instance.Instance{
+		Title:  title,
+		Status: domain.Active,
+	}
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -50,7 +50,7 @@ type testConvSession struct {
 // conversation JSONL files under a temp HOME directory, and points
 // os.UserHomeDir() at it for the duration of the test via $HOME. Returns
 // the constructed *session.ClaudeSessionHistory for direct use.
-func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *session.ClaudeSessionHistory {
+func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *claudehistory.ClaudeSessionHistory {
 	t.Helper()
 	home := svctest.WithFakeHome(t)
 
@@ -97,7 +97,7 @@ func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *session.
 	}
 	require.NoError(t, histFile.Close())
 
-	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	hist, err := claudehistory.NewClaudeSessionHistoryFromClaudeDir()
 	require.NoError(t, err)
 	return hist
 }
@@ -258,7 +258,7 @@ func TestFilterAutomationSessions_KeepsAutonomousModeSessionsThatAreNotHidden(t 
 
 func TestFilterHistoryEntriesByAutomation_ExcludesEntriesWithHiddenTrue(t *testing.T) {
 	t.Parallel()
-	entries := []session.ClaudeHistoryEntry{{ID: "c9d2e611"}}
+	entries := []claudehistory.ClaudeHistoryEntry{{ID: "c9d2e611"}}
 	instances := []*instance.Instance{newInstance(t, "c9d2e611", true, "")}
 
 	got := filterHistoryEntriesByAutomation(entries, instances)
@@ -268,7 +268,7 @@ func TestFilterHistoryEntriesByAutomation_ExcludesEntriesWithHiddenTrue(t *testi
 
 func TestFilterHistoryEntriesByAutomation_KeepsEntriesWithNoLiveInstanceMatch(t *testing.T) {
 	t.Parallel()
-	entries := []session.ClaudeHistoryEntry{{ID: "d4e3f722"}}
+	entries := []claudehistory.ClaudeHistoryEntry{{ID: "d4e3f722"}}
 
 	got := filterHistoryEntriesByAutomation(entries, nil)
 

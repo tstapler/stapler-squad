@@ -1,0 +1,325 @@
+package credkit
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ---------------------------------------------------------------------------
+// CredentialChain + individual source tests
+// ---------------------------------------------------------------------------
+
+func TestEnvVarCredentialSource_Anthropic(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "env-key-123")
+	src := &EnvVarCredentialSource{}
+	cred, ok, err := src.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "env-key-123", cred.APIKey)
+	assert.Equal(t, "anthropic", cred.Provider)
+	assert.Contains(t, cred.Source, "ANTHROPIC_API_KEY")
+}
+
+func TestEnvVarCredentialSource_Google_PrimaryVar(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "gemini-key-xyz")
+	src := &EnvVarCredentialSource{}
+	cred, ok, err := src.Resolve(context.Background(), "google")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "gemini-key-xyz", cred.APIKey)
+}
+
+func TestEnvVarCredentialSource_Google_FallbackVar(t *testing.T) {
+	if prev, existed := os.LookupEnv("GEMINI_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("GEMINI_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("GEMINI_API_KEY") })
+	}
+	os.Unsetenv("GEMINI_API_KEY")
+	t.Setenv("GOOGLE_API_KEY", "google-key-abc")
+	src := &EnvVarCredentialSource{}
+	cred, ok, err := src.Resolve(context.Background(), "google")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "google-key-abc", cred.APIKey)
+	assert.Contains(t, cred.Source, "GOOGLE_API_KEY")
+}
+
+func TestEnvVarCredentialSource_Missing_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("ANTHROPIC_API_KEY") })
+	}
+	os.Unsetenv("ANTHROPIC_API_KEY")
+	src := &EnvVarCredentialSource{}
+	_, ok, err := src.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestEnvVarCredentialSource_UnknownProvider_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	src := &EnvVarCredentialSource{}
+	_, ok, err := src.Resolve(context.Background(), "unknown-provider")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestClaudeOAuthCredentialSource_ValidToken(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0700))
+
+	// Write a credentials file with a non-expired token.
+	expiryMs := time.Now().Add(1 * time.Hour).UnixMilli()
+	creds := map[string]interface{}{
+		"claudeAiOauth": map[string]interface{}{
+			"accessToken":  "claude-bearer-token",
+			"refreshToken": "claude-refresh-token",
+			"expiresAt":    expiryMs,
+			"tokenType":    "Bearer",
+		},
+	}
+	data, _ := json.Marshal(creds)
+	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), data, 0600))
+
+	src := &ClaudeOAuthCredentialSource{HomeDirOverride: home}
+	cred, ok, err := src.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "claude-bearer-token", cred.BearerToken)
+	assert.Empty(t, cred.APIKey, "OAuth cred should not have an API key")
+	assert.Contains(t, cred.Source, ".credentials.json")
+}
+
+func TestClaudeOAuthCredentialSource_ExpiredToken_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0700))
+
+	expiryMs := time.Now().Add(-1 * time.Hour).UnixMilli() // already expired
+	creds := map[string]interface{}{
+		"claudeAiOauth": map[string]interface{}{
+			"accessToken": "stale-token",
+			"expiresAt":   expiryMs,
+		},
+	}
+	data, _ := json.Marshal(creds)
+	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), data, 0600))
+
+	src := &ClaudeOAuthCredentialSource{HomeDirOverride: home}
+	_, ok, err := src.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.False(t, ok, "expired token should return false, not an error")
+}
+
+func TestClaudeOAuthCredentialSource_MissingFile_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	src := &ClaudeOAuthCredentialSource{HomeDirOverride: t.TempDir()}
+	_, ok, err := src.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestClaudeOAuthCredentialSource_WrongProvider_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	src := &ClaudeOAuthCredentialSource{}
+	_, ok, err := src.Resolve(context.Background(), "google")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestAgyCredentialSource_ValidAgyOAuthToken(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	geminiDir := filepath.Join(home, ".gemini")
+	require.NoError(t, os.MkdirAll(geminiDir, 0700))
+
+	expiryMs := time.Now().Add(1 * time.Hour).UnixMilli()
+	creds := geminiOAuthCreds{
+		AccessToken:  "gemini-access-token",
+		RefreshToken: "gemini-refresh-token",
+		ExpiryDate:   expiryMs,
+		Scope:        "https://www.googleapis.com/auth/cloud-platform",
+		TokenType:    "Bearer",
+	}
+	data, _ := json.Marshal(creds)
+	require.NoError(t, os.WriteFile(filepath.Join(geminiDir, "oauth_creds.json"), data, 0600))
+
+	src := &AgyCredentialSource{HomeDirOverride: home}
+	cred, ok, err := src.Resolve(context.Background(), "google")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "gemini-access-token", cred.BearerToken)
+	assert.False(t, cred.IsADC)
+	assert.Contains(t, cred.Source, "oauth_creds.json")
+}
+
+func TestAgyCredentialSource_ExpiredAgyToken_FallsBackToADC(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+
+	// Write expired AGY token
+	geminiDir := filepath.Join(home, ".gemini")
+	require.NoError(t, os.MkdirAll(geminiDir, 0700))
+	expired := geminiOAuthCreds{
+		AccessToken: "expired-token",
+		ExpiryDate:  time.Now().Add(-1 * time.Hour).UnixMilli(),
+	}
+	data, _ := json.Marshal(expired)
+	require.NoError(t, os.WriteFile(filepath.Join(geminiDir, "oauth_creds.json"), data, 0600))
+
+	// Write valid gcloud ADC
+	gcloudDir := filepath.Join(home, ".config", "gcloud")
+	require.NoError(t, os.MkdirAll(gcloudDir, 0700))
+	adc := gcloudADCCreds{
+		Type:         "authorized_user",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		RefreshToken: "refresh-token",
+	}
+	adcData, _ := json.Marshal(adc)
+	require.NoError(t, os.WriteFile(filepath.Join(gcloudDir, "application_default_credentials.json"), adcData, 0600))
+
+	src := &AgyCredentialSource{HomeDirOverride: home}
+	cred, ok, err := src.Resolve(context.Background(), "google")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.True(t, cred.IsADC, "should fall back to ADC when AGY token is expired")
+	assert.Contains(t, cred.Source, "gcloud_adc")
+}
+
+func TestAgyCredentialSource_NoFiles_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	src := &AgyCredentialSource{HomeDirOverride: t.TempDir()}
+	_, ok, err := src.Resolve(context.Background(), "google")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestAgyCredentialSource_WrongProvider_ReturnsFalse(t *testing.T) {
+	t.Parallel()
+	src := &AgyCredentialSource{}
+	_, ok, err := src.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+// ---------------------------------------------------------------------------
+// CredentialChain tests
+// ---------------------------------------------------------------------------
+
+func TestCredentialChain_EnvVarWinsOverOAuth(t *testing.T) {
+	// Both env var and OAuth file present — env var should win.
+	t.Setenv("ANTHROPIC_API_KEY", "env-wins")
+
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0700))
+	creds := map[string]interface{}{
+		"claudeAiOauth": map[string]interface{}{
+			"accessToken": "oauth-token",
+			"expiresAt":   time.Now().Add(time.Hour).UnixMilli(),
+		},
+	}
+	data, _ := json.Marshal(creds)
+	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), data, 0600))
+
+	chain := NewChain(
+		&EnvVarCredentialSource{},
+		&ClaudeOAuthCredentialSource{HomeDirOverride: home},
+	)
+	cred, err := chain.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.Equal(t, "env-wins", cred.APIKey)
+	assert.Contains(t, cred.Source, "ANTHROPIC_API_KEY")
+}
+
+func TestCredentialChain_FallsBackToOAuth_WhenEnvMissing(t *testing.T) {
+	t.Parallel()
+	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("ANTHROPIC_API_KEY") })
+	}
+	os.Unsetenv("ANTHROPIC_API_KEY")
+
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	require.NoError(t, os.MkdirAll(claudeDir, 0700))
+	creds := map[string]interface{}{
+		"claudeAiOauth": map[string]interface{}{
+			"accessToken": "fallback-oauth",
+			"expiresAt":   time.Now().Add(time.Hour).UnixMilli(),
+		},
+	}
+	data, _ := json.Marshal(creds)
+	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, ".credentials.json"), data, 0600))
+
+	chain := NewChain(
+		&EnvVarCredentialSource{},
+		&ClaudeOAuthCredentialSource{HomeDirOverride: home},
+	)
+	cred, err := chain.Resolve(context.Background(), "anthropic")
+	require.NoError(t, err)
+	assert.Equal(t, "fallback-oauth", cred.BearerToken)
+}
+
+func TestCredentialChain_NothingAvailable_ReturnsError(t *testing.T) {
+	t.Parallel()
+	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("ANTHROPIC_API_KEY") })
+	}
+	os.Unsetenv("ANTHROPIC_API_KEY")
+	chain := NewChain(
+		&EnvVarCredentialSource{},
+		&ClaudeOAuthCredentialSource{HomeDirOverride: t.TempDir()},
+	)
+	_, err := chain.Resolve(context.Background(), "anthropic")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no credential found")
+	assert.Contains(t, err.Error(), "anthropic")
+}
+
+// ---------------------------------------------------------------------------
+// Credential helper method tests
+// ---------------------------------------------------------------------------
+
+func TestCredential_AnthropicAuthHeader_APIKey(t *testing.T) {
+	t.Parallel()
+	c := Credential{APIKey: "sk-ant-123"}
+	key, val, ok := c.AnthropicAuthHeader()
+	require.True(t, ok)
+	assert.Equal(t, "x-api-key", key)
+	assert.Equal(t, "sk-ant-123", val)
+}
+
+func TestCredential_AnthropicAuthHeader_Bearer(t *testing.T) {
+	t.Parallel()
+	c := Credential{BearerToken: "tok-abc"}
+	key, val, ok := c.AnthropicAuthHeader()
+	require.True(t, ok)
+	assert.Equal(t, "Authorization", key)
+	assert.Equal(t, "Bearer tok-abc", val)
+}
+
+func TestCredential_IsValid(t *testing.T) {
+	t.Parallel()
+	assert.False(t, Credential{}.IsValid())
+	assert.True(t, Credential{APIKey: "k"}.IsValid())
+	assert.True(t, Credential{BearerToken: "t"}.IsValid())
+	assert.True(t, Credential{IsADC: true}.IsValid())
+}

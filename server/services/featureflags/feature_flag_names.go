@@ -15,6 +15,12 @@ const SddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 // where it's read.
 const WorkspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// CrossHostClaimDedupFlagName gates every cross-host claim check. Off by
+// default: with it off, creation and dequeue behave exactly as they did before
+// the claim substrate existed. Claim recording (Storage.CreateBacklogItem) is
+// always on.
+const CrossHostClaimDedupFlagName = "cross_host_claim_dedup"
+
 // backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
 const BacklogFlagName = "backlog"
 

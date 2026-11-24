@@ -1,0 +1,715 @@
+package unfinishedwork
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
+	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitprovider"
+	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/unfinished"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// Compile-time check: UnfinishedWorkService must implement the generated handler.
+var _ sessionv1connect.UnfinishedWorkServiceHandler = (*UnfinishedWorkService)(nil)
+
+// aiSemaphore limits concurrent Claude AI subprocess calls globally.
+var aiSemaphore = make(chan struct{}, 2)
+
+// instanceIndexTTL bounds how long the worktree-path and PR indexes built from
+// session.Storage are reused before being rebuilt from a fresh ListInstanceData scan.
+// EventUnfinishedWorkUpdated/Removed events can fire in bursts (one per changed
+// worktree during a scan sweep); without this cache each event triggers its own
+// full ent/sqlite session scan.
+const instanceIndexTTL = 2 * time.Second
+
+// instanceIndexCache holds the last-built sessionPathIndex/instancePRIndex pair,
+// invalidated by instanceIndexTTL rather than rebuilt on every call.
+type instanceIndexCache struct {
+	mu      sync.Mutex
+	builtAt time.Time
+	pathIdx map[string][]string
+	prIdx   map[string]worktreePRInfo
+}
+
+// UnfinishedWorkService implements the ConnectRPC UnfinishedWorkServiceHandler.
+type UnfinishedWorkService struct {
+	scanner         *unfinished.Scanner
+	stateStore      *unfinished.StateStore
+	eventBus        *events.EventBus
+	storage         *session.Storage
+	watchDirWatcher *unfinished.WatchDirWatcher
+
+	// perWorktreeMu prevents duplicate AI summary generation for the same worktree.
+	aiMu sync.Map // map[string]*sync.Mutex  key = repoPath+"|"+branch
+
+	idxCache instanceIndexCache
+}
+
+// NewUnfinishedWorkService creates a new service instance. watchDirWatcher
+// may be nil (e.g. in tests) — UpdateUnfinishedWorkConfig then skips live
+// watch-dir registration and relies on the next process restart's
+// WatchDirWatcher.Start to pick up the persisted config instead.
+func NewUnfinishedWorkService(
+	scanner *unfinished.Scanner,
+	stateStore *unfinished.StateStore,
+	eventBus *events.EventBus,
+	storage *session.Storage,
+	watchDirWatcher *unfinished.WatchDirWatcher,
+) *UnfinishedWorkService {
+	return &UnfinishedWorkService{
+		scanner:         scanner,
+		stateStore:      stateStore,
+		eventBus:        eventBus,
+		storage:         storage,
+		watchDirWatcher: watchDirWatcher,
+	}
+}
+
+// worktreePRInfo holds the best available PR information for an unfinished worktree,
+// derived from active session instances whose Path matches the worktree path.
+type worktreePRInfo struct {
+	Number   int
+	URL      string
+	State    string
+	Priority string
+}
+
+// instanceIndexes returns the worktreePath → []sessionUUID and worktreePath →
+// worktreePRInfo indexes built from all loaded instances, reusing the cached copy
+// when it's younger than instanceIndexTTL instead of re-scanning session.Storage.
+// A single ListInstanceData scan builds both indexes together (previously each had
+// its own scan, doubling the cost).
+func (s *UnfinishedWorkService) instanceIndexes() (map[string][]string, map[string]worktreePRInfo) {
+	if s.storage == nil {
+		return map[string][]string{}, map[string]worktreePRInfo{}
+	}
+
+	s.idxCache.mu.Lock()
+	defer s.idxCache.mu.Unlock()
+
+	if time.Since(s.idxCache.builtAt) < instanceIndexTTL && s.idxCache.pathIdx != nil {
+		return s.idxCache.pathIdx, s.idxCache.prIdx
+	}
+
+	// ListInstanceDataWithWorktree (not ListInstanceData/LoadMinimal) so
+	// ActiveDir() below can see Worktree.WorktreePath — the scanner keys results
+	// by WorktreePath (the resolved directory), so the index must key on the
+	// same resolved concept or worktree sessions never match.
+	data, err := s.storage.ListInstanceDataWithWorktree()
+	if err != nil {
+		if s.idxCache.pathIdx != nil {
+			// Serve the stale cache rather than an empty index on a transient error.
+			return s.idxCache.pathIdx, s.idxCache.prIdx
+		}
+		return map[string][]string{}, map[string]worktreePRInfo{}
+	}
+
+	pathIdx := make(map[string][]string, len(data))
+	prIdx := make(map[string]worktreePRInfo, len(data))
+	for _, d := range data {
+		activeDir := d.ActiveDir()
+		if activeDir != "" && d.UUID != "" {
+			pathIdx[activeDir] = append(pathIdx[activeDir], d.UUID)
+		}
+		if activeDir == "" || d.GitHubPRNumber == 0 {
+			continue
+		}
+		// Prefer the first (or best-priority) PR we find for a given path.
+		if _, exists := prIdx[activeDir]; !exists {
+			prIdx[activeDir] = worktreePRInfo{
+				Number:   d.GitHubPRNumber,
+				URL:      d.GitHubPRURL,
+				State:    d.GitHubPRState,
+				Priority: d.GitHubPRPriority,
+			}
+		}
+	}
+
+	s.idxCache.pathIdx = pathIdx
+	s.idxCache.prIdx = prIdx
+	s.idxCache.builtAt = time.Now()
+	return pathIdx, prIdx
+}
+
+// ListUnfinishedWork returns the current snapshot of all unfinished worktrees.
+func (s *UnfinishedWorkService) ListUnfinishedWork(
+	_ context.Context,
+	_ *connect.Request[sessionv1.ListUnfinishedWorkRequest],
+) (*connect.Response[sessionv1.ListUnfinishedWorkResponse], error) {
+	results := s.scanner.GetAllResults()
+	pathIndex, prIndex := s.instanceIndexes()
+	worktrees := make([]*sessionv1.UnfinishedWorktree, 0, len(results))
+	for _, r := range results {
+		r.SessionIDs = pathIndex[r.WorktreePath]
+		worktrees = append(worktrees, scanResultToProto(r, prIndex[r.WorktreePath]))
+	}
+	return connect.NewResponse(&sessionv1.ListUnfinishedWorkResponse{
+		Worktrees: worktrees,
+		LastScan:  timestamppb.Now(),
+	}), nil
+}
+
+// WatchUnfinishedWork streams real-time updates to connected clients.
+// Pattern: send initial snapshot → subscribe to EventBus → forward events until disconnect.
+func (s *UnfinishedWorkService) WatchUnfinishedWork(
+	ctx context.Context,
+	_ *connect.Request[sessionv1.WatchUnfinishedWorkRequest],
+	stream *connect.ServerStream[sessionv1.UnfinishedWorkEvent],
+) error {
+	done := streammetrics.TrackOpenStream("WatchUnfinishedWork")
+	defer done()
+
+	// 1. Send initial snapshot.
+	results := s.scanner.GetAllResults()
+	pathIndex, prIndex := s.instanceIndexes()
+	for _, r := range results {
+		r.SessionIDs = pathIndex[r.WorktreePath]
+		evt := &sessionv1.UnfinishedWorkEvent{
+			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
+				WorktreeUpdated: scanResultToProto(r, prIndex[r.WorktreePath]),
+			},
+		}
+		if err := stream.Send(evt); err != nil {
+			return fmt.Errorf("send initial snapshot: %w", err)
+		}
+	}
+
+	// 2. Subscribe to EventBus.
+	eventCh, subID := s.eventBus.Subscribe(ctx)
+	defer s.eventBus.Unsubscribe(subID)
+
+	// 3. Forward events.
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-eventCh:
+			if !ok {
+				return nil
+			}
+			protoEvent := s.convertUnfinishedEvent(event)
+			if protoEvent == nil {
+				continue
+			}
+			if err := stream.Send(protoEvent); err != nil {
+				return fmt.Errorf("send event: %w", err)
+			}
+		}
+	}
+}
+
+// convertUnfinishedEvent converts an internal EventBus event to a proto UnfinishedWorkEvent.
+func (s *UnfinishedWorkService) convertUnfinishedEvent(evt *events.Event) *sessionv1.UnfinishedWorkEvent {
+	switch evt.Type {
+	case unfinished.EventUnfinishedWorkUpdated:
+		// The Context field carries "repoPath|branch".
+		parts := strings.SplitN(evt.Context, "|", 2)
+		if len(parts) != 2 {
+			return nil
+		}
+		r, ok := s.scanner.GetResultByKey(parts[0], parts[1])
+		if !ok {
+			return nil
+		}
+		pathIdx, prIdx := s.instanceIndexes()
+		r.SessionIDs = pathIdx[r.WorktreePath]
+		prInfo := prIdx[r.WorktreePath]
+		return &sessionv1.UnfinishedWorkEvent{
+			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
+				WorktreeUpdated: scanResultToProto(r, prInfo),
+			},
+		}
+	case unfinished.EventUnfinishedWorkRemoved:
+		parts := strings.SplitN(evt.Context, "|", 2)
+		if len(parts) != 2 {
+			return nil
+		}
+		return &sessionv1.UnfinishedWorkEvent{
+			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeRemoved{
+				WorktreeRemoved: &sessionv1.UnfinishedWorktree{
+					RepoPath: parts[0],
+					Branch:   parts[1],
+				},
+			},
+		}
+	case unfinished.EventUnfinishedScanCompleted:
+		return &sessionv1.UnfinishedWorkEvent{
+			Payload: &sessionv1.UnfinishedWorkEvent_ScanCompleted{
+				ScanCompleted: &sessionv1.ScanCompleted{
+					CompletedAt: timestamppb.New(evt.Timestamp),
+				},
+			},
+		}
+	}
+	return nil
+}
+
+// ScanUnfinishedWork triggers an immediate scan.
+func (s *UnfinishedWorkService) ScanUnfinishedWork(
+	_ context.Context,
+	_ *connect.Request[sessionv1.ScanUnfinishedWorkRequest],
+) (*connect.Response[sessionv1.ScanUnfinishedWorkResponse], error) {
+	startedAt := time.Now()
+	s.scanner.TriggerScan()
+	return connect.NewResponse(&sessionv1.ScanUnfinishedWorkResponse{
+		ScanStartedAt: timestamppb.New(startedAt),
+	}), nil
+}
+
+// DismissWorktree permanently hides a worktree from results.
+func (s *UnfinishedWorkService) DismissWorktree(
+	_ context.Context,
+	req *connect.Request[sessionv1.DismissWorktreeRequest],
+) (*connect.Response[sessionv1.DismissWorktreeResponse], error) {
+	if err := s.stateStore.Dismiss(req.Msg.RepoPath, req.Msg.Branch); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	s.scanner.RemoveResult(req.Msg.RepoPath, req.Msg.Branch)
+	s.eventBus.Publish(newUnfinishedRemovedEvent(req.Msg.RepoPath, req.Msg.Branch))
+	return connect.NewResponse(&sessionv1.DismissWorktreeResponse{}), nil
+}
+
+// UndismissWorktree removes the dismiss record.
+func (s *UnfinishedWorkService) UndismissWorktree(
+	_ context.Context,
+	req *connect.Request[sessionv1.UndismissWorktreeRequest],
+) (*connect.Response[sessionv1.UndismissWorktreeResponse], error) {
+	if err := s.stateStore.Undismiss(req.Msg.RepoPath, req.Msg.Branch); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	// Trigger re-scan so the item reappears.
+	s.scanner.TriggerScan()
+	return connect.NewResponse(&sessionv1.UndismissWorktreeResponse{}), nil
+}
+
+// worktreeHeadSHA is worktreePath's current HEAD commit, or "" when it cannot be resolved.
+func worktreeHeadSHA(ctx context.Context, worktreePath string) string {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(worktreePath)}, "HEAD")
+	if err != nil {
+		return ""
+	}
+	return string(sha)
+}
+
+// SnoozeWorktree hides a worktree until the next HEAD SHA change.
+func (s *UnfinishedWorkService) SnoozeWorktree(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SnoozeWorktreeRequest],
+) (*connect.Response[sessionv1.SnoozeWorktreeResponse], error) {
+	// Get current HEAD SHA from the stored scan result.
+	r, ok := s.scanner.GetResultByKey(req.Msg.RepoPath, req.Msg.Branch)
+	var headSHA string
+	if ok {
+		// Run git rev-parse HEAD in the worktree to get current SHA.
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		headSHA = worktreeHeadSHA(ctx, r.WorktreePath)
+	}
+
+	if err := s.stateStore.Snooze(req.Msg.RepoPath, req.Msg.Branch, headSHA); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	s.scanner.RemoveResult(req.Msg.RepoPath, req.Msg.Branch)
+	s.eventBus.Publish(newUnfinishedRemovedEvent(req.Msg.RepoPath, req.Msg.Branch))
+	return connect.NewResponse(&sessionv1.SnoozeWorktreeResponse{}), nil
+}
+
+// GetWorktreeAISummary generates or returns a cached AI summary.
+func (s *UnfinishedWorkService) GetWorktreeAISummary(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetWorktreeAISummaryRequest],
+) (*connect.Response[sessionv1.GetWorktreeAISummaryResponse], error) {
+	r, ok := s.scanner.GetResultByKey(req.Msg.RepoPath, req.Msg.Branch)
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("worktree not found: %s|%s", req.Msg.RepoPath, req.Msg.Branch))
+	}
+
+	// Compute diff hash.
+	diffHash, err := unfinished.ComputeDiffHash(r.WorktreePath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("compute diff hash: %w", err))
+	}
+
+	// Check cache.
+	if summary, ok := s.stateStore.GetCachedSummary(req.Msg.RepoPath, req.Msg.Branch, diffHash); ok {
+		return connect.NewResponse(&sessionv1.GetWorktreeAISummaryResponse{
+			Summary:   summary,
+			FromCache: true,
+		}), nil
+	}
+
+	// Per-worktree mutex to avoid duplicate concurrent calls.
+	key := req.Msg.RepoPath + "|" + req.Msg.Branch
+	muI, _ := s.aiMu.LoadOrStore(key, &sync.Mutex{})
+	mu := muI.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Re-check cache after acquiring lock.
+	if summary, ok := s.stateStore.GetCachedSummary(req.Msg.RepoPath, req.Msg.Branch, diffHash); ok {
+		return connect.NewResponse(&sessionv1.GetWorktreeAISummaryResponse{
+			Summary:   summary,
+			FromCache: true,
+		}), nil
+	}
+
+	// Acquire global semaphore.
+	select {
+	case aiSemaphore <- struct{}{}:
+	case <-ctx.Done():
+		return nil, connect.NewError(connect.CodeCanceled, ctx.Err())
+	}
+	defer func() { <-aiSemaphore }()
+
+	const summaryPrompt = "Summarize these git changes in 2-4 sentences for a developer picking up where they left off."
+
+	subCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	gitOut, gitErr := gitprovider.Backend().Diff(subCtx, backend.Local{Root: backend.RepoRoot(r.WorktreePath)},
+		backend.DiffSpec{Base: "HEAD", Intent: backend.IntentDisplay})
+	if gitErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("git diff HEAD: %w", gitErr))
+	}
+
+	var summaryOut []byte
+	if client := headless.DefaultClient(); client != nil {
+		out, callErr := client.CallBlocking(subCtx, headless.FeatureKeyUnfinishedWorkSummary, summaryPrompt, gitOut, headless.CallOptions{}, headless.DiscardCost)
+		if callErr != nil {
+			if subCtx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("AI summary timed out after 30s"))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("AI summary: %w", callErr))
+		}
+		summaryOut = []byte(out)
+	} else {
+		claudePath, err := exec.LookPath("claude")
+		if err != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("claude CLI not found: %w", err))
+		}
+		claudeCmd := safeexec.CommandContext(subCtx, claudePath, "-p", summaryPrompt)
+		claudeCmd.Stdin = strings.NewReader(gitOut)
+		var claudeErr error
+		summaryOut, claudeErr = claudeCmd.Output()
+		if claudeErr != nil {
+			if subCtx.Err() != nil {
+				return nil, connect.NewError(connect.CodeDeadlineExceeded,
+					fmt.Errorf("AI summary timed out after 30s"))
+			}
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("claude CLI error: %w", claudeErr))
+		}
+	}
+
+	summary := strings.TrimSpace(string(summaryOut))
+	if err := s.stateStore.CacheSummary(req.Msg.RepoPath, req.Msg.Branch, diffHash, summary); err != nil {
+		log.Warn("[unfinished] failed to cache AI summary", "err", err)
+	}
+
+	return connect.NewResponse(&sessionv1.GetWorktreeAISummaryResponse{
+		Summary:   summary,
+		FromCache: false,
+	}), nil
+}
+
+// QuickCommitPush stages all changes, commits, and pushes.
+func (s *UnfinishedWorkService) QuickCommitPush(
+	ctx context.Context,
+	req *connect.Request[sessionv1.QuickCommitPushRequest],
+) (*connect.Response[sessionv1.QuickCommitPushResponse], error) {
+	if strings.TrimSpace(req.Msg.CommitMessage) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("commit message is required"))
+	}
+
+	r, ok := s.scanner.GetResultByKey(req.Msg.RepoPath, req.Msg.Branch)
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("worktree not found: %s|%s", req.Msg.RepoPath, req.Msg.Branch))
+	}
+
+	if strings.TrimSpace(req.Msg.Branch) == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("branch is required"))
+	}
+
+	worktreePath := r.WorktreePath
+
+	// Stage everything, then untrack any backlog-scaffolding path that's already
+	// tracked in this branch's history (git.ScaffoldingExcludePatterns) — the same
+	// guard GitWorktree.CommitChanges/PushChanges apply, so a stale-tracked
+	// .backlog-context.md/.claude/commands/backlog/* can never be re-committed here
+	// either, regardless of gitignore/info-exclude state.
+	wt := git.NewGitWorktreeFromStorage(req.Msg.RepoPath, worktreePath, "", req.Msg.Branch, "")
+	if err := wt.StageAllExceptScaffolding(); err != nil {
+		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("git add failed: %v", err),
+		}), nil
+	}
+
+	hasStaged, err := wt.HasStagedChanges()
+	if err != nil {
+		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+			Success:      false,
+			ErrorMessage: fmt.Sprintf("git diff --cached failed: %v", err),
+		}), nil
+	}
+
+	if hasStaged {
+		// git commit -m <message>
+		commitCtx, commitCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer commitCancel()
+		if err := gitprovider.Backend().Commit(commitCtx, backend.Local{Root: backend.RepoRoot(worktreePath)},
+			backend.CommitRequest{Message: req.Msg.CommitMessage}); err != nil {
+			return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("git commit failed: %v", err),
+			}), nil
+		}
+	}
+
+	// git push -u origin <branch> (60s timeout)
+	pushCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	if err := gitprovider.Backend().Push(pushCtx, backend.Local{Root: backend.RepoRoot(worktreePath)},
+		backend.PushRequest{Remote: "origin", Branch: backend.BranchName(req.Msg.Branch), SetUpstream: true}); err != nil {
+		errMsg := fmt.Sprintf("git push failed: %v", err)
+		if pushCtx.Err() != nil {
+			errMsg = "git push timed out after 60s"
+		}
+		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+			Success:      false,
+			ErrorMessage: errMsg,
+		}), nil
+	}
+
+	// Trigger a re-scan to update the item.
+	s.scanner.InvalidateCache(worktreePath)
+	s.scanner.EnqueueRepo(req.Msg.RepoPath)
+
+	return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
+		Success: true,
+	}), nil
+}
+
+// GetWorktreeDiff returns the full unified git diff for an unfinished worktree.
+// It compares the working tree against the remote default branch so the caller
+// can display the diff without opening a session.
+func (s *UnfinishedWorkService) GetWorktreeDiff(
+	_ context.Context,
+	req *connect.Request[sessionv1.GetWorktreeDiffRequest],
+) (*connect.Response[sessionv1.GetWorktreeDiffResponse], error) {
+	r, ok := s.scanner.GetResultByKey(req.Msg.RepoPath, req.Msg.Branch)
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound,
+			fmt.Errorf("worktree not found: %s|%s", req.Msg.RepoPath, req.Msg.Branch))
+	}
+
+	// Resolve the remote default branch for this repo.
+	defaultBranch := s.scanner.ResolveDefaultBranch(req.Msg.RepoPath)
+
+	// Build the diff range. Three-dot syntax gives changes since the merge-base,
+	// which is what "commits ahead" corresponds to. We also include unstaged changes
+	// by running two commands and concatenating.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var diffContent strings.Builder
+	loc := backend.Local{Root: backend.RepoRoot(r.WorktreePath)}
+
+	if defaultBranch != "" {
+		// Committed changes ahead of the remote default branch.
+		committedOut, err := gitprovider.Backend().Diff(ctx, loc,
+			backend.DiffSpec{Base: backend.RefName(defaultBranch), FromMergeBase: true, Intent: backend.IntentDisplay})
+		if err == nil {
+			diffContent.WriteString(committedOut)
+		}
+	}
+
+	// Uncommitted (staged + unstaged) changes on top of HEAD.
+	uncommittedOut, err := gitprovider.Backend().Diff(ctx, loc,
+		backend.DiffSpec{Base: "HEAD", Intent: backend.IntentDisplay})
+	if err == nil && len(uncommittedOut) > 0 {
+		diffContent.WriteString(uncommittedOut)
+	}
+
+	content := diffContent.String()
+	var added, removed int
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			added++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			removed++
+		}
+	}
+
+	return connect.NewResponse(&sessionv1.GetWorktreeDiffResponse{
+		DiffStats: &sessionv1.DiffStats{
+			// git diff output is raw bytes and can contain sequences that aren't valid
+			// UTF-8; DiffStats.content is a proto3 string field, which rejects those at
+			// marshal time, so sanitize here at the source.
+			Content: strings.ToValidUTF8(content, "�"),
+			Added:   int32(added),
+			Removed: int32(removed),
+		},
+	}), nil
+}
+
+// GetUnfinishedWorkConfig returns the current source configuration.
+func (s *UnfinishedWorkService) GetUnfinishedWorkConfig(
+	_ context.Context,
+	_ *connect.Request[sessionv1.GetUnfinishedWorkConfigRequest],
+) (*connect.Response[sessionv1.GetUnfinishedWorkConfigResponse], error) {
+	return connect.NewResponse(&sessionv1.GetUnfinishedWorkConfigResponse{
+		Config: &sessionv1.UnfinishedWorkConfig{
+			AutoSpiderSessions: s.stateStore.AutoSpiderEnabled(),
+			WatchDirs:          s.stateStore.WatchDirs(),
+			PinnedRepos:        s.stateStore.PinnedRepos(),
+		},
+	}), nil
+}
+
+// UpdateUnfinishedWorkConfig replaces the source configuration.
+func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
+	_ context.Context,
+	req *connect.Request[sessionv1.UpdateUnfinishedWorkConfigRequest],
+) (*connect.Response[sessionv1.UpdateUnfinishedWorkConfigResponse], error) {
+	cfg := req.Msg.Config
+	if cfg == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("config is required"))
+	}
+
+	// Validate pinned repos exist.
+	for _, repo := range cfg.PinnedRepos {
+		if err := s.scanner.AddPinnedRepo(repo); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("invalid pinned repo %q: %w", repo, err))
+		}
+	}
+
+	// Snapshot the previous watch dirs before overwriting, so the diff below
+	// can tell which dirs are newly added vs. removed.
+	previousWatchDirs := s.stateStore.WatchDirs()
+
+	if err := s.stateStore.SetConfig(cfg.AutoSpiderSessions, cfg.WatchDirs, cfg.PinnedRepos); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	s.scanner.SetAutoSpider(cfg.AutoSpiderSessions)
+	s.applyWatchDirChanges(previousWatchDirs, cfg.WatchDirs)
+
+	// Trigger scan to pick up new repos.
+	s.scanner.TriggerScan()
+
+	return connect.NewResponse(&sessionv1.UpdateUnfinishedWorkConfigResponse{
+		Config: cfg,
+	}), nil
+}
+
+// --- helpers ---
+
+// applyWatchDirChanges diffs previous against current watch dirs and applies
+// the delta to watchDirWatcher live — added dirs get walked immediately
+// (their repos show up without a restart), removed dirs release the repos
+// they contributed. No-op if watchDirWatcher is nil (see NewUnfinishedWorkService).
+func (s *UnfinishedWorkService) applyWatchDirChanges(previous, current []string) {
+	if s.watchDirWatcher == nil {
+		return
+	}
+	previousSet := make(map[string]bool, len(previous))
+	for _, dir := range previous {
+		previousSet[dir] = true
+	}
+	currentSet := make(map[string]bool, len(current))
+	for _, dir := range current {
+		currentSet[dir] = true
+	}
+
+	for dir := range currentSet {
+		if !previousSet[dir] {
+			s.watchDirWatcher.AddWatchDir(dir)
+		}
+	}
+	for dir := range previousSet {
+		if !currentSet[dir] {
+			s.watchDirWatcher.RemoveWatchDir(dir)
+		}
+	}
+}
+
+func scanResultToProto(r unfinished.ScanResult, pr worktreePRInfo) *sessionv1.UnfinishedWorktree {
+	wt := &sessionv1.UnfinishedWorktree{
+		RepoPath:       r.RepoPath,
+		Branch:         r.Branch,
+		WorktreePath:   r.WorktreePath,
+		RepoName:       r.RepoName,
+		DisplayPath:    r.DisplayPath,
+		HasUncommitted: r.HasUncommitted,
+		// #nosec G115 -- ahead/behind commit counts for one local worktree, far below int32 range.
+		CommitsAhead: int32(r.AheadCount),
+		// #nosec G115 -- see CommitsAhead above.
+		CommitsBehind: int32(r.BehindCount),
+		DefaultBranch: r.DefaultBranch,
+		// #nosec G115 -- git diff stats for one local worktree, far below int32 range.
+		ChangedFiles: int32(r.ChangedFiles),
+		// #nosec G115 -- see ChangedFiles above.
+		LinesAdded: int32(r.LinesAdded),
+		// #nosec G115 -- see ChangedFiles above.
+		LinesRemoved:        int32(r.LinesRemoved),
+		AheadCommitMessages: r.AheadMessages,
+		IsDismissed:         r.Status == unfinished.ScanResultStatusError, // used below
+		SessionIds:          r.SessionIDs,
+		// #nosec G115 -- pr.Number is a GitHub PR number, far below int32 range.
+		GithubPrNumber:   int32(pr.Number),
+		GithubPrUrl:      pr.URL,
+		GithubPrState:    pr.State,
+		GithubPrPriority: pr.Priority,
+	}
+
+	// Correct the is_dismissed field (ScanResult doesn't carry this).
+	wt.IsDismissed = false
+
+	switch r.Status {
+	case unfinished.ScanResultStatusOK:
+		wt.ScanStatus = sessionv1.ScanStatus_SCAN_STATUS_OK
+	case unfinished.ScanResultStatusTimeout:
+		wt.ScanStatus = sessionv1.ScanStatus_SCAN_STATUS_TIMEOUT
+		wt.ScanErrorMsg = r.ErrorMsg
+	case unfinished.ScanResultStatusPermission:
+		wt.ScanStatus = sessionv1.ScanStatus_SCAN_STATUS_PERMISSION
+		wt.ScanErrorMsg = r.ErrorMsg
+	case unfinished.ScanResultStatusError:
+		wt.ScanStatus = sessionv1.ScanStatus_SCAN_STATUS_ERROR
+		wt.ScanErrorMsg = r.ErrorMsg
+	}
+
+	if !r.LastModified.IsZero() {
+		wt.LastModified = timestamppb.New(r.LastModified)
+	}
+	if !r.ScanTime.IsZero() {
+		wt.ScanTime = timestamppb.New(r.ScanTime)
+	}
+	return wt
+}
+
+func newUnfinishedRemovedEvent(repoPath, branch string) *events.Event {
+	return &events.Event{
+		Type:      unfinished.EventUnfinishedWorkRemoved,
+		Timestamp: time.Now(),
+		Context:   repoPath + "|" + branch,
+	}
+}

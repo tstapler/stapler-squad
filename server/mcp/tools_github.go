@@ -15,7 +15,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -28,7 +27,9 @@ type githubHandlers struct {
 	// CreateSession + Background Resolution Pipeline (async-session-creation
 	// Epic 2.3, Story 2.3.2) instead of constructing/starting an *Instance
 	// inline. May be nil in tests that don't exercise createSessionForPR.
-	svc *services.SessionService
+	svc SessionCreator
+	// createLimiter is shared with lifecycleHandlers.createLimiter; nil means unlimited.
+	createLimiter *tokenBucket
 }
 
 // GitHubPRSummary is the MCP representation of one open pull request.
@@ -157,7 +158,7 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 // lifecycleHandlers.createSessionWithAwaitTimeout's doc comment in
 // tools_lifecycle.go for why this seam exists.
 func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
-	if !createSessionLimiter.allow("global") {
+	if !gh.createLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)", "Wait before creating another session."), nil
 	}
 
@@ -250,7 +251,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 	sessionID := createResp.Msg.Session.Id
 
 	outcome, awaitErr := gh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
-	if errors.Is(awaitErr, services.ErrCreationAwaitTimeout) {
+	if errors.Is(awaitErr, domain.ErrCreationAwaitTimeout) {
 		return okResult(CreateSessionForPRResult{
 			MCPResult: MCPResult{Success: true},
 			Session: &SessionDetail{SessionSummary: SessionSummary{
@@ -272,7 +273,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
 
-	if err := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, nil); err != nil {
+	if err := gh.svc.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, nil); err != nil {
 		log.Warn("mcp hook injection failed for PR session", "title", title, "err", err)
 	}
 

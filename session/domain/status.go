@@ -23,7 +23,7 @@ const (
 	Restoring Status = 5
 	// Crashed is a terminal state distinct from Stopped: the wrapped program exited
 	// abnormally (non-zero exit code or signal) and tmux's remain-on-exit left a dead
-	// pane placeholder, detected by SessionHealthChecker's polling (see session/health.go).
+	// pane placeholder, detected by SessionHealthChecker's polling (see session/autonomous/health.go).
 	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
 	// it surfaces to the user/automation for an explicit resume (see ExitReason).
 	Crashed Status = 6
@@ -76,7 +76,7 @@ func (s Status) String() string {
 // Paused and Hibernated sessions have no tmux session at all; Stopped, Crashed,
 // and PermanentlyFailed are terminal states awaiting an explicit resume/retry,
 // not incidental gaps that background pollers should paper over. See
-// healthCheckSkipReason (session/health.go) for the health-checker's per-status
+// healthCheckSkipReason (session/autonomous/health.go) for the health-checker's per-status
 // skip messages, and pr_status_poller.go's checkAllSessions for another consumer.
 func (s Status) IsSuspended() bool {
 	switch s {

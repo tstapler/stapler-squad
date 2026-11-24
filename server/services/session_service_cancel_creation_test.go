@@ -222,7 +222,7 @@ func TestCancelSessionCreation_should_ReturnInvalidArgument_When_IdIsEmpty(t *te
 // poller directly rather than going through the real RPC an MCP-style caller
 // actually calls. Given a caller blocked inside AwaitCreationTerminal for an
 // instance, when a concurrent CancelSessionCreation call removes it, the
-// waiter must observe ErrCreationVanished within roughly one poll interval
+// waiter must observe domain.ErrCreationVanished within roughly one poll interval
 // of the deletion, not hang until its own (much longer) timeout.
 func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_RacingALiveWait(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
@@ -230,7 +230,7 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 	newCancelTestInstance(t, svc, storage, "cancel-await-race", true)
 
 	type awaitResult struct {
-		outcome CreationOutcome
+		outcome domain.CreationOutcome
 		err     error
 	}
 	awaitDone := make(chan awaitResult, 1)
@@ -255,8 +255,8 @@ func TestCancelSessionCreation_should_ResolveAwaitCreationTerminalPromptly_When_
 	select {
 	case res := <-awaitDone:
 		elapsed := time.Since(start)
-		require.ErrorIs(t, res.err, ErrCreationVanished)
-		assert.Equal(t, CreationOutcome{}, res.outcome)
+		require.ErrorIs(t, res.err, domain.ErrCreationVanished)
+		assert.Equal(t, domain.CreationOutcome{}, res.outcome)
 		assert.Less(t, elapsed, 2*time.Second,
 			"the waiter must observe the cancel-driven deletion promptly, not hang until its own 5s timeout")
 	case <-time.After(2 * time.Second):

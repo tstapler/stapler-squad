@@ -122,13 +122,16 @@ func TestWireDepsIntoServer_should_PassMCPCoreOptionsToNewHTTPHandler(t *testing
 func TestWireDepsIntoServer_should_PassScrollbackAndAutoReopenerToNewHTTPHandler(t *testing.T) {
 	t.Parallel()
 	fn := parseFunc(t, "server.go", "wireDepsIntoServer")
-	var found, guarded bool
+	var found, guarded, rpcGuarded bool
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
 			lhs, lok := as.Lhs[0].(*ast.Ident)
 			if rhs, rok := as.Rhs[0].(*ast.CallExpr); lok && rok {
 				if id, iok := rhs.Fun.(*ast.Ident); iok && lhs.Name == "autoReopener" && id.Name == "mcpAutoReopener" {
 					guarded = true
+				}
+				if id, iok := rhs.Fun.(*ast.Ident); iok && lhs.Name == "backlogRPC" && id.Name == "mcpBacklogRPC" {
+					rpcGuarded = true
 				}
 			}
 		}
@@ -147,10 +150,15 @@ func TestWireDepsIntoServer_should_PassScrollbackAndAutoReopenerToNewHTTPHandler
 		reopener, ok := call.Args[6].(*ast.Ident)
 		require.True(t, ok)
 		assert.Equal(t, "autoReopener", reopener.Name)
+		require.GreaterOrEqual(t, len(call.Args), 8)
+		rpc, ok := call.Args[7].(*ast.Ident)
+		require.True(t, ok)
+		assert.Equal(t, "backlogRPC", rpc.Name)
 		return true
 	})
 	assert.True(t, found, "wireDepsIntoServer must build the HTTP MCP handler")
 	assert.True(t, guarded, "autoReopener must come from mcpAutoReopener so a nil service stays a nil interface")
+	assert.True(t, rpcGuarded, "backlogRPC must come from mcpBacklogRPC so a nil service stays a nil interface")
 }
 
 func TestMCPCoreOptions_should_InjectWorktreeOpener(t *testing.T) {

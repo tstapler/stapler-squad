@@ -4,8 +4,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -33,13 +31,13 @@ func WithToolModules(mods ...ToolModule) CoreOption {
 // composition root (see single_root_guard_test.go).
 type coreDeps struct {
 	store          session.InstanceStore
-	svc            *services.SessionService
+	svc            SessionRPC
 	sbMgr          TerminalScrollback
 	storage        *session.Storage
 	eventBus       *events.EventBus
 	backlogEnabled func() bool
 	autoReopener   AutoReopener
-	backlogSvc     *backlogsvc.BacklogService
+	backlogSvc     BacklogRPC
 	liveCheck      func(sessionUUID string) bool
 	cfg            coreConfig
 	gate           *callerIdentityGate // built once in defaultToolModules from cfg.wakeMetrics
@@ -51,7 +49,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 	if d.storage != nil {
 		d.gate = &callerIdentityGate{metrics: d.cfg.wakeMetrics, roleOf: roleLookupFrom(d.storage.GetItemSessionBySessionUUID)}
 	}
-	// A nil *services.SessionService or *session.Storage stored directly in an
+	// A nil *session.Storage stored directly in an
 	// interface-typed field would be a non-nil interface around a nil pointer,
 	// so each gate below is an explicit pointer comparison.
 	var diagnoseCheck diagnoseCallerCheck
@@ -63,9 +61,10 @@ func defaultToolModules(d coreDeps) []ToolModule {
 		liveFinder = d.svc
 	}
 
+	createLimiter := newCreateSessionLimiter()
 	mods := []ToolModule{
 		newDiscoveryModule(d.store),
-		newLifecycleModule(d.store, d.svc, diagnoseCheck),
+		newLifecycleModule(d.store, d.svc, diagnoseCheck, createLimiter),
 		newTerminalModule(d.store, liveFinder, d.sbMgr, diagnoseCheck),
 		newVCSModule(d.store, d.cfg.openWorktree),
 		newWorkflowModule(d.svc),
@@ -76,7 +75,7 @@ func defaultToolModules(d coreDeps) []ToolModule {
 	}
 	mods = append(mods, newBacklogModules(d, liveFinder)...)
 	mods = append(mods, newIdentityGatedModules(d.gate, d.storage, d.eventBus)...)
-	mods = append(mods, newGitHubModule(d.cfg.userPRs, d.store, d.svc))
+	mods = append(mods, newGitHubModule(d.cfg.userPRs, d.store, d.svc, createLimiter))
 	return append(mods, d.cfg.extraModules...)
 }
 
@@ -92,9 +91,9 @@ func newDiscoveryModule(store session.InstanceStore) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerDiscoveryTools(s, &discoveryHandlers{store: store}) })
 }
 
-func newLifecycleModule(store session.InstanceStore, svc *services.SessionService, diagnoseCheck diagnoseCallerCheck) ToolModule {
+func newLifecycleModule(store session.InstanceStore, svc SessionLifecycle, diagnoseCheck diagnoseCallerCheck, createLimiter *tokenBucket) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
-		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck, publicURL: publicURLFromEnv()})
+		registerLifecycleTools(s, &lifecycleHandlers{store: store, svc: svc, diagnoseCheck: diagnoseCheck, publicURL: publicURLFromEnv(), createLimiter: createLimiter})
 	})
 }
 
@@ -114,35 +113,35 @@ func newVCSModule(store session.InstanceStore, open WorktreeOpener) ToolModule {
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerVCSTools(s, &vcsHandlers{store: store, open: open}) })
 }
 
-func newWorkflowModule(svc *services.SessionService) ToolModule {
+func newWorkflowModule(svc WorkflowRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerWorkflowTools(s, &workflowHandlers{svc: svc}) })
 }
 
-func newRulesModule(svc *services.SessionService) ToolModule {
+func newRulesModule(svc ApprovalRulesRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerRulesTools(s, &rulesHandlers{svc: svc}) })
 }
 
-func newTaggingRulesModule(svc *services.SessionService) ToolModule {
+func newTaggingRulesModule(svc TaggingRulesRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerTaggingRulesTools(s, &taggingRulesHandlers{svc: svc}) })
 }
 
-func newNotificationsModule(svc *services.SessionService) ToolModule {
+func newNotificationsModule(svc NotificationHistoryRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) { registerNotificationTools(s, &notificationHandlers{svc: svc}) })
 }
 
-func newHistoryModule(svc *services.SessionService) ToolModule {
+func newHistoryModule(svc ClaudeHistoryRPC) ToolModule {
 	if svc == nil {
 		return nil
 	}
@@ -157,24 +156,29 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	if d.storage == nil || (d.backlogEnabled != nil && !d.backlogEnabled()) {
 		return nil
 	}
-	h := &backlogHandlers{gate: d.gate, storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser, prCheckerFactory: stuckReportCheckerFactory(d.cfg.openWorktree), github: d.cfg.github}
+	// d.storage is non-nil here (early return above), so guidance is never a boxed nil.
+	h := &backlogHandlers{gate: d.gate, storage: d.storage, guidance: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser, prCheckerFactory: stuckReportCheckerFactory(d.cfg.openWorktree), github: d.cfg.github}
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerBacklogTools(s, h) }),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerStuckReportTools(s, h) }),
 		newClaimModule(d.backlogSvc, d.backlogEnabled),
 		toolModuleFunc(func(s *mcpserver.MCPServer) {
 			// d.storage is non-nil here (early return above), so the interface is never a boxed nil.
-			registerGoalTools(s, &goalHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, enabledCheck: d.backlogEnabled})
+			registerGoalTools(s, &goalHandlers{storage: d.storage, peers: d.cfg.peers, store: d.store, eventBus: d.eventBus, enabledCheck: d.backlogEnabled})
 		}),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerGuidanceTools(s, h) }),
 		newFlowModule(d.cfg.flowSvc, d.backlogEnabled),
 		toolModuleFunc(func(s *mcpserver.MCPServer) {
-			registerDiagnoseTools(s, &diagnoseHandlers{storage: d.storage, live: liveFinder, eventBus: d.eventBus})
+			registerDiagnoseTools(s, newDiagnoseHandlers(d, liveFinder))
 		}),
 	}
 }
 
-func newClaimModule(backlogSvc *backlogsvc.BacklogService, enabled func() bool) ToolModule {
+func newDiagnoseHandlers(d coreDeps, liveFinder liveInstanceFinder) *diagnoseHandlers {
+	return &diagnoseHandlers{storage: d.storage, live: liveFinder, eventBus: d.eventBus, nudgeGate: d.cfg.nudgeGate}
+}
+
+func newClaimModule(backlogSvc BacklogRPC, enabled func() bool) ToolModule {
 	if backlogSvc == nil {
 		return nil
 	}
@@ -196,6 +200,7 @@ func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage,
 	if storage == nil || gate == nil {
 		return nil
 	}
+	// storage is non-nil here (early return above), so the interface is never a boxed nil.
 	peerHelp := newPeerHelpHandlers(gate, storage, bus)
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerWakeTools(s, newWakeHandlers(gate)) }),
@@ -204,11 +209,11 @@ func newIdentityGatedModules(gate *callerIdentityGate, storage *session.Storage,
 	}
 }
 
-func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc *services.SessionService) ToolModule {
+func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc SessionCreator, createLimiter *tokenBucket) ToolModule {
 	if prCache == nil {
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
-		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc})
+		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc, createLimiter: createLimiter})
 	})
 }

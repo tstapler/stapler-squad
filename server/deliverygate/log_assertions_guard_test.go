@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,15 +18,25 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 	patterns := []string{
 		"*_test.go",
 		"../services/*gate*_test.go",
+		"../services/*/*gate*_test.go",
 		"../services/gatestats*_test.go",
+		"../services/*/gatestats*_test.go",
 		"../services/legacy_hidden_counters_test.go",
+		"../services/*/legacy_hidden_counters_test.go",
 		"../services/session_service_events*_test.go",
+		"../services/*/session_service_events*_test.go",
 		"../services/hidden_*_test.go",
+		"../services/*/hidden_*_test.go",
 		"../services/notification_prune_test.go",
+		"../services/*/notification_prune_test.go",
 		"../services/terminal_*_test.go",
+		"../services/*/terminal_*_test.go",
 		"../services/ssq_hook_handler_stamp_test.go",
+		"../services/*/ssq_hook_handler_stamp_test.go",
 		"../services/slack_gate_test.go",
+		"../services/*/slack_gate_test.go",
 		"../services/session_service_diagnose_test.go",
+		"../services/*/session_service_diagnose_test.go",
 	}
 	forbidden := map[string]bool{
 		"log.SetSlogDefaultForTest": true, // the repo's global-logger swap seam
@@ -34,10 +45,14 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 	}
 	seen := map[string]bool{}
 	fset := token.NewFileSet()
+	leafFiles := 0 // services leaf tests matched; zero means the leaf globs went dead (e.g. missing Bazel data)
 	for _, pat := range patterns {
 		files, err := filepath.Glob(pat)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if strings.HasPrefix(pat, "../services/*/") {
+			leafFiles += len(files)
 		}
 		for _, f := range files {
 			if seen[f] {
@@ -64,6 +79,9 @@ func TestLogAssertions_ShouldInjectHandlerAndNeverUseCaptureLogsUnderParallel_Wh
 				return true
 			})
 		}
+	}
+	if leafFiles == 0 {
+		t.Fatal("no ../services/*/ leaf test files matched; the leaf globs are dead")
 	}
 	if len(seen) < 10 {
 		t.Fatalf("scanned only %d files; the glob patterns drifted", len(seen))

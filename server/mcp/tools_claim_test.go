@@ -9,17 +9,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type fakeClaimCheckService struct {
-	verdict services.ClaimVerdict
+	verdict hostclaim.ClaimVerdict
 	err     error
 }
 
-func (f fakeClaimCheckService) LookupCrossHostClaim(context.Context, string) (services.ClaimVerdict, error) {
+func (f fakeClaimCheckService) LookupCrossHostClaim(context.Context, string) (hostclaim.ClaimVerdict, error) {
 	return f.verdict, f.err
 }
 
@@ -36,7 +36,7 @@ func TestCheckCrossHostClaimTool_should_ReturnClaimedTrueWithHostAndDeepLink_Whe
 	require.NoError(t, err)
 	record := hostclaim.NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/42", "ssq://hostA/backlog/v1/bl_1", time.Now())
 
-	m := callCheckClaim(t, fakeClaimCheckService{verdict: services.NewHeldByOtherVerdict(record)},
+	m := callCheckClaim(t, fakeClaimCheckService{verdict: hostclaim.NewHeldByOtherVerdict(record)},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
 
 	assert.Equal(t, true, m["success"])
@@ -47,7 +47,7 @@ func TestCheckCrossHostClaimTool_should_ReturnClaimedTrueWithHostAndDeepLink_Whe
 }
 
 func TestCheckCrossHostClaimTool_should_ReturnCheckedFalseNeverClaimedFalseAlone_When_VerdictIndeterminate(t *testing.T) {
-	m := callCheckClaim(t, fakeClaimCheckService{verdict: services.NewIndeterminateVerdict()},
+	m := callCheckClaim(t, fakeClaimCheckService{verdict: hostclaim.NewIndeterminateVerdict()},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
 
 	assert.Equal(t, false, m["claimed"])
@@ -56,7 +56,7 @@ func TestCheckCrossHostClaimTool_should_ReturnCheckedFalseNeverClaimedFalseAlone
 }
 
 func TestCheckCrossHostClaimTool_should_ReturnCheckedTrue_When_VerdictUnclaimed(t *testing.T) {
-	m := callCheckClaim(t, fakeClaimCheckService{verdict: services.NewUnclaimedVerdict()},
+	m := callCheckClaim(t, fakeClaimCheckService{verdict: hostclaim.NewUnclaimedVerdict()},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
 
 	assert.Equal(t, false, m["claimed"])
@@ -65,7 +65,7 @@ func TestCheckCrossHostClaimTool_should_ReturnCheckedTrue_When_VerdictUnclaimed(
 }
 
 func TestCheckCrossHostClaimTool_should_ReportDisabledNotClear_When_FeatureFlagOff(t *testing.T) {
-	m := callCheckClaim(t, fakeClaimCheckService{err: backlogsvc.ErrCrossHostClaimDedupDisabled},
+	m := callCheckClaim(t, fakeClaimCheckService{err: domain.ErrCrossHostClaimDedupDisabled},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
 
 	assert.Equal(t, false, m["claimed"])

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/analyticsstore"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
+	"github.com/tstapler/stapler-squad/session/credentialstore"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -24,11 +25,16 @@ import (
 	"github.com/tstapler/stapler-squad/session/rulestore"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/shellstore"
+	"github.com/tstapler/stapler-squad/session/slowops"
 	"github.com/tstapler/stapler-squad/session/wakestore"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// entSchemaCreateSlowAfter is far above any legitimate schema create (tens of
+// milliseconds on an in-memory or small on-disk database).
+const entSchemaCreateSlowAfter = 2 * time.Minute
 
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
@@ -46,6 +52,7 @@ type EntRepository struct {
 	*rulestore.Rules
 	*analyticsstore.Analytics
 	*instancestore.Instances
+	*credentialstore.Credentials
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -204,7 +211,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// connection, entgo.io/ent/dialect/sql/schema.(*Atlas) has internal
 	// package-level state that races under `go test -parallel` when many
 	// NewEntRepository calls run schema creation concurrently.
-	stopSlowWatch := watchSlowOp("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
+	stopSlowWatch := slowops.Watch("ent schema create (incl. wait for EntSchemaCreateMu)", entSchemaCreateSlowAfter)
 	dbpool.EntSchemaCreateMu.Lock()
 	err := client.Schema.Create(context.Background())
 	dbpool.EntSchemaCreateMu.Unlock()
@@ -270,6 +277,7 @@ func (r *EntRepository) initStores() {
 	r.Projects = projectstore.New(r.Client)
 	r.Rules = rulestore.New(r.Client)
 	r.Analytics = analyticsstore.New(r.Client)
+	r.Credentials = credentialstore.New(r.Client)
 	r.Instances = instancestore.New(r.Client, instancestore.Ports{UpsertSessionPRSet: sessionpr.UpsertSessionPRSetTx, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
 	r.SetDriver(r.driver)
 	// Built before Backlog, which takes it as its guidance port; the callback resolves r.Backlog

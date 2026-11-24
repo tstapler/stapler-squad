@@ -13,9 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -49,13 +47,13 @@ type peerHelpHandlers struct {
 	gate    *callerIdentityGate
 	flags   wakeFlags
 	deps    func() *WakeToolDeps
-	storage *session.Storage
+	storage GuidanceStore
 	now     func() time.Time
 	// bus is optional; request_owner_action publishes its notification through it.
 	bus *events.EventBus
 }
 
-func newPeerHelpHandlers(gate *callerIdentityGate, storage *session.Storage, bus *events.EventBus) *peerHelpHandlers {
+func newPeerHelpHandlers(gate *callerIdentityGate, storage GuidanceStore, bus *events.EventBus) *peerHelpHandlers {
 	return &peerHelpHandlers{gate: gate, deps: currentWakeToolDeps, storage: storage, now: time.Now, bus: bus}
 }
 
@@ -262,9 +260,9 @@ func (h *peerHelpHandlers) answerHelp(ctx context.Context, caller string, req mc
 	if n := utf8.RuneCountInString(answer); n > deps.Backend.Limits().PayloadChars {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("answer is %d characters, the limit is %d", n, deps.Backend.Limits().PayloadChars), ""), nil
 	}
-	data, applied, err := deps.Answerer.AnswerAs(ctx, id, answer, services.SessionAnswerer(caller))
+	data, applied, err := deps.Answerer.AnswerAsSession(ctx, id, answer, caller)
 	switch {
-	case errors.Is(err, services.ErrAnswererForbidden):
+	case errors.Is(err, domain.ErrAnswererForbidden):
 		return typedErrorResult(CodeForbidden, "", "this request is not addressed to your session", ""), nil
 	case errors.Is(err, domain.ErrNotFound):
 		return errResult(ErrItemNotFound, "no such help request", ""), nil

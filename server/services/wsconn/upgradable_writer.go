@@ -15,7 +15,7 @@ import (
 )
 
 // upgradableWriter holds a stream's pane-write capability. An attach that is
-// read-only for a recoverable reason (session.TerminalInputBlock: a tymux
+// read-only for a recoverable reason (terminalstate.TerminalInputBlock: a tymux
 // instance that is not Active yet, or archived) upgrades once, one-way, when the
 // block clears, so the stream agrees with Session.terminal_read_only. Only
 // streamViaHub upgrades; hidden attaches never do.

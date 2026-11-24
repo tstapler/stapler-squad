@@ -591,8 +591,8 @@ func TestCreatePipelineMode_should_Succeed_When_AllPlaceholdersAreRecognized(t *
 // TestCreatePipelineMode_should_ReturnCodeInvalidArgumentAndPersistNothing_When_TriageProgramIsAider
 // (plan.md Story 3.3.1) is the end-to-end RPC-level confirmation that
 // ADR-002's exclusion holds through the full BacklogService surface, not
-// just session.ValidatePipelineModeContent in isolation (already covered by
-// pipeline_mode_validation_test.go's
+// just pipelinemode.ValidatePipelineModeContent in isolation (already covered by
+// session/pipelinemode/pipeline_mode_validation_test.go's
 // TestValidateStageExecutors_should_RejectNamingProgramAndStage_When_AiderConfiguredForTriage):
 // Given a live BacklogService test harness, When CreatePipelineMode is
 // called with stage_executors["triage"].program = "aider", Then the RPC
