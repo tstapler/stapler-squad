@@ -44,6 +44,7 @@ mode=0 path="loop2/x" => ERR connect:invalid_argument too many symlinks details=
 mode=0 path="missing" => resolved="missing" via=false stat=notexist
 mode=0 path="missing/deeper" => resolved="missing/deeper" via=false stat=notexist
 mode=0 path="CLAUDE.md/extra" => resolved="CLAUDE.md/extra" via=false stat=statat CLAUDE.md/extra: not a directory
+mode=0 path="\\a.txt" => ERR connect:invalid_argument absolute paths are not allowed details=0
 mode=1 path="" => resolved="." via=false stat=ok replace=target is not a regular file: .
 mode=1 path="." => resolved="." via=false stat=ok replace=target is not a regular file: .
 mode=1 path="./" => resolved="." via=false stat=ok replace=target is not a regular file: .
@@ -90,3 +91,4 @@ mode=1 path="loop2/x" => ERR connect:permission_denied symlink "loop2" points ou
 mode=1 path="missing" => resolved="missing" via=false stat=notexist replace=ok
 mode=1 path="missing/deeper" => resolved="missing/deeper" via=false stat=statat missing/deeper: not a directory replace=stat target: statat missing/deeper: not a directory
 mode=1 path="CLAUDE.md/extra" => resolved="CLAUDE.md/extra" via=false stat=statat CLAUDE.md/extra: not a directory replace=stat target: statat CLAUDE.md/extra: not a directory
+mode=1 path="\\a.txt" => ERR connect:invalid_argument absolute paths are not allowed details=0

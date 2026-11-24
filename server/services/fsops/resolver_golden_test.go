@@ -21,7 +21,7 @@ var goldenPaths = []string{
 	".git", ".git/config", ".git/hooks", "x/.git/y", "src/.git", ".GIT", "src/.git/config",
 	"AGENTS.md", "docs/alias.md", "shared", "shared/x.txt", "pkg/shared/../shared/x.txt", "chain1", "chain1/",
 	"leak", "leak_rel", "dir_leak", "dir_leak/secret", "dangling", "dangling_inside", "gitlink", "gitlink/config",
-	"linkdir", "linkdir/x", "loop1", "loop2/x", "missing", "missing/deeper", "CLAUDE.md/extra",
+	"linkdir", "linkdir/x", "loop1", "loop2/x", "missing", "missing/deeper", "CLAUDE.md/extra", "\\a.txt",
 }
 
 // goldenDump renders what the resolver and the confined root decide for goldenPaths in both modes.

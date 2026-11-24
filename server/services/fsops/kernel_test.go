@@ -299,6 +299,16 @@ func TestReadTextCapped_ShouldCapAtTruncateSize(t *testing.T) {
 	assert.Len(t, buf, TruncateSize)
 	assert.True(t, truncated)
 
+	exact := strings.Repeat("y", TruncateSize)
+	buf, truncated, err = ReadTextCapped(strings.NewReader(exact), TruncateSize)
+	require.NoError(t, err)
+	assert.Len(t, buf, TruncateSize)
+	assert.False(t, truncated, "a file exactly at the cap is not truncated")
+	buf, truncated, err = ReadTextCapped(strings.NewReader(exact+"z"), TruncateSize+1)
+	require.NoError(t, err)
+	assert.Len(t, buf, TruncateSize)
+	assert.True(t, truncated, "one byte over the cap is truncated")
+
 	_, _, err = ReadTextCapped(errSeeker{}, 5)
 	assert.ErrorContains(t, err, "seek")
 	_, _, err = ReadTextCapped(errReader{}, 5)

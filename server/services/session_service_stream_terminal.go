@@ -188,8 +188,8 @@ func (s *SessionService) StreamTerminal(
 		// its own independent *os.File/poll.FD — closing or setting a deadline
 		// on readFile has no effect on ptyFile or its other readers, since the
 		// underlying open file description is only released once every fd
-		// referencing it is closed. dupPTYFile is platform-specific
-		// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
+		// referencing it is closed. DupPTYFile is platform-specific
+		// (fsops/dup_fd_unix.go, fsops/dup_fd_windows.go) since syscall.Dup isn't available
 		// on Windows.
 		readFile, err = fsops.DupPTYFile(ptyFile)
 		if err != nil {
