@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -24,7 +25,7 @@ func newTestHandlerWithAnalytics(t *testing.T) (*ApprovalHandler, *AnalyticsStor
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = 50 * time.Millisecond // fast timeout for tests

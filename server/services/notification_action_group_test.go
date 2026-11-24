@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -18,7 +19,7 @@ import (
 // notifications collapsed into the single "x20" history record the tray shows.
 type groupedApprovals struct {
 	history    *notifications.NotificationHistoryStore
-	store      *ApprovalStore
+	store      *approvalkit.ApprovalStore
 	dispatcher *NotificationActionDispatcher
 }
 
@@ -29,7 +30,7 @@ func newGroupedApprovals(t *testing.T, n int) *groupedApprovals {
 	svctest.WithIsolatedStateDir(t)
 	history, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
 	require.NoError(t, err)
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetNotificationStore(history)
 	base := time.Now()

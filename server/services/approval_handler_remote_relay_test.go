@@ -37,6 +37,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	testutil "github.com/tstapler/stapler-squad/testutil/socket"
@@ -230,7 +231,7 @@ func TestApprovalHandler_SatisfiesRelayHandlerEndToEnd(t *testing.T) {
 	// (see its doc comment), so this test needs no real session.Storage/
 	// session.Instance fixture to prove the round trip -- the relay's
 	// StableSessionID is what ends up in that header regardless.
-	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
+	handler := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(autoAllowClassifier{})
 
 	// *ApprovalHandler satisfying sshremote.PermissionRequestHandler
@@ -355,7 +356,7 @@ func TestRemoteApprovalHookCommand_RealShellDeliversToRelay(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
+	handler := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(autoAllowClassifier{})
 
 	basePath := testutil.ShortTempSocketDir(t)
@@ -437,7 +438,7 @@ func TestRemoteApprovalHookCommand_SurvivesSlowHumanDecision(t *testing.T) {
 		t.Fatalf("GetOrDial() error: %v", err)
 	}
 
-	handler := NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(4))
+	handler := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, events.NewEventBus(4))
 	handler.SetClassifier(delayingClassifier{delay: 2 * time.Second})
 
 	basePath := testutil.ShortTempSocketDir(t)

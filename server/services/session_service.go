@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
@@ -215,7 +216,7 @@ type SessionService struct {
 	historyLinker *importer.HistoryLinker
 
 	// approvalStore holds pending Claude Code hook approval requests.
-	approvalStore *ApprovalStore
+	approvalStore *approvalkit.ApprovalStore
 
 	// deleteSessionCleanupTimeout bounds DeleteSession's cleanup-timeout warning;
 	// see defaultDeleteSessionCleanupTimeout's doc comment. Overridable via
@@ -810,7 +811,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	} else {
 		log.Warn("failed to get config dir for approval persistence", "err", configErr)
 	}
-	approvalStore := NewApprovalStore(approvalFilePath)
+	approvalStore := approvalkit.NewApprovalStore(approvalFilePath)
 	reviewQueueSvc := NewReviewQueueService(reviewQueue, concStorage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 

@@ -117,6 +117,7 @@ filegroup(
         "//server/reviewqueue:go_sources",
         "//server/services:go_sources",
         "//server/services/antigravityexport:go_sources",
+        "//server/services/approvalkit:go_sources",
         "//server/services/backlogflow:go_sources",
         "//server/services/backlogsvc:go_sources",
         "//server/services/credkit:go_sources",

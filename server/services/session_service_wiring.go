@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
@@ -32,7 +33,7 @@ import (
 )
 
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
-func (s *SessionService) GetApprovalStore() *ApprovalStore {
+func (s *SessionService) GetApprovalStore() *approvalkit.ApprovalStore {
 	return s.approvalStore
 }
 

@@ -2,11 +2,7 @@ package services
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +15,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -32,7 +29,7 @@ import (
 // all connected clients (including Device B) learn about the resolution in real-time.
 func TestResolveApproval_PublishesEventBusEvent(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	svc := NewApprovalService(store)
 	svc.SetEventBus(bus)
@@ -65,7 +62,7 @@ func TestResolveApproval_PublishesEventBusEvent(t *testing.T) {
 func TestResolveApproval_NoEventWhenApprovalNotFound(t *testing.T) {
 	t.Parallel()
 	bus := events.NewEventBus(10)
-	svc := NewApprovalService(NewApprovalStore(""))
+	svc := NewApprovalService(approvalkit.NewApprovalStore(""))
 	svc.SetEventBus(bus)
 
 	ch, _ := bus.Subscribe(t.Context())
@@ -90,7 +87,7 @@ func TestResolveApproval_NoEventWhenApprovalNotFound(t *testing.T) {
 // newApprovalService creates an ApprovalService backed by a no-persistence ApprovalStore
 // (empty filePath disables disk I/O so tests stay fast and isolated).
 func newApprovalService() *ApprovalService {
-	return NewApprovalService(NewApprovalStore(""))
+	return NewApprovalService(approvalkit.NewApprovalStore(""))
 }
 
 // newRulesService creates a RulesService with a real RulesStore backed by test storage
@@ -117,7 +114,7 @@ func TestListPendingApprovals_EmptyInitially(t *testing.T) {
 
 func TestListPendingApprovals_ReturnsAllPending(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 
 	// Create two approvals in different sessions.
@@ -133,7 +130,7 @@ func TestListPendingApprovals_ReturnsAllPending(t *testing.T) {
 
 func TestListPendingApprovals_FilterBySessionID(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 
 	a1 := newTestPendingApproval("a1", "session-A", "Bash")
@@ -154,7 +151,7 @@ func TestListPendingApprovals_FilterBySessionID(t *testing.T) {
 // covers plan.md Task 2.1.2: PendingApproval.RiskLevel must be set on the wire proto.
 func TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasClassifiedRisk(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 
 	a := newTestPendingApproval("a-risk", "session-A", "Bash")
@@ -172,7 +169,7 @@ func TestListPendingApprovals_should_IncludeRiskLevelInProto_When_ApprovalHasCla
 // pre-feature approval would have) must serialize as "", never fall back to "low".
 func TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 
 	a := newTestPendingApproval("a-legacy", "session-A", "Bash")
@@ -440,8 +437,8 @@ func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 // newTestPendingApproval builds a minimal PendingApproval for test use.
-func newTestPendingApproval(id, sessionID, toolName string) *PendingApproval {
-	return &PendingApproval{
+func newTestPendingApproval(id, sessionID, toolName string) *approvalkit.PendingApproval {
+	return &approvalkit.PendingApproval{
 		ID:        id,
 		SessionID: sessionID,
 		ToolName:  toolName,
@@ -491,7 +488,7 @@ func (s *spyNotificationStore) GetByID(id string) (*notifications.NotificationRe
 // MarkRead after SetMetadata so the notification badge auto-clears on resolution.
 func TestResolveApproval_MarksNotificationRead(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	spy := &spyNotificationStore{}
 	svc := NewApprovalService(store)
 	svc.SetNotificationStore(spy)
@@ -537,7 +534,7 @@ func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
@@ -561,7 +558,7 @@ func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	// Flag intentionally left unset (defaults false).
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
@@ -579,7 +576,7 @@ func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	// GitHubPRNumber == 0: no PR, so even a "failure" conclusion (which shouldn't occur
 	// in practice without a PR) must not trigger the block.
@@ -608,7 +605,7 @@ func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	// liveFinder wired but returns nil (session raced out of the live registry between
 	// escalation and the human clicking Approve) — must fail open, not block or panic.
@@ -630,7 +627,7 @@ func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store) // liveFinder left nil
 
 	a := newTestPendingApproval("appr-nilfinder", "session-X", "Bash")
@@ -647,7 +644,7 @@ func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
@@ -673,7 +670,7 @@ func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *test
 	svctest.WithIsolatedStateDir(t)
 	// Flag off — block would never have fired regardless of OverrideCiBlock.
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("session-X")})
 
@@ -686,136 +683,6 @@ func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *test
 		OverrideCiBlock: true,
 	}))
 	require.NoError(t, err, "behavior must match the equivalent non-override request when the block would not fire")
-}
-
-// ─── Escalation reason persistence + concurrency (escalation-reasoning Epic 5.1, Story 5.1.1) ──
-
-// TestApprovalStore_LoadFromDisk_PreservesEscalationReason is the AC2 "four-struct chain"
-// regression guard (plan.md Story 5.1.1's 4th AC, validation.md AC2 "persist round-trip
-// through disk" row): a pending_approvals.json fixture written with
-// escalation_reason/escalation_category populated for one entry must survive a simulated
-// restart (a fresh ApprovalStore constructed against that file) with both fields intact on
-// the resulting ApprovalMetadata, and Orphaned == true. If any single struct/copy-loop in
-// the PendingApproval -> PersistedApproval -> disk -> PendingApproval -> ApprovalMetadata
-// chain were missed, this test fails with an empty string, not a compile error.
-func TestApprovalStore_LoadFromDisk_PreservesEscalationReason(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "pending_approvals.json")
-
-	fixture := []PersistedApproval{
-		{
-			ID:                 "appr-restart-1",
-			SessionID:          "session-restart",
-			ToolName:           "Bash",
-			ToolInput:          map[string]interface{}{"command": "git branch -d feature/foo"},
-			Cwd:                "/tmp",
-			CreatedAt:          time.Now().Add(-1 * time.Minute),
-			ExpiresAt:          time.Now().Add(3 * time.Minute),
-			EscalationReason:   "Branch deletion modifies repository structure and should be reviewed.",
-			EscalationCategory: "explicit-rule",
-			Orphaned:           false, // pre-restart value; loadFromDisk must force this to true regardless
-		},
-	}
-	data, err := json.MarshalIndent(fixture, "", "  ")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, data, 0600))
-
-	// Simulate a server restart: a fresh ApprovalStore constructed against the same file.
-	store := NewApprovalStore(path)
-
-	metas := store.GetApprovalMetadataBySession("session-restart")
-	require.Len(t, metas, 1)
-	assert.Equal(t, "Branch deletion modifies repository structure and should be reviewed.", metas[0].EscalationReason)
-	assert.Equal(t, "explicit-rule", metas[0].EscalationCategory)
-	assert.True(t, metas[0].Orphaned, "approvals loaded from disk after a restart must be marked Orphaned")
-}
-
-// TestApprovalStore_should_PreserveRiskLevelAcrossPersistAndReload_When_ApprovalIsOrphaned
-// covers plan.md Task 1.2.2(a): a PendingApproval created with a classified RiskLevel must
-// survive a persist-then-reload (simulated server restart) round trip intact.
-func TestApprovalStore_should_PreserveRiskLevelAcrossPersistAndReload_When_ApprovalIsOrphaned(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "pending_approvals.json")
-
-	store := NewApprovalStore(path)
-	a := newTestPendingApproval("appr-risk-1", "session-risk", "Bash")
-	a.RiskLevel = "high"
-	require.NoError(t, store.Create(a))
-
-	// Simulate a server restart: a fresh ApprovalStore constructed against the same file.
-	reloaded := NewApprovalStore(path)
-	metas := reloaded.GetApprovalMetadataBySession("session-risk")
-	require.Len(t, metas, 1)
-	assert.Equal(t, "high", metas[0].RiskLevel)
-	assert.True(t, metas[0].Orphaned)
-}
-
-// TestApprovalStore_should_LoadEmptyRiskLevel_When_LegacyJSONHasNoRiskLevelKey covers
-// pre-mortem.md Failure #1's persistence half: a pending_approvals.json written by a
-// pre-feature binary (no "risk_level" key at all) must deserialize to RiskLevel == "" --
-// the "not recorded" sentinel -- never fall back to "low".
-func TestApprovalStore_should_LoadEmptyRiskLevel_When_LegacyJSONHasNoRiskLevelKey(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "pending_approvals.json")
-
-	// Deliberately hand-written JSON with no risk_level key, mirroring a pre-feature file.
-	legacyJSON := `[{"id":"appr-legacy-1","session_id":"session-legacy","tool_name":"Bash","cwd":"/tmp","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-01T00:05:00Z","orphaned":false}]`
-	require.NoError(t, os.WriteFile(path, []byte(legacyJSON), 0600))
-
-	store := NewApprovalStore(path)
-	metas := store.GetApprovalMetadataBySession("session-legacy")
-	require.Len(t, metas, 1)
-	assert.Equal(t, "", metas[0].RiskLevel, "legacy JSON with no risk_level key must load as not-recorded, not \"low\"")
-}
-
-// TestApprovalStore_Create_ConcurrentEscalations_NoDataRace is the pre-mortem P2
-// concurrency regression guard (plan.md Task 5.1.1d). N goroutines call store.Create
-// concurrently, each with a distinct EscalationReason/EscalationCategory pair, and all N
-// must persist intact afterward -- no lost writes, no corrupted EscalationReason bleeding
-// across entries. ApprovalStore's existing single mutex already serializes Create; this
-// test's job is confirming the two new string fields don't introduce a copy/aliasing bug
-// under concurrent load, not benchmarking throughput. Must be run with `go test -race`.
-func TestApprovalStore_Create_ConcurrentEscalations_NoDataRace(t *testing.T) {
-	t.Parallel()
-	store := NewApprovalStore("")
-	const n = 20
-
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
-			a := &PendingApproval{
-				ID:                 fmt.Sprintf("appr-concurrent-%d", i),
-				SessionID:          fmt.Sprintf("session-%d", i),
-				ToolName:           "Bash",
-				EscalationReason:   fmt.Sprintf("reason-%d", i),
-				EscalationCategory: fmt.Sprintf("category-%d", i),
-			}
-			if err := store.Create(a); err != nil {
-				t.Errorf("Create(%d) returned error: %v", i, err)
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	all := store.ListAll()
-	require.Len(t, all, n)
-
-	byID := make(map[string]*PendingApproval, n)
-	for _, a := range all {
-		byID[a.ID] = a
-	}
-	for i := 0; i < n; i++ {
-		id := fmt.Sprintf("appr-concurrent-%d", i)
-		a, ok := byID[id]
-		require.True(t, ok, "approval %s missing after concurrent Create", id)
-		assert.Equal(t, fmt.Sprintf("reason-%d", i), a.EscalationReason, "EscalationReason must not bleed across concurrently-created entries")
-		assert.Equal(t, fmt.Sprintf("category-%d", i), a.EscalationCategory, "EscalationCategory must not bleed across concurrently-created entries")
-	}
 }
 
 // ─── Epic 2.1: ResolveApprovalReconciled + human-vs-reconciliation arbitration ──
@@ -837,7 +704,7 @@ func newTestNotificationStore(t *testing.T) *notifications.NotificationHistorySt
 // metadata keys on top of ResolveApproval's existing approval_decision stamp.
 func TestResolveApprovalReconciled_StampsMetadata(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
 	svc := NewApprovalService(store)
 	svc.SetNotificationStore(notifStore)
@@ -872,7 +739,7 @@ func TestResolveApprovalReconciled_StampsMetadata(t *testing.T) {
 // generic CodeNotFound every other double-resolve case returns.
 func TestResolveApproval_AfterReconciled_ReturnsFailedPrecondition(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
 	svc := NewApprovalService(store)
 	svc.SetNotificationStore(notifStore)
@@ -897,25 +764,6 @@ func TestResolveApproval_AfterReconciled_ReturnsFailedPrecondition(t *testing.T)
 	assert.Contains(t, err.Error(), "Auto-allow safe git status checks")
 }
 
-// TestApprovalStore_HumanResolving_MarksAndClears pins the primitive the
-// human-vs-reconciliation arbitration mechanism depends on: mark/clear
-// round-trip, and ClearHumanResolving on a never-marked ID is a no-op.
-func TestApprovalStore_HumanResolving_MarksAndClears(t *testing.T) {
-	t.Parallel()
-	store := NewApprovalStore("")
-
-	assert.False(t, store.IsHumanResolving("appr-x"))
-
-	store.MarkHumanResolving("appr-x")
-	assert.True(t, store.IsHumanResolving("appr-x"))
-
-	store.ClearHumanResolving("appr-x")
-	assert.False(t, store.IsHumanResolving("appr-x"))
-
-	// Clearing a never-marked ID is a no-op — must not panic.
-	assert.NotPanics(t, func() { store.ClearHumanResolving("appr-never-marked") })
-}
-
 // TestResolveApprovalReconciled_DefersToInFlightHumanResolution covers the
 // "favor the human, not the automation" arbitration mandate (research/ux.md):
 // once a human's resolution is marked in flight, a concurrent
@@ -923,7 +771,7 @@ func TestApprovalStore_HumanResolving_MarksAndClears(t *testing.T) {
 // connect.CodeAborted and never touch the store.
 func TestResolveApprovalReconciled_DefersToInFlightHumanResolution(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 
 	a := newTestPendingApproval("appr-race", "sess-race", "Bash")
@@ -946,7 +794,7 @@ func TestResolveApprovalReconciled_DefersToInFlightHumanResolution(t *testing.T)
 // from "lost the race to a concurrent reconciliation pass."
 func TestIsApprovalPending_ReflectsStoreState(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 
 	a := newTestPendingApproval("appr-pending-check", "sess-y", "Bash")
@@ -954,7 +802,7 @@ func TestIsApprovalPending_ReflectsStoreState(t *testing.T) {
 
 	assert.True(t, svc.IsApprovalPending("appr-pending-check"))
 
-	require.NoError(t, store.Resolve("appr-pending-check", ApprovalDecision{Behavior: "allow"}))
+	require.NoError(t, store.Resolve("appr-pending-check", approvalkit.ApprovalDecision{Behavior: "allow"}))
 	assert.False(t, svc.IsApprovalPending("appr-pending-check"))
 }
 
@@ -987,7 +835,7 @@ func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(
 		prViewFor(t, 11, domain.PRStateMerged, "success"),
 		prViewFor(t, 12, domain.PRStateOpen, ciConclusionFailure))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
 	require.NoError(t, store.Create(newTestPendingApproval("appr-active", "session-M", "Bash")))
@@ -1008,7 +856,7 @@ func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T)
 		prViewFor(t, 11, domain.PRStateMerged, ciConclusionFailure),
 		prViewFor(t, 12, domain.PRStateOpen, "success"))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: inst})
 	require.NoError(t, store.Create(newTestPendingApproval("appr-green", "session-N", "Bash")))

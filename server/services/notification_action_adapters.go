@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -18,11 +19,11 @@ import (
 // the CI-red guard, notification stamping and event broadcast.
 type approvalServiceAdapter struct {
 	svc   *ApprovalService
-	store *ApprovalStore
+	store *approvalkit.ApprovalStore
 }
 
 // NewApprovalResolver adapts ApprovalService to ApprovalResolver.
-func NewApprovalResolver(svc *ApprovalService, store *ApprovalStore) ApprovalResolver {
+func NewApprovalResolver(svc *ApprovalService, store *approvalkit.ApprovalStore) ApprovalResolver {
 	return approvalServiceAdapter{svc: svc, store: store}
 }
 

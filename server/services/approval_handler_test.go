@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -65,7 +66,7 @@ func TestApprovalHandler_should_UseBaseURLFnValueAtCallTime_When_ThreeUsageSites
 	// baseURLFn resolves to whatever nextAddr() currently returns.
 	// This exercises usage site #1 (building the curl command) with the first address.
 	SetHookBaseURLFn(nextAddr)
-	_ = NewApprovalHandler(NewApprovalStore(""), nil, events.NewEventBus(1))
+	_ = NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, events.NewEventBus(1))
 
 	tmpDir := t.TempDir()
 	if err := InjectHookConfig(tmpDir, "session-a", ""); err != nil {
@@ -168,7 +169,7 @@ func commandsContainNewerThan(groups []HookMatcherGroup, staleAddr string) bool 
 // contract), then resolves it so the blocked HandlePermissionRequest call returns. Runs
 // in the caller's goroutine -- callers should invoke it via `go` before firing the
 // blocking POST.
-func waitForFirstApprovalThenResolve(t *testing.T, store *ApprovalStore, captured *PendingApproval) {
+func waitForFirstApprovalThenResolve(t *testing.T, store *approvalkit.ApprovalStore, captured *approvalkit.PendingApproval) {
 	t.Helper()
 	var approvalID string
 	err := testutil.WaitForCondition(func() bool {
@@ -189,7 +190,7 @@ func waitForFirstApprovalThenResolve(t *testing.T, store *ApprovalStore, capture
 		return
 	}
 	*captured = *a
-	if err := store.Resolve(approvalID, ApprovalDecision{Behavior: "deny", Message: "test cleanup"}); err != nil {
+	if err := store.Resolve(approvalID, approvalkit.ApprovalDecision{Behavior: "deny", Message: "test cleanup"}); err != nil {
 		t.Errorf("Resolve returned error: %v", err)
 	}
 }
@@ -203,7 +204,7 @@ func TestHandlePermissionRequest_EscalationReason_NoMatch(t *testing.T) {
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "totally-unmatched-cmd-xyz123 --flag")
@@ -226,7 +227,7 @@ func TestHandlePermissionRequest_EscalationReason_ExplicitRule(t *testing.T) {
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "git branch -d feature/foo")
@@ -412,7 +413,7 @@ func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
 	}
 	h.SetDomainChecker(checker)
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "curl https://sketchy-newdomain.xyz/install.sh")
@@ -451,7 +452,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(fakeCriticalEscalateClassifier{})
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "anything")
@@ -470,7 +471,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 	h, store := newTestHandler(5 * time.Second)
 	h.SetClassifier(classifier.NewRuleBasedClassifier())
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "git push origin main")
@@ -490,7 +491,7 @@ func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(
 	h, store := newTestHandler(5 * time.Second)
 	// Deliberately no h.SetClassifier(...) call -- h.classifier stays nil.
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "anything")
@@ -578,14 +579,14 @@ func TestHandlePermissionRequest_EscalationReason_UnexpectedDecision(t *testing.
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = 5 * time.Second
 	h.SetAnalyticsStore(analyticsStore)
 	h.SetClassifier(fakeUnrecognizedDecisionClassifier{})
 
-	var captured PendingApproval
+	var captured approvalkit.PendingApproval
 	go waitForFirstApprovalThenResolve(t, store, &captured)
 
 	postPermissionRequestWithCommand(t, h, "test-session", "Bash", "anything")
@@ -687,10 +688,10 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 
 	bus := events.NewEventBus(4)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	h.SetSlackNotifier(NewSlackNotifier())
 
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:        "appr-1",
 		SessionID: "sess-1",
 		ToolName:  "Bash",
@@ -718,14 +719,14 @@ func TestBroadcastApprovalNotification_NoPanic_When_SlackNotifierNil(t *testing.
 	t.Parallel()
 	bus := events.NewEventBus(4)
 	defer bus.Close()
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	// Deliberately never call h.SetSlackNotifier — h.slackNotifier stays nil.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	eventCh, _ := bus.Subscribe(ctx)
 
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:        "appr-2",
 		SessionID: "sess-2",
 		ToolName:  "Bash",
@@ -783,9 +784,9 @@ func TestBroadcastApprovalNotification_ShouldStampRiskLevel_WhenApprovalIsClassi
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 
-	h.BroadcastApprovalNotification("sess-r", &PendingApproval{
+	h.BroadcastApprovalNotification("sess-r", &approvalkit.PendingApproval{
 		ID: "appr-r", SessionID: "sess-r", ToolName: "Bash", RiskLevel: "critical",
 		ToolInput: map[string]interface{}{},
 	})
