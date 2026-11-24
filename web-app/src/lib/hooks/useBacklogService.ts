@@ -138,7 +138,7 @@ export interface LinkedSession {
   /**
    * Absolute (server-local) path to a durable capture of the raw LLM output
    * for a headless triage/review call that errored or failed to parse — see
-   * backlogaux.WriteHeadlessFailureCapture. "" when the call succeeded and
+   * session.WriteHeadlessFailureCapture. "" when the call succeeded and
    * parsed cleanly, or nothing was captured.
    */
   failureCapturePath?: string;
@@ -301,7 +301,7 @@ export interface BacklogItem {
    * Per-item, optional soft-budget-warning threshold in USD. Undefined means
    * no threshold is configured and no warning ever fires for this item — 0
    * is a legitimate configured threshold, distinct from unset. See
-   * ItemBudgetWarning.tsx and backlogaux.EvaluateBudgetThreshold.
+   * ItemBudgetWarning.tsx and session.EvaluateBudgetThreshold.
    */
   costBudgetThresholdUsd?: number;
   /** A report_duplicate claim awaits operator confirmation (item is in review). */
