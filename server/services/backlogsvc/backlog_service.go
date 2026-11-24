@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -1439,7 +1440,7 @@ func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, prio
 	thresholdUSD = effectiveBudgetThreshold(thresholdUSD)
 	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
 	cumulative := priorTotal + callCostUSD
-	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
+	if !backlogaux.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
 		return
 	}
 	suffix := ""
@@ -1462,7 +1463,7 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 	if thresholdUSD == nil {
 		return
 	}
-	if !session.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
+	if !backlogaux.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
 		s.budgetWarnedItems.Delete(itemID)
 		return
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -120,7 +121,7 @@ func checkNoNewWaivers(incoming, existing domain.AcCriteriaJSON) error {
 	if incoming == "" {
 		return nil
 	}
-	return session.CheckNoNewAcWaivers(existing, incoming)
+	return backlogaux.CheckNoNewAcWaivers(existing, incoming)
 }
 
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.

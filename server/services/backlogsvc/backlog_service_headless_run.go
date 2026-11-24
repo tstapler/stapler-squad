@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -156,7 +157,7 @@ func (s *BacklogService) captureHeadlessFailure(sessionUUID, raw string) string 
 		log.Warn("[captureHeadlessFailure] resolve capture dir failed", "error", dirErr)
 		return ""
 	}
-	path, writeErr := session.WriteHeadlessFailureCapture(dir, sessionUUID, raw, session.DefaultHeadlessFailureCaptureMaxBytes)
+	path, writeErr := backlogaux.WriteHeadlessFailureCapture(dir, sessionUUID, raw, backlogaux.DefaultHeadlessFailureCaptureMaxBytes)
 	if writeErr != nil {
 		log.Warn("[captureHeadlessFailure] write capture file failed", "session", sessionUUID, "error", writeErr)
 		return ""

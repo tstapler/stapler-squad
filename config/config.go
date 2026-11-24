@@ -1080,7 +1080,7 @@ func ceilingOrDefault(configured, def int) int {
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// backlogaux.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
 // see HibernationCheckpointDirOrDefault's doc comment for why this routes through
 // GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
 // to os.UserHomeDir() regardless of test mode: every go test run that exercised a
