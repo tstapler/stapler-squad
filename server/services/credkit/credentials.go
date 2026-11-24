@@ -1,4 +1,4 @@
-package services
+package credkit
 
 import (
 	"context"
@@ -105,14 +105,10 @@ type CredentialChain struct {
 
 // NewDefaultChain returns a chain with the standard priority order:
 //  1. Environment variable (highest priority — always wins)
-//  2. Config file explicit entry
-//  3. Claude CLI OAuth file (~/.claude/.credentials.json)
-//  4. Antigravity OAuth file (~/.gemini/oauth_creds.json)
-//  5. gcloud Application Default Credentials
-//
-// JulesCredentialSource is registered immediately after EnvVarCredentialSource
-// so JULES_API_KEY still wins over the keychain for scripted/CI use, matching
-// this chain's existing env-first ordering.
+//  2. Jules keychain (after env so JULES_API_KEY still wins for scripted/CI use)
+//  3. Config file explicit entry
+//  4. Claude CLI OAuth file (~/.claude/.credentials.json)
+//  5. Antigravity OAuth file (~/.gemini/oauth_creds.json), then gcloud ADC
 func NewDefaultChain(cfg *config.Config) *CredentialChain {
 	return &CredentialChain{sources: []CredentialSource{
 		&EnvVarCredentialSource{},
@@ -138,7 +134,7 @@ func NewChain(sources ...CredentialSource) *CredentialChain {
 // see jules/keychain.go's KeyringTokenSource doc comment for why only one
 // instance may exist per process. A no-op if no JulesCredentialSource is in
 // the chain (e.g. a test-built chain via NewChain).
-func (c *CredentialChain) SetJulesTokenSource(tokens julesKeyringTokenSource) {
+func (c *CredentialChain) SetJulesTokenSource(tokens JulesKeyringTokenSource) {
 	for _, src := range c.sources {
 		if jcs, ok := src.(*JulesCredentialSource); ok {
 			jcs.tokens = tokens
@@ -435,10 +431,10 @@ func (s *AgyCredentialSource) resolveGcloudADC(path string) (Credential, bool, e
 // 5. JulesCredentialSource — reads the Jules API key from the OS keychain
 // ---------------------------------------------------------------------------
 
-// julesKeyringTokenSource is the subset of *jules.KeyringTokenSource this
+// JulesKeyringTokenSource is the subset of *jules.KeyringTokenSource this
 // package depends on, so tests can inject a stub without touching the real
 // OS keychain.
-type julesKeyringTokenSource interface {
+type JulesKeyringTokenSource interface {
 	APIKey(ctx context.Context) (jules.JulesAPIKey, error)
 }
 
@@ -447,7 +443,7 @@ type julesKeyringTokenSource interface {
 // project_plans/google-jules-integration/implementation/plan.md Epic 1.2).
 // It is a no-op for every other provider.
 type JulesCredentialSource struct {
-	tokens julesKeyringTokenSource
+	tokens JulesKeyringTokenSource
 }
 
 func (s *JulesCredentialSource) Name() string { return "jules_keychain" }

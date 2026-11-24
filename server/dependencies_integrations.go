@@ -235,7 +235,7 @@ func buildJules(svc *ServiceDeps, cfg *config.Config, backlogSvc *backlogsvc.Bac
 	// second, independent *jules.KeyringTokenSource over the same OS keychain
 	// entry, undermining the single-cache/circuit-breaker/singleflight-group
 	// invariant documented on jules.KeyringTokenSource. See
-	// server/services/credentials.go's SetJulesTokenSource.
+	// server/services/credkit/credentials.go's SetJulesTokenSource.
 	sessionService.SetJulesKeyringTokenSource(julesKeys)
 	var julesSourceRegistry *jules.JulesSourceRegistry
 	var julesPoller *sessionjules.JulesSessionPoller

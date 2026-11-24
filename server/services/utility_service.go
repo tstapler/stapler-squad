@@ -73,7 +73,7 @@ var sensitiveLogAttributeKeys = map[string]bool{ //nolint:gochecknoglobals
 // JSONHandler doesn't set HandlerOptions.AddSource today, so this is inert
 // in production for now, but several call sites already pass a plain
 // *string* "source" attribute for unrelated domain data (e.g.
-// credentials.go's "credential source", database_service.go's merge source
+// credkit/credentials.go's "credential source", database_service.go's merge source
 // dir) — treating that string as a caller location would be actively wrong,
 // so only the structural object shape is ever read into Source; a string
 // "source" attribute is left to the generic extraKeys fold below like any

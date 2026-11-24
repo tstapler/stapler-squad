@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -603,7 +604,7 @@ func (s *SessionService) GetProviderLimits(
 		provider = "openai"
 	}
 
-	var limits ProviderLimits
+	var limits credkit.ProviderLimits
 	var found bool
 	if s.capacityMonitor != nil {
 		limits, found = s.capacityMonitor.GetSessionLimits(inst.Title)
@@ -621,7 +622,7 @@ func (s *SessionService) GetProviderLimits(
 			}
 		}
 	} else {
-		limits = ProviderLimits{
+		limits = credkit.ProviderLimits{
 			Provider:  provider,
 			Model:     inst.Program,
 			Available: true,

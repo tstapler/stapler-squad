@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -37,7 +38,7 @@ func (m *mockSessionSwitcher) GetTarget(sessionID string) string {
 }
 
 type mockLimitsClient struct {
-	limits        ProviderLimits
+	limits        credkit.ProviderLimits
 	contextWindow int
 	err           error
 }
@@ -46,11 +47,11 @@ func (m *mockLimitsClient) Provider() string {
 	return m.limits.Provider
 }
 
-func (m *mockLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits, error) {
+func (m *mockLimitsClient) QueryLimits(ctx context.Context) (credkit.ProviderLimits, error) {
 	return m.limits, m.err
 }
 
-func (m *mockLimitsClient) UpdateFromResponseHeaders(headers http.Header, current ProviderLimits) ProviderLimits {
+func (m *mockLimitsClient) UpdateFromResponseHeaders(headers http.Header, current credkit.ProviderLimits) credkit.ProviderLimits {
 	return m.limits
 }
 
@@ -115,7 +116,7 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 
 	anthropicClient := &mockLimitsClient{
 		contextWindow: 10000, // 9000 used -> 90%
-		limits: ProviderLimits{
+		limits: credkit.ProviderLimits{
 			Provider:          "anthropic",
 			Available:         true,
 			RequestsRemaining: 100,
@@ -214,7 +215,7 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 
 	anthropicClient := &mockLimitsClient{
 		contextWindow: 10000,
-		limits: ProviderLimits{
+		limits: credkit.ProviderLimits{
 			Provider:          "anthropic",
 			Available:         true,
 			RequestsRemaining: 100,
@@ -275,7 +276,7 @@ func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 
 	anthropicClient := &mockLimitsClient{
 		contextWindow: 100000,
-		limits: ProviderLimits{
+		limits: credkit.ProviderLimits{
 			Provider:          "anthropic",
 			Available:         true,
 			RequestsLimit:     100,
@@ -436,7 +437,7 @@ func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseRes
 	}
 	monitor.RegisterClient("anthropic", &mockLimitsClient{
 		contextWindow: 1_000_000,
-		limits:        ProviderLimits{Provider: "anthropic", Available: true, RequestsRemaining: 100},
+		limits:        credkit.ProviderLimits{Provider: "anthropic", Available: true, RequestsRemaining: 100},
 	})
 	return monitor, eventBus, poller
 }
