@@ -1,4 +1,4 @@
-package services
+package anthropicwire
 
 import (
 	"context"
@@ -28,7 +28,7 @@ type CLIAgentSpec struct {
 
 // knownCLIAgents lists supported AI CLI agents in preference order for
 // NewBestAvailableAIClient. The first one found in PATH wins.
-var knownCLIAgents = []CLIAgentSpec{
+var KnownCLIAgents = []CLIAgentSpec{
 	{
 		// Claude Code CLI: --print enables non-interactive one-shot mode.
 		// The message is read from stdin when no positional argument is given.

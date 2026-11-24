@@ -211,14 +211,14 @@ The per-file assignment is [session-service-hub-assignment.csv](session-service-
 | Layer | Package under `server/services/` | Lines | Contents |
 |---|---|---|---|
 | L0 kernels (import only domain, config, `session*`, and lower kernels) | `fsops` | 1,695 | `fsops`, `file_atomic`, `file_backend*`, `file_inode_*`, `file_codec`, `file_metrics`, `files_telemetry`, `dup_fd_*`, `exec_*`, `settings_file_atomic_write`, `path_resolver` |
-| | `secretscan` | 94 | `secret_scanner` |
+| | `secretscan` | 107 | `secret_scanner`, `redaction_sentinels` (the sentinels moved in from `ai_interfaces.go`, #1798) |
 | | `credkit` | 589 | `credentials`, `provider_limits` |
 | | `access` | 1,128 | `terminal_access`, `human_activity`, `local_write_verdict`, `terminal_input_metrics`, `session_nudge_guard`, `tmux_input_send`, `external_pane_resize`, plus the symbols in 3.3.2 |
 | | `auditkit` | 467 | `hidden_reply_audit` (imports `fsops`) |
 | | `approvalkit` | 460 | `approval_store` |
 | | `flagsvc` | 1,695 | `feature_flag_*`, `feature_flags_*` (imports `auditkit`, `access`) |
 | | `questionkit` | 1,716 | `pending_question_store`, `askuserquestion_parser`, `question_delivery_track`, `answer_listener`, `guidance_request_hook_mirror`, `guidance_request_mirror_proto`, `guidance_dialog_*`, `notification_quality_metrics`, `reply_idempotency` (imports `flagsvc`, `secretscan`) |
-| | `anthropicwire` | 829 | `anthropic_client`, `anthropic_limits_client`, `gemini_limits_client`, `cli_ai_client`, `selecting_ai_client`, `ai_interfaces` (imports `credkit`) |
+| | `anthropicwire` | 824 | `anthropic_client`, `anthropic_limits_client`, `gemini_limits_client`, `cli_ai_client`, `selecting_ai_client`, `ai_interfaces` (imports `credkit`) |
 | L1 leaves (import kernels and `session*`, never the hub; the L1 graph is a DAG after 3.3.3) | `filesvc` | 8,053 | merge of the old `fileops` and `vcssearch` (82% of the cap) |
 | | `attention` (ships split per Part 3 into `approvals`, `qareply`, `notifyactions`; not re-measured) | 7,908 | `approval_*` (not the store), `hook_*`, `question_*`, `pane_reply_*`, `notification_action*`, `hidden_question_reply`, `hidden_review_steer`, `pi_extension_*`, `claim_checker`, `mcp_proof`, `domain_checker` |
 | | `providers` | 6,014 | `github_*`, `capacity_*`, `quota_*`, `jules_*`, `callback_*`, `webhook_*`, `update_check`, `trigger_rate_limiter` |

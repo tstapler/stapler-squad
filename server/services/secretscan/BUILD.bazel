@@ -3,7 +3,10 @@ load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "secretscan",
-    srcs = ["secret_scanner.go"],
+    srcs = [
+        "redaction_sentinels.go",
+        "secret_scanner.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/server/services/secretscan",
     visibility = ["//visibility:public"],
 )
@@ -16,7 +19,10 @@ alias(
 
 go_test(
     name = "secretscan_test",
-    srcs = ["secret_scanner_test.go"],
+    srcs = [
+        "redaction_sentinels_test.go",
+        "secret_scanner_test.go",
+    ],
     embed = [":secretscan"],
 )
 

@@ -1,4 +1,4 @@
-package services
+package anthropicwire
 
 import (
 	"context"
@@ -143,7 +143,7 @@ func TestCLIAgentSpec_PromptAsArg_appendsPromptToArgv(t *testing.T) {
 // TestKnownCLIAgents_agy_hasCorrectSpec verifies agy is registered with PromptAsArg=true.
 func TestKnownCLIAgents_agy_hasCorrectSpec(t *testing.T) {
 	t.Parallel()
-	for _, spec := range knownCLIAgents {
+	for _, spec := range KnownCLIAgents {
 		if spec.Name == "agy" {
 			if !spec.PromptAsArg {
 				t.Error("agy spec: PromptAsArg should be true")
@@ -160,7 +160,7 @@ func TestKnownCLIAgents_agy_hasCorrectSpec(t *testing.T) {
 // TestKnownCLIAgents_opencode_hasPromptAsArg verifies opencode is registered with PromptAsArg=true.
 func TestKnownCLIAgents_opencode_hasPromptAsArg(t *testing.T) {
 	t.Parallel()
-	for _, spec := range knownCLIAgents {
+	for _, spec := range KnownCLIAgents {
 		if spec.Name == "opencode" {
 			if !spec.PromptAsArg {
 				t.Error("opencode spec: PromptAsArg should be true")
