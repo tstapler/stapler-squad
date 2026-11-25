@@ -1910,6 +1910,11 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	if s.heldByTransitionDenial(ctx, "AutoReopenAfterFailedReview", item) {
 		return nil
 	}
+	// A FAIL verdict on an epic's integration child is a failing end-to-end check: attribute it to a
+	// sibling (fix child) or escalate to the epic's owner instead of blindly reworking the check itself.
+	if item.IsIntegrationChild && s.handleIntegrationCheckFailure(ctx, item) {
+		return nil
+	}
 
 	// Iteration cap: count prior work sessions so we don't spin forever on a
 	// persistent FAIL verdict. Fail-safe: if the DB query errors we cannot know

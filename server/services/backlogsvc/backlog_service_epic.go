@@ -2,6 +2,7 @@ package backlogsvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 const integrationFixLabel = "integration-fix"
@@ -73,10 +75,45 @@ func (s *BacklogService) doneCommandTemplate(ctx context.Context, slug string) s
 	return pm.DoneCommandTemplate
 }
 
+// handleIntegrationCheckFailure is the production caller of OnIntegrationChildFailed, reached from
+// AutoReopenAfterFailedReview when the integration child's review fails. It returns true when the
+// failure was handed off (fix child, open fix child, or escalation) so the caller must not also
+// rework the child. A hand-off error is logged and still counts as handled: the usual cause is a
+// pending guidance request already covering the epic, and reworking the check would only hide it.
+func (s *BacklogService) handleIntegrationCheckFailure(ctx context.Context, child *backlogdto.BacklogItemData) bool {
+	out, err := s.OnIntegrationChildFailed(ctx, child.ID, s.integrationFailingFiles(ctx, child))
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return false // not owned by an epic: rework it like any other item
+		}
+		log.Warn("[EpicIntegration] failure hand-off failed; leaving the integration child parked", "item", child.ID, "error", err)
+		return true
+	}
+	return out.FixChildID != "" || out.GuidanceRequestID != ""
+}
+
+// integrationFailingFiles lists the files the integration child's latest work session changed,
+// falling back to its recorded shipped files.
+func (s *BacklogService) integrationFailingFiles(ctx context.Context, child *backlogdto.BacklogItemData) []string {
+	repoPath, baseSHA, headSHA, _, err := s.storage.Repo.GetRepoPathAndLatestCompletedWorkSessionCommits(ctx, child.ID)
+	if err == nil && repoPath != "" && baseSHA != "" && headSHA != "" {
+		if stats, gitErr := git.FileStatsBetween(repoPath, baseSHA, headSHA); gitErr == nil && len(stats) > 0 {
+			paths := make([]string, len(stats))
+			for i, st := range stats {
+				paths[i] = st.Path
+			}
+			return paths
+		}
+	}
+	return backlogstore.ShippedFilePaths(child.ShippedFileStats)
+}
+
 // effectiveIntegrationFixCap mirrors effectiveReworkCap: nil override = global default,
 // 0 = unlimited, >0 = the item's own cap.
 func (s *BacklogService) effectiveIntegrationFixCap(epic *backlogdto.BacklogItemData) int {
-	if epic.ReworkCapOverride != nil {
+	// A negative override is invalid (the RPC takes any int32): fall back to the global default
+	// rather than reading it as "unlimited", which only 0 means.
+	if epic.ReworkCapOverride != nil && *epic.ReworkCapOverride >= 0 {
 		return *epic.ReworkCapOverride
 	}
 	return s.cfg.MaxAutoReworkIterationsOrDefault()

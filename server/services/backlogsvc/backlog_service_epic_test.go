@@ -302,3 +302,77 @@ func TestCreateEpicIntegrationChild_should_ReturnInvalidArgument_When_TooManySib
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, connect.CodeInvalidArgument, ce.Code())
 }
+
+func (f epicFixture) failedIntegrationChild(t *testing.T, childShipped string) *backlogdto.BacklogItemData {
+	t.Helper()
+	ctx := context.Background()
+	child := f.integrationChild(t)
+	f.setShipped(t, child.ID, childShipped)
+	_, err := f.svc.storage.Repo.RawTransitionBacklogItemStatus(ctx, child.ID, domain.BacklogStatusReview, nil, "test")
+	require.NoError(t, err)
+	return child
+}
+
+// Through the production failure path: a FAIL verdict on the integration child reaches
+// AutoReopenAfterFailedReview, which hands the failure to OnIntegrationChildFailed.
+func TestAutoReopenAfterFailedReview_should_CreateFixChild_When_IntegrationChildFailsWithAttributableFiles(t *testing.T) {
+	t.Parallel()
+	f := newEpicFixture(t, true, e2eACs, nil)
+	f.setShipped(t, f.sibs[0], `[{"path":"a/x.go"},{"path":"a/y.go"}]`)
+	child := f.failedIntegrationChild(t, `[{"path":"a/x.go"},{"path":"a/y.go"}]`)
+	ctx := context.Background()
+
+	require.NoError(t, f.svc.AutoReopenAfterFailedReview(ctx, child.ID))
+
+	epic, err := f.svc.storage.GetBacklogItem(ctx, f.epic.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, epic.IntegrationFixCount, "a fix child was created for the attributed sibling")
+	blockedBy, _, err := f.svc.storage.ListBacklogItemDependencies(ctx, child.ID)
+	require.NoError(t, err)
+	assert.Len(t, blockedBy, 3, "two siblings plus the new fix child")
+	got, err := f.svc.storage.GetBacklogItem(ctx, child.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(domain.BacklogStatusReview), got.Status, "the integration child is parked, not reworked")
+}
+
+func TestAutoReopenAfterFailedReview_should_EscalateToEpic_When_IntegrationFailureUnattributable(t *testing.T) {
+	t.Parallel()
+	f := newEpicFixture(t, true, e2eACs, nil)
+	f.setShipped(t, f.sibs[0], `[{"path":"a/x.go"}]`)
+	child := f.failedIntegrationChild(t, `[{"path":"unrelated/z.go"}]`)
+	ctx := context.Background()
+
+	require.NoError(t, f.svc.AutoReopenAfterFailedReview(ctx, child.ID))
+
+	epic, err := f.svc.storage.GetBacklogItem(ctx, f.epic.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, epic.IntegrationFixCount)
+	assert.True(t, epic.HasPendingGuidanceRequests, "the failure escalated to the epic's owner")
+	got, err := f.svc.storage.GetBacklogItem(ctx, child.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(domain.BacklogStatusReview), got.Status)
+}
+
+func TestAutoReopenAfterFailedReview_should_ParkWithoutDuplicates_When_FailureRepeats(t *testing.T) {
+	t.Parallel()
+	f := newEpicFixture(t, true, e2eACs, nil)
+	f.setShipped(t, f.sibs[0], `[{"path":"a/x.go"}]`)
+	child := f.failedIntegrationChild(t, `[{"path":"unrelated/z.go"}]`)
+	ctx := context.Background()
+
+	require.NoError(t, f.svc.AutoReopenAfterFailedReview(ctx, child.ID))
+	require.NoError(t, f.svc.AutoReopenAfterFailedReview(ctx, child.ID), "a sweep re-running the router must not error or rework")
+
+	got, err := f.svc.storage.GetBacklogItem(ctx, child.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(domain.BacklogStatusReview), got.Status)
+}
+
+func TestEffectiveIntegrationFixCap_should_UseDefault_When_OverrideNegative(t *testing.T) {
+	t.Parallel()
+	svc := &BacklogService{cfg: &config.Config{}}
+	neg, zero, three := -1, 0, 3
+	assert.Equal(t, config.DefaultMaxAutoReworkIterations, svc.effectiveIntegrationFixCap(&backlogdto.BacklogItemData{ReworkCapOverride: &neg}))
+	assert.Equal(t, 0, svc.effectiveIntegrationFixCap(&backlogdto.BacklogItemData{ReworkCapOverride: &zero}), "0 stays unlimited")
+	assert.Equal(t, 3, svc.effectiveIntegrationFixCap(&backlogdto.BacklogItemData{ReworkCapOverride: &three}))
+}
