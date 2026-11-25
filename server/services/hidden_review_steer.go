@@ -13,6 +13,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -79,7 +81,7 @@ func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *in
 // steerRequestFacts are the per-request facts an audit line records, carried
 // to the writer through the context.
 type steerRequestFacts struct {
-	refusal   LocalWriteRefusal
+	refusal   access.LocalWriteRefusal
 	userAgent string
 }
 
@@ -106,11 +108,11 @@ type BacklogSteerWriter struct {
 	run  backlogSteerRunner
 }
 
-// BacklogSteerWriter returns the writer for link, or ErrReadOnly for a zero
+// newBacklogSteerWriter returns the writer for link, or ErrReadOnly for a zero
 // link (a link nobody resolved).
-func (a TerminalAccess) BacklogSteerWriter(link BacklogReviewLink, run backlogSteerRunner) (*BacklogSteerWriter, error) {
+func newBacklogSteerWriter(_ access.TerminalAccess, link BacklogReviewLink, run backlogSteerRunner) (*BacklogSteerWriter, error) {
 	if link.inst == nil || run == nil {
-		return nil, ErrReadOnly
+		return nil, access.ErrReadOnly
 	}
 	return &BacklogSteerWriter{link: link, run: run}, nil
 }
@@ -158,11 +160,11 @@ func steerPreview(msg string) string {
 	return string([]rune(msg)[:steerPreviewRunes])
 }
 
-func (s *SessionService) steerAuditLine(ctx context.Context, inst *instance.Instance, msg string) AuditLine {
+func (s *SessionService) steerAuditLine(ctx context.Context, inst *instance.Instance, msg string) auditkit.AuditLine {
 	f := steerRequestFactsFrom(ctx)
 	sum := sha256.Sum256([]byte(msg))
 	snap := inst.Snapshot()
-	return AuditLine{
+	return auditkit.AuditLine{
 		ChangeID:    uuid.NewString(),
 		SessionUUID: inst.GetStableID(), SessionTitle: snap.Title,
 		MessageLen: len(msg), MessageSHA256: hex.EncodeToString(sum[:]), MessagePreview: steerPreview(msg),
@@ -172,7 +174,7 @@ func (s *SessionService) steerAuditLine(ctx context.Context, inst *instance.Inst
 	}
 }
 
-func (s *SessionService) auditSink() *AuditSink {
+func (s *SessionService) auditSink() *auditkit.AuditSink {
 	if s.featureFlagSvc == nil {
 		return nil
 	}
@@ -182,12 +184,12 @@ func (s *SessionService) auditSink() *AuditSink {
 // appendSteerRequest writes the durable pre-write line. With the guards on a
 // sink fault refuses the steer; with them off the qualifying review steer goes
 // through on the degraded WARN record instead (the flag exists to restore it).
-func (s *SessionService) appendSteerRequest(ctx context.Context, line AuditLine) error {
-	line.Phase = auditPhaseRequest
+func (s *SessionService) appendSteerRequest(ctx context.Context, line auditkit.AuditLine) error {
+	line.Phase = auditkit.AuditPhaseRequest
 	sink := s.auditSink()
 	var err error
 	if sink == nil {
-		err = ErrAuditFailed
+		err = auditkit.ErrAuditFailed
 	} else {
 		err = sink.AppendBounded(ctx, line)
 	}
@@ -200,21 +202,21 @@ func (s *SessionService) appendSteerRequest(ctx context.Context, line AuditLine)
 		return errSteerAuditUnavailable
 	}
 	if sink != nil {
-		sink.fallback(line, err)
+		sink.Fallback(line, err)
 	}
 	return nil
 }
 
 // appendSteerResult records the outcome after the write. It runs after the
 // write, so a fault here cannot undo anything: it falls back to the WARN record.
-func (s *SessionService) appendSteerResult(line AuditLine, outcome string) {
-	line.Phase, line.Outcome = auditPhaseResult, outcome
+func (s *SessionService) appendSteerResult(line auditkit.AuditLine, outcome string) {
+	line.Phase, line.Outcome = auditkit.AuditPhaseResult, outcome
 	sink := s.auditSink()
 	if sink == nil {
 		return
 	}
 	if err := sink.Append(line); err != nil {
-		sink.fallback(line, err)
+		sink.Fallback(line, err)
 	}
 }
 
@@ -229,7 +231,7 @@ func (s *SessionService) guardsEnabled() bool {
 func (s *SessionService) steerHiddenReviewViaBacklogLink(ctx context.Context, link BacklogReviewLink, msg string) error {
 	inst := link.inst
 	line := s.steerAuditLine(ctx, inst, msg)
-	line.Kind, line.ItemID = auditKindBacklogSteer, link.itemID
+	line.Kind, line.ItemID = auditkit.AuditKindBacklogSteer, link.itemID
 	if err := s.appendSteerRequest(ctx, line); err != nil {
 		return err
 	}

@@ -46,7 +46,7 @@ func newStageCRUDTestService(t *testing.T) (*BacklogService, stagecfg.StageCRUDR
 
 // TestEnsureBuiltInWorkflowStages_should_MarkDoneAndArchivedAsTerminal
 // verifies the seeded built-in stages' is_terminal column matches
-// IsTerminalStatus (session/terminal_status.go), which treats both "done"
+// IsTerminalStatus (session/terminalstate/status.go), which treats both "done"
 // and "archived" as terminal — builtInTerminalStages (workflow_stage_seed.go)
 // previously marked only "archived", leaving the seeded "done" row's
 // is_terminal false and inconsistent with the rest of the codebase.

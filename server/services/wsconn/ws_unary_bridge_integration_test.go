@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // Run with: go test ./server/services -run WsUnary -race
@@ -21,7 +21,7 @@ func TestWsUnaryIntegration_ShouldPass_WhenRunWithRace(t *testing.T) {
 		useTLS bool
 	}{{"ws", false}, {"wss", true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newBridgeHarnessTLS(t, services.ListenerLocal, tc.useTLS)
+			h := newBridgeHarnessTLS(t, access.ListenerLocal, tc.useTLS)
 			scheme := "http://"
 			if tc.useTLS {
 				scheme = "https://"

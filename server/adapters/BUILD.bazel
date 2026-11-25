@@ -14,13 +14,13 @@ go_library(
     deps = [
         "//log",
         "//proto/session/v1:sessionv1_go",
-        "//session",
         "//session/cdp",
         "//session/detection",
         "//session/detection/ratelimit",
         "//session/domain",
         "//session/instance",
         "//session/queue",
+        "//session/terminalstate",
         "//session/tokens",
         "//session/vnc",
         "@org_golang_google_protobuf//types/known/timestamppb",
@@ -38,6 +38,7 @@ go_test(
     srcs = [
         "artifact_records_utf8_test.go",
         "instance_adapter_test.go",
+        "main_test.go",
         "review_queue_adapter_test.go",
         "session_pull_requests_test.go",
     ],

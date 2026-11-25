@@ -128,7 +128,7 @@ func (b *Backlog) UpdateItemSessionEndedWithDetail(ctx context.Context, id strin
 }
 
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
-// capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
+// capture file (backlogaux.WriteHeadlessFailureCapture) for a headless triage/review
 // call that errored or produced unparseable output — see the failure_capture_path
 // schema comment. Set independently of UpdateItemSessionEndedWithReason (a separate,
 // orthogonal column) so a caller that already wrote the capture file to disk can

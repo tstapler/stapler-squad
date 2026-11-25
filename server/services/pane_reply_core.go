@@ -13,6 +13,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -62,12 +64,12 @@ const (
 	AnswerTargetVisible
 )
 
-func (t AnswerTarget) admits(a TerminalAccess) bool {
+func (t AnswerTarget) admits(a access.TerminalAccess) bool {
 	switch t {
 	case AnswerTargetHidden:
-		return a == TerminalReadOnly
+		return a == access.TerminalReadOnly
 	case AnswerTargetVisible:
-		return a == TerminalReadWrite
+		return a == access.TerminalReadWrite
 	}
 	return false
 }
@@ -188,12 +190,12 @@ type QuestionReplyWriter struct {
 	after func(time.Duration) <-chan time.Time
 }
 
-// QuestionReplyWriter returns the writer for claim on inst, or ErrReadOnly for
+// newQuestionReplyWriter returns the writer for claim on inst, or ErrReadOnly for
 // a zero claim (never claimed) and errAnswerTargetMismatch when this access is
 // not the kind target admits.
-func (a TerminalAccess) QuestionReplyWriter(target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance, after func(time.Duration) <-chan time.Time) (*QuestionReplyWriter, error) {
+func newQuestionReplyWriter(a access.TerminalAccess, target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance, after func(time.Duration) <-chan time.Time) (*QuestionReplyWriter, error) {
 	if !claim.Valid() || inst == nil {
-		return nil, ErrReadOnly
+		return nil, access.ErrReadOnly
 	}
 	if !target.admits(a) {
 		return nil, errAnswerTargetMismatch
@@ -219,7 +221,7 @@ func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *instance.H
 type PaneReplyCore struct {
 	store            *PendingQuestionStore
 	limiters         *replyLimiters
-	auditSink        func() *AuditSink
+	auditSink        func() *auditkit.AuditSink
 	count            func(label string)
 	after            func(time.Duration) <-chan time.Time
 	controllerActive func(*instance.Instance) bool
@@ -302,7 +304,7 @@ func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget
 	if !ok {
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT}, replyStageLeaseBusy, false
 	}
-	writer, werr := AccessFor(inst).QuestionReplyWriter(target, claim, inst, c.after)
+	writer, werr := newQuestionReplyWriter(access.AccessFor(inst), target, claim, inst, c.after)
 	if werr != nil {
 		lease.Release()
 		out := sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT
@@ -339,7 +341,7 @@ func mapReplyStage(rs panereply.ReplyStage, err error) (replyOutcomeResult, stri
 // match of a fresh live capture, which is authoritative.
 func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance) func() error {
 	return func() error {
-		if !target.admits(AccessFor(inst)) {
+		if !target.admits(access.AccessFor(inst)) {
 			out, stage := target.mismatchOutcome()
 			return &replyWriteError{out, stage}
 		}
@@ -364,15 +366,15 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 
 // ---- audit and metrics ----
 
-func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) AuditLine {
+func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) auditkit.AuditLine {
 	q := claim.Question()
 	idx := int(in.digit - '0')
 	label := ""
 	if idx >= 1 && idx <= len(q.Dialog.Labels) {
 		label = truncateRunes(q.Dialog.Labels[idx-1], 80)
 	}
-	return AuditLine{
-		Kind: auditKindReply, ChangeID: uuid.NewString(),
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: q.SessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: q.QuestionID, ReplyID: in.replyID, OptionIndex: idx, OptionLabel: label, QuestionToken: q.Token,
 		Listener: facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
@@ -390,19 +392,19 @@ func truncateRunes(s string, n int) string {
 }
 
 // appendRequest is the durable pre-write line: no audit, no write.
-func (c *PaneReplyCore) appendRequest(ctx context.Context, line AuditLine) error {
-	line.Phase = auditPhaseRequest
+func (c *PaneReplyCore) appendRequest(ctx context.Context, line auditkit.AuditLine) error {
+	line.Phase = auditkit.AuditPhaseRequest
 	sink := c.auditSink()
 	if sink == nil {
-		return ErrAuditFailed
+		return auditkit.ErrAuditFailed
 	}
 	return sink.AppendBounded(ctx, line)
 }
 
 // appendResult records the outcome after the write; a fault here cannot
 // undo anything, so it logs.
-func (c *PaneReplyCore) appendResult(line AuditLine, res replyOutcomeResult, stage string) {
-	line.Phase, line.Outcome, line.Stage = auditPhaseResult, replyOutcomeLabel(res.Outcome), stage
+func (c *PaneReplyCore) appendResult(line auditkit.AuditLine, res replyOutcomeResult, stage string) {
+	line.Phase, line.Outcome, line.Stage = auditkit.AuditPhaseResult, replyOutcomeLabel(res.Outcome), stage
 	sink := c.auditSink()
 	if sink == nil {
 		return

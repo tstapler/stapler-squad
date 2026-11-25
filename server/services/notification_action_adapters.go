@@ -7,6 +7,8 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -18,11 +20,11 @@ import (
 // the CI-red guard, notification stamping and event broadcast.
 type approvalServiceAdapter struct {
 	svc   *ApprovalService
-	store *ApprovalStore
+	store *approvalkit.ApprovalStore
 }
 
 // NewApprovalResolver adapts ApprovalService to ApprovalResolver.
-func NewApprovalResolver(svc *ApprovalService, store *ApprovalStore) ApprovalResolver {
+func NewApprovalResolver(svc *ApprovalService, store *approvalkit.ApprovalStore) ApprovalResolver {
 	return approvalServiceAdapter{svc: svc, store: store}
 }
 
@@ -168,7 +170,7 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 	}
 	r := &AnswerRouter{
 		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
-		visible: s.paneReplyCore, guard: NewHumanActiveGuard(defaultHumanActivity, tmux.ListClientActivity),
+		visible: s.paneReplyCore, guard: access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity),
 		flags: configActionFlags{ev: compiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
 	}
 	r.ensure = s.ensureRegistered(d.Mirror)

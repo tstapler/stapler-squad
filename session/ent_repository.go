@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/analyticsstore"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
+	"github.com/tstapler/stapler-squad/session/credentialstore"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -51,6 +52,7 @@ type EntRepository struct {
 	*rulestore.Rules
 	*analyticsstore.Analytics
 	*instancestore.Instances
+	*credentialstore.Credentials
 
 	Client *ent.Client
 	driver dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
@@ -275,6 +277,7 @@ func (r *EntRepository) initStores() {
 	r.Projects = projectstore.New(r.Client)
 	r.Rules = rulestore.New(r.Client)
 	r.Analytics = analyticsstore.New(r.Client)
+	r.Credentials = credentialstore.New(r.Client)
 	r.Instances = instancestore.New(r.Client, instancestore.Ports{UpsertSessionPRSet: sessionpr.UpsertSessionPRSetTx, DeleteOwnerPRRows: sessionpr.DeleteOwnerPRRows})
 	r.SetDriver(r.driver)
 	// Built before Backlog, which takes it as its guidance port; the callback resolves r.Backlog

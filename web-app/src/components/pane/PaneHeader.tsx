@@ -68,6 +68,7 @@ export function PaneHeader({
           onDragStart={onDragStart}
           onClick={(e) => e.stopPropagation()}
           title="Drag to swap with another pane"
+          role="img"
           aria-label="Drag to swap panes"
           data-testid={`pane-drag-handle-${pane.id}`}
         >

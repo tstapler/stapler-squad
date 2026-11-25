@@ -65,7 +65,7 @@ func TestUpdateFeatureFlag_ShouldRefuseLooseningFlip_WhenAuditSinkDown(t *testin
 	assert.False(t, listedFlag(t, e.svc, backgroundActivityFeedFlagName).Enabled)
 	assert.Contains(t, listedFlag(t, e.svc, backgroundActivityFeedFlagName).StatusDetail, "refused while the audit sink is down")
 
-	e.mfs.setFailWrite(errDiskFull)
+	e.mfs.SetFailWrite(errDiskFull)
 	err := e.flip(backgroundActivityFeedFlagName, true)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))

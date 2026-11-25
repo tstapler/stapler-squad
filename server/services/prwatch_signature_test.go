@@ -8,16 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 const prWatchTestPR = githubpkg.LinkKey("github.com/o/r#7")
 
 func TestPRWatchGuardSignature_should_EqualNudgeAndPRFixSignatures_When_SamePRAndReason(t *testing.T) {
-	assert.Equal(t, GuardSignature(prWatchTestPR, ReasonSetSignature("FAILING_CHECKS")),
+	assert.Equal(t, access.GuardSignature(prWatchTestPR, access.ReasonSetSignature("FAILING_CHECKS")),
 		PRWatchGuardSignature(prWatchTestPR, PRWatchKindCI))
-	assert.Equal(t, GuardSignature(prWatchTestPR, ReasonSetSignature("UNRESOLVED_THREADS")),
+	assert.Equal(t, access.GuardSignature(prWatchTestPR, access.ReasonSetSignature("UNRESOLVED_THREADS")),
 		PRWatchGuardSignature(prWatchTestPR, PRWatchKindComment))
-	assert.Equal(t, GuardSignature(prWatchTestPR, ReasonSetSignature("CHANGES_REQUESTED")),
+	assert.Equal(t, access.GuardSignature(prWatchTestPR, access.ReasonSetSignature("CHANGES_REQUESTED")),
 		PRWatchGuardSignature(prWatchTestPR, PRWatchKindReview))
 	// Subsumption matches the PR-fix path.
 	assert.Equal(t, PRWatchGuardSignature(prWatchTestPR, PRWatchKindComment),
@@ -45,7 +46,7 @@ func TestSteerSessionGuarded_should_ReturnDuplicate_When_PRWatchSignatureRepeats
 
 	// A manual-nudge style signature for the same PR and reason also dedupes.
 	out, err = svc.SteerSessionGuarded(context.Background(), inst.GetStableID(),
-		GuardSignature(prWatchTestPR, ReasonSetSignature("FAILING_CHECKS")), "msg")
+		access.GuardSignature(prWatchTestPR, access.ReasonSetSignature("FAILING_CHECKS")), "msg")
 	require.NoError(t, err)
 	assert.Equal(t, SteerDuplicate, out)
 }

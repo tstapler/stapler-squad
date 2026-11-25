@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
@@ -96,7 +97,7 @@ type resyncFake struct{ *fakePanePTY }
 
 func (resyncFake) IsBackendProcessAlive() bool { return true }
 
-func testWriterFn() services.TerminalWriter { return testWriter() }
+func testWriterFn() access.TerminalWriter { return testWriter() }
 
 func TestCurrentPaneAnswerer_ShouldRouteLaneByHandlerRegistry(t *testing.T) {
 	for _, tc := range []struct {

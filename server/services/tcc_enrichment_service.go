@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
@@ -76,7 +77,7 @@ func enrichmentRootOutcome(enricher *instance.WorktreeEnricher, paths []string) 
 
 // +api: tcc:continue-enrichment
 func (s *SessionService) ContinueTCCEnrichment(ctx context.Context, req *connect.Request[sessionv1.ContinueTCCEnrichmentRequest]) (*connect.Response[sessionv1.ContinueTCCEnrichmentResponse], error) {
-	if _, err := EvaluateLocalWrite(ctx, req.Peer().Addr, LocalWriteRebinding); err != nil {
+	if _, err := access.EvaluateLocalWrite(ctx, req.Peer().Addr, access.LocalWriteRebinding); err != nil {
 		return nil, err
 	}
 	state := s.tccEnrichment

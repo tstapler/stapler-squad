@@ -14,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
@@ -295,7 +296,7 @@ func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.C
 // NotifyApprovalPending sends a Slack notification for a new pending
 // approval. No-ops cleanly when no webhook is configured. Non-blocking; any
 // send failure is logged and swallowed.
-func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.Config, approval *PendingApproval, sessionName, dashboardURL string) {
+func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.Config, approval *approvalkit.PendingApproval, sessionName, dashboardURL string) {
 	n.dispatchAsync(ctx, func(ctx context.Context) {
 		webhookURL, err := resolveSlackWebhookURL(cfg)
 		if err != nil {

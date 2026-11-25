@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const (
@@ -63,7 +64,7 @@ func (o *FileOps) servedOps(ctx context.Context) []sessionv1.FileOp {
 func (o *FileOps) Capabilities(ctx context.Context) *sessionv1.FileTransportCapabilities {
 	limits := &sessionv1.FileTransportLimits{
 		MaxWriteFullBytes: maxWriteFullBodyBytes,
-		HashCapBytes:      truncateSize,
+		HashCapBytes:      fsops.TruncateSize,
 	}
 	if o.policy.Flags.RangeRead(ctx) {
 		limits.MaxRangeBytes = maxRangeBytes

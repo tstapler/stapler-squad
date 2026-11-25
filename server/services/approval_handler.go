@@ -21,6 +21,8 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -77,7 +79,7 @@ type headlessPoolApprover interface {
 // It blocks the HTTP connection open while waiting for the user's decision,
 // then returns the decision in the hookSpecificOutput JSON format.
 type ApprovalHandler struct {
-	store               *ApprovalStore
+	store               *approvalkit.ApprovalStore
 	storage             *session.Storage
 	eventBus            *events.EventBus
 	queueChecker        ReviewQueueChecker          // optional: triggers immediate review queue check on new approval
@@ -111,7 +113,7 @@ func (h *ApprovalHandler) SetAutoApprovedGate(g AutoApprovedGate) {
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
-func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
+func NewApprovalHandler(store *approvalkit.ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
 	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: prpoller.DefaultPRStatusPollerConfig().PollInterval}
 }
 
@@ -371,7 +373,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				for k, v := range payload.ToolInput {
 					sanitizedInput[k] = v
 				}
-				sanitizedInput["command"] = redactedSecret
+				sanitizedInput["command"] = secretscan.RedactedSecret
 				sanitizedPayload := payload
 				sanitizedPayload.ToolInput = sanitizedInput
 				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
@@ -588,7 +590,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	if classified {
 		riskLevel = riskLevelString(escalation.RiskLevel)
 	}
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:                 approvalID,
 		SessionID:          sessionID,
 		ClaudeSessionID:    payload.SessionID,
@@ -626,9 +628,9 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	log.ForSession(sessionID).Info("[ApprovalHandler] waiting for decision", "approval_id", approvalID, "tool", payload.ToolName)
 
 	// Block until user decides, server times out, or connection closes
-	var decision ApprovalDecision
+	var decision approvalkit.ApprovalDecision
 	select {
-	case decision = <-approval.decisionCh:
+	case decision = <-approval.Decisions():
 		// User responded via ResolveApproval RPC
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval resolved", "approval_id", approvalID, "behavior", decision.Behavior)
 	case <-time.After(h.approvalTimeout()):
@@ -729,13 +731,13 @@ func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
 	return sessionID
 }
 
-func approvalNotificationTitle(approval *PendingApproval) string {
+func approvalNotificationTitle(approval *approvalkit.PendingApproval) string {
 	return fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
 }
 
 // approvalNotificationMetadata is the display metadata of an approval's
 // notification: the id to resolve it by and the fields the card shows.
-func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
+func approvalNotificationMetadata(approval *approvalkit.PendingApproval) map[string]string {
 	metadata := map[string]string{
 		"approval_id": approval.ID,
 		"tool_name":   approval.ToolName,
@@ -765,7 +767,7 @@ func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
 
 // broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
 // The approval ID is passed in the notification metadata so the UI can resolve it.
-func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approval *approvalkit.PendingApproval) {
 	metadata := approvalNotificationMetadata(approval)
 
 	title := approvalNotificationTitle(approval)
@@ -886,7 +888,7 @@ func approvalDetail(toolInput map[string]interface{}) string {
 }
 
 // buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *PendingApproval) string {
+func buildApprovalMessage(approval *approvalkit.PendingApproval) string {
 	if detail := approvalDetail(approval.ToolInput); detail != "" {
 		return detail
 	}
@@ -985,7 +987,7 @@ func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message
 
 // StartExpirationCleanup starts a background goroutine that periodically removes expired approvals.
 // The goroutine stops when ctx is canceled.
-func StartExpirationCleanup(ctx context.Context, store *ApprovalStore, wg *sync.WaitGroup) {
+func StartExpirationCleanup(ctx context.Context, store *approvalkit.ApprovalStore, wg *sync.WaitGroup) {
 	wg.Go(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -1055,7 +1057,7 @@ func InjectHookConfig(rootDir, sessionTitle, sessionUUID string) error {
 	// RemoveHooksConfig, which independently read-modify-write the same settingsPath —
 	// see settingsFileLocks' doc comment in mcp_injector.go for the lost-update hazard
 	// this closes.
-	defer lockSettingsPath(settingsPath)()
+	defer fsops.LockSettingsPath(settingsPath)()
 
 	url := hookApprovalURL()
 	// Desired hook entry for this session.
@@ -1098,7 +1100,7 @@ func InjectHookConfig(rootDir, sessionTitle, sessionUUID string) error {
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return fmt.Errorf("re-parse merged settings: %w", err)
 	}
-	if err := writeSettingsAtomic(settingsPath, claudeDir, raw); err != nil {
+	if err := fsops.WriteSettingsAtomic(settingsPath, claudeDir, raw); err != nil {
 		return err
 	}
 	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
@@ -326,7 +327,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 // This ensures sessions with known pending approvals appear in the queue immediately on startup,
 // even before the first poll cycle detects them via terminal content scanning.
 func syncOrphanedApprovalsToQueue(
-	store *services.ApprovalStore,
+	store *approvalkit.ApprovalStore,
 	instances []*instance.Instance,
 	queue session.ReviewQueueWriter,
 ) {
@@ -420,7 +421,7 @@ type CoreDeps struct {
 	Storage        *session.Storage
 	EventBus       *events.EventBus
 	ReviewQueue    *queuepkg.ReviewQueue
-	ApprovalStore  *services.ApprovalStore
+	ApprovalStore  *approvalkit.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
 	// FlagRegistry is the one registry shared by the flag service and every other flag reader.

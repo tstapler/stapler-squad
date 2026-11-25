@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -25,7 +25,7 @@ func TestStreamLatency_should_RecordEchoOnlyForTheFirstOutputAfterAKeystroke(t *
 	t.Parallel()
 	var sl streamLatency
 	sl.setBackend(domain.BackendNative)
-	sl.setListener(services.ListenerRemote)
+	sl.setListener(access.ListenerRemote)
 	l := sl.labels()
 	assert.Equal(t, termlat.Labels{Backend: "native", Listener: "remote"}, l)
 	before := latencyTotal(termlat.StageEchoServer, l)
@@ -44,7 +44,7 @@ func TestStreamLatency_should_IgnoreOutputTooLongAfterTheKeystroke(t *testing.T)
 	t.Parallel()
 	var sl streamLatency
 	sl.setBackend(domain.BackendTymux)
-	sl.setListener(services.ListenerLocal)
+	sl.setListener(access.ListenerLocal)
 	before := latencyTotal(termlat.StageEchoServer, sl.labels())
 
 	now := time.Now()

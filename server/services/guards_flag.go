@@ -9,6 +9,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -30,7 +32,7 @@ var guardsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 
 // guardsFlagController applies the persisted flag to the injected atomic the
 // unary handlers read.
-type guardsFlagController struct{ flag *UnaryGuardsFlag }
+type guardsFlagController struct{ flag *access.UnaryGuardsFlag }
 
 func (c guardsFlagController) Enable(context.Context) error { c.flag.SetEnabled(true); return nil }
 func (c guardsFlagController) Disable() error               { c.flag.SetEnabled(false); return nil }
@@ -86,14 +88,14 @@ func (g *guardBypassState) note() (warn bool) {
 // steer to a non-qualifying hidden target goes through (guards off). With the
 // sink down the write is refused: the flag exists to restore the review
 // composer, not to open writes to triage, diagnose and other sessions blind.
-func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) (AuditLine, error) {
+func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) (auditkit.AuditLine, error) {
 	line := s.steerAuditLine(withSteerRequestFacts(ctx, d.facts), inst, msg)
-	line.Kind = auditKindGuardBypass
-	line.Phase = auditPhaseRequest
+	line.Kind = auditkit.AuditKindGuardBypass
+	line.Phase = auditkit.AuditPhaseRequest
 	sink := s.auditSink()
 	var err error
 	if sink == nil {
-		err = ErrAuditFailed
+		err = auditkit.ErrAuditFailed
 	} else {
 		err = sink.AppendBounded(ctx, line)
 	}

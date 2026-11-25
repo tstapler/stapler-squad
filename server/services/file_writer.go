@@ -9,6 +9,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // WriteGuard is the session-level write gate: hidden and archived sessions are
@@ -52,14 +53,14 @@ func archivedSessionRefusal() error {
 type FileWriter struct {
 	ops         *FileOps
 	invalidator StatusInvalidator
-	locks       *pathMutexRegistry
+	locks       *fsops.PathMutexRegistry
 	// preRenameHook runs just before the pre-rename re-check; tests use it to play the agent.
 	preRenameHook func()
 }
 
 // NewFileWriter builds the writer over ops; a nil invalidator skips cache eviction.
 func NewFileWriter(ops *FileOps, invalidator StatusInvalidator) *FileWriter {
-	return &FileWriter{ops: ops, invalidator: invalidator, locks: pathLocks}
+	return &FileWriter{ops: ops, invalidator: invalidator, locks: fsops.PathLocks}
 }
 
 // WriteFile atomically replaces a file after verifying the caller's version token.
@@ -83,9 +84,9 @@ func (w *FileWriter) finish(ctx context.Context, call *writeCall, resp *sessionv
 	outcome, reason := call.classify(resp, err)
 	log.Info("file write", "session", call.req.SessionId, "path", call.req.Path,
 		"bytes", len(call.req.Content), "outcome", string(outcome))
-	recordWriteMetrics(ctx, outcome, took)
-	w.ops.policy.Telemetry.RecordWrite(ctx, call.req.SessionId, WriteOutcomeEvent{
-		Outcome: outcome, Reason: reason, Size: BucketSize(int64(len(call.req.Content))),
+	fsops.RecordWriteMetrics(ctx, outcome, took)
+	w.ops.policy.Telemetry.RecordWrite(ctx, call.req.SessionId, fsops.WriteOutcomeEvent{
+		Outcome: outcome, Reason: reason, Size: fsops.BucketSize(int64(len(call.req.Content))),
 		EOL: call.eol, BOM: call.bom, Duration: took,
 	})
 }

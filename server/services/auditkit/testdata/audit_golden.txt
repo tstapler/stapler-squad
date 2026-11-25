@@ -1,0 +1,33 @@
+append 0 err=<nil>
+append 1 err=<nil>
+append 2 err=<nil>
+append 3 err=<nil>
+append 4 err=<nil>
+append 5 err=<nil>
+append 6 err=<nil>
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"flag_change","phase":"requested","change_id":"c1","flag":"f","scope":"global","mutation":"set","previous":true,"new":false,"seq":7,"boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1","listener":"local","peer_addr":"127.0.0.1:1","host":"h","origin":"o","user_agent":"ua","auth_mode":"none"}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"flag_change","phase":"result","change_id":"c1","outcome":"applied","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1"}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"reply","phase":"requested","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1","session_uuid":"su","question_id":"q","reply_id":"r","option_index":2,"option_label":"Yes","question_token":"tok","stage":"send"}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"backlog_steer","phase":"result","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1","session_uuid":"su","session_title":"T","item_id":"i","message_len":5,"message_sha256":"abc","message_preview":"hello","peer_loopback":true,"proxied":false}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"guard_bypass","phase":"requested","outcome":"aborted_rolled_back","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1"}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"prune","phase":"requested","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1","matched_count":3,"include_unread_actionable":true,"counts":{"a":1,"b":2}}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"notification_action","phase":"result","outcome":"aborted_persist_failed","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1","channel":"ch","caller_kind":"ui","action_kind":"ack","target_key":"tk","detail":"d"}
+boot_seq=1
+mode=600
+closed-enqueue
+modes=[steer_fallback_log flag_change_fallback_log]
+WARN steer_audit_degraded cause=sink closed kind=backlog_steer phase=result change_id= outcome= session_uuid=su session_title=T item_id=i message_len=5 message_sha256=abc message_preview=hello boot_id=<boot> boot_seq=1 listener= peer_addr= peer_loopback=true proxied=false host= origin= user_agent= auth_mode=
+WARN flag_change_audit_degraded cause=sink closed phase=requested change_id=c1 flag=f scope=global previous=true new=false outcome= seq=7 boot_id=<boot> boot_seq=1 listener=local peer_addr=127.0.0.1:1 host=h origin=o user_agent=ua auth_mode=none
+queued:
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"flag_change","phase":"requested","change_id":"c1","flag":"f","scope":"global","mutation":"set","previous":true,"new":false,"seq":7,"boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1","listener":"local","peer_addr":"127.0.0.1:1","host":"h","origin":"o","user_agent":"ua","auth_mode":"none"}
+{"ts":"2026-01-02T03:04:05.123456789Z","kind":"flag_change","phase":"result","change_id":"c1","outcome":"applied","boot_id":"<boot>","boot_ts":"2026-01-02T03:04:05.123456789Z","boot_seq":"1"}
+corrupt err=<nil>
+boot_seq=1767323046
+mkdir err=audit append failed: mkdir boom is=true
+dirfn err=audit append failed: no dir
+write err=audit append failed: boot_seq: no space left on device
+bounded err=audit append timed out is=true
+file /cfg/audit/boot_seq size=1
+file /cfg/audit/hidden-session-replies.jsonl size=4194632
+file /cfg/audit/hidden-session-replies.jsonl.1 size=4194632
+file /cfg/audit/hidden-session-replies.jsonl.2 size=4194632

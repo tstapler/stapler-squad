@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -27,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 	"github.com/tstapler/stapler-squad/session/pipelinemode"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // resolveStuckOnManualTransition immediately resolves the durable stuck
@@ -120,7 +122,7 @@ func checkNoNewWaivers(incoming, existing domain.AcCriteriaJSON) error {
 	if incoming == "" {
 		return nil
 	}
-	return session.CheckNoNewAcWaivers(existing, incoming)
+	return backlogaux.CheckNoNewAcWaivers(existing, incoming)
 }
 
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.
@@ -1097,7 +1099,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
-	if session.IsTerminalStatus(to) {
+	if terminalstate.IsTerminalStatus(to) {
 		s.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathTransition), req.Msg.ItemId)
 	}
 

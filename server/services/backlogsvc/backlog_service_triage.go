@@ -60,7 +60,7 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *backlogdto.
 // workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""
 // when the workspacePeersNudgeFlagName feature flag is off (default), on any
 // detection/lookup failure, or when repoPath is empty. Delegates to
-// session.WorkspacePeersBlockForPath, shared with SessionService.CreateSession so the two
+// workspacepeers.Lister.BlockForPath, shared with SessionService.CreateSession so the two
 // callers can't drift on how the nudge is built.
 func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
 	return services.WorkspacePeersBlockFor(ctx, s.storage, repoPath)

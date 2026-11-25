@@ -18,42 +18,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// RuleSpec is the JSON-serializable form of a Rule.
-// CommandPattern and FilePattern are stored as strings (compiled on load).
-type RuleSpec struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	ToolName       string    `json:"tool_name,omitempty"`
-	ToolPattern    string    `json:"tool_pattern,omitempty"`
-	ToolCategory   string    `json:"tool_category,omitempty"`
-	CommandPattern string    `json:"command_pattern,omitempty"`
-	FilePattern    string    `json:"file_pattern,omitempty"`
-	Decision       string    `json:"decision"`   // "auto_allow" | "auto_deny" | "escalate"
-	RiskLevel      string    `json:"risk_level"` // "low" | "medium" | "high" | "critical"
-	Reason         string    `json:"reason,omitempty"`
-	Alternative    string    `json:"alternative,omitempty"`
-	Priority       int       `json:"priority"`
-	Enabled        bool      `json:"enabled"`
-	Source         string    `json:"source"` // "user" | "seed" | "claude-settings"
-	CreatedAt      time.Time `json:"created_at"`
-
-	// Structured CommandCriteria fields — mutually exclusive with commandPattern.
-	Programs              []string `json:"programs,omitempty"`
-	Subcommands           []string `json:"subcommands,omitempty"`
-	BlockedSubcommands    []string `json:"blocked_subcommands,omitempty"`
-	RequiredFlags         []string `json:"required_flags,omitempty"`
-	ForbiddenFlags        []string `json:"forbidden_flags,omitempty"`
-	RequiredFlagPrefixes  []string `json:"required_flag_prefixes,omitempty"`
-	PythonModes           []string `json:"python_modes,omitempty"`
-	SafePythonImportsOnly bool     `json:"safe_python_imports_only,omitempty"`
-	RequireCIPassing      bool     `json:"require_ci_passing,omitempty"`
-	MinSessionIdleMinutes int32    `json:"min_session_idle_minutes,omitempty"`
-}
-
 // RulesFile is the top-level structure of auto_approve_rules.json.
 type RulesFile struct {
-	Version int        `json:"version"`
-	Rules   []RuleSpec `json:"rules"`
+	Version int               `json:"version"`
+	Rules   []domain.RuleSpec `json:"rules"`
 }
 
 // RulesStore manages user-defined rules persisted to SQLite.
@@ -61,7 +29,7 @@ type RulesFile struct {
 type RulesStore struct {
 	mu      sync.RWMutex
 	storage *session.Storage
-	specs   []RuleSpec
+	specs   []domain.RuleSpec
 }
 
 // NewRulesStore creates a RulesStore backed by the given storage.
@@ -74,10 +42,10 @@ func NewRulesStore(storage *session.Storage) (*RulesStore, error) {
 }
 
 // All returns user rules as compiled Rules (source="user" only).
-func (s *RulesStore) All() []RuleSpec {
+func (s *RulesStore) All() []domain.RuleSpec {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]RuleSpec, len(s.specs))
+	out := make([]domain.RuleSpec, len(s.specs))
 	copy(out, s.specs)
 	return out
 }
@@ -91,18 +59,18 @@ func (s *RulesStore) ToRules() []classifier.Rule {
 
 // Upsert creates or updates a user rule. Source must be "user".
 // Returns the upserted spec.
-func (s *RulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error) {
+func (s *RulesStore) Upsert(ctx context.Context, spec domain.RuleSpec) (domain.RuleSpec, error) {
 	if spec.Source != "user" {
-		return RuleSpec{}, fmt.Errorf("only user rules can be modified; got source=%q", spec.Source)
+		return domain.RuleSpec{}, fmt.Errorf("only user rules can be modified; got source=%q", spec.Source)
 	}
 	if spec.ID == "" {
-		return RuleSpec{}, fmt.Errorf("rule ID is required")
+		return domain.RuleSpec{}, fmt.Errorf("rule ID is required")
 	}
 	// Validate patterns.
 	for _, pat := range []string{spec.ToolPattern, spec.CommandPattern, spec.FilePattern} {
 		if pat != "" {
 			if _, err := regexp.Compile(pat); err != nil {
-				return RuleSpec{}, fmt.Errorf("invalid regex %q: %w", pat, err)
+				return domain.RuleSpec{}, fmt.Errorf("invalid regex %q: %w", pat, err)
 			}
 		}
 	}
@@ -112,7 +80,7 @@ func (s *RulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error
 		len(spec.ForbiddenFlags) > 0 || len(spec.RequiredFlagPrefixes) > 0 ||
 		len(spec.PythonModes) > 0 || spec.SafePythonImportsOnly
 	if hasCriteria && spec.CommandPattern != "" {
-		return RuleSpec{}, fmt.Errorf("rule cannot set both commandPattern and structured criteria; use one mode")
+		return domain.RuleSpec{}, fmt.Errorf("rule cannot set both commandPattern and structured criteria; use one mode")
 	}
 
 	if spec.CreatedAt.IsZero() {
@@ -154,7 +122,7 @@ func (s *RulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error
 	defer s.mu.Unlock()
 
 	if err := s.storage.UpsertRule(ctx, ruleData); err != nil {
-		return RuleSpec{}, fmt.Errorf("save rule to DB: %w", err)
+		return domain.RuleSpec{}, fmt.Errorf("save rule to DB: %w", err)
 	}
 
 	// Update in-memory state only after the DB write succeeds.
@@ -208,9 +176,9 @@ func (s *RulesStore) reload() error {
 		return err
 	}
 
-	specs := make([]RuleSpec, len(rules))
+	specs := make([]domain.RuleSpec, len(rules))
 	for i, r := range rules {
-		specs[i] = RuleSpec{
+		specs[i] = domain.RuleSpec{
 			ID:             r.ID,
 			Name:           r.Name,
 			ToolName:       r.ToolName,
@@ -276,7 +244,7 @@ func (s *RulesStore) exportRulesLocked() {
 
 // specsToRules compiles RuleSpec patterns into Rule structs.
 // Specs with invalid regex are skipped with a warning log.
-func specsToRules(specs []RuleSpec) []classifier.Rule {
+func specsToRules(specs []domain.RuleSpec) []classifier.Rule {
 	rules := make([]classifier.Rule, 0, len(specs))
 	for _, spec := range specs {
 		r := classifier.Rule{
@@ -424,7 +392,7 @@ type BulkUpsertResult struct {
 // Lock ordering: BulkUpsert holds s.mu.Lock for the full operation, then calls
 // s.storage.UpsertRule while holding the lock. This is safe because storage is
 // independent of the in-memory lock (no recursive locking).
-func (s *RulesStore) BulkUpsert(ctx context.Context, specs []RuleSpec, overwriteDuplicates bool) BulkUpsertResult {
+func (s *RulesStore) BulkUpsert(ctx context.Context, specs []domain.RuleSpec, overwriteDuplicates bool) BulkUpsertResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

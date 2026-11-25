@@ -14,6 +14,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
@@ -151,10 +153,10 @@ func (f configActionFlags) Answer(route answerRoute) bool {
 	return f.fr.resolveAnswerQuestion(config.LoadConfig(), f.ev, route)
 }
 
-// actionAudit appends audit lines; *AuditSink satisfies it.
+// actionAudit appends audit lines; *auditkit.AuditSink satisfies it.
 type actionAudit interface {
-	Append(AuditLine) error
-	AppendBounded(ctx context.Context, l AuditLine) error
+	Append(auditkit.AuditLine) error
+	AppendBounded(ctx context.Context, l auditkit.AuditLine) error
 }
 
 // ActionCall is one inbound request with the facts the dispatcher needs from
@@ -346,7 +348,7 @@ func (d *NotificationActionDispatcher) tierGate(ctx context.Context, call Action
 		}
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, unavailableDesktopOnly), true
 	}
-	if _, err := EvaluateLocalWrite(ctx, call.Peer, LocalWriteLocalCaller); err != nil {
+	if _, err := access.EvaluateLocalWrite(ctx, call.Peer, access.LocalWriteLocalCaller); err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, "local caller required"), true
 	}
 	return ActionResult{}, false
@@ -467,9 +469,9 @@ func (d *NotificationActionDispatcher) decide(ctx context.Context, m *sessionv1.
 	return res, err
 }
 
-func (d *NotificationActionDispatcher) auditLine(m *sessionv1.InvokeNotificationActionRequest, c callerInfo) AuditLine {
-	return AuditLine{
-		Kind: auditKindNotificationAction, Channel: c.channel, CallerKind: c.kind, Listener: string(c.listener),
+func (d *NotificationActionDispatcher) auditLine(m *sessionv1.InvokeNotificationActionRequest, c callerInfo) auditkit.AuditLine {
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindNotificationAction, Channel: c.channel, CallerKind: c.kind, Listener: string(c.listener),
 		ActionKind: kindName(m.GetActionKind()), TargetKey: m.GetTargetKey(), ReplyID: m.GetIdempotencyKey(),
 	}
 }
@@ -481,22 +483,22 @@ func (d *NotificationActionDispatcher) sink() actionAudit {
 	return d.audit()
 }
 
-func (d *NotificationActionDispatcher) appendRequest(ctx context.Context, l AuditLine) error {
-	l.Phase = auditPhaseRequest
+func (d *NotificationActionDispatcher) appendRequest(ctx context.Context, l auditkit.AuditLine) error {
+	l.Phase = auditkit.AuditPhaseRequest
 	s := d.sink()
 	if s == nil {
-		return ErrAuditFailed
+		return auditkit.ErrAuditFailed
 	}
 	return s.AppendBounded(ctx, l)
 }
 
 // appendResult cannot undo the action, so a fault logs.
-func (d *NotificationActionDispatcher) appendResult(l AuditLine, res ActionResult) {
+func (d *NotificationActionDispatcher) appendResult(l auditkit.AuditLine, res ActionResult) {
 	d.appendResultLine(l, res.Outcome)
 }
 
-func (d *NotificationActionDispatcher) appendResultLine(l AuditLine, o sessionv1.ActionOutcome) {
-	l.Phase, l.Outcome = auditPhaseResult, outcomeLabel(o)
+func (d *NotificationActionDispatcher) appendResultLine(l auditkit.AuditLine, o sessionv1.ActionOutcome) {
+	l.Phase, l.Outcome = auditkit.AuditPhaseResult, outcomeLabel(o)
 	s := d.sink()
 	if s == nil {
 		log.Warn("[NotificationAction] no audit sink; result line not written", "action", l.ActionKind, "outcome", l.Outcome)

@@ -258,3 +258,9 @@ jobs:
           name: bazel-profile
           path: profile.gz
           if-no-files-found: warn
+
+      # setup-bazel tars the disk cache in its post step; a live server (disk-cache GC runs 10s after idle,
+      # .bazelrc) mutates it mid-tar, tar exits 1 and no disk-Bazel entry is ever saved.
+      - name: Shut down Bazel before the cache save
+        if: always()
+        run: bazel shutdown

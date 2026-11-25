@@ -17,6 +17,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -77,7 +80,7 @@ func newWriteRig(t *testing.T) *writeRig {
 	flags := &stubFilesFlags{editing: true}
 	tel := &recordingTelemetry{}
 	inv := &spyInvalidator{}
-	ops := NewFileOps(FilePolicy{Workspace: prov, Flags: flags, Telemetry: tel, Guard: prov}, osRootBackend{})
+	ops := NewFileOps(FilePolicy{Workspace: prov, Flags: flags, Telemetry: tel, Guard: prov}, fsops.OsRootBackend{})
 	return &writeRig{t: t, dir: dir, prov: prov, flags: flags, tel: tel, inv: inv, ops: ops, w: NewFileWriter(ops, inv)}
 }
 
@@ -148,7 +151,7 @@ func TestWriteFile_ShouldReturnSavedWithNewToken_When_ValidTokenAndFlagOn(t *tes
 	logs := captureSlog(t)
 	r := newWriteRig(t)
 	r.put("a.go", []byte("package a\r\n\r\nvar X = 1\r\n"))
-	r.put("bom.txt", append(append([]byte{}, utf8BOM...), "x\r\n"...))
+	r.put("bom.txt", append(append([]byte{}, fsops.UTF8BOM...), "x\r\n"...))
 	t1 := r.token("a.go")
 
 	resp, err := r.write("a.go", "package a\n\nvar X = 2\n", t1)
@@ -166,7 +169,7 @@ func TestWriteFile_ShouldReturnSavedWithNewToken_When_ValidTokenAndFlagOn(t *tes
 	resp, err = r.write("bom.txt", "y\n", r.token("bom.txt"))
 	require.NoError(t, err)
 	require.NotNil(t, resp.GetSaved())
-	assert.Equal(t, append(append([]byte{}, utf8BOM...), "y\r\n"...), r.disk("bom.txt"), "BOM re-applied")
+	assert.Equal(t, append(append([]byte{}, fsops.UTF8BOM...), "y\r\n"...), r.disk("bom.txt"), "BOM re-applied")
 	assert.Equal(t, []string{r.dir}, r.inv.dirs[:1], "a save evicts the VCS cache for the active dir")
 }
 
@@ -174,7 +177,7 @@ func TestWriteFile_ShouldReturnConflictFullText_When_AgentRewroteFile(t *testing
 	r := newWriteRig(t)
 	r.put("a.go", []byte("one\n"))
 	t1 := r.token("a.go")
-	r.put("a.go", append(append([]byte{}, utf8BOM...), "theirs\r\nline\r\n"...)) // agent rewrite, BOM + CRLF
+	r.put("a.go", append(append([]byte{}, fsops.UTF8BOM...), "theirs\r\nline\r\n"...)) // agent rewrite, BOM + CRLF
 	t3 := r.token("a.go")
 
 	resp, err := r.write("a.go", "mine\n", t1)
@@ -184,7 +187,7 @@ func TestWriteFile_ShouldReturnConflictFullText_When_AgentRewroteFile(t *testing
 	require.NotNil(t, full)
 	assert.Equal(t, "theirs\nline\n", full.Content, "LF-normalized, BOM stripped")
 	assert.Equal(t, t3, full.Token)
-	assert.Equal(t, append(append([]byte{}, utf8BOM...), "theirs\r\nline\r\n"...), r.disk("a.go"), "file unchanged")
+	assert.Equal(t, append(append([]byte{}, fsops.UTF8BOM...), "theirs\r\nline\r\n"...), r.disk("a.go"), "file unchanged")
 }
 
 func TestWriteFile_ShouldReturnConflictUnavailable_When_DiskGrewPastCapOrBecameBinaryNonUtf8MixedEolOrDeleted(t *testing.T) {
@@ -193,7 +196,7 @@ func TestWriteFile_ShouldReturnConflictUnavailable_When_DiskGrewPastCapOrBecameB
 		data []byte // nil: delete the file
 		want sessionv1.ReadOnlyReason
 	}{
-		{"too large", []byte(strings.Repeat("a", truncateSize+1)), sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE},
+		{"too large", []byte(strings.Repeat("a", fsops.TruncateSize+1)), sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE},
 		{"binary", []byte{'a', 0, 'b'}, sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY},
 		{"non-utf8", []byte("caf\xE9\n"), sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8},
 		{"mixed eol", []byte("a\r\nb\nc\n"), sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
@@ -339,7 +342,7 @@ func TestWriteFile_ShouldReturnPermissionDeniedHiddenSession_When_SessionHidden(
 	inst := hiddenInstance(t, true)
 	ws := &WorkspaceService{liveFinder: staticFinder{inst}}
 	requireRefusal(t, ws.CheckWriteAccess(inst.Title), connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_HIDDEN_SESSION)
-	off := &UnaryGuardsFlag{}
+	off := &access.UnaryGuardsFlag{}
 	off.SetEnabled(false)
 	ws.SetGuardsFlag(off)
 	assert.NoError(t, ws.CheckWriteAccess(inst.Title))
@@ -385,7 +388,7 @@ func TestWriteFile_ShouldReturnInvalidArgument_When_ContentHasCrNulOrTokenHashDa
 	r := newWriteRig(t)
 	r.put("a.go", []byte("one\n"))
 	good := r.token("a.go")
-	r.put("huge.txt", []byte(strings.Repeat("a", truncateSize+10)))
+	r.put("huge.txt", []byte(strings.Repeat("a", fsops.TruncateSize+10)))
 	r.put("bin.dat", []byte{1, 2, 0, 3})
 	r.put("latin1.txt", []byte("caf\xE9\n"))
 	r.put("mixed.txt", []byte("a\r\nb\nc\n"))
@@ -396,7 +399,7 @@ func TestWriteFile_ShouldReturnInvalidArgument_When_ContentHasCrNulOrTokenHashDa
 	dashToken := func(rel string) string {
 		info, err := os.Stat(filepath.Join(r.dir, rel))
 		require.NoError(t, err)
-		return NonEditableToken(info.Size(), info.ModTime().UnixNano()).String()
+		return fsops.NonEditableToken(info.Size(), info.ModTime().UnixNano()).String()
 	}
 
 	table := []struct {
@@ -413,7 +416,7 @@ func TestWriteFile_ShouldReturnInvalidArgument_When_ContentHasCrNulOrTokenHashDa
 		{"non-UTF-8 target", "latin1.txt", "x\n", dashToken("latin1.txt"), connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8},
 		{"mixed EOL target", "mixed.txt", "x\n", dashToken("mixed.txt"), connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
 		{"lone CR target", "lone_cr.txt", "x\n", dashToken("lone_cr.txt"), connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL},
-		{"content over 1 MiB", "a.go", strings.Repeat("a", truncateSize+1), good, connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE},
+		{"content over 1 MiB", "a.go", strings.Repeat("a", fsops.TruncateSize+1), good, connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE},
 		{"symlink leaf", "link.go", "x\n", good, connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK},
 		{".git/hooks/pre-commit", ".git/hooks/pre-commit", "x\n", good, connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_GIT_INTERNAL},
 		{"path escape", "../x", "x\n", good, connect.CodeInvalidArgument, 0},
@@ -512,27 +515,27 @@ func TestWriteFile_ShouldRecordOneTelemetryEventPerOutcomeWithoutPath_When_OkCon
 	r.tel.mu.Lock()
 	defer r.tel.mu.Unlock()
 	require.Len(t, r.tel.writes, 6, "exactly one RecordWrite per call")
-	got := make([]WriteOutcome, len(r.tel.writes))
+	got := make([]fsops.WriteOutcome, len(r.tel.writes))
 	for i, w := range r.tel.writes {
 		got[i] = w.Outcome
 	}
-	assert.Equal(t, []WriteOutcome{
-		WriteOutcomeOK, WriteOutcomeConflictRejected, WriteOutcomeDenied, WriteOutcomeDisabled,
-		WriteOutcomeRejected, WriteOutcomeRejected,
+	assert.Equal(t, []fsops.WriteOutcome{
+		fsops.WriteOutcomeOK, fsops.WriteOutcomeConflictRejected, fsops.WriteOutcomeDenied, fsops.WriteOutcomeDisabled,
+		fsops.WriteOutcomeRejected, fsops.WriteOutcomeRejected,
 	}, got)
 	first := r.tel.writes[0]
-	assert.Equal(t, WriteReasonNone, first.Reason)
-	assert.Equal(t, BucketSize(int64(len("mine\n"))), first.Size)
-	assert.Equal(t, EOLCRLF, first.EOL)
-	assert.Equal(t, BOMNo, first.BOM)
-	assert.Equal(t, WriteReasonHiddenSession, r.tel.writes[2].Reason)
-	assert.Equal(t, WriteReasonFlagOff, r.tel.writes[3].Reason)
-	assert.Equal(t, WriteReasonBadToken, r.tel.writes[4].Reason)
+	assert.Equal(t, fsops.WriteReasonNone, first.Reason)
+	assert.Equal(t, fsops.BucketSize(int64(len("mine\n"))), first.Size)
+	assert.Equal(t, fsops.EOLCRLF, first.EOL)
+	assert.Equal(t, fsops.BOMNo, first.BOM)
+	assert.Equal(t, fsops.WriteReasonHiddenSession, r.tel.writes[2].Reason)
+	assert.Equal(t, fsops.WriteReasonFlagOff, r.tel.writes[3].Reason)
+	assert.Equal(t, fsops.WriteReasonBadToken, r.tel.writes[4].Reason)
 }
 
 func TestWriteFile_ShouldNotAlterResponse_When_TelemetryRecorderIsSlow(t *testing.T) {
 	r := newWriteRig(t)
-	r.ops.policy.Telemetry = NewFilesTelemetry(&recordingProvider{err: errors.New("db down")})
+	r.ops.policy.Telemetry = fsops.NewFilesTelemetry(&fsopstest.RecordingProvider{Err: errors.New("db down")})
 	r.put("a.go", []byte("one\n"))
 
 	resp, err := r.write("a.go", "mine\n", r.token("a.go"))
@@ -575,4 +578,18 @@ func TestWorkspaceService_ShouldEvictVcsStatusCache_When_InvalidateVcsStatusCall
 	require.NoError(t, err)
 	_, still := ws.vcsStatusCache.Load(r.dir)
 	assert.False(t, still, "the next GetVCSStatus recomputes instead of waiting out the 15 s TTL")
+}
+
+// tempNames lists the atomic-write temp files left in dir.
+func tempNames(t testing.TB, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var out []string
+	for _, e := range entries {
+		if fsops.IsAtomicTempName(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	return out
 }

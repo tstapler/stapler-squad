@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/gitwt"
@@ -81,7 +82,7 @@ func TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval(t *t
 	attempts := 0
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(blockApprovalOnCIFailureFlagName, setting.(bool))
-		store := NewApprovalStore("")
+		store := approvalkit.NewApprovalStore("")
 		svc := NewApprovalService(store)
 		svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("bkf-session")})
 		attempts++

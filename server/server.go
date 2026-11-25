@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/federation"
@@ -45,6 +46,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/prmirror"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -281,7 +283,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("PRStatusPoller started")
 
 	if deps.Storage != nil {
-		mirrorReconciler := session.NewPRMirrorReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
+		mirrorReconciler := prmirror.NewReconciler(deps.PRStatusPoller.GetInstances, deps.Storage)
 		mirrorReconciler.Start(serverCtx)
 		srv.joinAfterCancel(serverCtx, mirrorReconciler.Wait)
 
@@ -573,7 +575,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
 	muxPool := wsconn.TerminalMuxPoolSizeFromEnv()
 	muxBridge := wsconn.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
-		wsconn.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		wsconn.WithTerminalMuxOriginPolicy(access.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
 		wsconn.WithTerminalMuxDispatchers(srv.unaryDispatcher))
 	srv.terminalMuxBridge.Store(muxBridge)
 	srv.mux.Handle(wsconn.TerminalMuxPath, muxBridge)
@@ -628,7 +630,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// dispatcher (published by Start/StartRemote); the remote listener upgrades only
 	// with an authenticated session and an allow-listed Origin.
 	unaryBridge := wsconn.NewUnaryWsBridge(srv.unaryDispatcher,
-		wsconn.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+		wsconn.WithUnaryOriginPolicy(access.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
 	srv.wsUnaryBridge.Store(unaryBridge)
 	srv.mux.Handle(wsconn.UnaryWsPath, unaryBridge)
 	// HTTP request batching (flag batch_unary): same per-call re-entry as the bridge.
@@ -1757,7 +1759,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Build middleware chain:
 	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
 	localDispatcher := s.localDispatcherWith(guardedProcedures)
-	s.setUnaryDispatcher(services.ListenerLocal, localDispatcher)
+	s.setUnaryDispatcher(access.ListenerLocal, localDispatcher)
 	handler := otelhttp.NewHandler(
 		wrapOuterMiddleware(localDispatcher, s.origins),
 		"stapler-squad-http",
@@ -2128,7 +2130,7 @@ func (s *Server) remoteDispatcher(authMW func(http.Handler) http.Handler, requir
 	if authMW != nil {
 		inner = authMW(inner)
 	}
-	return s.stampRequest(services.ListenerRemote, requiresAuth)(inner)
+	return s.stampRequest(access.ListenerRemote, requiresAuth)(inner)
 }
 
 // setUnaryDispatcher publishes the listener's dispatcher for the unary WebSocket
@@ -2155,8 +2157,8 @@ func (s *Server) unaryDispatcher(listener string) http.Handler {
 // stampRequest stamps the raw request record and the in-handler verdict's live
 // inputs on the context for both chains.
 func (s *Server) stampRequest(listener string, requiresAuth bool) func(http.Handler) http.Handler {
-	record := services.WithRequestRecord(listener, requiresAuth)
-	verdict := services.WithLocalWriteVerdictConfig(s.LocalWriteVerdictConfig())
+	record := access.WithRequestRecord(listener, requiresAuth)
+	verdict := access.WithLocalWriteVerdictConfig(s.LocalWriteVerdictConfig())
 	return func(next http.Handler) http.Handler { return record(verdict(next)) }
 }
 
@@ -2176,7 +2178,7 @@ func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 // then runs the server in a background goroutine until ctx is cancelled.
 func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls.Config, authMW func(http.Handler) http.Handler, requiresAuth bool) error {
 	remoteDispatcher := s.remoteDispatcher(authMW, requiresAuth)
-	s.setUnaryDispatcher(services.ListenerRemote, remoteDispatcher)
+	s.setUnaryDispatcher(access.ListenerRemote, remoteDispatcher)
 	handler := otelhttp.NewHandler(
 		wrapOuterMiddleware(remoteDispatcher, s.origins),
 		"stapler-squad-remote",

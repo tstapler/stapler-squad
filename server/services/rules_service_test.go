@@ -19,6 +19,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -49,13 +51,13 @@ type spyRulesStore struct {
 	upsertCalls int
 }
 
-func (s *spyRulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, error) {
+func (s *spyRulesStore) Upsert(ctx context.Context, spec domain.RuleSpec) (domain.RuleSpec, error) {
 	s.upsertCalls++
 	return s.RulesStore.Upsert(ctx, spec)
 }
 
 // newRulesServiceWithAI creates a RulesService wired with the given mock AI client.
-func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
+func newRulesServiceWithAI(t *testing.T, aiClient anthropicwire.AIClient) *RulesService {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
@@ -159,7 +161,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 
 	// Insert 2 user rules.
 	for i := 0; i < 2; i++ {
-		_, err := rulesStore.Upsert(context.Background(), RuleSpec{
+		_, err := rulesStore.Upsert(context.Background(), domain.RuleSpec{
 			ID:       fmt.Sprintf("rule-%d", i),
 			Name:     fmt.Sprintf("Rule %d", i),
 			Decision: "auto_allow",
@@ -389,7 +391,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 	require.NoError(t, err)
 
 	// Insert a user rule with same ToolName + CommandPattern at higher priority.
-	_, err = rulesStore.Upsert(context.Background(), RuleSpec{
+	_, err = rulesStore.Upsert(context.Background(), domain.RuleSpec{
 		ID:             "high-priority-rule",
 		Name:           "High Priority Rule",
 		ToolName:       "Bash",
@@ -422,7 +424,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 // into its store. Seed rules are still present (allRuleSpecs always appends them), but
 // testProg ("mytestcli") is an arbitrary name with no matching seed rules, so seed-rule
 // interference cannot affect coveredSubcommands results when testProg is used as the program.
-func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
+func newRulesServiceForCoverage(t *testing.T, specs []domain.RuleSpec) *RulesService {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
@@ -454,7 +456,7 @@ func TestCoveredSubcommands(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name         string
-		specs        []RuleSpec
+		specs        []domain.RuleSpec
 		program      string
 		knownSubcmds []string
 		// wantPresent lists keys that MUST be in the covered map.
@@ -470,7 +472,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-01: ToolPattern "Read|Glob" rule → testProg subcommands NOT covered
 			name: "ToolPattern_ReadGlob_skipped",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolPattern: "Read|Glob", Enabled: true},
 			},
 			program:      testProg,
@@ -481,7 +483,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-02: ToolCategory "builtin-agent" rule → testProg NOT covered (Concern-1 guard)
 			name: "ToolCategory_BuiltinAgent_skipped",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolCategory: "builtin-agent", Enabled: true},
 			},
 			program:      testProg,
@@ -492,7 +494,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-03: ToolPattern "Bash" rule → all testProg subcommands covered
 			name: "ToolPattern_Bash_included",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolPattern: "Bash", CommandPattern: "", Enabled: true},
 			},
 			program:      testProg,
@@ -503,7 +505,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-04: ToolPattern ".*" (wildcard) → all testProg subcommands covered
 			name: "ToolPattern_Wildcard_included",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolPattern: ".*", CommandPattern: "", Enabled: true},
 			},
 			program:      testProg,
@@ -514,7 +516,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-05: AllToolRule — empty ToolName and ToolPattern → covered (R1.3 preserved)
 			name: "AllToolRule_EmptyToolNameAndPattern",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolName: "", ToolPattern: "", CommandPattern: "", Enabled: true},
 			},
 			program:      testProg,
@@ -525,7 +527,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-06: ToolName=Bash, CommandPattern="" → all known subcommands covered (R2.1)
 			name: "ToolName_Bash_CommandPatternEmpty_allSubcmds",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolName: "Bash", CommandPattern: "", Enabled: true},
 			},
 			program:      testProg,
@@ -536,7 +538,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-07: ToolName=Bash, CommandPattern="", empty knownSubcmds → only bare key
 			name: "ToolName_Bash_CommandPatternEmpty_emptyKnownSubcmds",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolName: "Bash", CommandPattern: "", Enabled: true},
 			},
 			program:      testProg,
@@ -547,7 +549,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-08: Programs=["testProg"], no subcommand restriction → all covered
 			name: "Programs_match_noSubcmdRestriction",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{Programs: []string{testProg}, Enabled: true},
 			},
 			program:      testProg,
@@ -558,7 +560,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-09: Programs=["testProg"], Subcommands=["push"] → only "push"
 			name: "Programs_match_withSubcmdRestriction",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{Programs: []string{testProg}, Subcommands: []string{"push"}, Enabled: true},
 			},
 			program:      testProg,
@@ -571,7 +573,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-10: Disabled rule → nothing covered
 			name: "DisabledRule_notCovered",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolName: "Bash", CommandPattern: "", Enabled: false},
 			},
 			program:      testProg,
@@ -582,7 +584,7 @@ func TestCoveredSubcommands(t *testing.T) {
 		{
 			// TC-G-11: CommandPattern="^testProg push" → only "push" covered (bonus)
 			name: "CommandPattern_specificSubcmd",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolName: "Bash", CommandPattern: "^" + testProg + " push", Enabled: true},
 			},
 			program:      testProg,
@@ -595,7 +597,7 @@ func TestCoveredSubcommands(t *testing.T) {
 			// TC-G-12: Programs case-insensitive match — "MYTESTCLI" covers "mytestcli"
 			// via strings.EqualFold; regression guard for == vs EqualFold change.
 			name: "Programs_caseInsensitiveMatch",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{Programs: []string{"MYTESTCLI"}, Enabled: true},
 			},
 			program:      testProg,
@@ -608,7 +610,7 @@ func TestCoveredSubcommands(t *testing.T) {
 			// Pattern "^mytestcli$" matches the bare program string (re.MatchString(program))
 			// but not "mytestcli push", so only the sentinel key is set (rules_service.go:378).
 			name: "CommandPattern_matchesBareProgram_setsSentinelKey",
-			specs: []RuleSpec{
+			specs: []domain.RuleSpec{
 				{ToolName: "Bash", CommandPattern: "^" + testProg + "$", Enabled: true},
 			},
 			program:      testProg,
@@ -1015,7 +1017,7 @@ func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
 	require.NoError(t, svc.rulesStore.reload())
 	// Add 2 user rules.
 	for i := 0; i < 2; i++ {
-		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 			ID:       fmt.Sprintf("user-rule-%d", i),
 			Name:     fmt.Sprintf("User Rule %d", i),
 			Decision: "auto_allow",
@@ -1043,7 +1045,7 @@ func TestExportRules_FilterByRuleIDs(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
 	for i := 0; i < 3; i++ {
-		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 			ID:       fmt.Sprintf("user-rule-%d", i),
 			Name:     fmt.Sprintf("User Rule %d", i),
 			Decision: "auto_allow",
@@ -1079,7 +1081,7 @@ func TestExportRules_EmptyStore_ProducesEmptyRulesKey(t *testing.T) {
 func TestExportRules_OptionalFieldsOmitted(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
-	_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
+	_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 		ID:       "user-minimal",
 		Name:     "Minimal Rule",
 		Decision: "auto_allow",
@@ -1102,7 +1104,7 @@ func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
 	// enabled=true
-	_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
+	_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 		ID:       "user-enabled",
 		Name:     "Enabled Rule",
 		Decision: "auto_allow",
@@ -1112,7 +1114,7 @@ func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// enabled=false
-	_, err = svc.rulesStore.Upsert(context.Background(), RuleSpec{
+	_, err = svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 		ID:       "user-disabled",
 		Name:     "Disabled Rule",
 		Decision: "auto_allow",
@@ -1143,7 +1145,7 @@ func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
 func TestExportRules_Roundtrip(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
-	originals := []RuleSpec{
+	originals := []domain.RuleSpec{
 		{ID: "user-r1", Name: "Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10},
 		{ID: "user-r2", Name: "Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
 		{ID: "user-r3", Name: "Rule Gamma", CommandPattern: `^git log`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
@@ -1226,7 +1228,7 @@ func TestMinSessionIdleMinutes_SurvivesRoundTrip(t *testing.T) {
 	// drop the field.
 	reloaded, err := NewRulesStore(svc.rulesStore.storage)
 	require.NoError(t, err)
-	var persisted *RuleSpec
+	var persisted *domain.RuleSpec
 	for _, r := range reloaded.All() {
 		if r.ID == ruleID {
 			rc := r
@@ -1300,7 +1302,7 @@ func TestBulkUpsertRules_SkipDuplicates(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	// Pre-insert 2 rules.
 	for i := 0; i < 2; i++ {
-		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 			ID:       fmt.Sprintf("user-existing-%d", i),
 			Name:     fmt.Sprintf("Rule %d", i),
 			Decision: "auto_allow",
@@ -1339,7 +1341,7 @@ func TestBulkUpsertRules_OverwriteDuplicates(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	// Pre-insert 2 rules.
 	for i := 0; i < 2; i++ {
-		_, err := svc.rulesStore.Upsert(context.Background(), RuleSpec{
+		_, err := svc.rulesStore.Upsert(context.Background(), domain.RuleSpec{
 			ID:       fmt.Sprintf("user-existing-%d", i),
 			Name:     fmt.Sprintf("Rule %d", i),
 			Decision: "auto_allow",
@@ -1460,7 +1462,7 @@ func TestValidateRules_YAMLBombAliasExpansion(t *testing.T) {
 func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
 	t.Parallel()
 	svc := newSimpleRulesService(t)
-	specs := []RuleSpec{
+	specs := []domain.RuleSpec{
 		{ID: "user-it-1", Name: "IT Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10, Programs: []string{"git"}},
 		{ID: "user-it-2", Name: "IT Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
 		{ID: "user-it-3", Name: "IT Rule Gamma", CommandPattern: `^npm`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
@@ -1803,7 +1805,7 @@ func TestRebuildMu_ForcesSerialization_ConcurrentPathBlocksUntilFirstCompletes(t
 type fakeReconciliationResolver struct {
 	mu sync.Mutex
 
-	items []*PendingApproval
+	items []*approvalkit.PendingApproval
 
 	// resolveErr maps approval ID -> error ResolveApprovalReconciled should return for it.
 	// A missing entry means "succeed" (nil error).
@@ -1818,10 +1820,10 @@ type fakeReconciliationResolver struct {
 	resolvedCalls []string // approval IDs for which ResolveApprovalReconciled returned nil
 }
 
-func (f *fakeReconciliationResolver) ListPendingApprovalsInternal() []*PendingApproval {
+func (f *fakeReconciliationResolver) ListPendingApprovalsInternal() []*approvalkit.PendingApproval {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]*PendingApproval, len(f.items))
+	out := make([]*approvalkit.PendingApproval, len(f.items))
 	copy(out, f.items)
 	return out
 }
@@ -1873,8 +1875,8 @@ func (f *fakeReconciliationResolver) wasCalled(id string) bool {
 }
 
 // bashApproval builds a minimal pending Bash approval for reconciliation tests.
-func bashApproval(id, sessionID, command string, createdAt time.Time) *PendingApproval {
-	return &PendingApproval{
+func bashApproval(id, sessionID, command string, createdAt time.Time) *approvalkit.PendingApproval {
+	return &approvalkit.PendingApproval{
 		ID:        id,
 		SessionID: sessionID,
 		ToolName:  "Bash",
@@ -1928,7 +1930,7 @@ func upsertAllowRule(t *testing.T, svc *RulesService, id, name, commandPattern s
 // the real ApprovalStore/ApprovalService/NotificationHistoryStore chain, with the
 // notification record stamped reconciled: "true".
 func TestReconcilePendingApprovals_AutoAllowResolves(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
 	approvalSvc := NewApprovalService(store)
 	approvalSvc.SetNotificationStore(notifStore)
@@ -1984,7 +1986,7 @@ func upsertDenyRule(t *testing.T, svc *RulesService, id, name, commandPattern st
 // branch (rules_service.go's `decision := "deny"` fallback) completely uncovered. Parallels
 // TestReconcilePendingApprovals_AutoAllowResolves's structure with an AutoDeny rule instead.
 func TestReconcilePendingApprovals_AutoDenyResolves(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	notifStore := newTestNotificationStore(t)
 	approvalSvc := NewApprovalService(store)
 	approvalSvc.SetNotificationStore(notifStore)
@@ -2024,7 +2026,7 @@ func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
 	rulesSvc := newRulesService(t)
 
 	fake := &fakeReconciliationResolver{
-		items: []*PendingApproval{bashApproval("appr-4d5e6f", "sess-x", "rm -rf /tmp/scratch", time.Now())},
+		items: []*approvalkit.PendingApproval{bashApproval("appr-4d5e6f", "sess-x", "rm -rf /tmp/scratch", time.Now())},
 	}
 	rulesSvc.approvalSvc = fake
 
@@ -2045,7 +2047,7 @@ func TestReconcilePendingApprovals_StillEscalates_LeftUntouched(t *testing.T) {
 // unbuffered channel send/close/receive — never time.Sleep — so the interleaving is
 // deterministic on every run.
 func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	approvalSvc := NewApprovalService(store)
 	rulesSvc := newRulesService(t)
 	rulesSvc.SetApprovalService(approvalSvc)
@@ -2065,7 +2067,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 		store.MarkHumanResolving("appr-race")
 		close(humanClaimed) // happens-before: reconciliation's IsHumanResolving check
 		<-releaseHuman
-		_ = store.Resolve("appr-race", ApprovalDecision{Behavior: "deny", Message: "blocking this"})
+		_ = store.Resolve("appr-race", approvalkit.ApprovalDecision{Behavior: "deny", Message: "blocking this"})
 		store.ClearHumanResolving("appr-race")
 	}()
 
@@ -2089,7 +2091,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 
 	// Ground-truth assertion: read the delivered decision directly off the approval's own
 	// channel, not inferred from error codes or store absence alone.
-	decision := <-pendingApproval.decisionCh
+	decision := <-pendingApproval.Decisions()
 	assert.Equal(t, "deny", decision.Behavior)
 	assert.Equal(t, "blocking this", decision.Message)
 
@@ -2115,7 +2117,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 		store.MarkHumanResolving("appr-race-2")
 		close(humanClaimed2)
 		<-releaseHuman2
-		_ = store.Resolve("appr-race-2", ApprovalDecision{Behavior: "deny", Message: "blocking this too"})
+		_ = store.Resolve("appr-race-2", approvalkit.ApprovalDecision{Behavior: "deny", Message: "blocking this too"})
 		store.ClearHumanResolving("appr-race-2")
 	}()
 	<-humanClaimed2
@@ -2139,7 +2141,7 @@ func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
 
 	const total = maxReconcileAutoResolvesPerPass + 5
 	base := time.Now()
-	items := make([]*PendingApproval, total)
+	items := make([]*approvalkit.PendingApproval, total)
 	for i := 0; i < total; i++ {
 		// Deliberately out-of-construction-order CreatedAt: index 0 gets the newest
 		// timestamp, index total-1 the oldest, so a correct implementation must actually
@@ -2183,7 +2185,7 @@ func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
 	// Second pass: simulate the next rebuild seeing only what pass one left behind, and
 	// assert it resolves exactly the remainder — pinning that repeated capped passes are
 	// monotonic instead of touching an arbitrary subset each time.
-	remaining := make([]*PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
+	remaining := make([]*approvalkit.PendingApproval, 0, len(sortedIdx)-maxReconcileAutoResolvesPerPass)
 	for _, idx := range sortedIdx[maxReconcileAutoResolvesPerPass:] {
 		remaining = append(remaining, items[idx])
 	}
@@ -2212,7 +2214,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 	panicItem := bashApproval("item3-panic", "s3", "echo 3", base.Add(3*time.Second))
 
 	fake := &fakeReconciliationResolver{
-		items:    []*PendingApproval{item1, item2, panicItem},
+		items:    []*approvalkit.PendingApproval{item1, item2, panicItem},
 		panicIDs: map[string]bool{"item3-panic": true},
 	}
 	rulesSvc.approvalSvc = fake
@@ -2242,7 +2244,7 @@ func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(
 	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	approvalSvc := NewApprovalService(store)
 	approvalSvc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("sess-ci-guard")})
 
@@ -2276,7 +2278,7 @@ func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIG
 
 	item := bashApproval("appr-lost-race", "sess-lost-race", "git status", time.Now())
 	fake := &fakeReconciliationResolver{
-		items: []*PendingApproval{item},
+		items: []*approvalkit.PendingApproval{item},
 		resolveErr: map[string]error{
 			"appr-lost-race": connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("already auto-resolved by rule %q while you were reviewing it", "some-other-rule")),
@@ -2302,7 +2304,7 @@ func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIG
 // reaches the server-cwd-only ClaudeSettingsWatcher) never triggers reconciliation, so a
 // pending item it would now cover is left untouched.
 func TestReconcilePendingApprovals_WorktreeSettingsChange_DoesNotTrigger(t *testing.T) {
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	approvalSvc := NewApprovalService(store)
 	rulesSvc := newRulesService(t)
 	rulesSvc.SetApprovalService(approvalSvc)

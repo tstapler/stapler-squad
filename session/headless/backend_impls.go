@@ -161,7 +161,7 @@ func httpReachable(ctx context.Context, baseURL string) bool {
 type cliRunFunc func(ctx context.Context, bin string, args []string, stdin io.Reader, dir string) ([]byte, error)
 
 // CLIBackendSpec describes a one-shot CLI agent. Mirrors services.CLIAgentSpec
-// (server/services/cli_ai_client.go) for the agents the selector supports.
+// (server/services/anthropicwire/cli_ai_client.go) for the agents the selector supports.
 type CLIBackendSpec struct {
 	Name        string
 	Binary      string

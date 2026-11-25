@@ -77,7 +77,7 @@ func (ism *InstanceStatusManager) GetPiStatusSource(instanceTitle string) (*PiSt
 }
 
 // SetApprovalProvider wires the shared pending-approval lookup (backed by
-// *services.ApprovalStore in production — see server/dependencies.go) used
+// *approvalkit.ApprovalStore in production — see server/dependencies.go) used
 // by GetStatus()'s pi-fallback branch to override an inferred Idle status
 // with NeedsApproval (Story 5.3.1). Optional: GetStatus() skips the override
 // entirely when no provider has been set (e.g. in tests that don't need it).

@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // memFromDir replays an on-disk tree into a memBackend rooted at the same dir string.
-func memFromDir(t *testing.T, dir string) *memBackend {
+func memFromDir(t *testing.T, dir string) *fsops.MemBackend {
 	t.Helper()
-	mem := newMemBackend()
-	mem.tree(dir) // an empty tree still opens
+	mem := fsops.NewMemBackend()
+	mem.EnsureTree(dir) // an empty tree still opens
 	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == dir {
 			return err
@@ -31,7 +32,7 @@ func memFromDir(t *testing.T, dir string) *memBackend {
 			require.NoError(t, lerr)
 			mem.AddSymlink(dir, rel, target)
 		case d.IsDir():
-			mem.tree(dir).mkParents(rel + "/x")
+			mem.MkParents(dir, rel)
 		default:
 			data, rerr := os.ReadFile(p)
 			require.NoError(t, rerr)
@@ -83,7 +84,7 @@ func TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend(t *testing.T)
 }
 
 // newRangeConformanceOps is FileOps with files:range-read on, closed with the test.
-func newRangeConformanceOps(t *testing.T, dir string, b FileBackend) *FileOps {
+func newRangeConformanceOps(t *testing.T, dir string, b fsops.FileBackend) *FileOps {
 	t.Helper()
 	ops := NewFileOps(FilePolicy{Workspace: &fakeWorkspaceProvider{existingDir: dir}, Flags: &stubFilesFlags{rangeRead: true}}, b)
 	t.Cleanup(ops.analysis.Close)

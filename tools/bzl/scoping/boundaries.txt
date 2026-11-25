@@ -22,6 +22,12 @@ server/services/importsvc !server/web
 server/services/unfinishedwork !server/web
 server/services/federation !server/web
 server/services/secretscan !server/web
+server/services/credkit !server/web
+server/services/fsops !server/web
+server/services/anthropicwire !server/web
+server/services/access !server/web
+server/services/approvalkit !server/web
+server/services/auditkit !server/web
 session/ptyio !server
 session/ptydiscovery !server
 session/hostclaim !server
@@ -85,3 +91,10 @@ session/conflictretry !server
 session/nudgeoutcomes !server
 session/slowops !server
 session/itemlink !server
+session/credentialstore !server
+session/prmirror !server
+session/terminalstate !server
+session/jsonmigrate !server
+session/jsonmigrate !github
+session/workspacepeers !server
+session/backlogaux !server

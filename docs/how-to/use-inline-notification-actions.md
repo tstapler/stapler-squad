@@ -118,7 +118,7 @@ For a running session the card shows the delivery state
 | Sent - waiting for the agent | Keys were written. |
 | Sent, but the agent hasn't confirmed yet. Open session. | Unconfirmed. The row stays in Needs you until the agent confirms, you mark it handled, or the session ends. |
 | Not sent. Nothing was typed into the session. Retry | The write failed before the first key. Retry is safe. |
-| Not sent: someone is typing in that session. Retry when they are done. | You or another person typed in that pane within the last 5 s (`humanActiveWindow`, `server/services/human_activity.go`). |
+| Not sent: someone is typing in that session. Retry when they are done. | You or another person typed in that pane within the last 5 s (`humanActiveWindow`, `server/services/access/human_activity.go`). |
 | Sent, but we couldn't confirm it arrived. Check the session before retrying. | A key may have landed. No Retry. |
 | Sent, but the question is still showing. Check the session before retrying. | The dialog was still on screen after 60 s. Retry sits behind "Retry anyway?". |
 | Part of your answer was sent, then the prompt changed. Open session to finish. | A multi-key answer stopped part way. No Retry. |

@@ -15,10 +15,12 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/conditional"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // piSupportFlagName mirrors config.FeaturePiSupport so the flag registry (feature_flag_specs.go)
@@ -111,13 +113,16 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
-// drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
+// drift on the gate itself, the same way workspacepeers.Lister.BlockForPath already keeps
 // them from drifting on how the nudge is rendered.
 func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
 	if !config.LoadConfig().GetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName) {
 		return ""
 	}
-	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
+	if storage == nil {
+		return ""
+	}
+	return workspacepeers.New(storage).BlockForPath(ctx, repoPath)
 }
 
 // Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by
@@ -211,7 +216,7 @@ type FeatureFlagService struct {
 	observer deliverygate.FlagObserver
 
 	// audit and auditPolicies record flag_change lines for flags with a policy.
-	audit         *AuditSink
+	audit         *auditkit.AuditSink
 	auditPolicies map[string]featureflags.FlagAuditPolicy
 	flagSeq       int64 // persisted order of flips; incremented only under updateMu
 
@@ -358,7 +363,7 @@ func (f *FeatureFlagService) SetEnableGuard(name string, guard func() string) {
 func (f *FeatureFlagService) SetFlagObserver(o deliverygate.FlagObserver) { f.observer = o }
 
 // SetAudit wires the audit sink and the per-flag audit policy.
-func (f *FeatureFlagService) SetAudit(sink *AuditSink, policies map[string]featureflags.FlagAuditPolicy) {
+func (f *FeatureFlagService) SetAudit(sink *auditkit.AuditSink, policies map[string]featureflags.FlagAuditPolicy) {
 	f.audit, f.auditPolicies = sink, policies
 }
 
@@ -541,14 +546,14 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	if rollbackErr := rollbackFlag(name, previous, hadKey); rollbackErr != nil {
 		log.Error("failed to roll back feature flag after controller error", "feature", name, "err", rollbackErr)
 		if audit.active() {
-			audit.outcome = flagOutcomeControllerFailed
+			audit.outcome = auditkit.FlagOutcomeControllerFailed
 		}
 		return connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
 				verb, name, ctrlErr, rollbackErr))
 	}
 	if audit.active() {
-		audit.outcome = flagOutcomeRolledBack
+		audit.outcome = auditkit.FlagOutcomeRolledBack
 	}
 	f.notifyObserver(name)
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
@@ -569,7 +574,7 @@ func rollbackFlag(name string, previous, hadKey bool) error {
 // and mutation changed, so history can tell a clear or reset from a set false.
 func (f *FeatureFlagService) finishApplied(op flagOp, audit *flagAudit) {
 	if audit.active() {
-		audit.outcome = flagOutcomeApplied
+		audit.outcome = auditkit.FlagOutcomeApplied
 	}
 	if mo, ok := f.observer.(deliverygate.FlagMutationObserver); ok {
 		mo.OnFlagMutation(op.name, op.auditScope(), op.mutationName())
