@@ -1,7 +1,6 @@
 package triggerlimit
 
 import (
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,7 +12,7 @@ import (
 
 func TestTriggerRateLimiter_Allow_RefillsAfterWindow(t *testing.T) {
 	t.Parallel()
-	lim := &TriggerRateLimiter{limit: rate.Every(5 * time.Millisecond), burst: 1}
+	lim := &TriggerRateLimiter{limit: rate.Every(time.Hour), burst: 1}
 	id := uuid.New()
 
 	if !lim.Allow(id) {
@@ -22,18 +21,15 @@ func TestTriggerRateLimiter_Allow_RefillsAfterWindow(t *testing.T) {
 	if lim.Allow(id) {
 		t.Fatal("expected an immediate second fire to be throttled (burst 1)")
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !lim.Allow(id) {
-		if time.Now().After(deadline) {
-			t.Fatal("bucket never refilled")
-		}
-		runtime.Gosched()
+	// Advance the workflow's own bucket past the refill period instead of waiting.
+	if !lim.limiters[id].AllowN(time.Now().Add(2*time.Hour), 1) {
+		t.Fatal("expected the bucket to refill after one refill period")
 	}
 }
 
 func TestTriggerRateLimiter_Allow_ExactlyBurstUnderContention(t *testing.T) {
 	t.Parallel()
-	lim := NewTriggerRateLimiter()
+	lim := &TriggerRateLimiter{limit: rate.Every(time.Hour), burst: defaultTriggerRateBurst}
 	id := uuid.New()
 	var allowed atomic.Int64
 	var wg sync.WaitGroup

@@ -21,6 +21,7 @@ GET /api/debug/escape-codes/status  -> OK;Content-Type=application/json body={"e
 PUT /api/debug/escape-codes  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
 POST /api/debug/escape-codes/stats  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
 POST /api/debug/escape-codes/export  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+POST /api/debug/escape-codes/status  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
 POST /api/debug/escape-codes/session/s1  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
 POST /api/debug/escape-codes/category/CSI  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
 DELETE /api/debug/escape-codes  -> OK;Content-Type=application/json body={"status":"cleared"}\n

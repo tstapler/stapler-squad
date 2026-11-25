@@ -97,6 +97,7 @@ func TestEscapeCodeHandler_Golden(t *testing.T) {
 	do("PUT", "/api/debug/escape-codes", "")
 	do("POST", "/api/debug/escape-codes/stats", "")
 	do("POST", "/api/debug/escape-codes/export", "")
+	do("POST", "/api/debug/escape-codes/status", "")
 	do("POST", "/api/debug/escape-codes/session/s1", "")
 	do("POST", "/api/debug/escape-codes/category/CSI", "")
 	do("DELETE", "/api/debug/escape-codes", "")
