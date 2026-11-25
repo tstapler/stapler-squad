@@ -23,6 +23,7 @@ go_test(
         "//session/autonomous:go_sources",
         "//session/driver:go_sources",
         "//session/instance:go_sources",
+        "//session/unfinished:go_sources",
         "//session/vc:go_sources",
         "//tools/bzl:go_test.bzl",
         "//tools/bzl/scandata:module_go_sources",
