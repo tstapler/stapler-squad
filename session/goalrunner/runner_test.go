@@ -45,6 +45,7 @@ func TestRun_should_ParseEndReasonAndCost_When_StreamEnds(t *testing.T) {
 		{"max_turns_subtype", `{"type":"result","subtype":"error_max_turns","total_cost_usd":0.3,"num_turns":5}` + "\n", EndTurnLimit, 0.3, 5},
 		{"malformed_skipped", "not json\n" + `{"type":"result","end_reason":"goal_met","cost_usd":0.5,"num_turns":1}` + "\n", EndGoalMet, 0.5, 1},
 		{"real_result_shape", `{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":4,"total_cost_usd":0.014469425}` + "\n", EndGoalMet, 0.014469425, 4},
+		{"success_at_turn_bound", `{"type":"result","subtype":"success","is_error":false,"num_turns":20,"total_cost_usd":0.2}` + "\n", EndTurnLimit, 0.2, 20},
 		{"no_result", `{"type":"system"}` + "\n", EndError, 0, 0},
 	}
 	for _, tc := range cases {
@@ -131,3 +132,34 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	return s.b.Write(p)
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestRun_should_KillBlockedProcess_When_CeilingCrossed(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	line := `{"type":"assistant","message":{"id":"m1","model":"unknown-model","usage":{"output_tokens":10000000}}}`
+	script := "#!/bin/sh\necho '" + line + "'\nexec sleep 30\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got := Run(context.Background(), Config{Binary: bin, Criteria: "x", Logger: slog.New(slog.DiscardHandler)})
+	if got.EndReason != EndCostExceeded || time.Since(start) > 15*time.Second {
+		t.Fatalf("got %+v after %v; the blocked process was not killed", got, time.Since(start))
+	}
+}
+
+func TestRun_should_FailFast_When_LineExceedsScannerBuffer(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nhead -c 5000000 /dev/zero | tr '\\0' 'a'\nexec sleep 30\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got := Run(context.Background(), Config{Binary: bin, Criteria: "x", Logger: slog.New(slog.DiscardHandler)})
+	if got.EndReason != EndError || time.Since(start) > 15*time.Second {
+		t.Fatalf("got %+v after %v", got, time.Since(start))
+	}
+}

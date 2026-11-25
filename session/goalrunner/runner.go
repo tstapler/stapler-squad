@@ -35,13 +35,16 @@ type Config struct {
 	NewTicker func(time.Duration) (<-chan time.Time, func())
 }
 
+func (c Config) maxTurns() int {
+	if c.MaxTurns <= 0 {
+		return DefaultMaxTurns
+	}
+	return c.MaxTurns
+}
+
 // Goal returns the /goal prompt; the judge evaluates the trailing turn bound.
 func (c Config) Goal() string {
-	n := c.MaxTurns
-	if n <= 0 {
-		n = DefaultMaxTurns
-	}
-	return fmt.Sprintf("/goal %s or stop after %d turns", c.Criteria, n)
+	return fmt.Sprintf("/goal %s or stop after %d turns", c.Criteria, c.maxTurns())
 }
 
 // Args builds the claude argument list (no shell involved).
@@ -129,7 +132,7 @@ func (s *spend) worst() tokens.ModelPricing {
 
 // reasonFromResult maps the final result object to an EndReason. An explicit
 // end_reason wins; otherwise is_error and the max-turns subtype are used.
-func reasonFromResult(l streamLine) EndReason {
+func reasonFromResult(l streamLine, maxTurns int) EndReason {
 	switch EndReason(l.EndReason) {
 	case EndGoalMet, EndTurnLimit, EndImpossible, EndError:
 		return EndReason(l.EndReason)
@@ -139,6 +142,9 @@ func reasonFromResult(l streamLine) EndReason {
 		return EndTurnLimit
 	case l.IsError:
 		return EndError
+	case maxTurns > 0 && l.NumTurns >= maxTurns:
+		// The bound lives only in the /goal prompt, so a success at the bound is a turn stop.
+		return EndTurnLimit
 	default:
 		return EndGoalMet
 	}
@@ -192,6 +198,7 @@ func Run(ctx context.Context, cfg Config) Outcome {
 		exceeded bool
 		lines    = make(chan string)
 		done     = make(chan struct{})
+		scanErr  error
 	)
 	go func() {
 		defer close(done)
@@ -204,6 +211,9 @@ func Run(ctx context.Context, cfg Config) Outcome {
 			case <-runCtx.Done():
 				return
 			}
+		}
+		if scanErr = sc.Err(); scanErr != nil {
+			cancel() // an unreadable (oversized) line would stall the pipe and the ceiling
 		}
 	}()
 
@@ -247,7 +257,7 @@ loop:
 	case exceeded:
 		out.EndReason = EndCostExceeded
 	case result != nil:
-		out.EndReason = reasonFromResult(*result)
+		out.EndReason = reasonFromResult(*result, cfg.maxTurns())
 		out.CostUSD = result.CostUSD
 		if out.CostUSD == 0 {
 			out.CostUSD = result.TotalCostUSD
@@ -257,7 +267,7 @@ loop:
 		}
 	default:
 		out.EndReason = EndError
-		out.Err = errors.Join(errors.New("no result line in stream"), waitErr)
+		out.Err = errors.Join(errors.New("no result line in stream"), scanErr, waitErr)
 	}
 	return out
 }
