@@ -51,7 +51,7 @@ server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
 server/services/wsconn files=23 loc=9770 imports=29
-server/services/backlogsvc files=37 loc=15639 imports=40
+server/services/backlogsvc files=38 loc=15834 imports=40
 server/services/internal/svctest files=36 loc=1582 imports=23
 server/services/sessionbundle files=4 loc=862 imports=9
 server/services/devtools files=4 loc=501 imports=4
