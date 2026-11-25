@@ -266,6 +266,7 @@ func makeGitRepoOrPlain(t *testing.T) (repoDir, plainDir string) {
 }
 
 func TestHookReceivers_should_MatchGolden(t *testing.T) {
+	t.Parallel()
 	repoDir, plainDir := makeGitRepoOrPlain(t)
 	g := &goldenOut{}
 	norm := strings.NewReplacer(repoDir, "<REPO>", plainDir, "<PLAIN>")
