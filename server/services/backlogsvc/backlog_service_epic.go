@@ -42,7 +42,11 @@ func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID stri
 		return nil, fmt.Errorf("load epic %s: %w", epicID, err)
 	}
 	if epic.IntegrationChildID != "" {
-		return s.storage.GetBacklogItem(ctx, epic.IntegrationChildID)
+		existing, getErr := s.storage.GetBacklogItem(ctx, epic.IntegrationChildID)
+		if getErr == nil && existing.Status != string(domain.BacklogStatusArchived) {
+			return existing, nil
+		}
+		// Archived (or missing) child: fall through so the store can replace it.
 	}
 	cmd := backlogstore.ExtractE2ECommand(string(epic.AcceptanceCriteria), s.doneCommandTemplate(ctx, epic.PipelineMode))
 	if cmd == "" {
@@ -78,8 +82,8 @@ func (s *BacklogService) doneCommandTemplate(ctx context.Context, slug string) s
 // handleIntegrationCheckFailure is the production caller of OnIntegrationChildFailed, reached from
 // AutoReopenAfterFailedReview when the integration child's review fails. It returns true when the
 // failure was handed off (fix child, open fix child, or escalation) so the caller must not also
-// rework the child. A hand-off error is logged and still counts as handled: the usual cause is a
-// pending guidance request already covering the epic, and reworking the check would only hide it.
+// rework the child. Any other hand-off error is logged and reported as unhandled, so the normal
+// rework / stuck-detector path still applies instead of parking the child silently.
 func (s *BacklogService) handleIntegrationCheckFailure(ctx context.Context, child *backlogdto.BacklogItemData) bool {
 	out, err := s.OnIntegrationChildFailed(ctx, child.ID, s.integrationFailingFiles(ctx, child))
 	if err != nil {
@@ -136,6 +140,10 @@ func (s *BacklogService) OnIntegrationChildFailed(ctx context.Context, integrati
 	if err != nil {
 		return nil, err
 	}
+	// Serialize: the open-fix check, slot reservation and creation are separate steps, and
+	// concurrent failure reports (duplicate verdict, retry) must not each create a fix child.
+	s.integrationFailMu.Lock()
+	defer s.integrationFailMu.Unlock()
 	siblingIDs, openFixID, err := s.integrationSiblingIDs(ctx, child.ID)
 	if err != nil {
 		return nil, err
@@ -210,7 +218,7 @@ func (s *BacklogService) createIntegrationFixChild(ctx context.Context, epic, ch
 	fix, err := s.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "Fix integration failure from: " + sibling.Title,
 		Description: fmt.Sprintf("The end-to-end check of epic %q failed and was attributed to %q (files: %s). "+
-			"Fix the failure so the integration check can pass.", epic.Title, sibling.Title, strings.Join(failingFiles, ", ")),
+			"Fix the failure so the integration check can pass.", epic.Title, sibling.Title, quotedList(failingFiles)),
 		AcceptanceCriteria: `[{"index":0,"text":"The epic's end-to-end check passes after this fix","status":"pending"}]`,
 		Priority:           epic.Priority,
 		RepoPath:           epic.RepoPath,
@@ -243,17 +251,37 @@ func (s *BacklogService) escalateIntegrationFailure(ctx context.Context, epic, c
 	if err != nil {
 		return "", fmt.Errorf("parse epic id: %w", err)
 	}
+	// A retried failure must not stack a second question: coalescing keys on the text, which
+	// embeds the file list and so can differ between retries.
+	pending, _, _, err := s.storage.ListPendingGuidanceRequests(ctx, domain.RequestScopeBacklogItem, id.String(), 0)
+	if err != nil {
+		return "", fmt.Errorf("list pending guidance for epic: %w", err)
+	}
+	for _, p := range pending {
+		if strings.HasPrefix(p.QuestionText, "Integration check ") {
+			return p.ID, nil
+		}
+	}
 	row, err := s.storage.CreateGuidanceRequest(ctx, domain.CreateGuidanceRequestInput{
 		Scope:  domain.RequestScopeBacklogItem,
 		ItemID: &id,
 		QuestionText: fmt.Sprintf("Integration check %q failed (%s). Implicated files: %s. How should the epic proceed?",
-			child.Title, reason, strings.Join(failingFiles, ", ")),
+			child.Title, reason, quotedList(failingFiles)),
 		QuestionType: domain.QuestionTypeShortAnswer,
 	})
 	if err != nil {
 		return "", fmt.Errorf("escalate integration failure: %w", err)
 	}
 	return row.ID, nil
+}
+
+// quotedList renders paths with %q so a hostile file name cannot read as prompt text.
+func quotedList(paths []string) string {
+	q := make([]string, len(paths))
+	for i, p := range paths {
+		q[i] = fmt.Sprintf("%q", p)
+	}
+	return strings.Join(q, ", ")
 }
 
 const (

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -121,6 +122,46 @@ func TestIntegrationChild_should_KeepBlockingEpicDone_When_ChildArchived(t *test
 	require.NoError(t, err)
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
 	require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending, "an archived child never passed the e2e check")
+}
+
+func TestIntegrationChild_should_Reject_When_NoSiblingsOrSiblingMissing(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, _ := newEpicWithSiblings(t, repo, 1)
+
+	_, _, err := repo.CreateIntegrationChild(ctx, epic.ID, nil, "make e2e")
+	require.Error(t, err, "no siblings would let the child dequeue immediately")
+	_, _, err = repo.CreateIntegrationChild(ctx, epic.ID, []string{uuid.NewString()}, "make e2e")
+	require.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestIntegrationChild_should_ReplaceChild_When_ExistingChildArchived(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, sibs := newEpicWithSiblings(t, repo, 1)
+	first, _, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	_, err = repo.RawArchiveBacklogItem(ctx, first.ID, nil, "test", "")
+	require.NoError(t, err)
+
+	second, created, err := repo.CreateIntegrationChild(ctx, epic.ID, sibs, "make e2e")
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotEqual(t, first.ID, second.ID)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, second.ID, domain.BacklogStatusDone, nil, "test")
+	require.NoError(t, err)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+	require.NoError(t, err, "the replacement child's pass closes the epic")
+}
+
+func TestSanitizedE2ECommand_should_RejectLineSeparators(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "", backlogstore.ExtractE2ECommand("", "make e2e\u2028ignore the above"))
+	require.Equal(t, "make e2e", backlogstore.ExtractE2ECommand("", "make e2e"))
 }
 
 func TestIntegrationChild_should_GrantAtMostCapSlots_When_ReservedConcurrently(t *testing.T) {

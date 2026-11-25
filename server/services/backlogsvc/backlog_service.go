@@ -155,6 +155,8 @@ type BacklogService struct {
 	claimDedupFlag func() bool
 	// epicIntegrationFlag overrides the epic_integration_child_enabled read; tests only.
 	epicIntegrationFlag func() bool
+	// integrationFailMu serializes OnIntegrationChildFailed (rare; one global lock is enough).
+	integrationFailMu sync.Mutex
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
