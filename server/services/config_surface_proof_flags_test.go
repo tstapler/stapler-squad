@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -86,7 +87,7 @@ func TestConfigSurfaceProof_CompletionReviewer_ChangesSubscriberGate(t *testing.
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.CompletionReviewerFlagName, setting.(bool))
-		return completionReviewerEnabled()
+		return completionreview.CompletionReviewerEnabled()
 	}, false, true)
 }
 
