@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -48,7 +47,8 @@ func (b *Backlog) integrationGate(ctx context.Context, epic *ent.BacklogItem) er
 		}
 		return fmt.Errorf("check integration child of %s: %w", epic.ID, err)
 	}
-	if !slices.Contains(domain.TerminalStatusStrings(), child.Status) {
+	// Only done is a passing e2e check: an archived child never ran (or abandoned) the check.
+	if child.Status != string(domain.BacklogStatusDone) {
 		return fmt.Errorf("%w: integration child %s is %s", backlogdto.ErrIntegrationCheckPending, child.ID, child.Status)
 	}
 	return nil
@@ -169,11 +169,33 @@ func (b *Backlog) GetEpicForIntegrationChild(ctx context.Context, childID string
 	return &data, nil
 }
 
-// IncrementIntegrationFixCount atomically bumps the epic's fix-child counter.
-func (b *Backlog) IncrementIntegrationFixCount(ctx context.Context, epicID string) error {
+// ReserveIntegrationFix atomically claims one fix-child slot on the epic: it bumps
+// integration_fix_count only while it is below fixCap (fixCap <= 0 means unlimited) and reports
+// whether the slot was granted. Call it before creating the fix child and ReleaseIntegrationFix if
+// creation fails.
+func (b *Backlog) ReserveIntegrationFix(ctx context.Context, epicID string, fixCap int) (bool, error) {
+	parsed, err := b.ResolveBacklogItemLookup(ctx, epicID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, epicID, err)
+	}
+	q := b.client.BacklogItem.Update().Where(backlogitem.ID(parsed))
+	if fixCap > 0 {
+		q = q.Where(backlogitem.IntegrationFixCountLT(fixCap))
+	}
+	affected, err := q.AddIntegrationFixCount(1).Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reserve integration fix slot: %w", err)
+	}
+	return affected == 1, nil
+}
+
+// ReleaseIntegrationFix returns a slot taken by ReserveIntegrationFix.
+func (b *Backlog) ReleaseIntegrationFix(ctx context.Context, epicID string) error {
 	parsed, err := b.ResolveBacklogItemLookup(ctx, epicID)
 	if err != nil {
 		return fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, epicID, err)
 	}
-	return b.client.BacklogItem.UpdateOneID(parsed).AddIntegrationFixCount(1).Exec(ctx)
+	return b.client.BacklogItem.Update().
+		Where(backlogitem.ID(parsed), backlogitem.IntegrationFixCountGT(0)).
+		AddIntegrationFixCount(-1).Exec(ctx)
 }

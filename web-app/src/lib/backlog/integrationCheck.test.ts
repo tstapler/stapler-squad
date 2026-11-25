@@ -5,9 +5,11 @@ describe("integrationCheckState", () => {
     expect(integrationCheckState(undefined)).toBe("awaiting");
     expect(integrationCheckState({ status: "in_progress", acCriteria: [] })).toBe("awaiting");
   });
-  it("is passed when the child is done or archived", () => {
+  it("is passed only when the child is done", () => {
     expect(integrationCheckState({ status: "done", acCriteria: [] })).toBe("passed");
-    expect(integrationCheckState({ status: "archived", acCriteria: [] })).toBe("passed");
+  });
+  it("is failed when the child was archived without passing", () => {
+    expect(integrationCheckState({ status: "archived", acCriteria: [] })).toBe("failed");
   });
   it("is failed when a criterion failed and the child is not resolved", () => {
     expect(

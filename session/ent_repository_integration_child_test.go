@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,7 +107,7 @@ func TestIntegrationChild_should_BlockEpicDone_UntilChildResolved(t *testing.T) 
 	require.NoError(t, err)
 }
 
-func TestIntegrationChild_should_AllowEpicDone_When_ChildArchived(t *testing.T) {
+func TestIntegrationChild_should_KeepBlockingEpicDone_When_ChildArchived(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
@@ -117,7 +119,38 @@ func TestIntegrationChild_should_AllowEpicDone_When_ChildArchived(t *testing.T) 
 	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "test", "")
 	require.NoError(t, err)
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
+	require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending, "an archived child never passed the e2e check")
+}
+
+func TestIntegrationChild_should_GrantAtMostCapSlots_When_ReservedConcurrently(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+	ctx := context.Background()
+	epic, _ := newEpicWithSiblings(t, repo, 0)
+
+	var granted atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := repo.ReserveIntegrationFix(ctx, epic.ID, 3)
+			if err == nil && ok {
+				granted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	assert.EqualValues(t, 3, granted.Load())
+
+	require.NoError(t, repo.ReleaseIntegrationFix(ctx, epic.ID))
+	ok, err := repo.ReserveIntegrationFix(ctx, epic.ID, 3)
 	require.NoError(t, err)
+	assert.True(t, ok, "a released slot can be reserved again")
+	ok, err = repo.ReserveIntegrationFix(ctx, epic.ID, 0)
+	require.NoError(t, err)
+	assert.True(t, ok, "cap 0 means unlimited")
 }
 
 func TestIntegrationChild_should_FindEpicAndCountFixes(t *testing.T) {
@@ -133,8 +166,11 @@ func TestIntegrationChild_should_FindEpicAndCountFixes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, epic.ID, got.ID)
 
-	require.NoError(t, repo.IncrementIntegrationFixCount(ctx, epic.ID))
-	require.NoError(t, repo.IncrementIntegrationFixCount(ctx, epic.ID))
+	for i := 0; i < 2; i++ {
+		ok, err := repo.ReserveIntegrationFix(ctx, epic.ID, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
 	got, err = repo.GetBacklogItem(ctx, epic.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, got.IntegrationFixCount)

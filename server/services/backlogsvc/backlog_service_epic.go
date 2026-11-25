@@ -30,7 +30,10 @@ type IntegrationOutcome struct {
 // siblings arrive as an argument. No-op when the flag is off, the epic defines no e2e command
 // (warns), or an integration child already exists (idempotent).
 func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID string, siblingIDs []string) (*backlogdto.BacklogItemData, error) {
-	if s.flags == nil || !s.flags.Enabled(s.cfg, featureflags.EpicIntegrationChildFlagName) {
+	s.cfgMu.RLock()
+	enabled := s.flags != nil && s.flags.Enabled(s.cfg, featureflags.EpicIntegrationChildFlagName)
+	s.cfgMu.RUnlock()
+	if !enabled {
 		return nil, nil
 	}
 	epic, err := s.storage.GetBacklogItem(ctx, epicID)
@@ -99,18 +102,28 @@ func (s *BacklogService) OnIntegrationChildFailed(ctx context.Context, integrati
 	sibling, confidence := backlogstore.AttributeByFileOverlap(failingFiles, files)
 	out := &IntegrationOutcome{AttributedTo: sibling, Confidence: confidence}
 
+	s.cfgMu.RLock()
 	fixCap := s.effectiveIntegrationFixCap(epic)
-	capped := fixCap > 0 && epic.IntegrationFixCount >= fixCap
-	if sibling != "" && confidence >= s.cfg.IntegrationAttributionThresholdOrDefault() && !capped {
-		fix, err := s.createIntegrationFixChild(ctx, epic, child, sibling, failingFiles)
+	threshold := s.cfg.IntegrationAttributionThresholdOrDefault()
+	s.cfgMu.RUnlock()
+	reason := "the failure could not be attributed to one sibling with enough confidence"
+	if sibling != "" && confidence >= threshold {
+		// The slot is claimed atomically before the child exists so concurrent failures cannot exceed the cap.
+		reserved, err := s.storage.Repo.ReserveIntegrationFix(ctx, epic.ID, fixCap)
 		if err != nil {
 			return nil, err
 		}
-		out.FixChildID = fix.ID
-		return out, nil
-	}
-	reason := "the failure could not be attributed to one sibling with enough confidence"
-	if capped {
+		if reserved {
+			fix, err := s.createIntegrationFixChild(ctx, epic, child, sibling, failingFiles)
+			if err != nil {
+				if relErr := s.storage.Repo.ReleaseIntegrationFix(ctx, epic.ID); relErr != nil {
+					log.Warn("[EpicIntegration] could not release fix slot", "epic", epic.ID, "error", relErr)
+				}
+				return nil, err
+			}
+			out.FixChildID = fix.ID
+			return out, nil
+		}
 		reason = fmt.Sprintf("the fix-child cap (%d) is reached", fixCap)
 	}
 	gid, err := s.escalateIntegrationFailure(ctx, epic, child, failingFiles, reason)
@@ -166,9 +179,6 @@ func (s *BacklogService) createIntegrationFixChild(ctx context.Context, epic, ch
 		if err := s.storage.AddBacklogItemDependency(ctx, edge); err != nil {
 			return nil, fmt.Errorf("link integration fix child: %w", err)
 		}
-	}
-	if err := s.storage.Repo.IncrementIntegrationFixCount(ctx, epic.ID); err != nil {
-		return nil, err
 	}
 	return fix, nil
 }

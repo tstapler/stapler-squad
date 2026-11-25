@@ -2,7 +2,10 @@ package backlogsvc
 
 import (
 	"context"
+	"fmt"
 	"testing"
+
+	"connectrpc.com/connect"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -188,4 +191,11 @@ func TestEpicIntegrationFlow_should_CloseEpic_When_IntegrationChildPasses(t *tes
 	closed, err := repo.RawTransitionBacklogItemStatus(ctx, f.epic.ID, domain.BacklogStatusDone, nil, "test")
 	require.NoError(t, err)
 	assert.Equal(t, string(domain.BacklogStatusDone), string(closed.Status))
+}
+
+func TestTransitionConnectError_should_MapIntegrationCheckPendingToFailedPrecondition(t *testing.T) {
+	err := transitionConnectError(fmt.Errorf("%w: integration child x is idea", backlogdto.ErrIntegrationCheckPending), "epic", "transition")
+	var ce *connect.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, connect.CodeFailedPrecondition, ce.Code())
 }
