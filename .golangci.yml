@@ -734,10 +734,10 @@ linters:
             - "!**/server/services/backlogsvc/backlog_service_pipeline_mode.go"
             - "!**/server/services/backlogsvc/backlog_service_ship.go"
             - "!**/server/services/backlogsvc/backlog_service_ship_status.go"
-            - "!**/server/services/session_summary_service_test.go"
+            - "!**/server/services/summaryrpc/session_summary_service_test.go"
             - "!**/server/services/backlogsvc/backlog_service_sync.go"
             - "!**/server/services/webhooktrigger/github_webhook_handler.go"
-            - "!**/server/services/session_summary_service.go"
+            - "!**/server/services/summaryrpc/session_summary_service.go"
             - "!**/server/services/backlogsvc/backlog_service_pipeline_mode_test.go"
             - "!**/server/services/webhooktrigger/webhook_trigger_common.go"
             - "!**/server/services/webhooktrigger/github_webhook_handler_test.go"
@@ -752,7 +752,10 @@ linters:
             # file (handoff_summary_service.go) does NOT need this exclusion —
             # it was fixed to use session.HandoffSummary (a plain domain DTO)
             # instead of importing session/ent directly.
-            - "!**/server/services/handoff_summary_service_test.go"
+            - "!**/server/services/summaryrpc/handoff_summary_service_test.go"
+            # The summaryrpc golden and mapping tests seed and read ent rows the same way.
+            - "!**/server/services/summaryrpc/summaryrpc_golden_test.go"
+            - "!**/server/services/summaryrpc/summaryrpc_mapping_test.go"
             # github_webhook_pr_fix_test.go's erroringWorkflowRepo wraps the real
             # stagecfg.WorkflowRepository and overrides only ListByTriggerType to
             # simulate an infra failure (e.g. a DB error) — the interface method's
