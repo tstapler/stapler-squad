@@ -507,6 +507,12 @@ var (
 					log.Info("CORS trusted origins", "origins", srv.GetOrigins())
 				}
 
+				if raw := os.Getenv(server.TrustedProxyHostsEnv); raw != "" {
+					valid, _ := server.ParseTrustedProxyHosts(raw)
+					srv.SetTrustedProxyHosts(valid)
+					log.Info("Trusted proxy hosts for the local listener", "hosts", valid)
+				}
+
 				if err := setupLocalAuth(srv, cfg, !remoteAccessFlag && !cfg.PasskeyEnabled); err != nil {
 					return err
 				}

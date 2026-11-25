@@ -104,6 +104,7 @@ type Server struct {
 	dispatchers                map[string]http.Handler                  // listener name -> dispatcher the unary WS bridge re-enters
 	httpsURL                   atomic.Pointer[string]                   // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]                 // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	trustedProxyHosts          atomic.Pointer[[]string]                 // hostnames of a trusted same-box reverse proxy; see trusted_proxy_hosts.go
 	verifiedHostnames          atomic.Pointer[[]string]                 // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                                 // allowed CORS origins
 	shutdownHooks              []func()                                 // called before HTTP server stops
@@ -2028,9 +2029,9 @@ func (s *Server) GetVerifiedHostnames() []string {
 // construction are honored.
 func (s *Server) LocalWriteVerdictConfig() middleware.VerdictConfig {
 	return middleware.VerdictConfig{
-		VerifiedHosts:  s.GetVerifiedHostnames,
+		VerifiedHosts:  s.guardVerifiedHosts,
 		ListenAddr:     s.GetAddr,
-		AllowedOrigins: s.GetOrigins,
+		AllowedOrigins: s.guardOrigins,
 	}
 }
 
@@ -2120,7 +2121,8 @@ var localExemptPaths = []string{"/health"}
 
 func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 	return middleware.HostGuardConfig{
-		AllowedOrigins: s.GetOrigins,
+		AllowedOrigins: s.guardOrigins,
+		AllowedHosts:   s.trustedProxyHostList,
 		ExemptPaths:    localExemptPaths,
 	}
 }
@@ -2177,8 +2179,8 @@ func (s *Server) stampRequest(listener string, requiresAuth bool) func(http.Hand
 func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 	return middleware.ProbeGuardConfig{
 		LoopbackBound:  func() bool { return middleware.ListenAddrIsLoopback(s.GetAddr()) },
-		AllowedOrigins: s.GetOrigins,
-		AllowedHosts:   s.GetHostnames,
+		AllowedOrigins: s.guardOrigins,
+		AllowedHosts:   s.guardHosts,
 	}
 }
 
