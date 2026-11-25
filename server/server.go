@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -1148,7 +1149,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
 	// into autonomous backlog work sessions by spawnSessionAfterGates)
-	hookReceiver := services.NewHookReceiver()
+	hookReceiver := hookrecv.NewHookReceiver()
 	if deps.SessionService != nil {
 		hookReceiver.SetPostToolUseObserver(deps.SessionService.ObservePostToolUse)
 	}

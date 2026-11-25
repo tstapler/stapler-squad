@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "hookrecv",
+    srcs = [
+        "hook_receiver_drift.go",
+        "hook_receivers.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/hookrecv",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/git",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":hookrecv",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "hookrecv_test",
+    srcs = [
+        "hook_receiver_drift_test.go",
+        "hook_receivers_golden_test.go",
+        "hook_receivers_post_tool_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":hookrecv"],
+    deps = [
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
