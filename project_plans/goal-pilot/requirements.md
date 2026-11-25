@@ -74,3 +74,9 @@ specific file exists, a markdown doc is updated). These are the safest class bec
 - UI for the new mode (operator-triggered only during the pilot phase).
 - Multi-turn conversation / continuation after goal-not-met (the existing respawn logic is out).
 - Applying `/goal` to feature/bugfix items (only chore/docs for the pilot).
+
+## Autonomous decisions (no owner available)
+
+- AC4/AC5 (live 10-item pilot, driver baseline): not satisfiable by the work session without ~$20 of live spend and real item selection; marked failed rather than inventing data. The runner, flag and results-doc template are ready for an operator run.
+- AC8: verified statically in tests; one tiny live run (capped by `--max-budget-usd`) is used for the runtime check if `claude` is available.
+- Criteria source: item description, first 500 characters.

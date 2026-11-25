@@ -44,6 +44,7 @@ func TestRun_should_ParseEndReasonAndCost_When_StreamEnds(t *testing.T) {
 		{"error_flag", `{"type":"result","is_error":true,"total_cost_usd":0.2,"num_turns":1}` + "\n", EndError, 0.2, 1},
 		{"max_turns_subtype", `{"type":"result","subtype":"error_max_turns","total_cost_usd":0.3,"num_turns":5}` + "\n", EndTurnLimit, 0.3, 5},
 		{"malformed_skipped", "not json\n" + `{"type":"result","end_reason":"goal_met","cost_usd":0.5,"num_turns":1}` + "\n", EndGoalMet, 0.5, 1},
+		{"real_result_shape", `{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","num_turns":4,"total_cost_usd":0.014469425}` + "\n", EndGoalMet, 0.014469425, 4},
 		{"no_result", `{"type":"system"}` + "\n", EndError, 0, 0},
 	}
 	for _, tc := range cases {

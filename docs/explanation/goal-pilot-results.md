@@ -1,6 +1,6 @@
 # /goal pilot: design, comparison plan and results
 
-Status: **runner built, pilot not yet run.** No pilot item has been executed, so the results table and verdict below are empty on purpose; nothing here is a measured claim.
+Status: **runner and operator command built, hook coexistence checked live once, pilot not yet run.** No pilot item has been executed, so the results table and verdict below are empty on purpose; nothing here is a measured claim.
 
 ## What exists
 
@@ -13,14 +13,15 @@ Status: **runner built, pilot not yet run.** No pilot item has been executed, so
 
 ## Not done
 
-- **Dispatcher wiring.** Nothing yet calls `goalrunner.Run` for a backlog item, so the flag has no effect. The pilot needs an operator-triggered caller that passes the item's description (first 500 characters) as `Criteria`.
-- **Result-line schema.** `end_reason` and `cost_usd` are read as the item specifies; `is_error`, `subtype=error_max_turns` and `total_cost_usd` are accepted as fallbacks. This has been tested against fake streams only, not a live `claude`; check one real result object before trusting the mapping.
+- **Dispatcher wiring.** No automatic backlog dispatch calls the runner. The operator-triggered entry point is `cmd/goal-pilot` (`--criteria`, `--dir`, `--max-turns`, `--ceiling-usd`, `--settings`), which refuses to run unless `goal_mode` is on and truncates criteria to 500 characters.
+- **Pilot and baseline data (AC4, AC5).** Not collected: it needs 10 live runs (up to $2 each) on real items and a driver baseline. The only live data is the single 4-turn, $0.0145 run above, which is a smoke test, not a pilot item.
+- **Result-line schema (checked live, 2026-11-25, one haiku run).** The real `type:"result"` object has **no `end_reason` or `cost_usd`**. It carries `subtype` (`success`), `is_error`, `terminal_reason` (`completed`), `num_turns` and `total_cost_usd`. The runner reads `end_reason`/`cost_usd` when present and otherwise derives: `error_max_turns` -> `turn_limit`, `is_error` -> `error`, else `goal_met`. Consequence: a `/goal` verdict of "impossible", or a stop by the in-condition turn bound, is **not distinguishable** in the result object and reports as `goal_met`; the pilot must classify those from the transcript text.
 - **Flag name.** Claude Code's flag is `--settings`, not `--settings-file`; the runner uses `--settings`.
 
 ## Hook coexistence
 
 - Verified statically (`settings_test.go`): the generated settings file holds Stapler Squad's Stop and PermissionRequest hooks and no `/goal` hook, because `/goal` registers its own session-scoped Stop hook at runtime. The two live in different sources, so they cannot overwrite each other in the file.
-- **Unverified at runtime:** that Claude Code runs both Stop hooks without interference in `-p` mode. Confirm with one live run and record it here.
+- **Verified at runtime (one live run, `claude -p '/goal the file hello.txt exists ... or stop after 3 turns' --output-format stream-json --verbose --settings s.json --max-budget-usd 0.30 --model haiku`):** `s.json` held only a Stop hook that appends a line to a marker file. Outcome: exit 0, result `subtype=success`, 4 turns, `total_cost_usd` 0.0145, goal met (`hello.txt` created), and the marker file had exactly one line, so the settings-file Stop hook fired once alongside `/goal`'s without error. Single run, one condition; it does not show behaviour when the goal is not met.
 
 ## Comparison plan
 
