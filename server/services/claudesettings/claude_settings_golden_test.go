@@ -47,9 +47,12 @@ func TestClaudeSettings_ShouldMatchTheRecordedGolden_WhenTheScenariosAreReplayed
 	require.NoError(t, err)
 	raw, err := io.ReadAll(zr)
 	require.NoError(t, err)
-	// The one intended difference: encoding/json names the target type's package in its
-	// error text, and the type moved from services to claudesettings.
-	want := []byte(strings.ReplaceAll(string(raw), "services.claudeSettingsFile", "claudesettings.claudeSettingsFile"))
+	// The one intended difference: encoding/json names the target types' package in its
+	// error text (claudeSettingsFile and ClaudePermissions), and they moved from services to claudesettings.
+	want := []byte(strings.NewReplacer(
+		"services.claudeSettingsFile", "claudesettings.claudeSettingsFile",
+		"services.ClaudePermissions", "claudesettings.ClaudePermissions",
+	).Replace(string(raw)))
 	if string(want) != got {
 		gl, wl := strings.Split(got, "\n"), strings.Split(string(want), "\n")
 		for i := 0; i < len(gl) && i < len(wl); i++ {
@@ -80,6 +83,7 @@ var goldenSettingsBodies = []string{
 	`not json`,
 	`[]`,
 	`{"permissions":{"allow":["Bash(ls)","Bash(ls)","Bash(ls *)"],"deny":["Edit"]},"other":{"x":1}}`,
+	`{"permissions":[]}`,
 }
 
 var goldenPatterns = []string{
