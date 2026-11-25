@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/adminmisc"
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
@@ -725,7 +726,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// external deps, so it's constructed inline rather than threaded
 	// through ServerDependencies.
 	{
-		tymuxRolloutSvc := services.NewTymuxRolloutService()
+		tymuxRolloutSvc := adminmisc.NewTymuxRolloutService()
 		tymuxRolloutPath, tymuxRolloutHandler := sessionv1connect.NewTymuxRolloutServiceHandler(tymuxRolloutSvc, ConnectOptions(deps.ErrorRegistry)...)
 		tymuxRolloutAPIPath := "/api" + tymuxRolloutPath
 		srv.RegisterConnectHandler(tymuxRolloutAPIPath, http.StripPrefix("/api", tymuxRolloutHandler))
@@ -1302,16 +1303,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Registered Escape Code Analytics handlers at /api/debug/escape-codes/*")
 
 	// Register runtime log-level handler (used by the debug menu in the web UI)
-	logLevelHandler := services.NewLogLevelHandler()
+	logLevelHandler := adminmisc.NewLogLevelHandler()
 	logLevelHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered log-level handler at /api/debug/log-level")
 
-	services.NewClientLogHandler().RegisterRoutes(srv.mux)
+	adminmisc.NewClientLogHandler().RegisterRoutes(srv.mux)
 	log.Info("Registered client-log handler at /api/client-logs")
 	log.Info("server deploy id", "deploy_id", services.DeployID())
 
 	// Register Circuit Breaker debug handler for observability
-	cbHandler := services.NewCircuitBreakerHandler()
+	cbHandler := adminmisc.NewCircuitBreakerHandler()
 	cbHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
 
