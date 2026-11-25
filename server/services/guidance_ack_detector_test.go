@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -81,7 +82,7 @@ func newAckEnv(t *testing.T) *ackEnv {
 }
 
 func (e *ackEnv) sent(indeterminate bool) {
-	e.det.Sent(SentDelivery{
+	e.det.Sent(questionkit.SentDelivery{
 		RowID: e.rowID, SessionUUID: "s1", Dialog: colorDialog, Route: domain.DeliveryRouteLiveKeystroke, Indeterminate: indeterminate,
 	})
 }

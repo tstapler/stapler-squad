@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
@@ -263,14 +264,14 @@ func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.C
 			return
 		}
 
-		primary := fmt.Sprintf("*%s* needs attention: %s", escapeSlackMrkdwn(sanitizeNotificationText(item.SessionName)), item.Reason.String())
+		primary := fmt.Sprintf("*%s* needs attention: %s", escapeSlackMrkdwn(questionkit.SanitizeNotificationText(item.SessionName)), item.Reason.String())
 		blocks := []slackBlock{
 			{Type: "section", Text: &slackBlockText{Type: "mrkdwn", Text: primary}},
 		}
 		if item.Context != "" {
 			blocks = append(blocks, slackBlock{
 				Type: "section",
-				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(sanitizeNotificationText(item.Context)), maxSlackBlockTextLen)},
+				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(questionkit.SanitizeNotificationText(item.Context)), maxSlackBlockTextLen)},
 			})
 		}
 		if item.DiffStats != nil && item.DiffStats.Content != "" {
@@ -281,7 +282,7 @@ func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.C
 		}
 		if dashboardURL != "" {
 			link := dashboardURL + "/?session=" + item.SessionID
-			linkText := fmt.Sprintf("<%s|View %s>", link, escapeSlackMrkdwn(sanitizeNotificationText(item.SessionName)))
+			linkText := fmt.Sprintf("<%s|View %s>", link, escapeSlackMrkdwn(questionkit.SanitizeNotificationText(item.SessionName)))
 			blocks = append(blocks, slackBlock{
 				Type: "section",
 				Text: &slackBlockText{Type: "mrkdwn", Text: linkText},
@@ -311,7 +312,7 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 		if displayName == "" {
 			displayName = approval.SessionID
 		}
-		primary := fmt.Sprintf("*%s* is waiting for approval to use *%s*", escapeSlackMrkdwn(sanitizeNotificationText(displayName)), escapeSlackMrkdwn(sanitizeNotificationText(approval.ToolName)))
+		primary := fmt.Sprintf("*%s* is waiting for approval to use *%s*", escapeSlackMrkdwn(questionkit.SanitizeNotificationText(displayName)), escapeSlackMrkdwn(questionkit.SanitizeNotificationText(approval.ToolName)))
 		blocks := []slackBlock{
 			{Type: "section", Text: &slackBlockText{Type: "mrkdwn", Text: primary}},
 		}
@@ -320,13 +321,13 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 		if detail != "" {
 			blocks = append(blocks, slackBlock{
 				Type: "section",
-				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(sanitizeNotificationText(detail)), maxSlackBlockTextLen)},
+				Text: &slackBlockText{Type: "mrkdwn", Text: truncateForSlackBlock(escapeSlackMrkdwn(questionkit.SanitizeNotificationText(detail)), maxSlackBlockTextLen)},
 			})
 		}
 
 		if dashboardURL != "" {
 			link := dashboardURL + "/?session=" + approval.SessionID
-			linkText := fmt.Sprintf("<%s|View %s>", link, escapeSlackMrkdwn(sanitizeNotificationText(displayName)))
+			linkText := fmt.Sprintf("<%s|View %s>", link, escapeSlackMrkdwn(questionkit.SanitizeNotificationText(displayName)))
 			blocks = append(blocks, slackBlock{
 				Type: "section",
 				Text: &slackBlockText{Type: "mrkdwn", Text: linkText},

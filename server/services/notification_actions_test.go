@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -27,13 +28,13 @@ func (f *fakeApprovals) PendingApprovalIDs() map[string]bool {
 }
 
 type fakeQuestions struct {
-	live  map[QuestionKey]PendingQuestion
+	live  map[questionkit.QuestionKey]questionkit.PendingQuestion
 	calls atomic.Int32
 }
 
-func (f *fakeQuestions) PeekQuestions(keys []QuestionKey) map[QuestionKey]PendingQuestion {
+func (f *fakeQuestions) PeekQuestions(keys []questionkit.QuestionKey) map[questionkit.QuestionKey]questionkit.PendingQuestion {
 	f.calls.Add(1)
-	out := map[QuestionKey]PendingQuestion{}
+	out := map[questionkit.QuestionKey]questionkit.PendingQuestion{}
 	for _, k := range keys {
 		if q, ok := f.live[k]; ok {
 			out[k] = q
@@ -85,7 +86,7 @@ type descriptorFixture struct {
 func newDescriptorFixture() *descriptorFixture {
 	return &descriptorFixture{
 		approvals: &fakeApprovals{ids: map[string]bool{}},
-		questions: &fakeQuestions{live: map[QuestionKey]PendingQuestion{}},
+		questions: &fakeQuestions{live: map[questionkit.QuestionKey]questionkit.PendingQuestion{}},
 		backlog:   &fakeBacklog{states: map[string]BacklogDecisionState{}},
 		guidance:  &fakeGuidance{open: map[string]OpenGuidance{}},
 		flags:     map[string]bool{},
@@ -119,7 +120,7 @@ func kinds(r interface {
 func questionRecord(id, session, qid string) *sessionv1.NotificationHistoryRecord {
 	return &sessionv1.NotificationHistoryRecord{
 		Id: id, SessionId: session,
-		Metadata: map[string]string{metaQuestionID: qid},
+		Metadata: map[string]string{questionkit.MetaQuestionID: qid},
 	}
 }
 
@@ -148,10 +149,10 @@ func TestBuildDescriptors_ShouldOfferOnlyOpen_WhenApprovalAlreadyResolved(t *tes
 func TestBuildDescriptors_ShouldCarryOptionLabelsTierB_WhenQuestionPendingAndLocal(t *testing.T) {
 	t.Parallel()
 	f := newDescriptorFixture()
-	f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
-	q := f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}]
+	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
+	q := f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}]
 	q.Dialog.Labels = []string{"Redis", "Memcached"}
-	f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = q
+	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = q
 
 	rec := questionRecord("n1", "s1", "q1")
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
@@ -172,8 +173,8 @@ func TestBuildDescriptors_ShouldOfferOnlyOpen_WhenQuestionAnsweredOrReplyUnavail
 	f := newDescriptorFixture() // store has no q1: answered
 	answered := questionRecord("n1", "s1", "q1")
 	unavailable := questionRecord("n2", "s1", "q2")
-	unavailable.Metadata[metaReplyUnavailable] = "true"
-	f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q2"}] = PendingQuestion{}
+	unavailable.Metadata[questionkit.MetaReplyUnavailable] = "true"
+	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q2"}] = questionkit.PendingQuestion{}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{answered, unavailable}, ListenerClassLocal)
 	assert.Equal(t, []string{"OPEN"}, kinds(answered))
 	assert.Equal(t, []string{"OPEN"}, kinds(unavailable))
@@ -182,7 +183,7 @@ func TestBuildDescriptors_ShouldOfferOnlyOpen_WhenQuestionAnsweredOrReplyUnavail
 func TestBuildDescriptors_ShouldMarkTierBDesktopOnly_WhenListenerRemote(t *testing.T) {
 	t.Parallel()
 	f := newDescriptorFixture()
-	f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = PendingQuestion{}
+	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = questionkit.PendingQuestion{}
 	page := func() []*sessionv1.NotificationHistoryRecord {
 		return []*sessionv1.NotificationHistoryRecord{questionRecord("n1", "s1", "q1")}
 	}
@@ -225,7 +226,7 @@ func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTi
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newDescriptorFixture()
-			f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = PendingQuestion{}
+			f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = questionkit.PendingQuestion{}
 			b := f.builder()
 			b.sources.Routes = tc.routes
 			f.flags[scopeChannelTierB] = !tc.tierBOff
@@ -247,8 +248,8 @@ func TestBuildDescriptors_ShouldOfferAnswerGuidance_WhenGuidanceOpen(t *testing.
 	t.Parallel()
 	f := newDescriptorFixture()
 	f.guidance.open["g1"] = OpenGuidance{Options: []string{"yes", "no"}}
-	open := &sessionv1.NotificationHistoryRecord{Id: "n1", Metadata: map[string]string{metaGuidanceRequestID: "g1"}}
-	closed := &sessionv1.NotificationHistoryRecord{Id: "n2", Metadata: map[string]string{metaGuidanceRequestID: "g2"}}
+	open := &sessionv1.NotificationHistoryRecord{Id: "n1", Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1"}}
+	closed := &sessionv1.NotificationHistoryRecord{Id: "n2", Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g2"}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{open, closed}, ListenerClassRemote)
 
 	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(open))
@@ -263,7 +264,7 @@ func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookSourc
 	f.guidance.open["peer"] = OpenGuidance{Source: domain.QuestionSourcePeer, PeerHelp: true}
 	f.guidance.open["agent"] = OpenGuidance{Source: domain.QuestionSourceAgentMCP}
 	rec := func(id string) *sessionv1.NotificationHistoryRecord {
-		return &sessionv1.NotificationHistoryRecord{Id: "n-" + id, Metadata: map[string]string{metaGuidanceRequestID: id}}
+		return &sessionv1.NotificationHistoryRecord{Id: "n-" + id, Metadata: map[string]string{questionkit.MetaGuidanceRequestID: id}}
 	}
 	hook, peer, agent := rec("hook"), rec("peer"), rec("agent")
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{hook, peer, agent}, ListenerClassLocal)
@@ -322,7 +323,7 @@ func TestBuildDescriptors_ShouldReduceToOpen_WhenActionFlagOff(t *testing.T) {
 	f.flags["action:APPROVE"] = false
 	f.flags["action:DENY"] = false
 	appr := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaApprovalID: "a1"}}
-	guid := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaGuidanceRequestID: "g1"}}
+	guid := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1"}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{appr, guid}, ListenerClassLocal)
 	assert.Equal(t, []string{"OPEN"}, kinds(appr))
 	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(guid))
@@ -361,11 +362,11 @@ func pageOf(f *descriptorFixture, n, sessions int) []*sessionv1.NotificationHist
 			f.approvals.ids[id] = true
 			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{metaApprovalID: id}})
 		case 1:
-			f.questions.live[QuestionKey{SessionUUID: sess, QuestionID: id}] = PendingQuestion{}
+			f.questions.live[questionkit.QuestionKey{SessionUUID: sess, QuestionID: id}] = questionkit.PendingQuestion{}
 			out = append(out, questionRecord(id, sess, id))
 		case 2:
 			f.guidance.open[id] = OpenGuidance{}
-			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{metaGuidanceRequestID: id}})
+			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{questionkit.MetaGuidanceRequestID: id}})
 		default:
 			f.backlog.states[id] = BacklogDecisionState{Status: "review"}
 			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{metaItemID: id, metaDecisionSchema: schema}})

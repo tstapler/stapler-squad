@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -37,14 +38,14 @@ const (
 type fakeActionApprovals struct {
 	calls  atomic.Int32
 	last   ApprovalChoice
-	result ActionResult
+	result questionkit.ActionResult
 }
 
-func (f *fakeActionApprovals) ResolveApproval(_ context.Context, c ApprovalChoice) (ActionResult, error) {
+func (f *fakeActionApprovals) ResolveApproval(_ context.Context, c ApprovalChoice) (questionkit.ActionResult, error) {
 	f.calls.Add(1)
 	f.last = c
 	if f.result.Outcome == 0 {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	return f.result, nil
 }
@@ -53,36 +54,36 @@ type fakeQuestionReplier struct {
 	route  answerRoute
 	known  bool
 	writes atomic.Int32
-	result ActionResult
+	result questionkit.ActionResult
 	last   atomic.Pointer[QuestionAnswer]
 }
 
 func (f *fakeQuestionReplier) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
-func (f *fakeQuestionReplier) ReplyToQuestion(_ context.Context, in QuestionAnswer) (ActionResult, error) {
+func (f *fakeQuestionReplier) ReplyToQuestion(_ context.Context, in QuestionAnswer) (questionkit.ActionResult, error) {
 	f.writes.Add(1)
 	f.last.Store(&in)
 	if f.result.Outcome == 0 {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	return f.result, nil
 }
 
 type fakeGuidanceAnswerer struct{ calls atomic.Int32 }
 
-func (f *fakeGuidanceAnswerer) AnswerGuidance(context.Context, string, string) (ActionResult, error) {
+func (f *fakeGuidanceAnswerer) AnswerGuidance(context.Context, string, string) (questionkit.ActionResult, error) {
 	f.calls.Add(1)
-	return applied(), nil
+	return questionkit.Applied(), nil
 }
 
 type fakeBacklogDecider struct {
 	calls  atomic.Int32
-	result ActionResult
+	result questionkit.ActionResult
 }
 
-func (f *fakeBacklogDecider) Decide(context.Context, BacklogDecision) (ActionResult, error) {
+func (f *fakeBacklogDecider) Decide(context.Context, BacklogDecision) (questionkit.ActionResult, error) {
 	f.calls.Add(1)
 	if f.result.Outcome == 0 {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	return f.result, nil
 }
@@ -238,10 +239,10 @@ func TestInvokeNotificationAction_ShouldReturnInvalid_WhenKeyReusedWithDifferent
 func TestInvokeNotificationAction_ShouldRetryAgain_WhenFirstAttemptWasNotCacheable(t *testing.T) {
 	t.Parallel()
 	f := newDispatchFixture()
-	f.approvals.result = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, "")
+	f.approvals.result = questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, "")
 	ctx := localCtx(t)
 	f.invoke(t, ctx, approveReq("k1"), nil)
-	f.approvals.result = ActionResult{}
+	f.approvals.result = questionkit.ActionResult{}
 	assert.Equal(t, outApplied, f.invoke(t, ctx, approveReq("k1"), nil).Outcome)
 	assert.EqualValues(t, 2, f.approvals.calls.Load())
 }
@@ -304,7 +305,7 @@ func TestInvokeNotificationAction_ShouldRetireDecisionNotifications_WhenBacklogD
 	assert.Equal(t, outApplied, f.invoke(t, localCtx(t), m, nil).Outcome)
 	assert.Equal(t, []string{"item1"}, f.resolver.items)
 
-	f.backlog.result = outcome(outResolved, "")
+	f.backlog.result = questionkit.Outcome(outResolved, "")
 	m.IdempotencyKey = "k2"
 	assert.Equal(t, outResolved, f.invoke(t, localCtx(t), m, nil).Outcome)
 	assert.Equal(t, []string{"item1"}, f.resolver.items, "an already-resolved decision does not re-retire")
@@ -391,7 +392,7 @@ func TestActionIdempotency_ShouldEvictOldestKey_WhenOverCapacity(t *testing.T) {
 	for _, k := range []string{"a", "b", "c", "d"} {
 		f, role := c.begin(k, "h")
 		require.Equal(t, flightLeader, role)
-		c.settle(f, applied())
+		c.settle(f, questionkit.Applied())
 	}
 	assert.Equal(t, 3, c.len())
 	_, role := c.begin("a", "h")
@@ -478,7 +479,7 @@ func TestInvokeNotificationAction_ShouldRetireTheDecidedCard_WhenAnswerOrApprova
 func TestInvokeNotificationAction_ShouldKeepTheCard_WhenAnswerWasNotApplied(t *testing.T) {
 	t.Parallel()
 	f := newDispatchFixture()
-	f.questions.result = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+	f.questions.result = questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
 
 	f.invoke(t, localCtx(t), answerReq("k-q"), nil)
 

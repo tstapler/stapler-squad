@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"strings"
@@ -30,7 +30,7 @@ type AskedQuestion struct {
 // {"questions":[{question, header, options:[{label, description}], multiSelect}]}
 // (spike S1, Claude Code 2.1.303); any other payload is multi or unknown and
 // not replyable. An absent multiSelect is unknown, never single. All text is
-// run through sanitizeNotificationText.
+// run through SanitizeNotificationText.
 func ParseAskUserQuestion(toolInput map[string]interface{}) AskedQuestion {
 	raw, ok := toolInput["questions"].([]interface{})
 	if !ok || len(raw) == 0 {
@@ -98,14 +98,14 @@ func parseQuestionMap(m map[string]interface{}) (domain.Question, bool) {
 	var q domain.Question
 	text, _ := m["question"].(string)
 	header, _ := m["header"].(string)
-	q.Text, q.Header = sanitizeNotificationText(text), sanitizeNotificationText(header)
+	q.Text, q.Header = SanitizeNotificationText(text), SanitizeNotificationText(header)
 	opts, _ := m["options"].([]interface{})
 	for _, o := range opts {
 		if om, ok := o.(map[string]interface{}); ok {
 			label, _ := om["label"].(string)
 			desc, _ := om["description"].(string)
 			q.Options = append(q.Options, domain.Option{
-				Label: sanitizeNotificationText(label), Description: sanitizeNotificationText(desc),
+				Label: SanitizeNotificationText(label), Description: SanitizeNotificationText(desc),
 			})
 		}
 	}
@@ -124,4 +124,29 @@ func replyableLabels(labels []string) bool {
 		}
 	}
 	return true
+}
+
+func tabbedQuestions(p domain.QuestionPayload) []panereply.TabbedQuestion {
+	src := p.Questions()
+	out := make([]panereply.TabbedQuestion, len(src))
+	for i, q := range src {
+		labels := make([]string, len(q.Options))
+		for j, o := range q.Options {
+			labels[j] = o.Label
+		}
+		out[i] = panereply.TabbedQuestion{Text: q.Text, Header: q.Header, Labels: labels, MultiSelect: q.MultiSelect}
+	}
+	return out
+}
+
+// SanitizeNotificationText strips newlines and non-printable characters from
+// user- or model-controlled strings before embedding them in OS notification
+// titles, preventing newline injection into the OS notification tray.
+func SanitizeNotificationText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 32 {
+			return ' '
+		}
+		return r
+	}, s)
 }

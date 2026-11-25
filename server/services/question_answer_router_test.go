@@ -14,28 +14,29 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// recordingAcks is a deliverySink that remembers what was sent.
+// recordingAcks is a questionkit.DeliverySink that remembers what was sent.
 type recordingAcks struct {
 	mu   sync.Mutex
-	sent []SentDelivery
+	sent []questionkit.SentDelivery
 }
 
-func (r *recordingAcks) Sent(d SentDelivery) {
+func (r *recordingAcks) Sent(d questionkit.SentDelivery) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sent = append(r.sent, d)
 }
 
-func (r *recordingAcks) all() []SentDelivery {
+func (r *recordingAcks) all() []questionkit.SentDelivery {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]SentDelivery(nil), r.sent...)
+	return append([]questionkit.SentDelivery(nil), r.sent...)
 }
 
 // routerEnv is a reply env plus a router over real storage, a fake clock for
@@ -96,8 +97,8 @@ func (e *routerEnv) hookRow(inst *instance.Instance, d panereply.QuestionDialog)
 	require.NoError(e.t, err)
 	row, err := e.fix.storage.CreateMirroredGuidanceRequest(context.Background(), gr, 0)
 	require.NoError(e.t, err)
-	e.fix.svc.PendingQuestions().Register(PendingQuestion{
-		QuestionID: row.ID, SessionUUID: inst.UUID, Dialog: d, Token: QuestionToken(d.Question),
+	e.fix.svc.PendingQuestions().Register(questionkit.PendingQuestion{
+		QuestionID: row.ID, SessionUUID: inst.UUID, Dialog: d, Token: questionkit.QuestionToken(d.Question),
 	})
 	return row.ID
 }
@@ -120,7 +121,7 @@ func (e *routerEnv) row(id string) *domain.GuidanceRequestData {
 	return row
 }
 
-func (e *routerEnv) answer(inst *instance.Instance, qid, label string) ActionResult {
+func (e *routerEnv) answer(inst *instance.Instance, qid, label string) questionkit.ActionResult {
 	e.t.Helper()
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: label, ReplyID: "r-" + uuid.NewString()})
 	require.NoError(e.t, err)

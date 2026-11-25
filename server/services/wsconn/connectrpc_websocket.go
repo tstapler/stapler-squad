@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -1624,7 +1625,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	})
 
 	writer := h.writerFor(instance)
-	services.NoteOperatorOpen(instance)
+	questionkit.NoteOperatorOpen(instance)
 
 	h.performInitialResizeNudge(writer, instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)
 
@@ -2475,7 +2476,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 	stream.creation.Mark(stageHubCreate)
 
-	services.NoteOperatorOpen(instance)
+	questionkit.NoteOperatorOpen(instance)
 	upWriter, subscriberID, _ := h.attachUpgradableSubscriber(connCtx, hub, hubSubscriberAttachment{
 		stream:          stream,
 		instance:        instance,
@@ -4106,7 +4107,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	snap := instance.Snapshot()
 	writer := h.writerFor(instance)
 	if shellTmuxSessionName == "" {
-		services.NoteOperatorOpen(instance)
+		questionkit.NoteOperatorOpen(instance)
 	}
 	cpt := resolveCapturePaneTarget(instance, snap, shellTmuxSessionName, writer)
 	sessionID := cpt.sessionID

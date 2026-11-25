@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -26,14 +25,14 @@ const guidanceMirrorBound = 250 * time.Millisecond
 
 // Failure reasons of guidance_mirror_failed_total.
 const (
-	mirrorFailTimeout    = "timeout"
-	mirrorFailError      = "error"
-	mirrorFailCapped     = "cap_exceeded"
+	MirrorFailTimeout    = "timeout"
+	MirrorFailError      = "error"
+	MirrorFailCapped     = "cap_exceeded"
 	mirrorFailNoPayload  = "no_payload"
 	mirrorFailBadPayload = "invalid_payload"
 )
 
-type guidanceMirrorStore interface {
+type GuidanceMirrorStore interface {
 	CreateMirroredGuidanceRequest(ctx context.Context, req domain.GuidanceRequest, capLimit int) (*domain.GuidanceRequestData, error)
 	CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reason string) (bool, error)
 	GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error)
@@ -44,7 +43,7 @@ type guidanceMirrorStore interface {
 
 // GuidanceHookMirror writes, clears and re-hydrates hook-source guidance rows.
 type GuidanceHookMirror struct {
-	store   guidanceMirrorStore
+	store   GuidanceMirrorStore
 	pending *PendingQuestionStore
 	bound   time.Duration
 	failed  func(reason string)
@@ -57,6 +56,12 @@ type GuidanceHookMirror struct {
 	enabled func() bool
 }
 
+// SetBound overrides the write bound; tests lengthen it for a race-instrumented store or shorten it to prove the give-up.
+func (m *GuidanceHookMirror) SetBound(d time.Duration) { m.bound = d }
+
+// ForgetPending drops key from the in-memory pending store the mirror rehydrates.
+func (m *GuidanceHookMirror) ForgetPending(key QuestionKey) { m.pending.Forget(key) }
+
 // SetCardRetirer installs what moves the card of a question cleared by a terminal
 // answer or a vanished dialog out of Needs you (UX-AC26: it flips, then settles).
 func (m *GuidanceHookMirror) SetCardRetirer(fn func(rowID string)) { m.retireCard = fn }
@@ -68,11 +73,9 @@ func (m *GuidanceHookMirror) SetPaneCapture(fn func(ctx context.Context, session
 
 // NewGuidanceHookMirror builds the mirror. failed and cleared count
 // guidance_mirror_failed_total and guidance_mirror_cleared_total; either may be nil.
-// reg must be non-nil.
-func NewGuidanceHookMirror(store guidanceMirrorStore, pending *PendingQuestionStore, failed, cleared func(reason string), reg *featureflags.Registry) *GuidanceHookMirror {
-	fr := flagReader{reg: reg}
-	return &GuidanceHookMirror{store: store, pending: pending, bound: guidanceMirrorBound, failed: failed, cleared: cleared,
-		enabled: func() bool { return fr.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender) }}
+// enabled reports the rollout flag and is read on every Mirror call.
+func NewGuidanceHookMirror(store GuidanceMirrorStore, pending *PendingQuestionStore, failed, cleared func(reason string), enabled func() bool) *GuidanceHookMirror {
+	return &GuidanceHookMirror{store: store, pending: pending, bound: guidanceMirrorBound, failed: failed, cleared: cleared, enabled: enabled}
 }
 
 // HookMirrorRequest is one AskUserQuestion to mirror.
@@ -142,14 +145,14 @@ func (m *GuidanceHookMirror) Mirror(req HookMirrorRequest) (id string, ok bool) 
 	case res := <-done:
 		switch {
 		case errors.Is(res.err, domain.ErrPendingCapExceeded):
-			m.fail(mirrorFailCapped, req.SessionUUID, res.err)
+			m.fail(MirrorFailCapped, req.SessionUUID, res.err)
 		case res.err != nil:
-			m.fail(mirrorFailError, req.SessionUUID, res.err)
+			m.fail(MirrorFailError, req.SessionUUID, res.err)
 		default:
 			return res.row.ID, true
 		}
 	case <-ctx.Done():
-		m.fail(mirrorFailTimeout, req.SessionUUID, ctx.Err())
+		m.fail(MirrorFailTimeout, req.SessionUUID, ctx.Err())
 	}
 	return "", false
 }
@@ -178,9 +181,9 @@ func redactedPayload(p domain.QuestionPayload) (domain.QuestionPayload, error) {
 	return domain.NewQuestionPayload(qs)
 }
 
-// dialogFromRow rebuilds the on-screen dialog of a replyable hook row: one
+// DialogFromRow rebuilds the on-screen dialog of a replyable hook row: one
 // single-select question that passes the same label rules as a live parse.
-func dialogFromRow(row *domain.GuidanceRequestData) (panereply.QuestionDialog, bool) {
+func DialogFromRow(row *domain.GuidanceRequestData) (panereply.QuestionDialog, bool) {
 	if row.Source != domain.QuestionSourceHook || row.DeliveryRoute != domain.DeliveryRouteLiveKeystroke {
 		return panereply.QuestionDialog{}, false
 	}
@@ -202,11 +205,11 @@ func dialogFromRow(row *domain.GuidanceRequestData) (panereply.QuestionDialog, b
 	return panereply.QuestionDialog{Question: qs[0].Text, Header: qs[0].Header, Labels: labels}, true
 }
 
-// tabbedFromRow returns the questions of a replyable hook row in the measured
+// TabbedFromRow returns the questions of a replyable hook row in the measured
 // tabbed shape. It is the identity the router and the descriptor builder share:
 // such a row is answered by the stepwise driver and re-verified with
 // panereply.ParseTabbedFrame, never panereply.DialogMatch.
-func tabbedFromRow(row *domain.GuidanceRequestData) ([]panereply.TabbedQuestion, bool) {
+func TabbedFromRow(row *domain.GuidanceRequestData) ([]panereply.TabbedQuestion, bool) {
 	if row.Source != domain.QuestionSourceHook || row.DeliveryRoute != domain.DeliveryRouteLiveKeystroke || row.QuestionsJSON == "" {
 		return nil, false
 	}
@@ -218,9 +221,9 @@ func tabbedFromRow(row *domain.GuidanceRequestData) ([]panereply.TabbedQuestion,
 	return qs, tabbedReplyable(payload)
 }
 
-// tabbedHeadersMatch reports whether a capture shows a recognised tabbed frame
+// TabbedHeadersMatch reports whether a capture shows a recognised tabbed frame
 // whose tab headers are the row's.
-func tabbedHeadersMatch(qs []panereply.TabbedQuestion) func(capture string) bool {
+func TabbedHeadersMatch(qs []panereply.TabbedQuestion) func(capture string) bool {
 	return func(capture string) bool {
 		f, ok := panereply.ParseTabbedFrame(capture)
 		if !ok || len(f.Tabs) != len(qs) {
@@ -238,7 +241,7 @@ func tabbedHeadersMatch(qs []panereply.TabbedQuestion) func(capture string) bool
 // register puts a durable row back in the verified-proof cache. The row id is
 // the question id, so a card rendered before a restart still addresses it.
 func (m *GuidanceHookMirror) register(row *domain.GuidanceRequestData) bool {
-	dialog, ok := dialogFromRow(row)
+	dialog, ok := DialogFromRow(row)
 	if !ok || row.AskerSessionUUID == "" {
 		return false
 	}
@@ -344,7 +347,7 @@ func (m *GuidanceHookMirror) reverifyOpen(ctx context.Context, sessionUUID strin
 	cleared := 0
 	for _, row := range rows {
 		capture, cerr := m.capture(ctx, sessionUUID)
-		reason, terminal := judgeRow(row, capture, cerr).cancelReason()
+		reason, terminal := JudgeRow(row, capture, cerr).cancelReason()
 		if !terminal {
 			continue
 		}

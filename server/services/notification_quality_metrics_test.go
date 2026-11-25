@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -91,7 +92,7 @@ func TestScrape_ShouldYieldDeliveryFailureRateOfOneTenth_WhenTenAnswersOneNotSen
 	f := newDispatchFixture()
 	f.d.metrics = defaultActionMetrics()
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
-	tracker := newReopenTracker(func() time.Time { return now })
+	tracker := questionkit.NewReopenTracker(func() time.Time { return now })
 	f.d.reopen = tracker
 	web := map[string][]string{actionClientHeader: {actionClientWebUI}}
 	answers := map[string]string{"kind": "answer_question", "channel": channelWebLocal}
@@ -110,19 +111,19 @@ func TestScrape_ShouldYieldDeliveryFailureRateOfOneTenth_WhenTenAnswersOneNotSen
 		req := answerReq(string(rune('a' + i)))
 		req.SessionId = "sess-" + string(rune('a'+i))
 		if i == 4 {
-			f.questions.result = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+			f.questions.result = questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
 		} else {
-			f.questions.result = ActionResult{}
+			f.questions.result = questionkit.ActionResult{}
 		}
 		f.invoke(t, localCtx(t), req, web)
 	}
 	require.NoError(t, analytics.WithQualityMetrics(nopAnalytics{}).Record(context.Background(),
 		analytics.Event{EventName: analytics.EventInlineActionUndo, Labels: map[string]string{"kind": "approve"}}))
 	now = now.Add(45 * time.Second)
-	tracker.attached("sess-b-title", "sess-b") // opened inside 60 s of its answer
-	tracker.attached("sess-e")                 // its answer was NOT_SENT: nothing pending
+	tracker.Attached("sess-b-title", "sess-b") // opened inside 60 s of its answer
+	tracker.Attached("sess-e")                 // its answer was NOT_SENT: nothing pending
 	now = now.Add(time.Hour)
-	tracker.attached("sess-c") // opened after the window
+	tracker.Attached("sess-c") // opened after the window
 
 	attempted, failed := counterValue(t, "notification_inline_action_total", answers)-beforeAll, failing()-beforeFail
 	assert.EqualValues(t, 10, attempted)
@@ -134,21 +135,21 @@ func TestScrape_ShouldYieldDeliveryFailureRateOfOneTenth_WhenTenAnswersOneNotSen
 func TestScrape_ShouldSampleWakeFiresAndCountScheduleWakeup_WhenSessionEndsAfterThreeWakesAndTwoReceipts(t *testing.T) {
 	m := wakes.NewMetrics()
 	beforeN, beforeSum := histogramTotals(t, wakes.HistogramFiresPerSession)
-	beforeCalls := counterValue(t, metricScheduleWakeupCalls, map[string]string{"role": "unlinked"})
+	beforeCalls := counterValue(t, questionkit.MetricScheduleWakeupCalls, map[string]string{"role": "unlinked"})
 
 	for range 3 {
 		m.WakeDelivered("sess-w")
 	}
 	svc := &SessionService{}
-	svc.ObservePostToolUse(context.Background(), "sess-w", scheduleWakeupTool)
-	svc.ObservePostToolUse(context.Background(), "sess-w", scheduleWakeupTool)
+	svc.ObservePostToolUse(context.Background(), "sess-w", questionkit.ScheduleWakeupTool)
+	svc.ObservePostToolUse(context.Background(), "sess-w", questionkit.ScheduleWakeupTool)
 	svc.ObservePostToolUse(context.Background(), "sess-w", "Bash")
 	m.SessionEnded("sess-w")
 
 	n, sum := histogramTotals(t, wakes.HistogramFiresPerSession)
 	assert.EqualValues(t, 1, n-beforeN)
 	assert.InDelta(t, 3, sum-beforeSum, 1e-9)
-	assert.EqualValues(t, 2, counterValue(t, metricScheduleWakeupCalls, map[string]string{"role": "unlinked"})-beforeCalls)
+	assert.EqualValues(t, 2, counterValue(t, questionkit.MetricScheduleWakeupCalls, map[string]string{"role": "unlinked"})-beforeCalls)
 }
 
 type fakeRoleLookup struct {
@@ -162,9 +163,9 @@ func (f fakeRoleLookup) GetItemSessionBySessionUUID(context.Context, string) (ba
 
 func TestScheduleWakeupRole_ShouldNameTheBacklogRole_WhenSessionIsLinked(t *testing.T) {
 	ctx := context.Background()
-	assert.Equal(t, "work", scheduleWakeupRoles{lookup: fakeRoleLookup{row: backlogdto.ItemSessionSummary{Role: "work"}}}.roleOf(ctx, "s"))
-	assert.Equal(t, roleUnlinked, scheduleWakeupRoles{lookup: fakeRoleLookup{err: domain.ErrNotFound}}.roleOf(ctx, "s"))
-	assert.Equal(t, roleUnknown, scheduleWakeupRoles{lookup: fakeRoleLookup{err: assert.AnError}}.roleOf(ctx, "s"))
+	assert.Equal(t, "work", questionkit.ScheduleWakeupRoles{Lookup: fakeRoleLookup{row: backlogdto.ItemSessionSummary{Role: "work"}}}.RoleOf(ctx, "s"))
+	assert.Equal(t, questionkit.RoleUnlinked, questionkit.ScheduleWakeupRoles{Lookup: fakeRoleLookup{err: domain.ErrNotFound}}.RoleOf(ctx, "s"))
+	assert.Equal(t, questionkit.RoleUnknown, questionkit.ScheduleWakeupRoles{Lookup: fakeRoleLookup{err: assert.AnError}}.RoleOf(ctx, "s"))
 }
 
 func TestInjectedPostToolUseGroup_ShouldHaveNoMatcher_SoScheduleWakeupReceiptsArrive(t *testing.T) {
@@ -184,8 +185,8 @@ func TestInjectedPostToolUseGroup_ShouldHaveNoMatcher_SoScheduleWakeupReceiptsAr
 
 func TestScrape_ShouldCountUnconfirmed_WhenWriteIsIndeterminate(t *testing.T) {
 	d := NewGuidanceAckDetector(nil, nil, nil, nil)
-	before := counterValue(t, metricGuidanceUnconfirmed, nil)
-	d.Sent(SentDelivery{RowID: "r1"})
-	d.Sent(SentDelivery{RowID: "r2", Indeterminate: true})
-	assert.EqualValues(t, 1, counterValue(t, metricGuidanceUnconfirmed, nil)-before)
+	before := counterValue(t, questionkit.MetricGuidanceUnconfirmed, nil)
+	d.Sent(questionkit.SentDelivery{RowID: "r1"})
+	d.Sent(questionkit.SentDelivery{RowID: "r2", Indeterminate: true})
+	assert.EqualValues(t, 1, counterValue(t, questionkit.MetricGuidanceUnconfirmed, nil)-before)
 }

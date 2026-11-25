@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -35,7 +36,7 @@ type hookReplyRows interface {
 type hookReplyResolver struct {
 	rows  hookReplyRows
 	flags actionFlags
-	acks  deliverySink
+	acks  questionkit.DeliverySink
 }
 
 // PreAnswer records answer on a still-open single-question row for a hook to
@@ -58,7 +59,7 @@ func (r *hookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolI
 	if sessionUUID == "" || !r.flags.Answer(routeHookReply) {
 		return nil
 	}
-	asked := ParseAskUserQuestion(toolInput)
+	asked := questionkit.ParseAskUserQuestion(toolInput)
 	if !asked.Replyable {
 		return nil
 	}
@@ -75,7 +76,7 @@ func (r *hookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolI
 	return nil
 }
 
-func (r *hookReplyResolver) serve(ctx context.Context, row *domain.GuidanceRequestData, sessionUUID string, asked AskedQuestion, toolInput map[string]interface{}) *hookipc.HookOutput {
+func (r *hookReplyResolver) serve(ctx context.Context, row *domain.GuidanceRequestData, sessionUUID string, asked questionkit.AskedQuestion, toolInput map[string]interface{}) *hookipc.HookOutput {
 	if row.AnsweredAt == nil || row.CancelledAt != nil || (row.AskerSessionUUID != sessionUUID && row.SessionUUID != sessionUUID) {
 		return nil
 	}
@@ -100,7 +101,7 @@ func (r *hookReplyResolver) serve(ctx context.Context, row *domain.GuidanceReque
 		return nil // another hook took it, or the row moved: leave the dialog to the operator
 	}
 	if r.acks != nil {
-		r.acks.Sent(SentDelivery{RowID: row.ID, SessionUUID: sessionUUID, Route: domain.DeliveryRouteHookReply})
+		r.acks.Sent(questionkit.SentDelivery{RowID: row.ID, SessionUUID: sessionUUID, Route: domain.DeliveryRouteHookReply})
 	}
 	return hookAllowWithAnswers(toolInput, map[string]string{key: row.Answer})
 }

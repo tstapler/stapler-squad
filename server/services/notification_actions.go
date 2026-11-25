@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -118,7 +119,7 @@ type DescriptorSources struct {
 	Backlog   BacklogDecisionLookup
 	Guidance  GuidanceLookup
 	// Canary degrades hook-mirrored answers to read_only when the layout drifts (optional).
-	Canary *DialogMatchCanary
+	Canary *questionkit.DialogMatchCanary
 	// Routes tells where an answer would go, so a stored answer (stopped or
 	// archived session, Tier A, no keystroke) stays available remotely (optional;
 	// nil keeps every answer desktop-only on the remote listener).
@@ -137,7 +138,7 @@ type ApprovalLookup interface {
 
 // QuestionLookup returns the live registered questions among keys.
 type QuestionLookup interface {
-	PeekQuestions(keys []QuestionKey) map[QuestionKey]PendingQuestion
+	PeekQuestions(keys []questionkit.QuestionKey) map[questionkit.QuestionKey]questionkit.PendingQuestion
 }
 
 // BacklogDecisionState is what the builder needs to know about an item.
@@ -188,14 +189,14 @@ func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *De
 // pageKeys are the entity keys of the unresolved records of one page.
 type pageKeys struct {
 	needApprovals bool
-	questions     []QuestionKey
+	questions     []questionkit.QuestionKey
 	itemIDs       []string
 	guidanceIDs   []string
 }
 
 func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 	var k pageKeys
-	seenQ, seenItem, seenG := map[QuestionKey]bool{}, map[string]bool{}, map[string]bool{}
+	seenQ, seenItem, seenG := map[questionkit.QuestionKey]bool{}, map[string]bool{}, map[string]bool{}
 	for _, r := range records {
 		if r.GetIsRead() {
 			continue
@@ -212,7 +213,7 @@ func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 			seenItem[id] = true
 			k.itemIDs = append(k.itemIDs, id)
 		}
-		if id := md[metaGuidanceRequestID]; id != "" && !seenG[id] {
+		if id := md[questionkit.MetaGuidanceRequestID]; id != "" && !seenG[id] {
 			seenG[id] = true
 			k.guidanceIDs = append(k.guidanceIDs, id)
 		}
@@ -220,18 +221,18 @@ func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 	return k
 }
 
-func questionKeyOf(r *sessionv1.NotificationHistoryRecord) (QuestionKey, bool) {
+func questionKeyOf(r *sessionv1.NotificationHistoryRecord) (questionkit.QuestionKey, bool) {
 	md := r.GetMetadata()
-	if md[metaQuestionID] == "" || md[metaReplyUnavailable] == boolTrue || r.GetSessionId() == "" {
-		return QuestionKey{}, false
+	if md[questionkit.MetaQuestionID] == "" || md[questionkit.MetaReplyUnavailable] == boolTrue || r.GetSessionId() == "" {
+		return questionkit.QuestionKey{}, false
 	}
-	return QuestionKey{SessionUUID: r.GetSessionId(), QuestionID: md[metaQuestionID]}, true
+	return questionkit.QuestionKey{SessionUUID: r.GetSessionId(), QuestionID: md[questionkit.MetaQuestionID]}, true
 }
 
 // pageState is the result of the per-page lookups.
 type pageState struct {
 	approvals map[string]bool
-	questions map[QuestionKey]PendingQuestion
+	questions map[questionkit.QuestionKey]questionkit.PendingQuestion
 	backlog   map[string]BacklogDecisionState
 	guidance  map[string]OpenGuidance
 }
@@ -393,7 +394,7 @@ func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionD
 // ActionOption.value, so a client can group them without a proto change; the
 // answer travels as EncodeSequencePicks in params.answer.
 func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHistoryRecord, st pageState, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
-	id := r.GetMetadata()[metaGuidanceRequestID]
+	id := r.GetMetadata()[questionkit.MetaGuidanceRequestID]
 	g, open := st.guidance[id]
 	if id == "" || !open || len(g.Tabbed) == 0 || r.GetSessionId() == "" {
 		return nil
@@ -411,7 +412,7 @@ func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHi
 }
 
 func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
-	id := r.GetMetadata()[metaGuidanceRequestID]
+	id := r.GetMetadata()[questionkit.MetaGuidanceRequestID]
 	g, open := st.guidance[id]
 	if id == "" || !open || g.Source == domain.QuestionSourceHook {
 		return nil

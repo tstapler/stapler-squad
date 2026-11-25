@@ -16,6 +16,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -65,9 +66,9 @@ type samplerEnv struct {
 	t       *testing.T
 	clock   *manualClock
 	storage *session.Storage
-	mirror  *GuidanceHookMirror
+	mirror  *questionkit.GuidanceHookMirror
 	counts  *mirrorCounts
-	sampler *DialogGoneSampler
+	sampler *questionkit.DialogGoneSampler
 	pane    *paneScript
 }
 
@@ -76,19 +77,19 @@ func newSamplerEnv(t *testing.T, frames ...string) *samplerEnv {
 	storage := svctest.CreateTestStorage(t)
 	counts := &mirrorCounts{}
 	e := &samplerEnv{t: t, clock: newManualClock(), storage: storage, counts: counts, pane: &paneScript{frames: frames}}
-	e.mirror = newRealStoreMirror(storage, NewPendingQuestionStore(nil), counts)
-	e.sampler = NewDialogGoneSampler(storage, e.pane.capture, e.mirror, e.clock.Now)
+	e.mirror = newRealStoreMirror(storage, questionkit.NewPendingQuestionStore(nil), counts)
+	e.sampler = questionkit.NewDialogGoneSampler(storage, e.pane.capture, e.mirror, e.clock.Now)
 	return e
 }
 
 // colorRow mirrors the fixture question as a replyable row created at the fake "now".
 func (e *samplerEnv) colorRow(callID string) string {
 	e.t.Helper()
-	asked := ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
+	asked := questionkit.ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
 		"question": colorDialog.Question, "header": colorDialog.Header, "multiSelect": false,
 		"options": []interface{}{map[string]interface{}{"label": "Red"}, map[string]interface{}{"label": replyColorLabel}, map[string]interface{}{"label": "Blue"}},
 	}}})
-	id, ok := e.mirror.Mirror(HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: callID, Asked: asked, Replyable: true})
+	id, ok := e.mirror.Mirror(questionkit.HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: callID, Asked: asked, Replyable: true})
 	require.True(e.t, ok)
 	return id
 }
@@ -181,7 +182,7 @@ func TestDialogGoneSampler_should_StopSamplingAfterTenMinutes_AndLeaveTheRowAnsw
 	assert.Nil(t, row.AnsweredAt)
 	assert.Empty(t, row.DeliveryState, "time alone never changes the delivery state")
 	assert.Equal(t, domain.DeliveryRouteLiveKeystroke, row.DeliveryRoute)
-	_, replyable := dialogFromRow(row)
+	_, replyable := questionkit.DialogFromRow(row)
 	assert.True(t, replyable, "still answerable: its dialog can be rebuilt for the answer-time DialogMatch")
 }
 
@@ -195,10 +196,10 @@ func TestDialogGoneSampler_should_SampleAtMostTwentyRowsPerPass(t *testing.T) {
 		}
 	}
 	pane := &paneScript{frames: []string{ownFrame(t)}}
-	s := NewDialogGoneSampler(listStore(rows), pane.capture, noopClearer{}, func() time.Time { return now.Add(time.Second) })
+	s := questionkit.NewDialogGoneSampler(listStore(rows), pane.capture, noopClearer{}, func() time.Time { return now.Add(time.Second) })
 
 	s.Tick(context.Background())
-	assert.Equal(t, samplerMaxPerPass, pane.count())
+	assert.Equal(t, questionkit.SamplerMaxPerPass, pane.count())
 	s.Tick(context.Background())
 	assert.Equal(t, 25, pane.count(), "the five left over are sampled next, longest-unsampled first")
 }
@@ -264,7 +265,7 @@ func TestMirror_should_RefuseAtTheCap_WhenEveryDialogStillMatches(t *testing.T) 
 	_, ok := e.mirror.Mirror(mirrorReq(t, "toolu_5", "Question 5?", true))
 
 	assert.False(t, ok)
-	assert.Equal(t, []string{mirrorFailCapped}, e.counts.failures())
+	assert.Equal(t, []string{questionkit.MirrorFailCapped}, e.counts.failures())
 }
 
 // ---- Task 3.3d: a PostToolUse receipt clears what the operator answered in the terminal ----
@@ -287,14 +288,14 @@ func TestObservePostToolUse_should_ClearTheMirroredRowsOfAnAnsweredQuestion(t *t
 	e := newRouterEnv(t)
 	inst, _ := e.addVisible("terminal-answered")
 	qid := e.hookRow(inst, colorDialog)
-	e.fix.svc.SetGuidanceMirror(NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, testFlagRegistry()))
+	e.fix.svc.SetGuidanceMirror(questionkit.NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, AskUserQuestionRenderGate(testFlagRegistry())))
 
 	e.fix.svc.ObservePostToolUse(context.Background(), inst.UUID, askUserQuestion)
 
 	row := e.row(qid)
 	require.NotNil(t, row.CancelledAt)
 	assert.Equal(t, domain.CancelReasonAnsweredInTerminal, row.CancelReason)
-	_, still := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: inst.UUID, QuestionID: qid})
+	_, still := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: inst.UUID, QuestionID: qid})
 	assert.False(t, still, "the cache entry goes with the row")
 }
 
@@ -304,9 +305,9 @@ func TestAnswerRouter_should_ReVerifyDialogMatchAndWriteOneByte_When_AnsweredPas
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("answer-45m")
 	qid := e.hookRow(inst, colorDialog)
-	e.fix.svc.SetGuidanceMirror(NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, testFlagRegistry()))
+	e.fix.svc.SetGuidanceMirror(questionkit.NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, AskUserQuestionRenderGate(testFlagRegistry())))
 	e.clock.Advance(45 * time.Minute)
-	_, cached := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: inst.UUID, QuestionID: qid})
+	_, cached := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: inst.UUID, QuestionID: qid})
 	require.False(t, cached, "the 30-minute cache entry expired")
 
 	res := e.answer(inst, qid, replyColorLabel)
@@ -319,7 +320,7 @@ func TestAnswerRouter_should_ReturnStaleWithZeroWrites_When_TheDialogWasAnswered
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("answer-45m-gone")
 	qid := e.hookRow(inst, colorDialog)
-	mirror := NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, testFlagRegistry())
+	mirror := questionkit.NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, AskUserQuestionRenderGate(testFlagRegistry()))
 	e.fix.svc.SetGuidanceMirror(mirror)
 	e.clock.Advance(45 * time.Minute)
 	require.NoError(t, mirror.Clear(context.Background(), qid, domain.CancelReasonAnsweredInTerminal))

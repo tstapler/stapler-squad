@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -90,7 +91,7 @@ func (h *GuidanceDebugSeedHandler) seedQuestion(w http.ResponseWriter, r *http.R
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "sessionUuid": inst.GetStableID()})
 }
 
-func (h *GuidanceDebugSeedHandler) create(r *http.Request, req seedQuestionRequest, sessionUUID string, payload domain.QuestionPayload, mirror *GuidanceHookMirror) (string, error) {
+func (h *GuidanceDebugSeedHandler) create(r *http.Request, req seedQuestionRequest, sessionUUID string, payload domain.QuestionPayload, mirror *questionkit.GuidanceHookMirror) (string, error) {
 	ctx := r.Context()
 	source := domain.QuestionSourceHook
 	if req.Source == string(domain.QuestionSourceAgentMCP) {
@@ -113,7 +114,7 @@ func (h *GuidanceDebugSeedHandler) create(r *http.Request, req seedQuestionReque
 		return "", err
 	}
 	if source == domain.QuestionSourceHook {
-		mirror.EnsureRegistered(ctx, QuestionKey{SessionUUID: sessionUUID, QuestionID: row.ID})
+		mirror.EnsureRegistered(ctx, questionkit.QuestionKey{SessionUUID: sessionUUID, QuestionID: row.ID})
 	}
 	return row.ID, nil
 }

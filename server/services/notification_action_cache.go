@@ -3,6 +3,7 @@ package services
 import (
 	"container/list"
 	"context"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"sync"
 )
 
@@ -14,16 +15,16 @@ type actionFlight struct {
 	key  string
 	hash string
 	done chan struct{}
-	res  ActionResult
+	res  questionkit.ActionResult
 }
 
 // wait blocks until the leader finishes or ctx ends.
-func (f *actionFlight) wait(ctx context.Context) (ActionResult, error) {
+func (f *actionFlight) wait(ctx context.Context) (questionkit.ActionResult, error) {
 	select {
 	case <-f.done:
 		return f.res, nil
 	case <-ctx.Done():
-		return ActionResult{}, ctx.Err()
+		return questionkit.ActionResult{}, ctx.Err()
 	}
 }
 
@@ -77,7 +78,7 @@ func (c *actionIdempotency) begin(key, hash string) (*actionFlight, flightRole) 
 }
 
 // settle publishes the leader's result and keeps the key so a retry replays it.
-func (c *actionIdempotency) settle(f *actionFlight, res ActionResult) {
+func (c *actionIdempotency) settle(f *actionFlight, res questionkit.ActionResult) {
 	c.mu.Lock()
 	f.res = res
 	c.mu.Unlock()
@@ -86,7 +87,7 @@ func (c *actionIdempotency) settle(f *actionFlight, res ActionResult) {
 
 // forget publishes the result to waiting followers and drops the key, so a
 // retry runs again: a result that is safe to retry must not be replayed.
-func (c *actionIdempotency) forget(f *actionFlight, res ActionResult) {
+func (c *actionIdempotency) forget(f *actionFlight, res questionkit.ActionResult) {
 	c.mu.Lock()
 	f.res = res
 	if el, ok := c.byKey[f.key]; ok && el.Value.(*actionFlight) == f {

@@ -42,7 +42,7 @@ for `AskUserQuestion`; `tool_input` has no other key:
 - `options` — objects with `label` and `description`, not plain strings
 - there is no top-level `prompt`
 
-`ParseAskUserQuestion` (`server/services/askuserquestion_parser.go`) reads this shape; captured
+`ParseAskUserQuestion` (`server/services/questionkit/askuserquestion_parser.go`) reads this shape; captured
 payloads live in `server/services/testdata/askuserquestion/`.
 
 ## Stories

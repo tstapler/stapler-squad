@@ -44,7 +44,7 @@ sampling; see [caveats](#caveats)).
 | 10 | `GetTmuxVersionStatus` (`web-app/src/components/system/TmuxVersionMismatchBanner.tsx:57`) | 60 s; **no visibility pause** | HAR 22 calls (0.99/min); server 2.26/min, 9.5 ms avg | Pure-event / cheap fix | The answer changes only on tmux upgrade or server restart; fetch on mount and on stream reconnect | 100% | Low |
 
 Next after the top 10 (same method, smaller cost): `DialogGoneSampler` 3 s DB read
-(`server/services/guidance_dialog_gone_sampler.go:204`; 111 `ListAllPendingGuidanceRequests`
+(`server/services/questionkit/guidance_dialog_gone_sampler.go:204`; 111 `ListAllPendingGuidanceRequests`
 queries in 7 minutes at 55 ms each), `guidanceRowStore` 3 s / 15 s client poll
 (`GetGuidanceRequest` is 4.51/min over 24 h server-side), `GetReviewQueue` fallback
 (`useReviewQueue.ts:481`), `ListWorkflows` 90 s backstop (`useWorkflows.ts:146`), and the
@@ -110,7 +110,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/mux/discovery.go:352` | 30 s backstop | Scan for external PTY sessions | Mux socket events | Cheap-enough |
 | `session/autonomous/health.go:636` | configured interval | `RecoverUnhealthySessions` over all instances, may `SaveInstances` | tmux session-closed notifications | Needs-new-event-source |
 | `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `session/jules/session_poller.go:236`, `session/tagpoller/session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
-| `server/services/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
+| `server/services/questionkit/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
 | `server/services/guidance_ack_detector.go:155` | 3 s | per-row sample (name) | same | Pure-event |
 | `server/services/config_file_rules_reload.go:76` | 3 s | stat `shared_rules.yaml` | FSEvents or a parent-directory watch, not per-file kqueue (editors replace the file by rename) | Pure-event, trivial |
 | `server/services/connectrpc_websocket.go:2015` | 1 s per terminal stream | `hub.SubscriberCount()` (O(1)) | Subscriber join/leave callback | Cheap-enough |

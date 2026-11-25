@@ -35,7 +35,7 @@ const guardModulePath = "github.com/tstapler/stapler-squad"
 type guardConfig struct {
 	// writerTypes: a use of an object whose type is one of these names satisfies R1/R2.
 	writerTypes map[string]bool
-	// capabilityTypes: type name -> the one file that may construct it.
+	// capabilityTypes: type name -> the one file that may construct it ("pkg/file.go" pins the package too).
 	capabilityTypes      map[string]string
 	constructorCallTypes map[string]bool
 	// primitiveMethods are UI-stream primitives matched by method name on module types.
@@ -61,7 +61,7 @@ func realGuardConfig() guardConfig {
 			"HeldLease":            "instance_write_lease.go",
 			"steerAuthorization":   "steer_authorization.go",
 			"BacklogReviewLink":    "hidden_review_steer.go",
-			"PendingQuestionClaim": "pending_question_store.go",
+			"PendingQuestionClaim": "questionkit/pending_question_store.go",
 		},
 		// constructorCallTypes: a call returning one of these is a construction too,
 		// so the token has exactly one creating file (a plain conversion or literal
@@ -311,7 +311,7 @@ func (c guardConfig) checkCapabilityLiterals(pkgs []*packages.Package, pkgFilter
 		if strings.HasSuffix(file, "_test.go") {
 			return
 		}
-		if file == c.capabilityTypes[typ] {
+		if pin := c.capabilityTypes[typ]; file == pin || (strings.Contains(pin, "/") && strings.HasSuffix(p.PkgPath+"/"+file, "/"+pin)) {
 			return
 		}
 		findings = append(findings, "capability-literal: "+how+" of "+typ+" in "+p.PkgPath+"/"+file)

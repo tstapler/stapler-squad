@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -8,10 +8,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// setGuidanceMirrorFields copies the ADR-003 columns onto the wire message.
+// SetGuidanceMirrorFields copies the ADR-003 columns onto the wire message.
 // A questions_json that no longer parses is logged and sent as no questions:
 // the row still renders from question_text and options.
-func setGuidanceMirrorFields(out *sessionv1.GuidanceRequest, d *domain.GuidanceRequestData) {
+func SetGuidanceMirrorFields(out *sessionv1.GuidanceRequest, d *domain.GuidanceRequestData) {
 	out.Source = string(d.Source)
 	out.AskerSessionUuid = d.AskerSessionUUID
 	out.AnswererKind = string(d.AnswererKind)

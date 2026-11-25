@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -136,8 +137,8 @@ type SessionService struct {
 	guidanceAcks *GuidanceAckDetector
 	hookReply    atomic.Pointer[hookReplyResolver]
 	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
-	dialogCanary   atomic.Pointer[DialogMatchCanary]
-	guidanceMirror atomic.Pointer[GuidanceHookMirror]
+	dialogCanary   atomic.Pointer[questionkit.DialogMatchCanary]
+	guidanceMirror atomic.Pointer[questionkit.GuidanceHookMirror]
 	ackCancel      context.CancelFunc
 	ackDone        chan struct{}
 
@@ -1026,7 +1027,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		svc.terminalSvc.SetNudgeRecorder(concStorage)
 	}
 	workspaceSvc.SetGuardsFlag(svc.guards)
-	var linkLookup itemSessionLookup
+	var linkLookup questionkit.ItemSessionLookup
 	if concStorage != nil {
 		linkLookup = concStorage
 	}

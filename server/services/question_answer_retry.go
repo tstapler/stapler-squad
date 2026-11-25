@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -19,18 +20,18 @@ import (
 // when the row cannot be retried; otherwise the question is registered again
 // and the caller writes as usual. A row that was never answered is not a retry,
 // so the flag changes nothing for it.
-func (r *AnswerRouter) reopenForRetry(ctx context.Context, key QuestionKey) (res ActionResult, stop bool) {
+func (r *AnswerRouter) reopenForRetry(ctx context.Context, key questionkit.QuestionKey) (res questionkit.ActionResult, stop bool) {
 	id, err := uuid.Parse(key.QuestionID)
 	if r.rows == nil || r.reopen == nil || err != nil {
-		return ActionResult{}, false
+		return questionkit.ActionResult{}, false
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
 	if err != nil || row.Status() != domain.GuidanceRequestStatusAnswered {
-		return ActionResult{}, false
+		return questionkit.ActionResult{}, false
 	}
 	switch row.DeliveryState {
 	case domain.DeliveryStateAcknowledged:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, row.Answer), true
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, row.Answer), true
 	case domain.DeliveryStateSent:
 		// The operator declares the unconfirmed send failed; losing the race to
 		// an acknowledgement means nothing is left to retry.
@@ -39,12 +40,12 @@ func (r *AnswerRouter) reopenForRetry(ctx context.Context, key QuestionKey) (res
 		}
 	case domain.DeliveryStateFailed:
 	default:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, true
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, true
 	}
-	dialog, ok := dialogFromRow(row)
+	dialog, ok := questionkit.DialogFromRow(row)
 	if !ok || row.AskerSessionUUID != key.SessionUUID {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, true
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, true
 	}
-	r.reopen(PendingQuestion{QuestionID: row.ID, SessionUUID: key.SessionUUID, Dialog: dialog, Token: QuestionToken(dialog.Question)})
-	return ActionResult{}, false
+	r.reopen(questionkit.PendingQuestion{QuestionID: row.ID, SessionUUID: key.SessionUUID, Dialog: dialog, Token: questionkit.QuestionToken(dialog.Question)})
+	return questionkit.ActionResult{}, false
 }

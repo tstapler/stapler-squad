@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
@@ -51,29 +52,29 @@ type actionFakes struct {
 	approvals, guidance, backlog, wakes, peers atomic.Int32
 }
 
-func (f *actionFakes) ResolveApproval(context.Context, services.ApprovalChoice) (services.ActionResult, error) {
+func (f *actionFakes) ResolveApproval(context.Context, services.ApprovalChoice) (questionkit.ActionResult, error) {
 	f.approvals.Add(1)
-	return services.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
+	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
 
-func (f *actionFakes) AnswerGuidance(context.Context, string, string) (services.ActionResult, error) {
+func (f *actionFakes) AnswerGuidance(context.Context, string, string) (questionkit.ActionResult, error) {
 	f.guidance.Add(1)
-	return services.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
+	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
 
-func (f *actionFakes) Decide(context.Context, services.BacklogDecision) (services.ActionResult, error) {
+func (f *actionFakes) Decide(context.Context, services.BacklogDecision) (questionkit.ActionResult, error) {
 	f.backlog.Add(1)
-	return services.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
+	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
 
-func (f *actionFakes) CancelWake(context.Context, string) (services.ActionResult, error) {
+func (f *actionFakes) CancelWake(context.Context, string) (questionkit.ActionResult, error) {
 	f.wakes.Add(1)
-	return services.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
+	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED}, nil
 }
 
-func (f *actionFakes) CancelPeerHelp(context.Context, string) (services.ActionResult, error) {
+func (f *actionFakes) CancelPeerHelp(context.Context, string) (questionkit.ActionResult, error) {
 	f.peers.Add(1)
-	return services.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED}, nil
+	return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED}, nil
 }
 
 type remoteActionEnv struct {
@@ -83,7 +84,7 @@ type remoteActionEnv struct {
 	pane   *countingPane
 	remote http.Handler
 	local  http.Handler
-	qkey   services.QuestionKey
+	qkey   questionkit.QuestionKey
 }
 
 func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
@@ -114,7 +115,7 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 	poller.SetInstances([]*instance.Instance{inst})
 	svc.SetReviewQueuePoller(poller)
 
-	q := services.PendingQuestion{QuestionID: "q1", SessionUUID: "uuid-hidden"}
+	q := questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "uuid-hidden"}
 	q.Dialog.Labels = []string{"Redis", "Memcached"}
 	svc.PendingQuestions().Register(q)
 
@@ -130,7 +131,7 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 		srv: srv, svc: svc, fakes: f, pane: pane,
 		remote: srv.remoteChain(middleware.Auth(cookieValidator{token: remoteSessionCookie}), true),
 		local:  srv.localChain(),
-		qkey:   services.QuestionKey{SessionUUID: "uuid-hidden", QuestionID: "q1"},
+		qkey:   questionkit.QuestionKey{SessionUUID: "uuid-hidden", QuestionID: "q1"},
 	}
 }
 
