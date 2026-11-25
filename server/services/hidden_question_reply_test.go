@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -81,9 +82,9 @@ func newReplyEnv(t *testing.T) *replyEnv {
 }
 
 func (e *replyEnv) register(inst *instance.Instance, d panereply.QuestionDialog) string {
-	id := NewQuestionID()
-	e.fix.svc.PendingQuestions().Register(PendingQuestion{
-		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: QuestionToken(d.Question),
+	id := questionkit.NewQuestionID()
+	e.fix.svc.PendingQuestions().Register(questionkit.PendingQuestion{
+		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: questionkit.QuestionToken(d.Question),
 	})
 	return id
 }
@@ -124,7 +125,7 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	assert.Equal(t, []int{1}, e.pm.probed, "the fsynced requested line was durable when the digit was written, and the result line was not yet")
 	instance.AssertLeaseFree(t, e.inst)
 	assert.EqualValues(t, 1, e.counter("sent"))
-	_, still := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, still := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.False(t, still, "the answered question is consumed")
 
 	lines := replyLines(e.auditLines())
@@ -204,7 +205,7 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 	})
 
 	// Every refusal left the question claimable and released the lease.
-	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
 	instance.AssertLeaseFree(t, e.inst)
 }
@@ -248,7 +249,7 @@ func TestReply_ShouldMakeInFlightReplyIdWaitForTheFirstResult_WhenTwoCallersSend
 	go func() { results <- e.replyOK("1", "r-flight") }()
 	<-e.pm.entered // the first caller is inside the write
 	go func() { results <- e.replyOK("1", "r-flight") }()
-	require.Eventually(t, func() bool { return e.fix.svc.replyState().flights.size() == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return e.fix.svc.replyState().flights.Size() == 1 }, time.Second, time.Millisecond)
 	close(e.pm.gate)
 
 	r1, r2 := <-results, <-results
@@ -296,7 +297,7 @@ func TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSec
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, resp.Outcome)
 	assert.EqualValues(t, 4, resp.RetryAfterSeconds)
 	assert.Len(t, e.pm.writes(), 1)
-	_, claimable := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: q2})
+	_, claimable := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: q2})
 	assert.True(t, claimable, "rate limiting happens before the claim")
 
 	// A retry of the first id inside the window is the first result, not RATE_LIMITED.
@@ -314,7 +315,7 @@ func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWrite
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
 	assert.Empty(t, e.pm.writes())
 	assert.EqualValues(t, 1, e.counter("audit_failed"))
-	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok, "the claim was released: Retry is safe")
 	instance.AssertLeaseFree(t, e.inst)
 
@@ -348,7 +349,7 @@ func TestReply_ShouldReturnNotSentAndAllowRetry_WhenTheWriteProvablyWroteNothing
 
 	first := e.replyOK("2", "r-ns")
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, first.Outcome)
-	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
 
 	e.pm.mu.Lock()
@@ -366,7 +367,7 @@ func TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy(t *testing.T
 
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, e.replyOK("1", "r-busy").Outcome)
 	assert.Empty(t, e.pm.writes())
-	_, claimable := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, claimable := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, claimable)
 }
 

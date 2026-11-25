@@ -16,8 +16,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -51,13 +51,9 @@ type BacklogReviewLink struct {
 	itemID string
 }
 
-type itemSessionLookup interface {
-	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
-}
-
 // storageLinkResolver implements the predicate over the item_session table. A
 // nil lookup (a service built without storage) never links.
-type storageLinkResolver struct{ lookup itemSessionLookup }
+type storageLinkResolver struct{ lookup questionkit.ItemSessionLookup }
 
 func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *instance.Instance) (BacklogReviewLink, bool, error) {
 	if r.lookup == nil || inst == nil || !inst.Started() || inst.Snapshot().Status.IsSuspended() {

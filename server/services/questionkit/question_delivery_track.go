@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"context"
@@ -29,24 +29,37 @@ type SentDelivery struct {
 	Indeterminate bool
 }
 
-type deliveryTrack struct {
-	rows answerRows
-	acks deliverySink
+// AnswerRows is the slice of guidance storage the answer router reads and writes.
+type AnswerRows interface {
+	GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error)
+	AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error)
+	SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error)
+}
+
+// DeliverySink is told about every keystroke that may have reached a pane, so
+// acknowledgement can be detected (Task 3.4e).
+type DeliverySink interface {
+	Sent(d SentDelivery)
+}
+
+type DeliveryTrack struct {
+	rows AnswerRows
+	acks DeliverySink
 	id   uuid.UUID
 	on   bool
 }
 
-// beginDelivery tracks questionID when it names a still-open durable row.
-func (r *AnswerRouter) beginDelivery(ctx context.Context, questionID string) deliveryTrack {
-	t := deliveryTrack{rows: r.rows, acks: r.acks}
-	if r.rows == nil {
+// BeginDelivery tracks questionID when it names a still-open durable row.
+func BeginDelivery(ctx context.Context, rows AnswerRows, acks DeliverySink, questionID string) DeliveryTrack {
+	t := DeliveryTrack{rows: rows, acks: acks}
+	if rows == nil {
 		return t
 	}
 	id, err := uuid.Parse(questionID)
 	if err != nil {
 		return t
 	}
-	row, err := r.rows.GetGuidanceRequest(ctx, id)
+	row, err := rows.GetGuidanceRequest(ctx, id)
 	if err != nil || !trackable(row) {
 		return t
 	}
@@ -54,7 +67,7 @@ func (r *AnswerRouter) beginDelivery(ctx context.Context, questionID string) del
 	return t
 }
 
-func (t deliveryTrack) move(ctx context.Context, state domain.DeliveryState, attempts int) {
+func (t DeliveryTrack) move(ctx context.Context, state domain.DeliveryState, attempts int) {
 	if !t.on {
 		return
 	}
@@ -64,12 +77,12 @@ func (t deliveryTrack) move(ctx context.Context, state domain.DeliveryState, att
 	}
 }
 
-// pending marks the attempt; one attempt is counted per write.
-func (t deliveryTrack) pending(ctx context.Context) { t.move(ctx, domain.DeliveryStatePending, 1) }
+// Pending marks the attempt; one attempt is counted per write.
+func (t DeliveryTrack) Pending(ctx context.Context) { t.move(ctx, domain.DeliveryStatePending, 1) }
 
-// finish records where the attempt ended. A write that may have landed also
+// Finish records where the attempt ended. A write that may have landed also
 // answers the row and hands the delivery to the acknowledgement detector.
-func (t deliveryTrack) finish(ctx context.Context, res ActionResult, err error, sent SentDelivery, answer string) {
+func (t DeliveryTrack) Finish(ctx context.Context, res ActionResult, err error, sent SentDelivery, answer string) {
 	if !t.on {
 		return
 	}

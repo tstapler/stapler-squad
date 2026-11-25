@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -732,7 +733,7 @@ func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
 }
 
 func approvalNotificationTitle(approval *approvalkit.PendingApproval) string {
-	return fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+	return fmt.Sprintf("Permission Required: %s", questionkit.SanitizeNotificationText(approval.ToolName))
 }
 
 // approvalNotificationMetadata is the display metadata of an approval's
@@ -810,7 +811,7 @@ const maxNotificationMessageLen = 120
 // stamps question_id, question_shape and question_options; every other question stamps
 // question_shape and reply_unavailable so the card says "Answer in the terminal".
 func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload, qa QuestionAttribution) {
-	asked := ParseAskUserQuestion(payload.ToolInput)
+	asked := questionkit.ParseAskUserQuestion(payload.ToolInput)
 	message := "Check the terminal to respond."
 	switch {
 	case asked.Question != "":
@@ -822,7 +823,7 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 	}
 	message, _ = secretscan.RedactSecrets(message)
 	meta := h.registerQuestion(sessionID, qa, asked, payload.ToolUseID)
-	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
+	logQuestionRegistered(sessionID, string(asked.Shape), meta[questionkit.MetaReplyUnavailable])
 
 	event := events.NewNotificationEvent(
 		sessionID,
@@ -858,18 +859,6 @@ const maxEscalationReasonLen = 500
 // truncateEscalationReason caps s at maxEscalationReasonLen runes.
 func truncateEscalationReason(s string) string {
 	return truncateString(s, maxEscalationReasonLen)
-}
-
-// sanitizeNotificationText strips newlines and non-printable characters from
-// user- or model-controlled strings before embedding them in OS notification
-// titles, preventing newline injection into the OS notification tray.
-func sanitizeNotificationText(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r < 32 {
-			return ' '
-		}
-		return r
-	}, s)
 }
 
 // approvalDetail extracts the human-meaningful part of a tool call — the full command

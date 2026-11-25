@@ -128,6 +128,7 @@ docs/registry/coverage-gaps.json
 
 # Uploaded files (user-supplied, not source)
 uploads/
+!server/services/uploads/
 
 # Benchmark baselines — persisted via GitHub Actions cache (see
 # .github/workflows/benchmark.yml), not
@@ -173,4 +174,6 @@ docs-coverage-trend.json
 
 # The access kernel golden is the one tracked .gz
 !server/services/access/testdata/*.gz
+# The questionkit parity golden is tracked too
+!server/services/questionkit/testdata/*.gz
 !server/services/flagsvc/testdata/*.gz

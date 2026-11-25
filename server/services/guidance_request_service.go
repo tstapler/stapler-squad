@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/itemlink"
@@ -33,7 +34,7 @@ type GuidanceRequestService struct {
 	storage         *session.Storage
 	notifier        *EventBusNotifier
 	triageRespawner TriageRespawner
-	answerListener  atomic.Pointer[AnswerListener]
+	answerListener  atomic.Pointer[questionkit.AnswerListener]
 	waiverResumer   atomic.Pointer[WaiverResumer]
 	probes          atomic.Pointer[DeliveryProbes]
 }
@@ -99,7 +100,9 @@ type WaiverResumer func(ctx context.Context, itemID string)
 func (s *GuidanceRequestService) SetWaiverResumer(fn WaiverResumer) { s.waiverResumer.Store(&fn) }
 
 // SetAnswerListener registers fn to run after each successfully applied answer.
-func (s *GuidanceRequestService) SetAnswerListener(fn AnswerListener) { s.answerListener.Store(&fn) }
+func (s *GuidanceRequestService) SetAnswerListener(fn questionkit.AnswerListener) {
+	s.answerListener.Store(&fn)
+}
 
 // TriageRespawner is the narrow slice of *BacklogService's existing
 // AutoRespawnTriage (server/services/backlog_service_triage.go) that
@@ -282,7 +285,7 @@ func guidanceRequestToProto(d *domain.GuidanceRequestData) *sessionv1.GuidanceRe
 	if d.CancelledAt != nil {
 		out.CancelledAt = timestamppb.New(*d.CancelledAt)
 	}
-	setGuidanceMirrorFields(out, d)
+	questionkit.SetGuidanceMirrorFields(out, d)
 	return out
 }
 

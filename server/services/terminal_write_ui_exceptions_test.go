@@ -12,7 +12,7 @@ import (
 // T-RO-11: each UI-exception path is reachable only through functions that take
 // its capability: the O7 steer takes the BacklogReviewLink (constructible only in
 // hidden_review_steer.go) and Reply takes the PendingQuestionClaim (constructible
-// only in pending_question_store.go), check (a).
+// only in questionkit/pending_question_store.go), check (a).
 func TestUiExceptionEntryPoints_ShouldEachRequireTheirCapabilityParam_WhenReflected(t *testing.T) {
 	entryPoints := []struct{ file, recv, name, param string }{
 		{"hidden_review_steer.go", "", "newBacklogSteerWriter", "TerminalAccess"},

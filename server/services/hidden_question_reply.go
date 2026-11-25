@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -84,8 +85,8 @@ func (s *SessionService) wireReplyFlag() {
 
 // replyState is the Reply machinery of one SessionService, built on first use.
 type replyState struct {
-	store    *PendingQuestionStore
-	flights  *replyFlightTable
+	store    *questionkit.PendingQuestionStore
+	flights  *questionkit.ReplyFlightTable
 	flag     *ReplyFlag
 	limiters *replyLimiters
 	now      func() time.Time
@@ -98,8 +99,8 @@ func (s *SessionService) replyState() *replyState {
 			now = s.replyNow
 		}
 		s.reply = &replyState{
-			store:    NewPendingQuestionStore(now),
-			flights:  newReplyFlightTable(now),
+			store:    questionkit.NewPendingQuestionStore(now),
+			flights:  questionkit.NewReplyFlightTable(now),
 			flag:     &ReplyFlag{},
 			limiters: newReplyLimiters(now),
 			now:      now,
@@ -109,7 +110,9 @@ func (s *SessionService) replyState() *replyState {
 }
 
 // PendingQuestions is the registry the approval handler feeds.
-func (s *SessionService) PendingQuestions() *PendingQuestionStore { return s.replyState().store }
+func (s *SessionService) PendingQuestions() *questionkit.PendingQuestionStore {
+	return s.replyState().store
+}
 
 // onSessionDeleted drops everything Reply keeps for a deleted session.
 func (s *SessionService) onSessionDeletedForReply(sessionUUID string) {
@@ -154,30 +157,30 @@ func (s *SessionService) ReplyToPendingQuestion(
 	if access.AccessFor(inst) != access.TerminalReadOnly {
 		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_HIDDEN), nil
 	}
-	key := QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}
+	key := questionkit.QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}
 	if q, ok := st.store.Peek(key); ok && int(in.digit-'0') > len(q.Dialog.Labels) {
 		s.countReply(replyLabelInvalid)
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("option %c is not available for this question", in.digit))
 	}
 
-	flight, role := st.flights.begin(in.replyID, hashReplyPayload(in.sessionUUID, in.questionID, in.digit))
+	flight, role := st.flights.Begin(in.replyID, questionkit.HashReplyPayload(in.sessionUUID, in.questionID, in.digit))
 	switch role {
-	case replyMismatch:
+	case questionkit.ReplyMismatch:
 		s.countReply(replyLabelInvalid)
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("reply_id was already used for a different reply"))
-	case replyFollower, replyCached:
-		res, werr := flight.wait(ctx)
+	case questionkit.ReplyFollower, questionkit.ReplyCached:
+		res, werr := flight.Wait(ctx)
 		if werr != nil {
 			return nil, connect.NewError(connect.CodeCanceled, werr)
 		}
 		return s.replyResult(res)
 	}
 	res, cache := s.paneReplyCore().Run(ctx, AnswerTargetHidden, in, inst, facts)
-	st.flights.finish(in.replyID, flight, res, cache && res.Err == nil)
+	st.flights.Finish(in.replyID, flight, res, cache && res.Err == nil)
 	return s.replyResult(res)
 }
 
-func (s *SessionService) replyResult(res replyOutcomeResult) (*connect.Response[sessionv1.ReplyToPendingQuestionResponse], error) {
+func (s *SessionService) replyResult(res questionkit.ReplyOutcomeResult) (*connect.Response[sessionv1.ReplyToPendingQuestionResponse], error) {
 	if res.Err != nil {
 		return nil, res.Err
 	}

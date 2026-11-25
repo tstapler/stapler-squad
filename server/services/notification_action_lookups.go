@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -53,7 +54,7 @@ func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (
 	for _, r := range rows {
 		if want[r.ID] {
 			g := OpenGuidance{Options: decodeGuidanceOptions(r.Options), Source: r.Source, PeerHelp: r.Source == domain.QuestionSourcePeer}
-			if qs, ok := tabbedFromRow(r); ok {
+			if qs, ok := questionkit.TabbedFromRow(r); ok {
 				g.Tabbed = qs
 			}
 			out[r.ID] = g

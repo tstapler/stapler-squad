@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"fmt"
@@ -12,6 +12,28 @@ import (
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
+// storeTestClock is a mutex-guarded manual clock.
+type storeTestClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newStoreTestClock() *storeTestClock {
+	return &storeTestClock{t: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+}
+
+func (c *storeTestClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *storeTestClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
 func testQuestion(sessionUUID, id string, labels ...string) PendingQuestion {
 	if len(labels) == 0 {
 		labels = []string{"A", "B"}
@@ -24,7 +46,7 @@ func testQuestion(sessionUUID, id string, labels ...string) PendingQuestion {
 
 // T-RP-01
 func TestPendingQuestionStore_ShouldRegisterBoundEvictAndExpire_WhenQuestionsAreAskedAnsweredOrLeave(t *testing.T) {
-	clock := newGateTestClock()
+	clock := newStoreTestClock()
 	s := NewPendingQuestionStore(clock.Now)
 
 	s.Register(testQuestion("s1", "q1"))
@@ -131,7 +153,7 @@ func TestClaim_ShouldConsumeOnConsumeAndRemoveRegisteredEntriesOnSessionDelete(t
 }
 
 func TestPendingCount_ShouldCountOnlyParallelWindowQuestions_WhenOlderOnesWereAnsweredInTheTerminal(t *testing.T) {
-	clock := newGateTestClock()
+	clock := newStoreTestClock()
 	s := NewPendingQuestionStore(clock.Now)
 
 	assert.Equal(t, 0, s.PendingCount("unknown"))
@@ -145,7 +167,7 @@ func TestPendingCount_ShouldCountOnlyParallelWindowQuestions_WhenOlderOnesWereAn
 }
 
 func TestPendingCount_ShouldCountUnregisteredQuestions_WhenTheyArePartOfTheSameTurn(t *testing.T) {
-	clock := newGateTestClock()
+	clock := newStoreTestClock()
 	s := NewPendingQuestionStore(clock.Now)
 
 	s.NoteUnreplyable("s1") // multi-select question on screen
@@ -158,7 +180,7 @@ func TestPendingCount_ShouldCountUnregisteredQuestions_WhenTheyArePartOfTheSameT
 }
 
 func TestPendingCount_ShouldNotCountClaimedQuestions(t *testing.T) {
-	s := NewPendingQuestionStore(newGateTestClock().Now)
+	s := NewPendingQuestionStore(newStoreTestClock().Now)
 	s.Register(testQuestion("s1", "q1"))
 	_, res := s.Claim(QuestionKey{SessionUUID: "s1", QuestionID: "q1"})
 	require.Equal(t, ClaimOK, res)

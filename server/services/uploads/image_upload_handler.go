@@ -1,4 +1,4 @@
-package services
+package uploads
 
 import (
 	"encoding/base64"

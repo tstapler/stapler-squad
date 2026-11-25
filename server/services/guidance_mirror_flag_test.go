@@ -11,12 +11,13 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 func postVerifiedQuestion(q *questionHarness) (title, message string, meta map[string]string) {
 	ev := q.post(askQuestionBody, map[string]string{hookProofHeader: q.proofs.HeaderValue("sess-uuid")})
 	meta = maps.Clone(ev.NotificationMetadata)
-	delete(meta, metaQuestionID) // a random id in the legacy path
+	delete(meta, questionkit.MetaQuestionID) // a random id in the legacy path
 	return ev.NotificationTitle, ev.NotificationMessage, meta
 }
 
@@ -28,14 +29,14 @@ func TestGuidanceMirror_should_WriteNothingAndMatchLegacyOutput_When_StructuredF
 
 	mirrored := newQuestionHarness(t)
 	storage := svctest.CreateTestStorage(t)
-	m := NewGuidanceHookMirror(storage, mirrored.store, nil, nil, testFlagRegistry()) // production default gate
+	m := questionkit.NewGuidanceHookMirror(storage, mirrored.store, nil, nil, AskUserQuestionRenderGate(testFlagRegistry())) // production default gate
 	mirrored.h.SetGuidanceMirror(m)
 	title, msg, meta := postVerifiedQuestion(mirrored)
 
 	assert.Equal(t, lTitle, title)
 	assert.Equal(t, lMsg, msg)
 	assert.Equal(t, lMeta, meta)
-	assert.NotContains(t, meta, metaGuidanceRequestID)
+	assert.NotContains(t, meta, questionkit.MetaGuidanceRequestID)
 	rows, err := storage.ListAllPendingGuidanceRequests(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, rows, "flag off writes no durable row")
@@ -47,7 +48,7 @@ func TestGuidanceMirror_should_WriteNothingAndMatchLegacyOutput_When_StructuredF
 func TestGuidanceMirror_should_ReadTheFlagLivePerCall_When_ItFlipsAfterConstruction(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	storage := svctest.CreateTestStorage(t)
-	m := NewGuidanceHookMirror(storage, NewPendingQuestionStore(nil), nil, nil, testFlagRegistry())
+	m := questionkit.NewGuidanceHookMirror(storage, questionkit.NewPendingQuestionStore(nil), nil, nil, AskUserQuestionRenderGate(testFlagRegistry()))
 	_, ok := m.Mirror(mirrorReq(t, "toolu_a", "First?", true))
 	require.False(t, ok)
 

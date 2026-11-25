@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"context"
@@ -21,12 +21,12 @@ import (
 
 const (
 	metricReopenAfterAction    = "reopen_after_action_total"
-	metricGuidanceUnconfirmed  = "guidance_answer_unconfirmed_total"
-	metricScheduleWakeupCalls  = "agent_schedule_wakeup_calls_total"
-	scheduleWakeupTool         = "ScheduleWakeup"
+	MetricGuidanceUnconfirmed  = "guidance_answer_unconfirmed_total"
+	MetricScheduleWakeupCalls  = "agent_schedule_wakeup_calls_total"
+	ScheduleWakeupTool         = "ScheduleWakeup"
 	scheduleWakeupReceiptEvent = "schedule_wakeup_receipt"
-	roleUnlinked               = "unlinked"
-	roleUnknown                = "unknown"
+	RoleUnlinked               = "unlinked"
+	RoleUnknown                = "unknown"
 
 	// reopenWindow is how soon after an applied action an operator open of the
 	// same session counts as a possible wrong answer.
@@ -36,9 +36,9 @@ const (
 var (
 	reopenCounter = telemetry.CounterNamed(metricReopenAfterAction,
 		"Operator opened a session's terminal within 60s of an applied inline answer to it")
-	answerUnconfirmedCounter = telemetry.CounterNamed(metricGuidanceUnconfirmed,
+	answerUnconfirmedCounter = telemetry.CounterNamed(MetricGuidanceUnconfirmed,
 		"Keystroke answers that entered the Unconfirmed sub-state (indeterminate write or no acknowledgement at 60s)")
-	scheduleWakeupCounter = telemetry.CounterNamed(metricScheduleWakeupCalls,
+	scheduleWakeupCounter = telemetry.CounterNamed(MetricScheduleWakeupCalls,
 		"ScheduleWakeup PostToolUse receipts by backlog role")
 )
 
@@ -47,26 +47,26 @@ type pendingReopen struct {
 	at   time.Time
 }
 
-// reopenTracker counts an applied ANSWER_QUESTION followed by the operator
+// ReopenTracker counts an applied ANSWER_QUESTION followed by the operator
 // opening that session's terminal within reopenWindow. Only answers carry a
 // session id, so APPROVE, DENY and BACKLOG_DECISION are not tracked. A nil
 // tracker ignores every call.
-type reopenTracker struct {
+type ReopenTracker struct {
 	mu      sync.Mutex
 	now     func() time.Time
 	pending map[string]pendingReopen
 }
 
-func newReopenTracker(now func() time.Time) *reopenTracker {
+func NewReopenTracker(now func() time.Time) *ReopenTracker {
 	if now == nil {
 		now = time.Now
 	}
-	return &reopenTracker{now: now, pending: map[string]pendingReopen{}}
+	return &ReopenTracker{now: now, pending: map[string]pendingReopen{}}
 }
 
-var defaultReopenTracker = newReopenTracker(nil)
+var DefaultReopenTracker = NewReopenTracker(nil)
 
-func (t *reopenTracker) noteApplied(m *sessionv1.InvokeNotificationActionRequest, res ActionResult) {
+func (t *ReopenTracker) NoteApplied(m *sessionv1.InvokeNotificationActionRequest, res ActionResult) {
 	if t == nil || res.Outcome != sessionv1.ActionOutcome_ACTION_OUTCOME_APPLIED ||
 		m.GetActionKind() != sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION || m.GetSessionId() == "" {
 		return
@@ -84,7 +84,7 @@ func (t *reopenTracker) noteApplied(m *sessionv1.InvokeNotificationActionRequest
 
 // attached is called with every identifier of a session whose terminal the
 // operator just opened (stable id and title); it counts at most once per action.
-func (t *reopenTracker) attached(ids ...string) {
+func (t *ReopenTracker) Attached(ids ...string) {
 	if t == nil {
 		return
 	}
@@ -104,33 +104,33 @@ func (t *reopenTracker) attached(ids ...string) {
 	}
 }
 
-// recordAnswerUnconfirmed counts one answer entering Unconfirmed; the other
+// RecordAnswerUnconfirmed counts one answer entering Unconfirmed; the other
 // delivery states are already in guidance_answer_delivery_total{route,state}.
-func recordAnswerUnconfirmed() { telemetry.AddOne(answerUnconfirmedCounter()) }
+func RecordAnswerUnconfirmed() { telemetry.AddOne(answerUnconfirmedCounter()) }
 
-// scheduleWakeupRoles resolves a session's backlog role for the receipt counter.
-type scheduleWakeupRoles struct{ lookup itemSessionLookup }
+// ScheduleWakeupRoles resolves a session's backlog role for the receipt counter.
+type ScheduleWakeupRoles struct{ Lookup ItemSessionLookup }
 
-func (r scheduleWakeupRoles) roleOf(ctx context.Context, sessionUUID string) string {
-	if r.lookup == nil {
-		return roleUnlinked
+func (r ScheduleWakeupRoles) RoleOf(ctx context.Context, sessionUUID string) string {
+	if r.Lookup == nil {
+		return RoleUnlinked
 	}
-	row, err := r.lookup.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	row, err := r.Lookup.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
-		return roleUnlinked
+		return RoleUnlinked
 	case err != nil:
-		return roleUnknown
+		return RoleUnknown
 	case row.Role == "":
-		return roleUnlinked
+		return RoleUnlinked
 	}
 	return row.Role
 }
 
-// observeScheduleWakeup counts one ScheduleWakeup receipt and writes the
+// ObserveScheduleWakeup counts one ScheduleWakeup receipt and writes the
 // structured line the wake-baseline script reads.
-func observeScheduleWakeup(ctx context.Context, roles scheduleWakeupRoles, sessionUUID string) {
-	role := roles.roleOf(ctx, sessionUUID)
+func ObserveScheduleWakeup(ctx context.Context, roles ScheduleWakeupRoles, sessionUUID string) {
+	role := roles.RoleOf(ctx, sessionUUID)
 	telemetry.AddOne(scheduleWakeupCounter(), attribute.String("role", role))
 	log.Info(scheduleWakeupReceiptEvent, "session", sessionUUID, "role", role)
 }
@@ -138,5 +138,5 @@ func observeScheduleWakeup(ctx context.Context, roles scheduleWakeupRoles, sessi
 // noteOperatorOpen is called when a web terminal stream attaches to an agent
 // session's pane.
 func NoteOperatorOpen(inst *instance.Instance) {
-	defaultReopenTracker.attached(inst.GetStableID(), inst.GetTitle())
+	DefaultReopenTracker.Attached(inst.GetStableID(), inst.GetTitle())
 }

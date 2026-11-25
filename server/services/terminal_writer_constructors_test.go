@@ -8,14 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
-func validClaim(t *testing.T) PendingQuestionClaim {
+func validClaim(t *testing.T) questionkit.PendingQuestionClaim {
 	t.Helper()
-	s := NewPendingQuestionStore(nil)
+	s := questionkit.NewPendingQuestionStore(nil)
 	s.Register(testQuestion("s1", "q1"))
-	claim, res := s.Claim(QuestionKey{"s1", "q1"})
-	require.Equal(t, ClaimOK, res)
+	claim, res := s.Claim(questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"})
+	require.Equal(t, questionkit.ClaimOK, res)
 	return claim
 }
 
@@ -54,7 +56,7 @@ func TestNewQuestionReplyWriter_ShouldReturnErrReadOnly_WhenClaimIsZeroOrInstanc
 	t.Parallel()
 	inst := hiddenInstance(t, true)
 
-	w, err := newQuestionReplyWriter(access.TerminalReadOnly, AnswerTargetHidden, PendingQuestionClaim{}, inst, nil)
+	w, err := newQuestionReplyWriter(access.TerminalReadOnly, AnswerTargetHidden, questionkit.PendingQuestionClaim{}, inst, nil)
 	assert.Nil(t, w)
 	assert.ErrorIs(t, err, access.ErrReadOnly, "a never-claimed question yields no writer")
 
@@ -80,4 +82,11 @@ func TestNewBacklogSteerWriter_ShouldReturnErrReadOnly_WhenLinkIsZeroOrRunnerIsN
 	w, err = newBacklogSteerWriter(access.TerminalReadOnly, link, runner)
 	require.NoError(t, err)
 	assert.NotNil(t, w)
+}
+
+func testQuestion(sessionUUID, id string) questionkit.PendingQuestion {
+	return questionkit.PendingQuestion{
+		QuestionID: id, SessionUUID: sessionUUID,
+		Dialog: panereply.QuestionDialog{Question: "Q " + id + "?", Header: "H", Labels: []string{"A", "B"}},
+	}
 }

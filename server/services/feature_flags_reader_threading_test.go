@@ -1,13 +1,18 @@
 package services
 
 import (
+	"context"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // Constructor threading: each site below builds its flagReader from the registry it was given, so an
@@ -20,8 +25,33 @@ func inlineOnRegistry() *featureflags.Registry {
 
 func TestNewGuidanceHookMirror_ShouldGateOnInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	assert.True(t, NewGuidanceHookMirror(nil, nil, nil, nil, inlineOnRegistry()).enabled())
-	assert.False(t, NewGuidanceHookMirror(nil, nil, nil, nil, testFlagRegistry()).enabled())
+	assert.True(t, questionkit.NewGuidanceHookMirror(nil, nil, nil, nil, AskUserQuestionRenderGate(inlineOnRegistry())).Enabled())
+	assert.False(t, questionkit.NewGuidanceHookMirror(nil, nil, nil, nil, AskUserQuestionRenderGate(testFlagRegistry())).Enabled())
+}
+
+func TestAskUserQuestionRenderGate_ShouldReadTheRenderStageOnly(t *testing.T) {
+	e := newNotificationFlagEnv(t)
+	set := func(scope string) {
+		_, err := e.svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+			Name: flagsvc.AskUserQuestionStructuredFlagName, Scope: scope, Enabled: true,
+			Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED,
+		}))
+		require.NoError(t, err)
+	}
+	gate := AskUserQuestionRenderGate(testFlagRegistry())
+	assert.False(t, gate())
+	set(flagsvc.ScopeStageRender)
+	assert.True(t, gate(), "the gate is read per call, so a live flip applies; the answer stage is still off")
+}
+
+func TestAskUserQuestionRenderGate_ShouldStayClosed_WhenOnlyTheAnswerStageIsSet(t *testing.T) {
+	e := newNotificationFlagEnv(t)
+	_, err := e.svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+		Name: flagsvc.AskUserQuestionStructuredFlagName, Scope: flagsvc.ScopeStageAnswer, Enabled: true,
+		Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED,
+	}))
+	require.NoError(t, err)
+	assert.False(t, AskUserQuestionRenderGate(testFlagRegistry())())
 }
 
 func TestNewDescriptorBuilder_ShouldFlagOnInjectedRegistry(t *testing.T) {
