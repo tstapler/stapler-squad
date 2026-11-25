@@ -34,10 +34,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
+	"github.com/tstapler/stapler-squad/server/services/summaryrpc"
 	"github.com/tstapler/stapler-squad/server/services/uploads"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
@@ -661,7 +663,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register SessionSummaryService handler.
 	if deps.SessionSummaryGenerator != nil {
-		sessionSummaryService := services.NewSessionSummaryService(deps.SessionSummaryGenerator, deps.SessionService)
+		sessionSummaryService := summaryrpc.NewSessionSummaryService(deps.SessionSummaryGenerator, deps.SessionService)
 		ssPath, ssHandler := sessionv1connect.NewSessionSummaryServiceHandler(sessionSummaryService, ConnectOptions(deps.ErrorRegistry)...)
 		ssAPIPath := "/api" + ssPath
 		srv.RegisterConnectHandler(ssAPIPath, http.StripPrefix("/api", ssHandler))
@@ -670,7 +672,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register HandoffSummaryService handler (Story 2.2.1).
 	if deps.HandoffSummaryGenerator != nil {
-		handoffSummaryService := services.NewHandoffSummaryService(deps.HandoffSummaryGenerator)
+		handoffSummaryService := summaryrpc.NewHandoffSummaryService(deps.HandoffSummaryGenerator)
 		hsPath, hsHandler := sessionv1connect.NewHandoffSummaryServiceHandler(handoffSummaryService, ConnectOptions(deps.ErrorRegistry)...)
 		hsAPIPath := "/api" + hsPath
 		srv.RegisterConnectHandler(hsAPIPath, http.StripPrefix("/api", hsHandler))
@@ -1149,7 +1151,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register non-approval hook receivers (stop, pre/post-tool-use, prompt-submit,
 	// post-tool-use-drift-check — the BUG-044 follow-up steering hook, wired only
 	// into autonomous backlog work sessions by spawnSessionAfterGates)
-	hookReceiver := services.NewHookReceiver()
+	hookReceiver := hookrecv.NewHookReceiver()
 	if deps.SessionService != nil {
 		hookReceiver.SetPostToolUseObserver(deps.SessionService.ObservePostToolUse)
 	}
