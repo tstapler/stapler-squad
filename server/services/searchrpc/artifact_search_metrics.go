@@ -1,4 +1,4 @@
-package services
+package searchrpc
 
 import (
 	"context"
@@ -17,7 +17,7 @@ const (
 	MetricArtifactSearchQueries = "ssq_artifact_search_queries_total"
 )
 
-type artifactSearchMetrics struct {
+type ArtifactSearchMetrics struct {
 	seconds metric.Float64Histogram
 	queries metric.Int64Counter
 
@@ -25,17 +25,17 @@ type artifactSearchMetrics struct {
 	counts map[[2]string]int64 // in-process tally so tests need no exporter
 }
 
-var artifactSearchStats = func() *artifactSearchMetrics {
-	m := &artifactSearchMetrics{counts: map[[2]string]int64{}}
+var ArtifactSearchStats = func() *ArtifactSearchMetrics {
+	m := &ArtifactSearchMetrics{counts: map[[2]string]int64{}}
 	meter := telemetry.GetMeter()
 	m.seconds, _ = meter.Float64Histogram(MetricArtifactSearchSeconds, metric.WithUnit("s"))
 	m.queries, _ = meter.Int64Counter(MetricArtifactSearchQueries)
 	return m
 }()
 
-// observe records one finished query: kind is the query shape (text, pr, sha,
+// Observe records one finished query: kind is the query shape (text, pr, sha,
 // branch), hit says whether it returned any session.
-func (m *artifactSearchMetrics) observe(kind string, hit bool, took time.Duration) {
+func (m *ArtifactSearchMetrics) Observe(kind string, hit bool, took time.Duration) {
 	result := "miss"
 	if hit {
 		result = "hit"
@@ -54,7 +54,7 @@ func (m *artifactSearchMetrics) observe(kind string, hit bool, took time.Duratio
 
 // ArtifactSearchQueryCount is ssq_artifact_search_queries_total{kind,result} in this process.
 func ArtifactSearchQueryCount(kind, result string) int64 {
-	artifactSearchStats.mu.Lock()
-	defer artifactSearchStats.mu.Unlock()
-	return artifactSearchStats.counts[[2]string{kind, result}]
+	ArtifactSearchStats.mu.Lock()
+	defer ArtifactSearchStats.mu.Unlock()
+	return ArtifactSearchStats.counts[[2]string{kind, result}]
 }

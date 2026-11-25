@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"regexp"
 	"sort"
 	"strconv"
@@ -116,7 +117,7 @@ func (a *ArtifactService) SearchSessionArtifacts(
 		groups.retain(allowed)
 	}
 	hits := groups.rankedByScore(limit)
-	artifactSearchStats.observe(cq.kind, len(hits) > 0, time.Since(start))
+	searchrpc.ArtifactSearchStats.Observe(cq.kind, len(hits) > 0, time.Since(start))
 	return connect.NewResponse(&sessionv1.SearchSessionArtifactsResponse{
 		Hits:                  hits,
 		UnscannedSessionCount: vis.unscanned(),
@@ -148,7 +149,7 @@ func (a *ArtifactService) FindSessionsByPullRequest(
 		}
 	}
 	sortPRHits(hits)
-	artifactSearchStats.observe(queryKindPR, len(hits) > 0, time.Since(start))
+	searchrpc.ArtifactSearchStats.Observe(queryKindPR, len(hits) > 0, time.Since(start))
 	return connect.NewResponse(&sessionv1.FindSessionsByPullRequestResponse{
 		Hits:                  hits,
 		UnscannedSessionCount: vis.unscanned(),

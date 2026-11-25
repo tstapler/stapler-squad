@@ -38,6 +38,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/remote"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
 	"github.com/tstapler/stapler-squad/server/services/summaryrpc"
@@ -1466,7 +1467,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Local file browser — serves arbitrary local filesystem paths.
 	// Auth is provided by the existing middleware chain:
 	// local HTTP = no auth; remote HTTPS = WebAuthn required.
-	localFileSvc := services.NewLocalFileService()
+	localFileSvc := searchrpc.NewLocalFileService()
 	srv.mux.HandleFunc("/api/local/files/list", localFileSvc.ListLocalDirectory)
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")

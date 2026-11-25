@@ -1,4 +1,4 @@
-package services
+package searchrpc
 
 import (
 	"context"
@@ -123,6 +123,11 @@ func NewSearchService(
 		syncedCh:         make(chan struct{}),
 		unarySyncWait:    unarySyncWait,
 	}
+}
+
+// SearchEngine returns the engine this service was built with.
+func (ss *SearchService) SearchEngine() *search.SearchEngine {
+	return ss.searchEngine
 }
 
 // SetInstanceProvider wires the live-instance provider after SessionService
@@ -388,7 +393,7 @@ func (ss *SearchService) resolveHistoryEntry(
 // GetClaudeHistoryDetail retrieves detailed information for a specific history entry,
 // including lazily-fetched VCS status for the project directory.
 //
-// VCS status reuses the same vc.VCSProvider + vcsStatusToProto path that
+// VCS status reuses the same vc.VCSProvider + VCSStatusToProto path that
 // GetVCSStatus uses for running sessions, so the logic is not duplicated.
 func (ss *SearchService) GetClaudeHistoryDetail(
 	ctx context.Context,
@@ -453,7 +458,7 @@ func fetchHistoryVCSStatus(projectPath string) *sessionv1.VCSStatus {
 		log.Debug("fetchHistoryVCSStatus: GetStatus failed", "path", projectPath, "err", err)
 		return nil
 	}
-	return vcsStatusToProto(status)
+	return VCSStatusToProto(status)
 }
 
 // GetClaudeHistoryMessages retrieves messages from a specific conversation.
