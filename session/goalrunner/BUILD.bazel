@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "goalrunner",
+    srcs = [
+        "outcome.go",
+        "runner.go",
+        "settings.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/goalrunner",
+    visibility = ["//visibility:public"],
+    deps = ["//session/tokens"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":goalrunner",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "goalrunner_test",
+    srcs = [
+        "runner_test.go",
+        "settings_test.go",
+    ],
+    embed = [":goalrunner"],
+)
