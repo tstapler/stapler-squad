@@ -4282,7 +4282,7 @@ func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
 // Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
 // WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals
-// home. Without the settingsPaths dedup fix, the classifier would load the same file's rules
+// home. Without claudesettings.settingsPaths's dedup fix, the classifier would load the same file's rules
 // twice (once tagged "global", once tagged "project"). Exercises
 // loadClaudeSettingsRulesAtStartup directly — see the sibling
 // TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier's doc comment for why.
