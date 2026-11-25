@@ -121,6 +121,7 @@ go_library(
         "//server/services/hookrecv",
         "//server/services/importsvc",
         "//server/services/insights",
+        "//server/services/piextension",
         "//server/services/questionkit",
         "//server/services/remote",
         "//server/services/sessionbundle",
