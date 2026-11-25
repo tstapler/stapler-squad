@@ -21,14 +21,14 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // --- Session UUID context injection ---
@@ -294,7 +294,9 @@ type ReviewTrigger interface {
 
 type backlogHandlers struct {
 	storage       *session.Storage
+	guidance      GuidanceStore // same storage; the guidance tools read only this slice
 	store         session.InstanceStore
+	gate          *callerIdentityGate      // shared identity gate (one wake-metrics instance); nil builds a metrics-less one
 	eventBus      *events.EventBus         // optional; nil means notifications are disabled
 	reviewStopper ReviewCompletionSignaler // optional; nil means no driver stop on review verdict
 	enabledCheck  func() bool              // optional; nil means always-enabled (tests)
@@ -311,7 +313,7 @@ type backlogHandlers struct {
 	// AttachSessionToItem call. Concrete type per this package's existing convention
 	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
-	backlogSvc *backlogsvc.BacklogService
+	backlogSvc BacklogRPC
 
 	// plugins resolves the tracker plugins behind import_linear_issue / import_jira_issue.
 	plugins *session.PluginRegistry
@@ -359,9 +361,9 @@ type backlogHandlers struct {
 	// item wedged in "review" forever — see submitReviewVerdict). Optional;
 	// nil means the eager transition is skipped and the item falls back to
 	// the pre-existing session-exit/sweep paths. The same
-	// session.AutoReopenSpawner *services.BacklogService already implements
+	// reviewgate.AutoReopenSpawner *backlogsvc.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
-	autoReopener reviewgate.AutoReopenSpawner
+	autoReopener AutoReopener
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
@@ -378,10 +380,14 @@ type backlogHandlers struct {
 	// existing shape.
 	getBacklogItemFn func(ctx context.Context, itemID string) (*backlogdto.BacklogItemData, error)
 
+	// github backs the issue import, duplicate-ref check, PR cross-check and
+	// caller-login lookup; nil fails them with ErrGitHubUnavailable.
+	github GitHub
+
 	// resolveCallerGitHubLogin resolves the GitHub login of the identity this
 	// server is authenticated as, used by report_pr_created's override path
 	// to confirm the self-reported PR was authored by the same identity
-	// making the call. Defaults to githubpkg.GetCurrentUserLogin when nil;
+	// making the call. Defaults to h.github.GetCurrentUserLogin when nil;
 	// overridable in tests to avoid making a real GitHub API call.
 	resolveCallerGitHubLogin func(ctx context.Context) (string, error)
 
@@ -393,9 +399,8 @@ type backlogHandlers struct {
 	stageEngine stageLister
 
 	// prCheckerFactory backs get_backlog_stuck_report's live CI cross-check.
-	// Defaults to a real *git.GitWorktree bound to the item's repo_path when
-	// nil; overridable in tests to avoid shelling out to the real `gh` CLI —
-	// mirrors verifyPRMatchesBranch's existing shape.
+	// Built from the injected WorktreeOpener; nil (or a nil result) reports the
+	// cross-check unavailable. Tests set it directly to avoid the real `gh` CLI.
 	prCheckerFactory func(repoPath string) stuckReportPRChecker
 }
 
@@ -650,7 +655,7 @@ func isStaleVerdict(item *backlogdto.BacklogItemData, verdict *backlogdto.Review
 // re-requested: no reviewer is live and the latest verdict is missing, stale, or
 // not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
 func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary, verdict *backlogdto.ReviewVerdictSummary) bool {
-	if backlogsvc.HasActiveReviewSession(sessions) {
+	if backlogdto.HasActiveReviewSession(sessions) {
 		return false
 	}
 	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(domain.ReviewVerdictPass)
@@ -660,7 +665,7 @@ func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdt
 // ItemSession on success. On failure it returns a ready-to-return
 // *mcpgo.CallToolResult that distinguishes ITEM_NOT_FOUND (the item itself
 // doesn't exist) from PERMISSION_DENIED (the item exists but this session has
-// no link to it). A thin adapter over session.ResolveItemLink, which holds
+// no link to it). A thin adapter over itemlink.ResolveItemLink, which holds
 // the actual disambiguation logic — see that function's doc comment and
 // project_plans/backlog-link-error-consistency/research/stack.md. Extracted
 // (not reimplemented) so the ConnectRPC GuidanceRequestService's own
@@ -668,14 +673,14 @@ func canRecoverFromReview(item *backlogdto.BacklogItemData, sessions []backlogdt
 // independently-maintained copy (durable-guidance-request plan, Task
 // 2.1.2a-pre).
 func (h *backlogHandlers) resolveItemLink(ctx context.Context, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := session.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
+	itemSession, linkErr := itemlink.ResolveItemLink(ctx, h.storage, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
 	switch linkErr.Code {
-	case session.ItemLinkNotFound:
+	case itemlink.ItemLinkNotFound:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
-	case session.ItemLinkPermissionDenied:
+	case itemlink.ItemLinkPermissionDenied:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
@@ -748,7 +753,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 	if payload.Item != nil {
 		res.Status = payload.Item.Status
 		status := domain.BacklogStatus(payload.Item.Status)
-		if session.IsTerminalStatus(status) {
+		if terminalstate.IsTerminalStatus(status) {
 			res.IsTerminal = true
 		}
 	}
@@ -781,7 +786,7 @@ func buildMatchedWaitResult(itemID string, payload *events.BacklogItemEventPaylo
 // pre-satisfies.
 func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdto.ReviewVerdictSummary, eventTypeFilter string) *WaitForBacklogEventResult {
 	status := domain.BacklogStatus(item.Status)
-	terminal := session.IsTerminalStatus(status)
+	terminal := terminalstate.IsTerminalStatus(status)
 
 	if (eventTypeFilter == eventTypeAny || eventTypeFilter == eventTypeVerdictRecorded) && verdict != nil {
 		return &WaitForBacklogEventResult{
@@ -796,7 +801,7 @@ func currentStateWaitResult(item *backlogdto.BacklogItemData, verdict *backlogdt
 			IsTerminal:       terminal,
 		}
 	}
-	// Deliberately Archived-only, not session.IsTerminalStatus: this branch
+	// Deliberately Archived-only, not terminalstate.IsTerminalStatus: this branch
 	// matches the "item_archived" event kind specifically, not general
 	// terminal-ness — a "done" (or custom-terminal) item must not satisfy an
 	// eventTypeItemArchived wait (Epic 2.1, Story 2.1.3 sweep — reviewed,
@@ -1131,6 +1136,11 @@ func (h *backlogHandlers) listBacklogItems(ctx context.Context, req mcpgo.CallTo
 
 // --- report_progress ---
 
+// acProgressNotMet is report_progress's "attempted, target not met" status. It is stored as
+// AcStatusFail and, unlike an unfinished criterion, does not make request_review reject: the
+// item goes to a human decision instead of looping on a target that was honestly measured and missed.
+const acProgressNotMet = "not_met"
+
 func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	if r := featureDisabledResult(h.enabledCheck); r != nil {
 		return r, nil
@@ -1164,13 +1174,16 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		return errResult(ErrInvalidArgument, "status is required", ""), nil
 	}
 	switch status {
-	case "pass", "fail", "in_progress":
+	case "pass", "fail", "in_progress", acProgressNotMet:
 		// valid
 	default:
-		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid status %q — must be one of: pass, fail, in_progress", status), ""), nil
+		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid status %q — must be one of: pass, fail, in_progress, %s", status, acProgressNotMet), ""), nil
 	}
 
 	note, _ := args["note"].(string)
+	if status == acProgressNotMet && strings.TrimSpace(note) == "" {
+		return errResult(ErrInvalidArgument, "status not_met requires a note with the measured result, so the owner can decide whether to relax the criterion", ""), nil
+	}
 
 	// Verify session is linked to item (disambiguates ITEM_NOT_FOUND vs PERMISSION_DENIED).
 	if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
@@ -1184,6 +1197,8 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 		acStatus = "done"
 	case "fail":
 		acStatus = "in_progress"
+	case acProgressNotMet:
+		acStatus = string(domain.AcStatusFail)
 	}
 
 	_, verified := verifiedCallerSessionUUID(ctx)
@@ -1485,7 +1500,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if backlogsvc.HasActiveReviewSession(itemSessions) {
+		if backlogdto.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
@@ -1508,7 +1523,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if backlogsvc.HasActiveReviewSession(itemSessions) {
+		if backlogdto.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 	}
@@ -1518,6 +1533,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// branch too — that flag skips the independent LLM review, not this
 	// deterministic completeness check, otherwise a SkipReviewGate item could
 	// self-declare done with zero verification of any kind.
+	notMet := attemptedNotMetCriteria(item)
 	if err := unmetAcCriteriaError(item); err != nil {
 		log.InfoLog().Printf("[mcp:request_review] rejected: %v session=%s item=%s", err, callerUUID, itemID)
 		h.recordRejectedRequestReview(ctx, item, err)
@@ -1530,7 +1546,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// (a custom stage is never chosen here even if it were otherwise a
 	// plausible "review-like" destination).
 	targetStatus := domain.BacklogStatusReview
-	if item.SkipReviewGate {
+	// An honestly missed criterion is a human decision, never an auto-done, even with SkipReviewGate.
+	if item.SkipReviewGate && len(notMet) == 0 {
 		targetStatus = domain.BacklogStatusDone
 	}
 
@@ -1595,6 +1612,9 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	}
 
 	log.InfoLog().Printf("[mcp:request_review] session=%s item=%s transitioned to %s message=%q verification_notes_len=%d", callerUUID, itemID, targetStatus, message, len(verificationNotes))
+	if len(notMet) > 0 {
+		h.recordAcNotMet(ctx, callerUUID, item, notMet)
+	}
 
 	if targetStatus == domain.BacklogStatusDone {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
@@ -1787,6 +1807,13 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 // was parked in review because it hit blockedCycleThreshold, and nothing else
 // surfaces that. INPUT_REQUIRED/HIGH because a human must pick the way forward.
 func (h *backlogHandlers) notifyBlockedEscalation(sessionUUID string, item *backlogdto.BacklogItemData, rationale string, cycles int) {
+	h.publishInputRequired(sessionUUID, "Backlog item needs a decision",
+		fmt.Sprintf("%q was blocked %d times and escalated to review. Latest blocker: %s", item.Title, cycles, rationale),
+		map[string]string{"item_id": item.ID, "reason": "blocked_cycle_escalation"})
+}
+
+// publishInputRequired publishes one INPUT_REQUIRED/HIGH notification: a human must pick the way forward.
+func (h *backlogHandlers) publishInputRequired(sessionUUID, title, body string, meta map[string]string) {
 	if h.eventBus == nil {
 		return
 	}
@@ -1794,9 +1821,7 @@ func (h *backlogHandlers) notifyBlockedEscalation(sessionUUID string, item *back
 		sessionUUID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
-		"Backlog item needs a decision",
-		fmt.Sprintf("%q was blocked %d times and escalated to review. Latest blocker: %s", item.Title, cycles, rationale),
-		map[string]string{"item_id": item.ID, "reason": "blocked_cycle_escalation"},
+		title, body, meta,
 	))
 }
 
@@ -1842,7 +1867,7 @@ func unmetAcCriteriaError(item *backlogdto.BacklogItemData) error {
 	}
 	var unmet []string
 	for _, c := range criteria {
-		if !c.Status.IsSatisfied() {
+		if !c.Status.IsSatisfied() && !isAttemptedNotMet(c) {
 			unmet = append(unmet, fmt.Sprintf("%d: %s (status=%s)", c.Index, c.Text, c.Status))
 		}
 	}
@@ -1854,6 +1879,46 @@ func unmetAcCriteriaError(item *backlogdto.BacklogItemData) error {
 			"Call report_progress for each remaining criterion, or report_blocked if genuinely stuck",
 		len(unmet), strings.Join(unmet, "; "),
 	)
+}
+
+// isAttemptedNotMet is the "attempted, target not met" outcome: reported not_met with a note.
+func isAttemptedNotMet(c domain.AcCriterion) bool {
+	return c.Status == domain.AcStatusFail && strings.TrimSpace(c.Note) != ""
+}
+
+// attemptedNotMetCriteria lists the criteria reported as attempted but not met, formatted for notes and notifications.
+func attemptedNotMetCriteria(item *backlogdto.BacklogItemData) []string {
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, c := range criteria {
+		if isAttemptedNotMet(c) {
+			out = append(out, fmt.Sprintf("%d: %s — %s", c.Index, c.Text, strings.TrimSpace(c.Note)))
+		}
+	}
+	return out
+}
+
+// acNotMetNoteMarker prefixes the note request_review appends when it sends an item to a human with criteria not met.
+const acNotMetNoteMarker = "[request_review:ac_not_met]"
+
+// recordAcNotMet leaves a visible note and one INPUT_REQUIRED notification: the owner must relax or
+// waive the criterion, or file a follow-up. Best-effort, like the other audit notes.
+func (h *backlogHandlers) recordAcNotMet(ctx context.Context, sessionUUID string, item *backlogdto.BacklogItemData, notMet []string) {
+	detail := strings.Join(notMet, "; ")
+	noteLine := fmt.Sprintf("%s %d criteria attempted, target not met: %s", acNotMetNoteMarker, len(notMet), detail)
+	newNotes := noteLine
+	if item.Notes != "" {
+		newNotes = item.Notes + "\n" + noteLine
+	}
+	if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Notes: &newNotes}, nil); err != nil {
+		log.WarningLog().Printf("[mcp:request_review] failed to persist ac_not_met note item=%s: %v", item.ID, err)
+	}
+	h.publishInputRequired(sessionUUID, "Backlog item missed an acceptance criterion",
+		fmt.Sprintf("%q was sent to review with criteria attempted but not met: %s", item.Title, detail),
+		map[string]string{"item_id": item.ID, "reason": "ac_not_met"})
 }
 
 // --- resume_work ---
@@ -2461,7 +2526,10 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		return errResult(ErrInvalidArgument, fmt.Sprintf("issue_url is not a recognizable GitHub issue URL: %v", repoErr), ""), nil
 	}
 
-	issue, fetchErr := githubpkg.GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
+	issue, fetchErr := githubOrUnavailable(h.github).GetIssue(ctx, githubpkg.AccountRef{Host: ref.Host}, repo, ref.IssueNumber)
+	if errors.Is(fetchErr, ErrGitHubUnavailable) {
+		return errResult(ErrUnavailable, fetchErr.Error(), ""), nil
+	}
 	if fetchErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("fetch GitHub issue: %v", fetchErr), "Retry — this is usually transient. If it names missing credentials, that is not transient; configure GitHub access for this session instead."), nil
 	}
@@ -2470,7 +2538,7 @@ func (h *backlogHandlers) importGitHubIssue(ctx context.Context, req mcpgo.CallT
 		// Same live check the web import runs; a disabled flag, an error or an
 		// indeterminate result never blocks (LookupCrossHostClaim reports those
 		// as unclaimed or an error we ignore).
-		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, issue.URL); claimErr == nil && verdict.Kind == hostclaim.ClaimHeldByOther {
 			return errResult(ErrInvalidArgument,
 				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", issue.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
 				"Open that link to see the owning item, or import from the web UI with an override reason."), nil
@@ -2533,13 +2601,13 @@ func (h *backlogHandlers) verifyGitHubRefExists(ctx context.Context, ref *github
 	}
 	switch ref.Type {
 	case githubpkg.RefTypePR:
-		_, err := githubpkg.GetPR(ctx, account, repo, ref.PRNumber)
+		_, err := githubOrUnavailable(h.github).GetPR(ctx, account, repo, ref.PRNumber)
 		return err
 	case githubpkg.RefTypeIssue:
-		_, err := githubpkg.GetIssue(ctx, account, repo, ref.IssueNumber)
+		_, err := githubOrUnavailable(h.github).GetIssue(ctx, account, repo, ref.IssueNumber)
 		return err
 	case githubpkg.RefTypeCommit:
-		_, err := githubpkg.GetCommit(ctx, account, repo, ref.CommitSHA)
+		_, err := githubOrUnavailable(h.github).GetCommit(ctx, account, repo, ref.CommitSHA)
 		return err
 	default:
 		return fmt.Errorf("unsupported ref type %s", ref.Type)
@@ -2791,6 +2859,9 @@ func (h *backlogHandlers) resolveDuplicateRef(ctx context.Context, duplicateRef 
 	if verifyErr := h.verifyRef(ctx, ref); verifyErr != nil {
 		if errors.Is(verifyErr, githubpkg.ErrNotAuthenticated) {
 			return nil, errResult(ErrInternalError, fmt.Sprintf("this session has no configured GitHub credentials (no GITHUB_TOKEN/GH_TOKEN and no connected account) — report_duplicate cannot verify %s. This is not a transient failure: retrying will not help until credentials are configured. Leave the item as-is and note this in your summary for an operator to configure GitHub access for this session.", duplicateRef), "")
+		}
+		if errors.Is(verifyErr, ErrGitHubUnavailable) {
+			return nil, errResult(ErrUnavailable, fmt.Sprintf("report_duplicate cannot verify %s: %v. This is not transient; do not retry.", duplicateRef, verifyErr), "")
 		}
 		if errors.Is(verifyErr, githubpkg.ErrGitHubRefNotFound) {
 			return nil, errResult(ErrInvalidArgument, fmt.Sprintf("%s does not exist on GitHub (404) — double-check the URL. Note: a private/inaccessible repo also returns 404.", duplicateRef), "")
@@ -3087,9 +3158,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 				mcpgo.Min(0),
 			),
 			mcpgo.WithString("status",
-				mcpgo.Description("New status: pass (criterion complete), fail (blocked/broken), in_progress (actively working)"),
+				mcpgo.Description("New status: pass (criterion complete), fail (blocked/broken), in_progress (actively working), not_met (honestly attempted, the target was measured and missed; requires a note with the result and lets request_review proceed to a human decision instead of looping)"),
 				mcpgo.Required(),
-				mcpgo.Enum("pass", "fail", "in_progress"),
+				mcpgo.Enum("pass", "fail", "in_progress", acProgressNotMet),
 			),
 			mcpgo.WithString("note",
 				mcpgo.Description("Optional short note about the criterion outcome (e.g. test name, PR link, failure reason)"),

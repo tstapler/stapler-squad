@@ -18,7 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 const (
@@ -164,7 +164,7 @@ func WithUnaryKeepalive(pingPeriod, pongWait time.Duration) UnaryWsOption {
 func NewUnaryWsBridge(dispatchers UnaryDispatchers, opts ...UnaryWsOption) *UnaryWsBridge {
 	b := &UnaryWsBridge{
 		dispatchers: dispatchers,
-		policies:    map[string]func(*http.Request) bool{services.ListenerLocal: loopbackOriginAllowed},
+		policies:    map[string]func(*http.Request) bool{access.ListenerLocal: loopbackOriginAllowed},
 		maxInFlight: maxInFlightFromEnv(),
 		maxZombies:  wsUnaryMaxZombies,
 		zombieGrace: wsUnaryZombieGrace,
@@ -222,7 +222,7 @@ func (b *UnaryWsBridge) denyUpgrade(w http.ResponseWriter, r *http.Request, list
 
 // ServeHTTP upgrades the request and serves the socket until it closes.
 func (b *UnaryWsBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	rec, hasRecord := services.RequestRecordFrom(r.Context())
+	rec, hasRecord := access.RequestRecordFrom(r.Context())
 	listener := rec.Listener
 	if !hasRecord || listener == "" {
 		b.denyUpgrade(w, r, "unknown", "no_listener", http.StatusServiceUnavailable, "unavailable")
@@ -238,7 +238,7 @@ func (b *UnaryWsBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never widen an open chain: a nil authMW leaves the remote listener without
 	// authentication, and every later REQUEST would dispatch unauthenticated.
-	if listener == services.ListenerRemote && rec.AuthMode != services.AuthModeRequired {
+	if listener == access.ListenerRemote && rec.AuthMode != access.AuthModeRequired {
 		b.denyUpgrade(w, r, listener, "auth_required", http.StatusForbidden, wsUnaryAuthRequired)
 		return
 	}

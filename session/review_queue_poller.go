@@ -127,7 +127,7 @@ type ReviewQueuePoller struct {
 	approvalProvider domain.ApprovalMetadataProvider // Optional: enriches approval items with hook metadata
 	contentProvider  ContentProvider                 // Fetches and caches terminal content
 	statusDeterminer StatusDeterminer                // Evaluates whether session should be in queue
-	tmuxSocket       TmuxSocketQuerier               // Tmux server-socket queries for reconcileSessions; fakeable in tests
+	tmuxSocket       tmux.SocketQuerier              // Tmux server-socket queries for reconcileSessions; fakeable in tests
 	optionsSource    FlagOptionsSource               // Attention flags, read once per poll cycle; nil = all off
 	explain          suppressionExplainer            // Why-suppressed and why-skipped visibility
 	recorder         instance.SessionEventRecorder   // Attention raised/cleared sink; nil = no-op
@@ -201,7 +201,7 @@ func NewReviewQueuePollerWithConfig(queue *queue.ReviewQueue, statusManager Stat
 		statusDetector:   detection.NewStatusDetector(),
 		contentProvider:  NewPollerContentProvider(),
 		statusDeterminer: NewDefaultStatusDeterminer(config),
-		tmuxSocket:       realTmuxSocketQuerier{},
+		tmuxSocket:       tmux.NewRealSocketQuerier(),
 	}
 }
 
@@ -665,7 +665,7 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 
 	// Fetch pane activity timestamps once for all sessions. This single subprocess call
 	// replaces per-session capture-pane calls when content hasn't changed.
-	paneActivity := batchPaneActivity("")
+	paneActivity := tmux.BatchWindowActivity("")
 
 	sem := make(chan struct{}, checkSessionsConcurrency)
 	var wg sync.WaitGroup
@@ -683,9 +683,22 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 
 // previewCacheTTL is the fallback maximum age of a cached Preview() result when
 // pane activity timestamps are unavailable (e.g. tmux not running). The primary
-// invalidation mechanism is #{window_activity} from batchPaneActivity(); this
+// invalidation mechanism is #{window_activity} from tmux.BatchWindowActivity(); this
 // TTL is only a safety net and is intentionally long.
 const previewCacheTTL = 30 * time.Second
+
+// groupInstancesBySocket partitions instances by their own TmuxServerSocket.
+// Callers must query each socket independently rather than assuming all
+// instances share one socket -- that assumption previously caused instances on
+// a non-default socket to falsely appear dead (or alive) based on whichever
+// socket happened to be picked, flapping their status on every reconcile pass.
+func groupInstancesBySocket(instances []*instance.Instance) map[string][]*instance.Instance {
+	bySocket := make(map[string][]*instance.Instance, 1)
+	for _, inst := range instances {
+		bySocket[inst.TmuxServerSocket] = append(bySocket[inst.TmuxServerSocket], inst)
+	}
+	return bySocket
+}
 
 // paneActivitySettled reports whether an activity timestamp is safe to use for the
 // "unchanged, skip capture-pane" shortcut. #{window_activity} has one-second
@@ -874,7 +887,7 @@ func (rqp *ReviewQueuePoller) currentOptions() (DeterminerOptions, RuleOptions) 
 
 // evaluateSession checks a single session and adds/removes from queue as needed, using the
 // cycle's already-resolved flag options. paneActivity is the snapshot from
-// batchPaneActivity(); nil falls back to the TTL cache.
+// tmux.BatchWindowActivity(); nil falls back to the TTL cache.
 func (rqp *ReviewQueuePoller) evaluateSession(inst *instance.Instance, paneActivity map[string]time.Time, opts DeterminerOptions, ruleOpts RuleOptions) {
 	// Skip paused, stopped, or unstarted sessions
 	if rqp.shouldSkipSession(inst) {
@@ -1117,7 +1130,7 @@ func (rqp *ReviewQueuePoller) GetMonitoredCount() int {
 // Fetches a fresh pane activity snapshot for accurate cache invalidation.
 func (rqp *ReviewQueuePoller) CheckSession(inst *instance.Instance) {
 	opts, ruleOpts := rqp.currentOptions()
-	rqp.evaluateSession(inst, batchPaneActivity(""), opts, ruleOpts)
+	rqp.evaluateSession(inst, tmux.BatchWindowActivity(""), opts, ruleOpts)
 }
 
 // FindInstance finds an instance by session ID (exported for ReactiveQueueManager).

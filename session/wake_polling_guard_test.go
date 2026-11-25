@@ -24,12 +24,14 @@ var pollingReferences = map[string]int{
 	"server/mcp/tools_backlog_wait_cap_test.go":                   3,
 	"server/services/backlogsvc/backlog_service_verdict_steer.go": 2,
 	"server/services/backlogsvc/backlog_stuck_rpc_bsvc_test.go":   1,
-	"server/services/guidance_ack_wiring.go":                      4, // PostToolUse receipt counter, not a prompt
-	"server/services/notification_quality_metrics.go":             7, // agent_schedule_wakeup_calls_total
-	"server/services/notification_quality_metrics_test.go":        6,
+	"server/services/guidance_ack_wiring.go":                      6,  // PostToolUse receipt counter, not a prompt
+	"server/services/questionkit/notification_quality_metrics.go": 10, // agent_schedule_wakeup_calls_total
+	"server/services/questionkit/boundary_test.go":                2,
+	"server/services/questionkit/parity_shim_test.go":             1,
+	"server/services/notification_quality_metrics_test.go":        11,
 	"session/backlog/pipeline/post_review_prompt_test.go":         1,
 	"session/domain/backlog.go":                                   1,
-	"session/prompt_sections.go":                                  1, // the one shared ban, used by every work prompt
+	"session/pipelinemode/prompt_sections.go":                     1, // the one shared ban, used by every work prompt
 }
 
 func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.T) {

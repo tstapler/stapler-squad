@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
 )
@@ -499,7 +500,7 @@ func NudgeSignature(pr githubpkg.PRKey, reasons []sessionv1.NudgeReason) string 
 	for _, r := range reasons {
 		names = append(names, strings.TrimPrefix(r.String(), "NUDGE_REASON_"))
 	}
-	return GuardSignature(pr.Key(), ReasonSetSignature(names...))
+	return access.GuardSignature(pr.Key(), access.ReasonSetSignature(names...))
 }
 
 func nudgeReasonNames(reasons []sessionv1.NudgeReason) string {

@@ -277,7 +277,7 @@ func createClaudeRows(ctx context.Context, tx *ent.Tx, sessionID int, data domai
 	return nil
 }
 
-// CreateClaudeSessionRow inserts the claude_sessions row; session.EntRepository.Update reuses it until I5.
+// CreateClaudeSessionRow inserts the claude_sessions row; Update (update.go) reuses it.
 func CreateClaudeSessionRow(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) (*ent.ClaudeSession, error) {
 	claudeCreate := tx.ClaudeSession.Create().
 		SetSessionID(sessionID).
@@ -305,7 +305,7 @@ func CreateClaudeSessionRow(ctx context.Context, tx *ent.Tx, sessionID int, data
 	return created, nil
 }
 
-// SuppressedRuleTagsToSlice (shared with session.EntRepository.Update until I5) converts Instance.SuppressedRuleTags' in-memory
+// SuppressedRuleTagsToSlice (shared with Update in update.go) converts Instance.SuppressedRuleTags' in-memory
 // map[string]bool representation to the []string set persisted in the
 // suppressed_rule_tags JSON column (session/ent/schema/session.go) — a simpler
 // on-disk shape than a bool-valued JSON object, per Task 3.1.2a.

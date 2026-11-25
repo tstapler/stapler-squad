@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -24,7 +23,7 @@ type WakeBackend interface {
 // answer listener (and with it the asker's wake) runs exactly as for a human
 // answer; *services.GuidanceRequestService satisfies it.
 type HelpAnswerer interface {
-	AnswerAs(ctx context.Context, id, answer string, who services.Answerer) (*domain.GuidanceRequestData, bool, error)
+	AnswerAsSession(ctx context.Context, id, answer, sessionUUID string) (*domain.GuidanceRequestData, bool, error)
 }
 
 // WakeToolDeps are the late-bound collaborators of the five tools. The
@@ -61,18 +60,9 @@ func (f wakeFlags) config() *config.Config {
 	return config.LoadConfig()
 }
 
-func triggerTypeNames() []string {
-	types := domain.AllWakeTriggerTypes()
-	names := make([]string, len(types))
-	for i, t := range types {
-		names[i] = string(t)
-	}
-	return names
-}
-
 // toolOff returns the flag scope that blocks tool, or "" when it may run.
 func (f wakeFlags) toolOff(tool string) string {
-	if f.config().WakeToolEnabled(tool, triggerTypeNames()) {
+	if f.config().WakeToolEnabled(tool, domain.AllWakeTriggerTypeNames()) {
 		return ""
 	}
 	return config.WakeToolScope(tool)
@@ -80,7 +70,7 @@ func (f wakeFlags) toolOff(tool string) string {
 
 // triggerOff returns the flag scope that blocks creating a trigger of type t.
 func (f wakeFlags) triggerOff(t domain.WakeTriggerType) string {
-	if f.config().WakeTriggerEnabled(string(t), triggerTypeNames()) {
+	if f.config().WakeTriggerEnabled(string(t), domain.AllWakeTriggerTypeNames()) {
 		return ""
 	}
 	return config.WakeTriggerScope(string(t))

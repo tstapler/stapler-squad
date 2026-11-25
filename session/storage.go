@@ -146,6 +146,11 @@ func (s *Storage) SetCallbackDispatcher(d backlogdto.CallbackDispatcher) {
 // (for example WireChainFirer).
 func (s *Storage) Repository() *EntRepository { return s.Repo }
 
+// ShellRepository and InitialPromptRepository expose the backing repository to registry.Store.
+func (s *Storage) ShellRepository() instance.ShellRepository { return s.Repo }
+
+func (s *Storage) InitialPromptRepository() instance.InitialPromptRepository { return s.Repo }
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*instance.Instance) error {
 	return s.saveInstancesToRepo(instances)
@@ -175,7 +180,7 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *instance.Instanc
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
 	s.saved.persist(data, func(skip domain.UpdateSkip) bool {
-		if err := s.Repo.updateSkipping(ctx, data, skip); err != nil {
+		if err := s.Repo.UpdateSkipping(ctx, data, skip); err != nil {
 			// Not found → create it
 			if createErr := s.Repo.Create(ctx, data); createErr != nil {
 				log.Error("SaveInstances: failed to upsert instance",
@@ -200,7 +205,7 @@ func (s *Storage) LoadInstances() ([]*instance.Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
-	s.hydrateSessionPRs(ctx, dataSlice)
+	s.HydrateSessionPRs(ctx, dataSlice)
 	instances := make([]*instance.Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
@@ -295,13 +300,13 @@ func (s *Storage) applyBulkArtifacts(instances []*instance.Instance) {
 	}
 }
 
-// hydrateSessionPRs attaches each session's PR links to its InstanceData before
+// HydrateSessionPRs (exported only to satisfy registry.Store; not for general callers) attaches each session's PR links to its InstanceData before
 // the Instance (and so its first snapshot) is built: one bulk read of links+states
 // (and one of tombstones) instead of a query per session. A legacy PR number with
 // neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves
 // leave the legacy columns alone. If the bulk read fails, every legacy number is
 // treated as unrepresented (protected) rather than guessed at.
-func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
+func (s *Storage) HydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
 	uuids := make([]string, 0, len(rows))
 	for i := range rows {
 		if rows[i].UUID != "" {
@@ -381,7 +386,7 @@ func (s *Storage) ListInstanceDataWithWorktree() ([]domain.InstanceData, error) 
 // server restart. This is the storage-only counterpart to Instance.SetArchivedAtIfNilAndStop,
 // used as ArchiveSessionByUUID's fallback so terminal-transition and safety-net archival
 // sweeps don't silently no-op just because a session isn't currently being polled. Read-
-// modify-write on the full InstanceData row (not a partial struct), so EntRepository.Update's
+// modify-write on the full InstanceData row (not a partial struct), so instancestore.Instances.Update's
 // guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
 // Returns false (no error) if the session doesn't exist or is already archived, matching
 // SetArchivedAtIfNilAndStop's CAS semantics.
@@ -1635,6 +1640,11 @@ func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string
 // records whether that cost is trustworthy. See EntRepository.UpdateItemSessionCost.
 func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64, priced bool) error {
 	return s.Repo.UpdateItemSessionCost(ctx, id, usd, priced)
+}
+
+// UpdateItemSessionBranch replaces an ItemSession's branch_name. See Backlog.UpdateItemSessionBranch.
+func (s *Storage) UpdateItemSessionBranch(ctx context.Context, id string, branch string) error {
+	return s.Repo.UpdateItemSessionBranch(ctx, id, branch)
 }
 
 // AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession

@@ -1,10 +1,11 @@
 package search
 
 import (
+	"context"
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 )
 
 // SearchEngine is the main interface for full-text search over Claude history.
@@ -122,7 +123,7 @@ func (e *SearchEngine) markLoaded() {
 
 // BuildIndex indexes all messages from the provided history.
 // This replaces any existing index.
-func (e *SearchEngine) BuildIndex(history *session.ClaudeSessionHistory) error {
+func (e *SearchEngine) BuildIndex(history *claudehistory.ClaudeSessionHistory) error {
 	e.ensureLoaded()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -455,7 +456,16 @@ func (e *SearchEngine) GetTokenizer() *Tokenizer {
 // IncrementalSync synchronizes the index with current history state.
 // It only indexes new/modified sessions and removes deleted ones.
 // On first run or when metadata is missing, falls back to full rebuild.
-func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*SyncResult, error) {
+func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
+	return e.IncrementalSyncContext(context.Background(), history)
+}
+
+// IncrementalSyncContext is IncrementalSync that checks ctx between sessions
+// (not within one) and returns ctx.Err() once cancelled, without persisting.
+// A cancelled full build clears the sync metadata so the next sync rebuilds; a
+// cancelled incremental pass refreshes the totals and the next sync picks up
+// the remainder.
+func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
 	e.ensureLoaded()
 	startTime := time.Now()
 	result := &SyncResult{}
@@ -465,7 +475,7 @@ func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*
 
 	// If no sync metadata, need full rebuild
 	if e.syncMetadata == nil || e.ShouldRebuildLocked() {
-		if err := e.buildIndexLocked(history); err != nil {
+		if err := e.buildIndexLocked(ctx, history); err != nil {
 			return nil, err
 		}
 		result.WasFullRebuild = true
@@ -473,6 +483,12 @@ func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*
 		result.DocumentsAdded = e.syncMetadata.TotalDocuments
 		result.SyncDuration = time.Since(startTime)
 		return result, nil
+	}
+
+	// After the rebuild branch: a cancelled rebuild must clear the metadata (see
+	// buildIndexLocked), so only the incremental path may return early.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Compute what changed
@@ -490,6 +506,10 @@ func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*
 
 	// Process additions
 	for _, entry := range added {
+		if err := ctx.Err(); err != nil {
+			e.finalizeCancelledIncrementalLocked()
+			return nil, err
+		}
 		docCount, err := e.indexSessionLocked(history, entry)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
@@ -508,6 +528,10 @@ func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*
 
 	// Process updates (re-index modified sessions)
 	for _, entry := range updated {
+		if err := ctx.Err(); err != nil {
+			e.finalizeCancelledIncrementalLocked()
+			return nil, err
+		}
 		if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
 			result.DocumentsRemoved += meta.DocCount
 		}
@@ -529,17 +553,8 @@ func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*
 		result.DocumentsAdded += docCount
 	}
 
-	// Update aggregate counts
-	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
-	totalDocs := 0
-	for _, meta := range e.syncMetadata.Sessions {
-		totalDocs += meta.DocCount
-	}
-	e.syncMetadata.TotalDocuments = totalDocs
+	e.refreshAggregatesLocked()
 	e.syncMetadata.LastIncrementalSync = time.Now()
-
-	// Update scorer
-	e.scorer.UpdateAvgDocLength()
 
 	// Persist index and metadata
 	if e.indexStore != nil {
@@ -555,17 +570,39 @@ func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*
 	return result, nil
 }
 
+// finalizeCancelledIncrementalLocked keeps the totals true to the partial index
+// and stamps LastIncrementalSync to record that a pass ran, even if cancelled
+// before its first change.
+// Must be called with lock held.
+func (e *SearchEngine) finalizeCancelledIncrementalLocked() {
+	e.refreshAggregatesLocked()
+	e.syncMetadata.LastIncrementalSync = time.Now()
+}
+
+// refreshAggregatesLocked recomputes the session/document totals and the
+// scorer's average document length from the sync metadata.
+// Must be called with lock held.
+func (e *SearchEngine) refreshAggregatesLocked() {
+	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
+	totalDocs := 0
+	for _, meta := range e.syncMetadata.Sessions {
+		totalDocs += meta.DocCount
+	}
+	e.syncMetadata.TotalDocuments = totalDocs
+	e.scorer.UpdateAvgDocLength()
+}
+
 // computeChangesLocked analyzes history vs index state to determine what changed.
 // Must be called with lock held.
-func (e *SearchEngine) computeChangesLocked(history *session.ClaudeSessionHistory) (
-	added []session.ClaudeHistoryEntry,
-	updated []session.ClaudeHistoryEntry,
+func (e *SearchEngine) computeChangesLocked(history *claudehistory.ClaudeSessionHistory) (
+	added []claudehistory.ClaudeHistoryEntry,
+	updated []claudehistory.ClaudeHistoryEntry,
 	removed []string,
 ) {
 	entries := history.GetAll()
 
 	// Build map of current history
-	historyMap := make(map[string]session.ClaudeHistoryEntry, len(entries))
+	historyMap := make(map[string]claudehistory.ClaudeHistoryEntry, len(entries))
 	for _, entry := range entries {
 		historyMap[entry.ID] = entry
 	}
@@ -594,7 +631,7 @@ func (e *SearchEngine) computeChangesLocked(history *session.ClaudeSessionHistor
 
 // indexSessionLocked indexes all messages from a single session.
 // Must be called with lock held.
-func (e *SearchEngine) indexSessionLocked(history *session.ClaudeSessionHistory, entry session.ClaudeHistoryEntry) (int, error) {
+func (e *SearchEngine) indexSessionLocked(history *claudehistory.ClaudeSessionHistory, entry claudehistory.ClaudeHistoryEntry) (int, error) {
 	messages, err := history.GetMessagesFromConversationFile(entry.ID, 0)
 	if err != nil {
 		return 0, err
@@ -666,7 +703,7 @@ func (e *SearchEngine) ShouldRebuildLocked() bool {
 
 // buildIndexLocked performs a full index build and initializes sync metadata.
 // Must be called with lock held.
-func (e *SearchEngine) buildIndexLocked(history *session.ClaudeSessionHistory) error {
+func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehistory.ClaudeSessionHistory) error {
 	// Clear existing index
 	e.index.Clear()
 	e.docStore.Clear()
@@ -679,6 +716,10 @@ func (e *SearchEngine) buildIndexLocked(history *session.ClaudeSessionHistory) e
 	entries := history.GetAll()
 
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			e.syncMetadata = nil // partial index: force a full rebuild next time
+			return err
+		}
 		docCount, err := e.indexSessionLocked(history, entry)
 		if err != nil {
 			// Log and continue - don't fail entire index build
@@ -694,16 +735,7 @@ func (e *SearchEngine) buildIndexLocked(history *session.ClaudeSessionHistory) e
 		}
 	}
 
-	// Update aggregate counts
-	e.syncMetadata.TotalSessions = len(e.syncMetadata.Sessions)
-	totalDocs := 0
-	for _, meta := range e.syncMetadata.Sessions {
-		totalDocs += meta.DocCount
-	}
-	e.syncMetadata.TotalDocuments = totalDocs
-
-	// Update scorer with new average document length
-	e.scorer.UpdateAvgDocLength()
+	e.refreshAggregatesLocked()
 
 	// Persist if store is configured
 	if e.indexStore != nil {

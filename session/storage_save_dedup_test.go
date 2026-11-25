@@ -366,3 +366,97 @@ func TestSkipAgainst_Should_NotSkipSection_When_BothSumsAreZero(t *testing.T) {
 		"only the unhashable section is rewritten; the others still skip")
 	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, known.skipAgainst(known))
 }
+
+// sectionWrites counts the writes each child table sees through the storage client.
+type sectionWrites struct{ session, worktree, diff, claude atomic.Int64 }
+
+func countSectionWrites(t *testing.T, storage *Storage) *sectionWrites {
+	t.Helper()
+	w := &sectionWrites{}
+	hook := func(n *atomic.Int64) ent.Hook {
+		return func(next ent.Mutator) ent.Mutator {
+			return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+				n.Add(1)
+				return next.Mutate(ctx, m)
+			})
+		}
+	}
+	c := storage.GetEntClient()
+	c.Session.Use(hook(&w.session))
+	c.Worktree.Use(hook(&w.worktree))
+	c.DiffStats.Use(hook(&w.diff))
+	c.ClaudeSession.Use(hook(&w.claude))
+	return w
+}
+
+func (w *sectionWrites) snapshot() [4]int64 {
+	return [4]int64{w.session.Load(), w.worktree.Load(), w.diff.Load(), w.claude.Load()}
+}
+
+func restoredStarted(t *testing.T, data domain.InstanceData) *instance.Instance {
+	t.Helper()
+	inst, err := instance.FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+	inst.MarkStarted()
+	return inst
+}
+
+// End to end through saveInstanceToRepo: changing exactly one section of an already-saved session
+// must write that section's rows and no other section's (UpdateSkipping receives the dedup skip).
+func TestSaveInstances_Should_WriteOnlyTheChangedSection_When_OneSectionChanges(t *testing.T) {
+	t.Parallel()
+	base := func() domain.InstanceData {
+		return domain.InstanceData{
+			Title: "dedup-e2e", UUID: "u-dedup-e2e", Path: "/tmp/e2e", Program: "claude", Status: domain.Paused,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(), Tags: []string{"one"},
+			Worktree:      domain.GitWorktreeData{RepoPath: "/repo", WorktreePath: "/wt", SessionName: "dedup-e2e", BranchName: "b", BaseCommitSHA: "s"},
+			DiffStats:     domain.DiffStatsData{Added: 1, Removed: 2, Content: "d"},
+			ClaudeSession: domain.ClaudeSessionData{ConversationUUID: "conv", Metadata: map[string]string{"k": "v"}},
+		}
+	}
+	// writes is {session, worktree, diff stats, claude} writes caused by the one changed save.
+	cases := []struct {
+		name   string
+		change func(*domain.InstanceData)
+		check  func(t *testing.T, w [4]int64, got domain.InstanceData)
+	}{
+		{"session column only", func(d *domain.InstanceData) { d.Path = "/tmp/e2e-2" }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 0, 0, 0}, w)
+			assert.Equal(t, "/tmp/e2e-2", got.Path)
+		}},
+		{"worktree only", func(d *domain.InstanceData) { d.Worktree.BranchName = "b2" }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 1, 0, 0}, w)
+			assert.Equal(t, "b2", got.Worktree.BranchName)
+		}},
+		{"diff stats only", func(d *domain.InstanceData) { d.DiffStats.Added = 9 }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 0, 1, 0}, w)
+			assert.Equal(t, 9, got.DiffStats.Added)
+		}},
+		{"tags only", func(d *domain.InstanceData) { d.Tags = []string{"one", "two"} }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{3, 0, 0, 0}, w, "main update plus clear and add of the tag edge")
+			assert.ElementsMatch(t, []string{"one", "two"}, got.Tags)
+		}},
+		{"claude only", func(d *domain.InstanceData) { d.ClaudeSession.Metadata = map[string]string{"k": "v2"} }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 0, 0, 1}, w)
+			assert.Equal(t, map[string]string{"k": "v2"}, got.ClaudeSession.Metadata)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			require.NoError(t, storage.AddInstance(restoredStarted(t, base())))
+			require.NoError(t, storage.SaveInstances([]*instance.Instance{restoredStarted(t, base())}))
+			w := countSectionWrites(t, storage)
+
+			changed := base()
+			tc.change(&changed)
+			require.NoError(t, storage.SaveInstances([]*instance.Instance{restoredStarted(t, changed)}))
+
+			loaded, err := storage.Repo.GetWithOptions(context.Background(), "dedup-e2e", domain.LoadFull)
+			require.NoError(t, err)
+			tc.check(t, w.snapshot(), *loaded)
+		})
+	}
+}

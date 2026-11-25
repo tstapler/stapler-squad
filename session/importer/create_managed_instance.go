@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/registry"
 )
 
 // Sentinel errors returned by CreateManagedInstance, wrapped with
@@ -58,7 +59,7 @@ type CreateManagedInstanceParams struct {
 	// callers that don't use the live-handle registry (there are none today,
 	// but the field is a plain pointer, not an interface, so this is not
 	// speculative) may leave it nil.
-	Registry *session.Registry
+	Registry *registry.Registry
 
 	// CreateIfMissing controls whether a Directory-mode session may be
 	// created even though its target path does not yet exist on disk. This

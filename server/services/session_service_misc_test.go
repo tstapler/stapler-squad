@@ -14,7 +14,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
 // ---------------------------------------------------------------------------
@@ -219,56 +218,6 @@ func TestGetTerminalSnapshot_SessionNotFound(t *testing.T) {
 
 	_, err := svc.GetTerminalSnapshot(context.Background(), connect.NewRequest(&sessionv1.GetTerminalSnapshotRequest{
 		SessionId: "no-such-session",
-	}))
-	require.Error(t, err)
-	var connectErr *connect.Error
-	require.ErrorAs(t, err, &connectErr)
-	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
-}
-
-// ---------------------------------------------------------------------------
-// GetWorktreeDiff (UnfinishedWorkService)
-// ---------------------------------------------------------------------------
-
-// newMinimalUnfinishedWorkService constructs an UnfinishedWorkService with a
-// real (but empty) Scanner backed by a temp-dir StateStore. No background
-// scan goroutines are started, so it is safe to use in unit tests.
-func newMinimalUnfinishedWorkService(t *testing.T) *UnfinishedWorkService {
-	t.Helper()
-	tmpDir := t.TempDir()
-	stateStore, err := unfinished.NewStateStore(tmpDir + "/state.json")
-	require.NoError(t, err)
-	bus := events.NewEventBus(16)
-	scanner := unfinished.NewScanner(bus, stateStore)
-	return NewUnfinishedWorkService(scanner, stateStore, bus, nil, nil)
-}
-
-// TestGetWorktreeDiff_EmptyRepoPath verifies that missing repo_path or branch
-// yields CodeNotFound (the scanner returns !ok, which the handler maps to
-// CodeNotFound — the handler has no explicit empty-field validation).
-func TestGetWorktreeDiff_EmptyRepoPath(t *testing.T) {
-	t.Parallel()
-	svc := newMinimalUnfinishedWorkService(t)
-
-	_, err := svc.GetWorktreeDiff(context.Background(), connect.NewRequest(&sessionv1.GetWorktreeDiffRequest{
-		RepoPath: "",
-		Branch:   "",
-	}))
-	require.Error(t, err)
-	var connectErr *connect.Error
-	require.ErrorAs(t, err, &connectErr)
-	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
-}
-
-// TestGetWorktreeDiff_SessionNotFound verifies that a repo+branch pair that
-// has not been scanned returns CodeNotFound.
-func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
-	t.Parallel()
-	svc := newMinimalUnfinishedWorkService(t)
-
-	_, err := svc.GetWorktreeDiff(context.Background(), connect.NewRequest(&sessionv1.GetWorktreeDiffRequest{
-		RepoPath: "/nonexistent/repo",
-		Branch:   "main",
 	}))
 	require.Error(t, err)
 	var connectErr *connect.Error

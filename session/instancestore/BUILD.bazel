@@ -10,6 +10,7 @@ go_library(
         "mapper.go",
         "reads.go",
         "store.go",
+        "update.go",
         "updaters.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/instancestore",
@@ -38,9 +39,11 @@ alias(
 go_test(
     name = "instancestore_test",
     srcs = [
+        "commit_failure_test.go",
         "create_delete_test.go",
         "mapper_test.go",
         "reads_test.go",
+        "update_test.go",
         "updaters_test.go",
     ],
     embed = [":instancestore"],
@@ -49,6 +52,7 @@ go_test(
         "//session/internal/entdbtest",
         "//session/sessionpr",
         "//tools/bzl/ent",
+        "//tools/bzl/ent:claudemetadata",
         "//tools/bzl/ent:diffstats",
         "//tools/bzl/ent:itemsession",
         "//tools/bzl/ent:session",

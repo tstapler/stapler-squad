@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -325,7 +326,7 @@ func TestGuidanceDescriptors_should_OfferCancelRequestWithConfirmAndPeerLabel_Wh
 		sources: DescriptorSources{Guidance: &fakeGuidance{open: map[string]OpenGuidance{"g1": {PeerHelp: true}}}},
 		flag:    func(string) bool { return true },
 	}
-	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaGuidanceRequestID: "g1", MetaPeerTitle: "diagnose:abc"}}
+	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1", MetaPeerTitle: "diagnose:abc"}}
 
 	b.Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
 

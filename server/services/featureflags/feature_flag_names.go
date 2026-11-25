@@ -15,6 +15,12 @@ const SddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 // where it's read.
 const WorkspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
+// CrossHostClaimDedupFlagName gates every cross-host claim check. Off by
+// default: with it off, creation and dequeue behave exactly as they did before
+// the claim substrate existed. Claim recording (Storage.CreateBacklogItem) is
+// always on.
+const CrossHostClaimDedupFlagName = "cross_host_claim_dedup"
+
 // backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
 const BacklogFlagName = "backlog"
 
@@ -60,3 +66,22 @@ const TerminalResyncBatchingFlagName = "terminal:resync-batching"
 // documentation and
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
 const TerminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+
+// GithubIssueProgressCommentsFlagName gates the in_progress and review comments on the linked GitHub issue.
+const GithubIssueProgressCommentsFlagName = "github_issue_progress_comments"
+
+// UpdateCheckFlagName is opt-in: the check contacts api.github.com.
+const UpdateCheckFlagName = "changelog:update-check"
+
+// ChangelogFlagName gates the changelog route, API and update badge.
+const ChangelogFlagName = "changelog"
+
+const CompletionReviewerFlagName = "backlog:completion-reviewer"
+
+// TerminalWriteLeaseFlagName is the flag behind the per-instance terminal write lease (global only, default on).
+const TerminalWriteLeaseFlagName = "terminal_write_lease"
+
+// HiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary write guards (global only, default on).
+const HiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
+
+const HiddenSessionReplyFlagName = "hidden_session_reply"

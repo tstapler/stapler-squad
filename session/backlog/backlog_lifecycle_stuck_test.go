@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -2754,7 +2755,7 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 	assert.Equal(t, []string{"swept-twice-work-session"}, archiver.archivedUUIDs,
 		"a fully-processed terminal item is skipped inside the settle TTL")
 
-	clock = clock.Add(session.TerminalSweepSettleTTL)
+	clock = clock.Add(terminalstate.TerminalSweepSettleTTL)
 	listener.reconcileTerminalItemSessions(ctx)
 	assert.Equal(t, []string{"swept-twice-work-session", "swept-twice-work-session"}, archiver.archivedUUIDs,
 		"the safety net still re-verifies once the TTL elapses (idempotency is the archiver's CAS)")
@@ -4589,14 +4590,14 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 
 // TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage
 // is the Story 2.1.3 (Task 2.1.3d) regression test for selfHealStuck's
-// re-route to session.IsTerminalStatus: an operator-configured custom stage
+// re-route to terminalstate.IsTerminalStatus: an operator-configured custom stage
 // marked IsTerminal (simulated here via SetTerminalStatusChecker, standing in
 // for Epic 2.3's not-yet-built ConfiguredWorkflowEngine) must trigger the
 // same blanket terminal rule as built-in done/archived.
 func TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCustomTerminalStage(t *testing.T) {
 	const customTerminal = domain.BacklogStatus("legal-review")
-	session.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
-	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+	terminalstate.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { terminalstate.SetTerminalStatusChecker(nil) })
 
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -6247,7 +6248,7 @@ func TestReconcileTerminalItemWorktrees_should_SkipSettledItem_UntilTTLElapses(t
 	listener.reconcileTerminalItemWorktrees(ctx)
 	assert.Equal(t, []string{item.ID}, cleaner.calls())
 
-	clock = clock.Add(session.TerminalSweepSettleTTL)
+	clock = clock.Add(terminalstate.TerminalSweepSettleTTL)
 	listener.reconcileTerminalItemWorktrees(ctx)
 	assert.Equal(t, []string{item.ID, item.ID}, cleaner.calls())
 }

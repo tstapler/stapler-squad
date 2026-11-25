@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -71,7 +72,7 @@ func (r reasonSignature) key(pr githubpkg.LinkKey) string {
 	for _, h := range r.headers {
 		names = append(names, canonicalReasonForHeader(h))
 	}
-	return services.GuardSignature(pr, services.ReasonSetSignature(services.DropSubsumedChangesRequested(names)...))
+	return access.GuardSignature(pr, access.ReasonSetSignature(services.DropSubsumedChangesRequested(names)...))
 }
 
 func canonicalReasonForHeader(h string) string {
@@ -117,7 +118,7 @@ func buildReasonSignature(fixContext string) reasonSignature {
 // ---------------------------------------------------------------------------
 
 // lastSteerReason is per-item dedup state (BacklogService.steerDedup,
-// key=itemID), mirroring session/nudge_dedup.go's lastNudge shape plus
+// key=itemID), mirroring session/autonomous/nudge_dedup.go's lastNudge shape plus
 // sessionUUID — the session that actually received the delivery, so a
 // changed active work session is never mistaken for an already-delivered
 // reason it never actually saw.

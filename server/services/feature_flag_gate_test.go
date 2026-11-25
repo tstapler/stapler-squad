@@ -16,6 +16,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -31,7 +34,7 @@ func gateFlagUpdate(svc *SessionService, ctx context.Context, enabled bool) erro
 	return flagUpdateCtx(ctx, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag, enabled)
 }
 
-func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, enabled bool) error {
+func flagUpdateCtx(ctx context.Context, svc *flagsvc.FeatureFlagService, name string, enabled bool) error {
 	_, err := svc.UpdateFeatureFlag(ctx, connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{Name: name, Enabled: enabled}))
 	return err
 }
@@ -78,7 +81,7 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	svc.DeliveryGate().Stats().SetWriterRunning(true)
 
 	var flipErr error
-	h := WithRequestRecord(ListenerLocal, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := access.WithRequestRecord(access.ListenerLocal, false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, on := range []bool{true, false, true} {
 			if flipErr = gateFlagUpdate(svc, r.Context(), on); flipErr != nil {
 				return
@@ -91,23 +94,23 @@ func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFl
 	require.NoError(t, flipErr)
 	svc.Shutdown() // joins the audit drain goroutine
 
-	raw, err := os.ReadFile(filepath.Join(dir, "audit", auditFileName))
+	raw, err := os.ReadFile(filepath.Join(dir, "audit", auditkit.AuditFileName))
 	require.NoError(t, err)
 	ls := lines(raw)
 	require.Len(t, ls, 3, "one result line per tightening-path flip")
 	prevs := make([]bool, 0, len(ls))
 	for i, l := range ls {
-		var al AuditLine
+		var al auditkit.AuditLine
 		require.NoError(t, json.Unmarshal(l, &al))
-		assert.Equal(t, auditKindFlagChg, al.Kind)
+		assert.Equal(t, auditkit.AuditKindFlagChg, al.Kind)
 		assert.Equal(t, config.HiddenSessionGateFeatureFlag, al.Flag)
 		assert.Equal(t, "global", al.Scope)
-		assert.Equal(t, auditPhaseResult, al.Phase)
-		assert.Equal(t, flagOutcomeApplied, al.Outcome)
+		assert.Equal(t, auditkit.AuditPhaseResult, al.Phase)
+		assert.Equal(t, auditkit.FlagOutcomeApplied, al.Outcome)
 		assert.Equal(t, int64(i+1), al.Seq)
-		assert.Equal(t, ListenerLocal, al.Listener)
+		assert.Equal(t, access.ListenerLocal, al.Listener)
 		assert.Equal(t, "localhost:8543", al.Host)
-		assert.Equal(t, AuthModeNone, al.AuthMode)
+		assert.Equal(t, access.AuthModeNone, al.AuthMode)
 		require.NotNil(t, al.Previous)
 		prevs = append(prevs, *al.Previous)
 	}

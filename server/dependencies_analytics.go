@@ -16,9 +16,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
+	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
@@ -42,7 +45,7 @@ import (
 type unfinishedWiring struct {
 	scanner         *unfinished.Scanner
 	stateStore      *unfinished.StateStore
-	workSvc         *services.UnfinishedWorkService
+	workSvc         *unfinishedwork.UnfinishedWorkService
 	watchDirWatcher *unfinished.WatchDirWatcher
 	prPoller        *prpoller.WorktreePRPoller
 }
@@ -55,7 +58,7 @@ func buildUnfinishedWork(svc *ServiceDeps, cfg *config.Config) unfinishedWiring 
 	var (
 		unfinishedScanner         *unfinished.Scanner
 		unfinishedStateStore      *unfinished.StateStore
-		unfinishedWorkSvc         *services.UnfinishedWorkService
+		unfinishedWorkSvc         *unfinishedwork.UnfinishedWorkService
 		unfinishedWatchDirWatcher *unfinished.WatchDirWatcher
 		worktreePRPoller          *prpoller.WorktreePRPoller
 	)
@@ -74,7 +77,7 @@ func buildUnfinishedWork(svc *ServiceDeps, cfg *config.Config) unfinishedWiring 
 			applyShadowVerifyEnv(unfinishedScanner, os.Getenv)
 			unfinished.LogStartup(unfinishedScanner)
 			unfinishedWatchDirWatcher = unfinished.NewWatchDirWatcher(unfinishedScanner, unfinishedStateStore)
-			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage, unfinishedWatchDirWatcher)
+			unfinishedWorkSvc = unfinishedwork.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage, unfinishedWatchDirWatcher)
 			log.Info("UnfinishedWorkService initialized", "state", statePath)
 			if err := unfinished.RegisterMetrics(unfinishedScanner); err != nil {
 				log.Warn("failed to register unfinished OTel metrics", "err", err)
@@ -170,7 +173,7 @@ func openAnalyticsStores(sessionService *services.SessionService) analyticsWirin
 	if analyticsClient != nil {
 		filesAnalytics = analytics.NewSQLiteAnalyticsProvider(analyticsClient)
 	}
-	sessionService.GetFileService().SetTelemetry(services.NewFilesTelemetry(filesAnalytics))
+	sessionService.GetFileService().SetTelemetry(fsops.NewFilesTelemetry(filesAnalytics))
 
 	return analyticsWiring{
 		client:    analyticsClient,
@@ -259,7 +262,7 @@ func startTokenStores(svc *ServiceDeps, cfg *config.Config, historyLinker *impor
 		// consumes TokenStore's notifications on its own goroutine.
 		if entClient := storage.GetEntClient(); entClient != nil {
 			ctxHistoryStore = contexthistory.NewStore(entClient)
-			go contexthistory.NewRecorder(ctxHistoryStore, services.AnthropicContextWindow, 0).
+			go contexthistory.NewRecorder(ctxHistoryStore, anthropicwire.AnthropicContextWindow, 0).
 				Run(context.Background(), tokenStore)
 		}
 	} else {

@@ -207,7 +207,7 @@ jobs:
           # Soft-timeout wrapper: fail fast at 20m (soft budget) rather than
           # riding the job's 25m hard timeout-minutes to a SIGTERM with no
           # diagnostic. keep this marker prefix in sync with
-          # ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+          # ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           timeout 20m npx playwright test ${{ env.FEATURE_SPECS }} \
             --shard=${{ matrix.shard }}/2 \
             --reporter=list || {

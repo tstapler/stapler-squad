@@ -15,20 +15,24 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 type githubHandlers struct {
-	cache *githubpkg.UserPRCache
+	cache UserPRSource
 	store session.InstanceStore
 	// svc is used to route create_session_for_pr through the async
 	// CreateSession + Background Resolution Pipeline (async-session-creation
 	// Epic 2.3, Story 2.3.2) instead of constructing/starting an *Instance
 	// inline. May be nil in tests that don't exercise createSessionForPR.
-	svc *services.SessionService
+	svc SessionCreator
+	// createLimiter is shared with lifecycleHandlers.createLimiter; nil means unlimited.
+	createLimiter *tokenBucket
+	// publicURL is the instance's externally reachable UI base (STAPLER_SQUAD_PUBLIC_URL);
+	// empty means create_session_for_pr returns no ui_url.
+	publicURL string
 }
 
 // GitHubPRSummary is the MCP representation of one open pull request.
@@ -68,6 +72,8 @@ type CreateSessionForPRResult struct {
 	// ProgramWarning is set (non-fatally) when program isn't among the
 	// programs currently registered — see programWarningFor.
 	ProgramWarning string `json:"program_warning,omitempty"`
+	// UIURL links to the session in the web UI; see CreateSessionResult.UIURL.
+	UIURL string `json:"ui_url,omitempty"`
 }
 
 func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
@@ -157,7 +163,7 @@ func (gh *githubHandlers) createSessionForPR(ctx context.Context, req mcpgo.Call
 // lifecycleHandlers.createSessionWithAwaitTimeout's doc comment in
 // tools_lifecycle.go for why this seam exists.
 func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context, req mcpgo.CallToolRequest, awaitTimeout time.Duration) (*mcpgo.CallToolResult, error) {
-	if !createSessionLimiter.allow("global") {
+	if !gh.createLimiter.allow("global") {
 		return errResult(ErrRateLimitExceeded, "create_session rate limit exceeded (max 3 per minute)", "Wait before creating another session."), nil
 	}
 
@@ -188,6 +194,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 						return okResult(CreateSessionForPRResult{
 							MCPResult: MCPResult{Success: true},
 							Session:   &detail,
+							UIURL:     sessionUIURL(gh.publicURL, inst.GetStableID()),
 						}), nil
 					}
 				}
@@ -249,8 +256,10 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 	}
 	sessionID := createResp.Msg.Session.Id
 
+	uiURL := sessionUIURL(gh.publicURL, sessionID)
+
 	outcome, awaitErr := gh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
-	if errors.Is(awaitErr, services.ErrCreationAwaitTimeout) {
+	if errors.Is(awaitErr, domain.ErrCreationAwaitTimeout) {
 		return okResult(CreateSessionForPRResult{
 			MCPResult: MCPResult{Success: true},
 			Session: &SessionDetail{SessionSummary: SessionSummary{
@@ -260,6 +269,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			}},
 			StillCreating:  true,
 			ProgramWarning: programWarning,
+			UIURL:          uiURL,
 		}), nil
 	}
 	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
@@ -272,7 +282,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			fmt.Sprintf("session %q reached Active but is no longer findable", sessionID), ""), nil
 	}
 
-	if err := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, nil); err != nil {
+	if err := gh.svc.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, nil); err != nil {
 		log.Warn("mcp hook injection failed for PR session", "title", title, "err", err)
 	}
 
@@ -285,6 +295,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 		MCPResult:      MCPResult{Success: true},
 		Session:        &detail,
 		ProgramWarning: programWarning,
+		UIURL:          uiURL,
 	}), nil
 }
 
@@ -370,8 +381,8 @@ func NewPRVerification(exists, matched bool, actualHeadBranch, state, author str
 //   - (PRVerification{}, err): the lookup itself failed (rate limit, network,
 //     auth) — transient. Callers should surface a retryable error rather
 //     than treating this as a confirmed mismatch or a confirmed non-existence.
-func VerifyPRMatchesBranch(ctx context.Context, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
-	info, err := githubpkg.GetPRByNumber(ctx, ref, prNumber)
+func VerifyPRMatchesBranch(ctx context.Context, gh GitHub, ref githubpkg.RepoRef, prNumber int, expectedBranch string) (PRVerification, error) {
+	info, err := gh.GetPRByNumber(ctx, ref, prNumber)
 	if err != nil {
 		if errors.Is(err, githubpkg.ErrNoPR) {
 			return NewPRVerification(false, false, "", "", ""), nil

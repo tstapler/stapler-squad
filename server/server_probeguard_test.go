@@ -11,7 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // newChainTestServer builds a Server with only a mux, so the per-listener
@@ -160,13 +160,13 @@ func (okValidator) ValidateAuthSession(string) bool { return true }
 
 // recordProbe serves one request through h and returns the RequestRecord the
 // handler behind the chain observed.
-func recordProbe(t *testing.T, build func(*Server) http.Handler, host string, hdr map[string]string) services.RequestRecord {
+func recordProbe(t *testing.T, build func(*Server) http.Handler, host string, hdr map[string]string) access.RequestRecord {
 	t.Helper()
 	srv, _ := newChainTestServer(t, "localhost:8543")
-	var got services.RequestRecord
+	var got access.RequestRecord
 	var found bool
 	srv.mux.HandleFunc("/record-probe", func(_ http.ResponseWriter, r *http.Request) {
-		got, found = services.RequestRecordFrom(r.Context())
+		got, found = access.RequestRecordFrom(r.Context())
 	})
 	r := httptest.NewRequest(http.MethodPost, "/record-probe", strings.NewReader("{}"))
 	r.Host = host
@@ -187,11 +187,11 @@ func TestAuthMode_ShouldBeRequiredOnlyWhenARealValidatorIsWired_AndAnIdentityOrN
 		req  bool
 		want string
 	}{
-		{"nil wrapper", nil, false, services.AuthModeNone},
-		{"identity wrapper", identity, false, services.AuthModeNone},
-		{"Auth(nil)", middleware.Auth(nil), middleware.AuthRequires(nil), services.AuthModeNone},
-		{"Auth(typed nil)", middleware.Auth(typedNil), middleware.AuthRequires(typedNil), services.AuthModeNone},
-		{"Auth(validator)", middleware.Auth(okValidator{}), middleware.AuthRequires(okValidator{}), services.AuthModeRequired},
+		{"nil wrapper", nil, false, access.AuthModeNone},
+		{"identity wrapper", identity, false, access.AuthModeNone},
+		{"Auth(nil)", middleware.Auth(nil), middleware.AuthRequires(nil), access.AuthModeNone},
+		{"Auth(typed nil)", middleware.Auth(typedNil), middleware.AuthRequires(typedNil), access.AuthModeNone},
+		{"Auth(validator)", middleware.Auth(okValidator{}), middleware.AuthRequires(okValidator{}), access.AuthModeRequired},
 	}
 	for _, c := range cases {
 		t.Run(c.name+" local", func(t *testing.T) {
@@ -219,10 +219,10 @@ func TestAuthMode_ShouldBeRequiredOnlyWhenARealValidatorIsWired_AndAnIdentityOrN
 
 func TestRequestRecord_ShouldCarryRawListenerAuthModeHostOriginAndProxiedOnBothChainsWithoutAVerdict_WhenOnlyPr1fAIsMerged(t *testing.T) {
 	local := recordProbe(t, (*Server).localChain, "localhost:8543", nil)
-	assert.Equal(t, services.RequestRecord{Listener: services.ListenerLocal, AuthMode: services.AuthModeNone, Host: "localhost:8543"}, local)
+	assert.Equal(t, access.RequestRecord{Listener: access.ListenerLocal, AuthMode: access.AuthModeNone, Host: "localhost:8543"}, local)
 
 	remote := recordProbe(t, func(srv *Server) http.Handler { return srv.remoteChain(nil, true) }, "onyx.lan:8444", map[string]string{"X-Forwarded-For": "10.0.0.9", "Origin": "https://onyx.lan:8444"})
-	assert.Equal(t, services.RequestRecord{Listener: services.ListenerRemote, AuthMode: services.AuthModeRequired, Host: "onyx.lan:8444", Origin: "https://onyx.lan:8444", Proxied: true}, remote)
+	assert.Equal(t, access.RequestRecord{Listener: access.ListenerRemote, AuthMode: access.AuthModeRequired, Host: "onyx.lan:8444", Origin: "https://onyx.lan:8444", Proxied: true}, remote)
 
 	// Raw values only: the record adds no refusal, even for a foreign Host.
 	rebinding := recordProbe(t, func(srv *Server) http.Handler { return srv.remoteChain(nil, false) }, "evil.example", nil)
@@ -392,7 +392,7 @@ func TestLocalWriteGuard_ShouldNotBeInstalledWhenAuthMiddlewareIsSetAndTheVerdic
 		s.SetupAuth(func(next http.Handler) http.Handler { return next }, true)
 		return s.localChain()
 	}, "localhost:8543", nil)
-	assert.Equal(t, services.AuthModeRequired, rec.AuthMode)
+	assert.Equal(t, access.AuthModeRequired, rec.AuthMode)
 }
 
 func TestReplaceVerifiedHostnames_ShouldNormalizeDropLiteralsAndLocalhostAndReplaceWholesale(t *testing.T) {

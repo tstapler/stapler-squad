@@ -11,13 +11,13 @@ import (
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -33,38 +33,40 @@ import (
 // just gives it a second, always-on export shape for curl/uptime checks.
 func (s *Server) registerActuatorRoutes() {
 	for _, e := range s.actuatorEndpoints() {
-		s.mux.HandleFunc(e.Path, e.Handler)
+		s.mux.Handle(e.Path, e.Handler)
 	}
 }
 
 // actuatorEndpoint is one row of the actuator route table.
 type actuatorEndpoint struct {
 	Path    string
-	Handler http.HandlerFunc
+	Handler http.Handler
 }
 
 // actuatorEndpoints is the single list of actuator routes: a new endpoint is a
-// handler file plus one row here. Row order is registration order.
+// handler file plus one row here. Row order is registration order. Every row is
+// unconditional: a missing dependency is answered by the handler (503, "not
+// running"), never by leaving the route unregistered.
 func (s *Server) actuatorEndpoints() []actuatorEndpoint {
 	return []actuatorEndpoint{
-		{"/actuator/health", handleActuatorHealth},
-		{"/actuator/metrics", handleActuatorMetrics},
-		{"/actuator/db", handleActuatorDB},
-		{"/actuator/git-backend", handleActuatorGitBackend},
-		{"/actuator/workflow-engine", s.handleActuatorWorkflowEngine},
-		{"/actuator/nudge-outcomes", handleActuatorNudgeOutcomes},
+		{"/actuator/health", http.HandlerFunc(handleActuatorHealth)},
+		{"/actuator/metrics", http.HandlerFunc(handleActuatorMetrics)},
+		{"/actuator/db", http.HandlerFunc(handleActuatorDB)},
+		{"/actuator/git-backend", http.HandlerFunc(handleActuatorGitBackend)},
+		{"/actuator/workflow-engine", http.HandlerFunc(s.handleActuatorWorkflowEngine)},
+		{"/actuator/nudge-outcomes", http.HandlerFunc(handleActuatorNudgeOutcomes)},
 		{"/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner)},
-		{"/actuator/inbox-pr-watch", handleActuatorInboxPRWatch},
+		{"/actuator/inbox-pr-watch", http.HandlerFunc(handleActuatorInboxPRWatch)},
 		{"/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load)},
 		{"/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load)},
-		{"/actuator/terminal-input", handleActuatorTerminalInput(services.TerminalInputReport)},
+		{"/actuator/terminal-input", handleActuatorTerminalInput(access.TerminalInputReport)},
 		{"/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default)},
 	}
 }
 
 // handleActuatorTerminalInput serves the bounded per-session terminal input tally (frames,
 // bytes, class counts, last activity; never content). JSON by default; ?format=text for a terminal.
-func handleActuatorTerminalInput(report func() []services.TerminalInputSession) http.HandlerFunc {
+func handleActuatorTerminalInput(report func() []access.TerminalInputSession) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -73,7 +75,7 @@ func handleActuatorTerminalInput(report func() []services.TerminalInputSession) 
 		rows := report()
 		if r.URL.Query().Get("format") == "text" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = w.Write([]byte(services.RenderTerminalInputText(rows)))
+			_, _ = w.Write([]byte(access.RenderTerminalInputText(rows)))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -92,7 +94,7 @@ func handleActuatorTerminalMux(bridge func() *wsconn.TerminalMuxBridge) http.Han
 			return
 		}
 		if r.Method == http.MethodPost {
-			if rec, ok := services.RequestRecordFrom(r.Context()); !ok || rec.Listener != services.ListenerLocal {
+			if rec, ok := access.RequestRecordFrom(r.Context()); !ok || rec.Listener != access.ListenerLocal {
 				http.Error(w, "local listener only", http.StatusForbidden)
 				return
 			}
@@ -151,7 +153,7 @@ func handleActuatorDB(w http.ResponseWriter, _ *http.Request) {
 // and the time of the first record (Story 4.1.2).
 func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(session.DefaultNudgeOutcomes().Snapshot())
+	_ = json.NewEncoder(w).Encode(nudgeoutcomes.DefaultNudgeOutcomes().Snapshot())
 }
 
 // handleActuatorWsUnary serves the unary WebSocket bridge counters as JSON. The bridge is

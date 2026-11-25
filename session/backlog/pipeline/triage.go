@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 // TriageSuggestion is a canonical suggestion entry shared by the headless triage
@@ -105,7 +105,7 @@ Write %s/validation.md containing:
 
 ### Step 4 — Output
 After all files are written, output ONLY a JSON object (no other text before or after):
-%s`, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath, session.SecTriageCriteriaCheck, session.TriageOutputContract())
+%s`, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath, pipelinemode.SecTriageCriteriaCheck, pipelinemode.TriageOutputContract())
 
 	return sb.String()
 }
@@ -158,7 +158,7 @@ research as-is.
 
 After writing all files, output ONLY a JSON object (no other text before or
 after):
-%s`, feedback, artifactAbsPath, artifactAbsPath, researchDir, session.RetriageOutputContract())
+%s`, feedback, artifactAbsPath, artifactAbsPath, researchDir, pipelinemode.RetriageOutputContract())
 
 	return sb.String()
 }

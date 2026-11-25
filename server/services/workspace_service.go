@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -80,7 +81,7 @@ type WorkspaceService struct {
 	eventBus   *events.EventBus
 	liveFinder LiveInstanceFinder
 	// guards is the live hidden_session_readonly_guards value; nil means on.
-	guards GuardsFlag
+	guards access.GuardsFlag
 	// inFlightSwitches tracks session IDs currently undergoing a workspace switch.
 	// Prevents concurrent SwitchWorkspace RPCs on the same session from corrupting state.
 	inFlightSwitches sync.Map
@@ -115,7 +116,7 @@ func (ws *WorkspaceService) SetLiveFinder(f LiveInstanceFinder) {
 }
 
 // SetGuardsFlag injects the live read-only guards flag.
-func (ws *WorkspaceService) SetGuardsFlag(f GuardsFlag) {
+func (ws *WorkspaceService) SetGuardsFlag(f access.GuardsFlag) {
 	ws.guards = f
 }
 
@@ -166,7 +167,7 @@ func (ws *WorkspaceService) CheckWriteAccess(sessionID string) error {
 	if inst.IsArchived() {
 		return archivedSessionRefusal()
 	}
-	if _, err := AccessForUnary(inst, ws.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(inst, ws.guards).Writer(nil); err != nil {
 		return hiddenSessionRefusal()
 	}
 	return nil
@@ -571,7 +572,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 
 	// Every switch type types into or restarts the pane, so a hidden target is
 	// refused before the in-flight entry, the checkpoint or any git-side change.
-	if _, err := AccessForUnary(instance, ws.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(instance, ws.guards).Writer(nil); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.Id, err))
 	}

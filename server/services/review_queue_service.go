@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
 	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
@@ -38,7 +39,7 @@ type ReviewQueueService struct {
 	storage           *session.Storage
 	reviewQueuePoller *session.ReviewQueuePoller
 	eventBus          *events.EventBus
-	approvalStore     *ApprovalStore
+	approvalStore     *approvalkit.ApprovalStore
 }
 
 // NewReviewQueueService creates a ReviewQueueService with the required state.
@@ -73,7 +74,7 @@ func (rqs *ReviewQueueService) SetReviewQueuePoller(poller *session.ReviewQueueP
 
 // SetApprovalStore injects the ApprovalStore for enriching APPROVAL_PENDING items
 // with their pending_approval_id metadata.
-func (rqs *ReviewQueueService) SetApprovalStore(store *ApprovalStore) {
+func (rqs *ReviewQueueService) SetApprovalStore(store *approvalkit.ApprovalStore) {
 	rqs.approvalStore = store
 }
 

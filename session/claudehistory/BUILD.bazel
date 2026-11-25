@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "claudehistory",
+    srcs = ["history.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/claudehistory",
+    visibility = ["//visibility:public"],
+    deps = ["//session/instance"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":claudehistory",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "claudehistory_test",
+    srcs = [
+        "history_home_test.go",
+        "history_messages_test.go",
+        "history_reload_test.go",
+        "history_test.go",
+    ],
+    embed = [":claudehistory"],
+    deps = [
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

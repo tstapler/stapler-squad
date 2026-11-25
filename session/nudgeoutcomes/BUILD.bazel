@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "nudgeoutcomes",
+    srcs = ["nudge_outcomes.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/nudgeoutcomes",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nudgeoutcomes",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nudgeoutcomes_test",
+    srcs = ["nudge_outcomes_test.go"],
+    embed = [":nudgeoutcomes"],
+    deps = [
+        "//config",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

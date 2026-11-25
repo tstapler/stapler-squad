@@ -1425,7 +1425,7 @@ func (i *Instance) CapturePaneContent() (string, error) {
 }
 
 // terminalResyncExecGateFastLaneFlagName mirrors server/services'
-// terminalResyncExecGateFastLaneFlagName (feature_flag_service.go). It can't
+// terminalResyncExecGateFastLaneFlagName (flagsvc/feature_flag_service.go). It can't
 // be shared directly — server/services imports session, so the reverse
 // import would cycle — so the literal is duplicated here; keep both in sync
 // if the flag is ever renamed.

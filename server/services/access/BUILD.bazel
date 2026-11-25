@@ -1,0 +1,73 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "access",
+    srcs = [
+        "external_pane_resize.go",
+        "human_activity.go",
+        "local_write_verdict.go",
+        "request_record.go",
+        "session_nudge_guard.go",
+        "terminal_access.go",
+        "terminal_input_metrics.go",
+        "tmux_input_send.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/access",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//github",
+        "//log",
+        "//server/middleware",
+        "//session/domain",
+        "//session/instance",
+        "//session/tmux",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":access",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "access_test",
+    srcs = [
+        "access_seams_test.go",
+        "decisions_golden_test.go",
+        "human_activity_test.go",
+        "local_write_verdict_test.go",
+        "session_nudge_guard_test.go",
+        "terminal_access_test.go",
+        "terminal_input_metrics_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":access"],
+    deps = [
+        "//github",
+        "//server/middleware",
+        "//server/services/internal/svctest",
+        "//session/domain",
+        "//session/instance",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

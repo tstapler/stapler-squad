@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
@@ -409,7 +410,7 @@ func TestReportProgress_should_ReturnActionableHint_When_SessionNotLinked(t *tes
 
 func TestRegisterBacklogTools_should_RegisterLinkSessionToItemTool_When_ToolsRegistered(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil)
+	s := NewCore(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil)
 	tools := s.ListTools()
 	linkTool, hasLink := tools["link_session_to_item"]
 	_, hasGetLinked := tools["get_linked_item"]
@@ -2737,7 +2738,7 @@ func TestImportGitHubIssue_should_PersistItem_When_IssueFetchSucceeds(t *testing
 	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
-	handler := &backlogHandlers{storage: storage}
+	handler := &backlogHandlers{storage: storage, github: httpGitHub{}}
 	ctx := WithSessionUUID(context.Background(), uuid.New().String())
 
 	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
@@ -2783,7 +2784,7 @@ func TestImportGitHubIssue_should_Succeed_When_NoSessionUUID(t *testing.T) {
 	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
-	handler := &backlogHandlers{storage: storage}
+	handler := &backlogHandlers{storage: storage, github: httpGitHub{}}
 	ctx := context.Background() // No session UUID injected — simulates a manual MCP client.
 
 	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
@@ -2820,7 +2821,7 @@ func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathS
 	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
 	t.Cleanup(backlogSvc.Shutdown)
 
-	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc}
+	handler := &backlogHandlers{storage: storage, backlogSvc: backlogSvc, github: httpGitHub{}}
 	ctx := WithSessionUUID(context.Background(), uuid.New().String())
 
 	result, err := handler.importGitHubIssue(ctx, makeToolReq(map[string]interface{}{
@@ -3935,7 +3936,7 @@ func TestReportDuplicate_VerifyGitHubRefExists_DispatchesPRTypeToRealGetPR(t *te
 
 	// verifyGitHubRef deliberately left nil — the real verifyRef/
 	// verifyGitHubRefExists dispatch chain must run.
-	handler := &backlogHandlers{storage: storage}
+	handler := &backlogHandlers{storage: storage, github: httpGitHub{}}
 	ctxWithUUID := WithSessionUUID(context.Background(), sessionUUID)
 
 	req := makeToolReq(map[string]interface{}{
@@ -6017,13 +6018,13 @@ func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
 
 // TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
 // is the Story 2.1.3 (Task 2.1.3d) regression test for buildMatchedWaitResult's
-// switch to session.IsTerminalStatus: a custom stage marked IsTerminal via
-// session.SetTerminalStatusChecker must report IsTerminal true, matching
+// switch to terminalstate.IsTerminalStatus: a custom stage marked IsTerminal via
+// terminalstate.SetTerminalStatusChecker must report IsTerminal true, matching
 // plan.md's AC example verbatim (a "legal-review" custom terminal stage).
 func TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
 	const customTerminal = domain.BacklogStatus("legal-review")
-	session.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
-	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+	terminalstate.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { terminalstate.SetTerminalStatusChecker(nil) })
 
 	res := buildMatchedWaitResult("item-under-test", &events.BacklogItemEventPayload{
 		Kind: events.BacklogChangeStatusTransition,
@@ -6046,11 +6047,11 @@ func TestBuildMatchedWaitResult_should_NotSetIsTerminal_When_NoCheckerConfigured
 // TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
 // mirrors the above for currentStateWaitResult's "already satisfied" precheck
 // (the verdict_recorded branch, which is the one that reads the `terminal`
-// local re-routed to session.IsTerminalStatus).
+// local re-routed to terminalstate.IsTerminalStatus).
 func TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
 	const customTerminal = domain.BacklogStatus("legal-review")
-	session.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
-	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+	terminalstate.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { terminalstate.SetTerminalStatusChecker(nil) })
 
 	item := &backlogdto.BacklogItemData{ID: "item-under-test", Status: string(customTerminal)}
 	verdict := &backlogdto.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
@@ -7860,4 +7861,92 @@ func TestGetLinkedItem_should_ReportHeartbeatAge_When_ProgressRecorded(t *testin
 	require.True(t, ok, "heartbeat_age_seconds missing: %v", m)
 	assert.InDelta(t, 90, age, 5)
 	assert.Contains(t, m, "last_progress_at")
+
+// AC gate outcome: an honestly missed criterion (report_progress not_met + note) must reach a human
+// via review instead of looping on request_review's rejection, and must never auto-complete.
+func TestRequestReview_AttemptedNotMetCriterion_GoesToReviewNotRejectedNorDone(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		skipReviewGate bool
+		reportNotMet   bool
+		wantStatus     domain.BacklogStatus
+		wantRejected   bool
+	}{
+		"not_met reaches review":                      {false, true, domain.BacklogStatusReview, false},
+		"not_met never auto-done with SkipReviewGate": {true, true, domain.BacklogStatusReview, false},
+		"unfinished criterion is still rejected":      {false, false, domain.BacklogStatusInProgress, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storage := newTestBacklogStorage(t)
+			ctx := context.Background()
+			item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
+				Title:              "FP rate target",
+				Status:             string(domain.BacklogStatusInProgress),
+				SkipReviewGate:     tc.skipReviewGate,
+				AcceptanceCriteria: `[{"index":0,"text":"FP rate <= 30%","status":"pending"}]`,
+			})
+			require.NoError(t, err)
+			sessionUUID := uuid.New().String()
+			_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
+			require.NoError(t, err)
+			handler := &backlogHandlers{storage: storage}
+			ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+			status, note := "in_progress", "still working"
+			if tc.reportNotMet {
+				status, note = "not_met", "measured 72-81% false positives"
+			}
+			_, err = handler.reportProgress(ctxWithUUID, makeToolReq(map[string]interface{}{
+				"item_id": item.ID, "criteria_index": float64(0), "status": status, "note": note,
+			}))
+			require.NoError(t, err)
+
+			result, err := handler.requestReview(ctxWithUUID, makeToolReq(map[string]interface{}{"item_id": item.ID, "message": "done"}))
+			require.NoError(t, err)
+			if tc.wantRejected {
+				assert.False(t, parseResult(t, result)["success"].(bool), "an unfinished criterion is still rejected")
+			} else {
+				require.False(t, result.IsError, "%v", result.Content)
+			}
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.wantStatus), fetched.Status)
+			if !tc.wantRejected {
+				assert.Contains(t, fetched.Notes, acNotMetNoteMarker)
+				assert.Contains(t, fetched.Notes, "measured 72-81% false positives")
+			}
+		})
+	}
+}
+
+func TestReportProgress_NotMet_RequiresANote_AndIsStoredAsFail(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
+		Title: "x", Status: string(domain.BacklogStatusInProgress),
+		AcceptanceCriteria: `[{"index":0,"text":"c","status":"pending"}]`,
+	})
+	require.NoError(t, err)
+	sessionUUID := uuid.New().String()
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
+	require.NoError(t, err)
+	handler := &backlogHandlers{storage: storage}
+	ctxWithUUID := WithSessionUUID(ctx, sessionUUID)
+
+	args := map[string]interface{}{"item_id": item.ID, "criteria_index": float64(0), "status": "not_met"}
+	result, err := handler.reportProgress(ctxWithUUID, makeToolReq(args))
+	require.NoError(t, err)
+	assert.False(t, parseResult(t, result)["success"].(bool), "not_met without a note is refused")
+
+	args["note"] = "measured 75%"
+	_, err = handler.reportProgress(ctxWithUUID, makeToolReq(args))
+	require.NoError(t, err)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	criteria, err := domain.ParseAcCriteria(fetched.AcceptanceCriteria)
+	require.NoError(t, err)
+	assert.Equal(t, domain.AcStatusFail, criteria[0].Status)
 }

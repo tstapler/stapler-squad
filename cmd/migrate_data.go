@@ -11,7 +11,18 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/jsonmigrate"
 )
+
+// openEntRepository adapts session.NewEntRepository to jsonmigrate.OpenRepository.
+func openEntRepository(dbPath string) (jsonmigrate.Repository, error) {
+	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	return repo, nil
+}
 
 func main() {
 	// Get config directory
@@ -36,8 +47,8 @@ func main() {
 
 	// Parse state.json to extract instances
 	var state struct {
-		HelpScreensSeen uint32                 `json:"help_screens_seen"`
-		Instances       []session.InstanceData `json:"instances"`
+		HelpScreensSeen uint32                `json:"help_screens_seen"`
+		Instances       []domain.InstanceData `json:"instances"`
 	}
 	if err := json.Unmarshal(stateData, &state); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to parse state.json: %v\n", err)
@@ -74,11 +85,11 @@ func main() {
 
 	// Run migration
 	fmt.Println("\nStarting migration...")
-	result, err := session.MigrateJSONToEnt(session.MigrationOptions{
+	result, err := jsonmigrate.MigrateJSONToEnt(jsonmigrate.MigrationOptions{
 		JSONPath:       tmpPath,
 		SQLitePath:     dbPath,
 		ForceOverwrite: true,
-	})
+	}, openEntRepository)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Migration failed: %v\n", err)
@@ -105,7 +116,7 @@ func main() {
 
 	// Validate migration
 	fmt.Println("\nValidating migration...")
-	if err := session.ValidateEntMigration(tmpPath, dbPath); err != nil {
+	if err := jsonmigrate.ValidateEntMigration(tmpPath, dbPath, openEntRepository); err != nil {
 		fmt.Fprintf(os.Stderr, "Validation failed: %v\n", err)
 		os.Exit(1)
 	}

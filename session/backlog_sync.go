@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -529,7 +530,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 			}
 		}
 
-		if source.BackwardSyncEnabled && extItem.State == "open" && IsTerminalStatus(domain.BacklogStatus(existing.Status)) {
+		if source.BackwardSyncEnabled && extItem.State == "open" && terminalstate.IsTerminalStatus(domain.BacklogStatus(existing.Status)) {
 			// See the zero-time guard comment in the closed-issue block above —
 			// same rationale applies here.
 			if extItem.IssueUpdatedAt.IsZero() {

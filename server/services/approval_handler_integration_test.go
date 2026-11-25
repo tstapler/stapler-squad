@@ -17,6 +17,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -27,8 +28,8 @@ import (
 
 // newTestHandler creates an ApprovalHandler wired with real in-memory dependencies
 // and a short timeout suitable for unit tests.
-func newTestHandler(timeout time.Duration) (*ApprovalHandler, *ApprovalStore) {
-	store := NewApprovalStore("") // in-memory only (no file path)
+func newTestHandler(timeout time.Duration) (*ApprovalHandler, *approvalkit.ApprovalStore) {
+	store := approvalkit.NewApprovalStore("") // in-memory only (no file path)
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = timeout
@@ -85,7 +86,7 @@ func TestApprovalFlow_Allow(t *testing.T) {
 			t.Errorf("approval never appeared in store")
 			return
 		}
-		if err := store.Resolve(approvalID, ApprovalDecision{Behavior: "allow"}); err != nil {
+		if err := store.Resolve(approvalID, approvalkit.ApprovalDecision{Behavior: "allow"}); err != nil {
 			t.Errorf("Resolve returned error: %v", err)
 		}
 	}()
@@ -122,7 +123,7 @@ func TestApprovalFlow_Deny(t *testing.T) {
 			t.Errorf("approval never appeared in store")
 			return
 		}
-		_ = store.Resolve(approvalID, ApprovalDecision{
+		_ = store.Resolve(approvalID, approvalkit.ApprovalDecision{
 			Behavior: "deny",
 			Message:  "not permitted",
 		})
@@ -209,7 +210,7 @@ func TestApprovalFlow_SessionIDFromHeader(t *testing.T) {
 	h, store := newTestHandler(5 * time.Second)
 
 	go func() {
-		var approval *PendingApproval
+		var approval *approvalkit.PendingApproval
 		_ = testutil.WaitForCondition(func() bool {
 			approvals := store.ListAll()
 			if len(approvals) > 0 {
@@ -224,7 +225,7 @@ func TestApprovalFlow_SessionIDFromHeader(t *testing.T) {
 		if approval.SessionID != "my-session" {
 			t.Errorf("expected sessionID=my-session, got %q", approval.SessionID)
 		}
-		_ = store.Resolve(approval.ID, ApprovalDecision{Behavior: "allow"})
+		_ = store.Resolve(approval.ID, approvalkit.ApprovalDecision{Behavior: "allow"})
 	}()
 
 	postPermissionRequest(t, h, "my-session", "Read")
@@ -400,7 +401,7 @@ func newHandlerWithStorage(t *testing.T) (*ApprovalHandler, *session.Storage) {
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	t.Cleanup(bus.Close)
-	h := NewApprovalHandler(NewApprovalStore(""), storage, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), storage, bus)
 	return h, storage
 }
 
@@ -659,7 +660,7 @@ func (s *spyStamper) GetByID(id string) (*notifications.NotificationRecord, bool
 // clients can remove the toast immediately.
 func TestHandlePermissionRequest_TimeoutPublishesApprovalResponseEvent(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = 10 * time.Millisecond
@@ -758,7 +759,7 @@ func TestHandlePermissionRequest_ClaudeSource_TimeoutStaysEmptyBody(t *testing.T
 // that when a client disconnects, an EventApprovalResponse is broadcast to other clients.
 func TestHandlePermissionRequest_ContextCancelPublishesApprovalResponseEvent(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = 30 * time.Second // long timeout so cancel fires first
@@ -807,7 +808,7 @@ func TestHandlePermissionRequest_ContextCancelPublishesApprovalResponseEvent(t *
 // the stamper when an approval times out.
 func TestHandlePermissionRequest_TimeoutMarksRead(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	spy := &spyStamper{}
 	h := NewApprovalHandler(store, nil, bus)
@@ -834,7 +835,7 @@ func TestHandlePermissionRequest_TimeoutMarksRead(t *testing.T) {
 // no event is published when sessionID is "unknown" (no X-CS-Session-ID header).
 func TestHandlePermissionRequest_TimeoutDoesNotPublishWhenSessionUnknown(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = 10 * time.Millisecond
@@ -872,7 +873,7 @@ func TestHandlePermissionRequest_TimeoutDoesNotPublishWhenSessionUnknown(t *test
 // when a client disconnects (context cancel).
 func TestHandlePermissionRequest_ContextCancelMarksRead(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	spy := &spyStamper{}
 	h := NewApprovalHandler(store, nil, bus)
@@ -914,7 +915,7 @@ func TestHandlePermissionRequest_ContextCancelMarksRead(t *testing.T) {
 // SetMetadata is called with approval_decision=canceled on context cancel.
 func TestHandlePermissionRequest_ContextCancelStampsMetadata(t *testing.T) {
 	t.Parallel()
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	spy := &spyStamper{}
 	h := NewApprovalHandler(store, nil, bus)
@@ -968,7 +969,7 @@ func TestHandlePermissionRequest_NotificationUsesUUID(t *testing.T) {
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	h := NewApprovalHandler(store, storage, bus)
 	h.timeout = 100 * time.Millisecond // short timeout so the test doesn't block
 

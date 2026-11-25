@@ -15,16 +15,16 @@ package services
 import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/external"
 	"net/http"
 )
 
 // ExternalWebSocketHandler handles approval monitoring for external mux sessions.
 // Terminal streaming has been migrated to the unified ConnectRPC WebSocket handler.
 type ExternalWebSocketHandler struct {
-	discovery       *session.ExternalSessionDiscovery
-	approvalMonitor *session.ExternalApprovalMonitor
+	discovery       *external.ExternalSessionDiscovery
+	approvalMonitor *external.ExternalApprovalMonitor
 	eventBus        *events.EventBus
 }
 
@@ -32,9 +32,9 @@ type ExternalWebSocketHandler struct {
 // Note: tmuxStreamerManager parameter is kept for backward compatibility but is no longer used
 // since terminal streaming has been migrated to the unified ConnectRPC WebSocket handler.
 func NewExternalWebSocketHandler(
-	discovery *session.ExternalSessionDiscovery,
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager,
-	approvalMonitor *session.ExternalApprovalMonitor,
+	discovery *external.ExternalSessionDiscovery,
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager,
+	approvalMonitor *external.ExternalApprovalMonitor,
 	eventBus *events.EventBus,
 ) *ExternalWebSocketHandler {
 	// tmuxStreamerManager is intentionally unused - streaming migrated to connectrpc_websocket.go

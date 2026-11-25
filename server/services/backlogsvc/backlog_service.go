@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -30,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -572,7 +574,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		sourceBackend:        storage,
 		sessionCreator:       creator,
 		cfg:                  cfg,
-		flags:                services.FlagRegistry(),
+		flags:                flagsvc.FlagRegistry(),
 		engine:               engine,
 		pipelineEngine:       pipelineEngine,
 		pipelineModeRepo:     pipelineModeRepo,
@@ -1419,7 +1421,7 @@ func cumulativeItemSpendUSD(sessions []backlogdto.ItemSessionSummary) (totalUSD 
 // effectiveBudgetThreshold resolves the soft budget for an item: its own
 // threshold wins, otherwise the live global quota.default_cost_budget_threshold_usd
 // (read per call so edits apply without restart). nil = off; 0.0 is a valid
-// threshold. Resolution lives here so session.EvaluateBudgetThreshold stays pure.
+// threshold. Resolution lives here so backlogaux.EvaluateBudgetThreshold stays pure.
 // Crossing is log-only ([BudgetWarning]); no notification is sent.
 func effectiveBudgetThreshold(itemThresholdUSD *float64) *float64 {
 	if itemThresholdUSD != nil {
@@ -1439,7 +1441,7 @@ func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, prio
 	thresholdUSD = effectiveBudgetThreshold(thresholdUSD)
 	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
 	cumulative := priorTotal + callCostUSD
-	if !session.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
+	if !backlogaux.EvaluateBudgetThreshold(itemID, stage, thresholdUSD, cumulative) {
 		return
 	}
 	suffix := ""
@@ -1462,7 +1464,7 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 	if thresholdUSD == nil {
 		return
 	}
-	if !session.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
+	if !backlogaux.EvaluateBudgetThreshold(itemID, "work", thresholdUSD, totalCostUSD) {
 		s.budgetWarnedItems.Delete(itemID)
 		return
 	}

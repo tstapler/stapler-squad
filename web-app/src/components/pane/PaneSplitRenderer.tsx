@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { SessionList } from "@/components/sessions/SessionList";
@@ -26,8 +26,10 @@ import { usePaneContext } from "./PaneContext";
 import { PaneHeader } from "./PaneHeader";
 import { ResizeHandle } from "./ResizeHandle";
 import { MobilePaneTabStrip } from "./MobilePaneTabStrip";
+import { SessionPickerDialog } from "./SessionPickerDialog";
+import { emptyPaneButton } from "@/styles/pane/sessionPickerDialog.css";
 import { useViewport } from "@/components/providers/ViewportProvider";
-import { containsPaneId, hasVerticalSplit } from "@/lib/pane/paneUtils";
+import { containsPaneId, hasVerticalSplit, planLeafMove } from "@/lib/pane/paneUtils";
 import { useScrollRestore } from "@/lib/hooks/useScrollRestore";
 import {
   splitContainer,
@@ -364,18 +366,27 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
   const handleSetView = (viewKind: PaneViewKind) =>
     dispatch({ type: "SET_PANE_VIEW", paneId: pane.id, viewKind });
 
+  const [dropActive, setDropActive] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Only the header grip starts a drag: a draggable body would hijack text selection in the terminal.
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/pane-id", pane.id);
     e.dataTransfer.effectAllowed = "move";
+    const leaf = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-pane-leaf]");
+    if (leaf) e.dataTransfer.setDragImage(leaf, 24, 16);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (!hasSplits) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    setDropActive(true);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    setDropActive(false);
     const sourcePaneId = e.dataTransfer.getData("text/pane-id");
     if (sourcePaneId && sourcePaneId !== pane.id) {
       dispatch({ type: "SWAP_PANES", paneId: sourcePaneId, targetPaneId: pane.id });
@@ -388,9 +399,10 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
       data-focused={isFocused ? "true" : "false"}
       data-testid={`pane-leaf-${pane.id}`}
       data-context="cockpit"
-      draggable={hasSplits}
-      onDragStart={handleDragStart}
+      data-pane-leaf=""
+      data-drop-active={dropActive ? "true" : "false"}
       onDragOver={handleDragOver}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropActive(false); }}
       onDrop={handleDrop}
       onClick={handleFocus}
     >
@@ -405,6 +417,7 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
         splitButtonVisible={!isMobile}
         onSplitVertical={handleSplitVertical}
         onSplitHorizontal={handleSplitHorizontal}
+        onDragStart={hasSplits && !isMobile ? handleDragStart : undefined}
       />
       <div className={paneBody}>
         {pane.viewKind === "session-list" ? (
@@ -425,10 +438,26 @@ function PaneLeafComponent({ pane, state, dispatch, sessions, isMobile, hasSplit
           />
         ) : (
           <div className={emptyPaneSlot}>
-            Click a session to open it here
+            <span>This pane is empty</span>
+            <button type="button" className={emptyPaneButton} onClick={() => setPickerOpen(true)} data-testid={`pane-choose-session-${pane.id}`}>
+              {/* analytics-exempt */}
+              Choose a session…
+            </button>
           </div>
         )}
       </div>
+      {pickerOpen && (
+        <SessionPickerDialog
+          sessions={sessions}
+          openSessionIds={new Set(getAllLeaves(state.root).flatMap((l) => (l.sessionId ? [l.sessionId] : [])))}
+          onClose={() => setPickerOpen(false)}
+          onPick={(sessionId) => {
+            dispatch({ type: "ASSIGN_SESSION", paneId: pane.id, sessionId });
+            dispatch({ type: "FOCUS_PANE", paneId: pane.id });
+            setPickerOpen(false);
+          }}
+        />
+      )}
       {pickerLetter && (
         <div
           className={pickerOverlay}
@@ -533,6 +562,13 @@ export function PaneSplitRenderer({ state, dispatch, sessions, windowActive = tr
           sessions={sessions}
           onFocus={(paneId: PaneId) => dispatch({ type: "FOCUS_PANE", paneId })}
           onAddPane={() => dispatch({ type: "SPLIT_PANE", paneId: state.focusedPaneId, direction: "horizontal" })}
+          onReorder={(fromId: PaneId, toId: PaneId) => {
+            const ids = allLeaves.map((l) => l.id);
+            const plan = planLeafMove(ids, ids.indexOf(fromId), ids.indexOf(toId), ids.indexOf(state.focusedPaneId));
+            for (const [a, b] of plan.swaps) dispatch({ type: "SWAP_PANES", paneId: a, targetPaneId: b });
+            // Focus follows the content, not the leaf slot, so the pane you were using stays selected.
+            if (plan.swaps.length > 0) dispatch({ type: "FOCUS_PANE", paneId: ids[plan.focusIndex] });
+          }}
         />
       )}
     </div>

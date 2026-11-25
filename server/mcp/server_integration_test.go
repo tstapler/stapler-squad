@@ -17,7 +17,7 @@ import (
 )
 
 // expectedToolCount registers the tool set the exact same way main.go's
-// --mcp fallback path does (buildMCPDeps + RunServer(ctx, ..., nil, nil) --
+// --mcp fallback path does (server.RunStdioMCP -> RunServer(ctx, ..., nil, nil) --
 // eventBus and prCache are both nil there) and returns how many tools that
 // produces. This is the single source of truth for
 // TestMCPHandshakeSubprocess's assertion below -- adding, removing, or
@@ -27,7 +27,7 @@ func expectedToolCount(t *testing.T) int {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, nil)
-	s := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil, nil, nil, nil)
+	s := NewCore(&stubStore{}, realSession{svc}, nil, storage, nil, nil, nil, nil, nil)
 	return len(s.ListTools())
 }
 
@@ -36,7 +36,7 @@ func expectedToolCount(t *testing.T) int {
 // tools NewCore registers in production (I-1.1, I-1.4).
 //
 // The subprocess is pointed at an isolated config with an unreachable
-// listen_address so it always takes the local fallback path (buildMCPDeps)
+// listen_address so it always takes the local fallback path (server.RunStdioMCP)
 // deterministically, matching expectedToolCount above. Without this, the
 // test silently proxies to a real stapler-squad HTTP server if one happens
 // to already be listening on the default port (true on any dev machine

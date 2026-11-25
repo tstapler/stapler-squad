@@ -11,36 +11,9 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
-
-// ClaimVerdictKind is the three-way outcome of a cross-host claim check.
-type ClaimVerdictKind int
-
-const (
-	// ClaimUnclaimed: no other host is known to hold the URL.
-	ClaimUnclaimed ClaimVerdictKind = iota
-	// ClaimHeldByOther: a different host holds the URL; ClaimVerdict.Record says which.
-	ClaimHeldByOther
-	// ClaimCheckIndeterminate: at least one peer was unreachable and none reported
-	// a claim, so "unclaimed" cannot be confirmed. Callers proceed optimistically.
-	ClaimCheckIndeterminate
-)
-
-// ClaimVerdict is a claim check result. Build it with the New*Verdict
-// constructors so Kind and Record cannot be mismatched.
-type ClaimVerdict struct {
-	Kind   ClaimVerdictKind
-	Record hostclaim.ClaimRecord // meaningful only for ClaimHeldByOther
-}
-
-func NewUnclaimedVerdict() ClaimVerdict { return ClaimVerdict{Kind: ClaimUnclaimed} }
-
-func NewIndeterminateVerdict() ClaimVerdict { return ClaimVerdict{Kind: ClaimCheckIndeterminate} }
-
-func NewHeldByOtherVerdict(record hostclaim.ClaimRecord) ClaimVerdict {
-	return ClaimVerdict{Kind: ClaimHeldByOther, Record: record}
-}
 
 // CrossHostClaimChecker is the read-only seam between claim-aware call sites and
 // the claim substrate. Recording a claim is not here: it goes through
@@ -48,10 +21,10 @@ func NewHeldByOtherVerdict(record hostclaim.ClaimRecord) ClaimVerdict {
 type CrossHostClaimChecker interface {
 	// CheckClaim consults the local index, then live peers, under one bounded
 	// deadline. For interactively triggered paths only.
-	CheckClaim(ctx context.Context, externalURL string) (ClaimVerdict, error)
+	CheckClaim(ctx context.Context, externalURL string) (hostclaim.ClaimVerdict, error)
 	// CheckClaimLocalOnly reads only the local index and never touches the
 	// network, so it is safe under locks and in background sweeps.
-	CheckClaimLocalOnly(ctx context.Context, externalURL string) (ClaimVerdict, error)
+	CheckClaimLocalOnly(ctx context.Context, externalURL string) (hostclaim.ClaimVerdict, error)
 	// ListForeignClaims returns every claim in the local index held by another
 	// host, from one read of the index. Local-only.
 	ListForeignClaims() []hostclaim.ClaimRecord
@@ -61,12 +34,12 @@ type CrossHostClaimChecker interface {
 // so single-host behavior is unchanged.
 type UnimplementedClaimChecker struct{}
 
-func (UnimplementedClaimChecker) CheckClaim(context.Context, string) (ClaimVerdict, error) {
-	return NewUnclaimedVerdict(), nil
+func (UnimplementedClaimChecker) CheckClaim(context.Context, string) (hostclaim.ClaimVerdict, error) {
+	return hostclaim.NewUnclaimedVerdict(), nil
 }
 
-func (UnimplementedClaimChecker) CheckClaimLocalOnly(context.Context, string) (ClaimVerdict, error) {
-	return NewUnclaimedVerdict(), nil
+func (UnimplementedClaimChecker) CheckClaimLocalOnly(context.Context, string) (hostclaim.ClaimVerdict, error) {
+	return hostclaim.NewUnclaimedVerdict(), nil
 }
 
 func (UnimplementedClaimChecker) ListForeignClaims() []hostclaim.ClaimRecord { return nil }
@@ -77,7 +50,7 @@ type ClaimDisputeResolver interface {
 }
 
 // defaultClaimLookupTimeout bounds the whole peer fan-out of one CheckClaim,
-// matching deep_link_resolver.go's per-peer liveness timeout.
+// matching federation/deep_link_resolver.go's per-peer liveness timeout.
 const defaultClaimLookupTimeout = 2 * time.Second
 
 // claimPeerLister is the slice of *session.HostRegistry the checker needs.
@@ -111,7 +84,7 @@ func NewLocalClaimChecker(index *hostclaim.ClaimIndex, selfID hostclaim.HostID, 
 		selfID: selfID,
 		peers:  peers,
 		client: &http.Client{
-			Transport: peerTLSTransport(),
+			Transport: federation.PeerTLSTransport(),
 			// A peer must not bounce a signed lookup to an internal address.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
@@ -127,11 +100,11 @@ func (c *LocalClaimChecker) SignLookupsWith(identity hostclaim.HostIdentity) *Lo
 }
 
 // CheckClaimLocalOnly implements CrossHostClaimChecker.
-func (c *LocalClaimChecker) CheckClaimLocalOnly(_ context.Context, externalURL string) (ClaimVerdict, error) {
+func (c *LocalClaimChecker) CheckClaimLocalOnly(_ context.Context, externalURL string) (hostclaim.ClaimVerdict, error) {
 	if record, ok := c.index.ForeignClaim(externalURL, c.selfID); ok {
-		return NewHeldByOtherVerdict(record), nil
+		return hostclaim.NewHeldByOtherVerdict(record), nil
 	}
-	return NewUnclaimedVerdict(), nil
+	return hostclaim.NewUnclaimedVerdict(), nil
 }
 
 // ListForeignClaims implements CrossHostClaimChecker.
@@ -152,12 +125,12 @@ func (c *LocalClaimChecker) ResolveDispute(_ context.Context, externalURL string
 
 // CheckClaim implements CrossHostClaimChecker. A claim this host holds itself
 // short-circuits to Unclaimed: the item is already local and nothing conflicts.
-func (c *LocalClaimChecker) CheckClaim(ctx context.Context, externalURL string) (ClaimVerdict, error) {
+func (c *LocalClaimChecker) CheckClaim(ctx context.Context, externalURL string) (hostclaim.ClaimVerdict, error) {
 	if record, ok := c.index.CheckClaim(externalURL); ok {
 		if record.ClaimingHostID.String() == c.selfID.String() {
-			return NewUnclaimedVerdict(), nil
+			return hostclaim.NewUnclaimedVerdict(), nil
 		}
-		return NewHeldByOtherVerdict(record), nil
+		return hostclaim.NewHeldByOtherVerdict(record), nil
 	}
 	return c.queryPeers(ctx, externalURL), nil
 }
@@ -170,7 +143,7 @@ type peerAnswer struct {
 
 // queryPeers asks every known peer concurrently under one shared deadline; the
 // first verified foreign claim wins and cancels the rest.
-func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) ClaimVerdict {
+func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) hostclaim.ClaimVerdict {
 	var peers []hostclaim.RegistryEntry
 	for _, p := range c.peers.LiveSnapshot() {
 		if p.HostID.String() != c.selfID.String() {
@@ -178,7 +151,7 @@ func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) 
 		}
 	}
 	if len(peers) == 0 {
-		return NewUnclaimedVerdict()
+		return hostclaim.NewUnclaimedVerdict()
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -198,14 +171,14 @@ func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) 
 	anyFailed := false
 	for a := range answers {
 		if a.claimed {
-			return NewHeldByOtherVerdict(a.record)
+			return hostclaim.NewHeldByOtherVerdict(a.record)
 		}
 		anyFailed = anyFailed || a.failed
 	}
 	if anyFailed {
-		return NewIndeterminateVerdict()
+		return hostclaim.NewIndeterminateVerdict()
 	}
-	return NewUnclaimedVerdict()
+	return hostclaim.NewUnclaimedVerdict()
 }
 
 // askPeer tries the peer's addresses in order until one gives a definite

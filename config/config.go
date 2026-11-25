@@ -346,7 +346,7 @@ type Config struct {
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
-	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// stopping without a DONE signal (session/autonomous/autonomous_driver.go). 0 = use the default
 	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
@@ -580,7 +580,7 @@ const HiddenSessionGateFeatureFlag = "hidden_session_gate"
 const HiddenSessionGateDefault = true
 
 // DriverPaneActivityGateDefault is the registry default of the session driver's
-// pane-activity gate (session.FeatureFlagDriverPaneActivityGate), shared by the
+// pane-activity gate (paneactivity.FeatureFlagDriverPaneActivityGate), shared by the
 // flag service and the driver's reader so they cannot disagree.
 const DriverPaneActivityGateDefault = true
 
@@ -1080,7 +1080,7 @@ func ceilingOrDefault(configured, def int) int {
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// backlogaux.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
 // see HibernationCheckpointDirOrDefault's doc comment for why this routes through
 // GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
 // to os.UserHomeDir() regardless of test mode: every go test run that exercised a

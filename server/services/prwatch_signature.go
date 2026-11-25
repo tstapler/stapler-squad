@@ -1,6 +1,9 @@
 package services
 
-import githubpkg "github.com/tstapler/stapler-squad/github"
+import (
+	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/access"
+)
 
 // PRWatchKind is the services-level kind of PR activity the PR watch steers on.
 // server/prwatch has its own Kind enum; the server adapter maps it onto this one
@@ -39,5 +42,5 @@ func PRWatchGuardSignature(pr githubpkg.LinkKey, kinds ...PRWatchKind) string {
 			names = append(names, n)
 		}
 	}
-	return GuardSignature(pr, ReasonSetSignature(DropSubsumedChangesRequested(names)...))
+	return access.GuardSignature(pr, access.ReasonSetSignature(DropSubsumedChangesRequested(names)...))
 }

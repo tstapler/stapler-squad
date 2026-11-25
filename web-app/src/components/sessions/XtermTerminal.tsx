@@ -33,6 +33,7 @@ import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { copyToClipboard } from "@/lib/clipboard";
+import { openLinkInNewWindow } from "@/lib/terminal/terminalLinks";
 import { browserClipboardEnv } from "@/lib/terminal/clipboardEnv";
 import { createClipboardActions } from "@/lib/terminal/terminalClipboard";
 import { xtermClipboardSurface } from "@/lib/terminal/xtermClipboardSurface";
@@ -508,19 +509,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     void copyToClipboard(uri).then((ok) => showToast(ok ? 'copied' : 'failed'));
   }, [showToast]);
 
-  const handleLinkMenuOpen = useCallback((uri: string) => {
-    // Mirrors @xterm/addon-web-links' own default handler (window.open + null opener)
-    // so touch and mouse land on identical navigation behavior, just gated differently.
-    const newWindow = window.open();
-    if (newWindow) {
-      try {
-        newWindow.opener = null;
-      } catch {
-        // Some browsers throw when reassigning opener — navigation still proceeds.
-      }
-      newWindow.location.href = uri;
-    }
-  }, []);
+  const handleLinkMenuOpen = openLinkInNewWindow;
 
   const handleLinkMenuDismiss = useCallback(() => {
     setLinkMenuState(null);

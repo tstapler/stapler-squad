@@ -14,7 +14,7 @@ import (
 )
 
 // savedFingerprints remembers a hash of the InstanceData last persisted per
-// title, so a save of an unchanged instance can skip EntRepository.Update. That
+// title, so a save of an unchanged instance can skip instancestore.Instances.UpdateSkipping. That
 // call is one transaction of ~19 statements (session SELECT, tag delete and
 // re-insert, diff_stats upsert, claude_sessions update, ...) queued on the
 // single writer connection; callers such as SaveInstances(allInstances()) and

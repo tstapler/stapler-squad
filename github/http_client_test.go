@@ -82,7 +82,7 @@ func resetGHPriorityAdmissionFlagCache() {
 }
 
 // TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate is a
-// code-review MAJOR's cheap safety net: server/services/feature_flag_service.go's
+// code-review MAJOR's cheap safety net: server/services/flagsvc/feature_flag_service.go's
 // the flag Specs registers this same literal under its own
 // githubPriorityAdmissionFlagName constant (github cannot import
 // server/services — a cycle). This test hardcodes that literal so a rename
@@ -90,9 +90,9 @@ func resetGHPriorityAdmissionFlagCache() {
 // diverging; see this package's githubPriorityAdmissionFlagName doc comment
 // (http_client.go) for the full cross-package rationale.
 func TestGithubPriorityAdmissionFlagName_MatchesServerServicesDuplicate(t *testing.T) {
-	const serverServicesFlagName = "github:priority-admission-control" // server/services/feature_flag_service.go:44
+	const serverServicesFlagName = "github:priority-admission-control" // server/services/flagsvc/feature_flag_service.go:44
 	if githubPriorityAdmissionFlagName != serverServicesFlagName {
-		t.Fatalf("githubPriorityAdmissionFlagName = %q, want %q to match server/services/feature_flag_service.go's constant", githubPriorityAdmissionFlagName, serverServicesFlagName)
+		t.Fatalf("githubPriorityAdmissionFlagName = %q, want %q to match server/services/flagsvc/feature_flag_service.go's constant", githubPriorityAdmissionFlagName, serverServicesFlagName)
 	}
 }
 

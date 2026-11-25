@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "terminalstate",
+    srcs = [
+        "input_block.go",
+        "status.go",
+        "sweep_settled.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/terminalstate",
+    visibility = ["//visibility:public"],
+    deps = ["//session/domain"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":terminalstate",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "terminalstate_test",
+    srcs = [
+        "input_block_test.go",
+        "status_test.go",
+        "sweep_settled_test.go",
+    ],
+    embed = [":terminalstate"],
+    deps = [
+        "//session/domain",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

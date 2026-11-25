@@ -1,0 +1,81 @@
+package flagsvc
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+)
+
+// flagAudit is the audit state of one UpdateFeatureFlag call.
+type flagAudit struct {
+	sink     *auditkit.AuditSink
+	base     auditkit.AuditLine
+	previous bool
+	seq      int64
+	outcome  string
+	enabled  bool
+}
+
+func flagRequestFields(ctx context.Context, peer string, header http.Header) auditkit.AuditLine {
+	l := auditkit.AuditLine{PeerAddr: peer, UserAgent: header.Get("User-Agent")}
+	if rec, ok := access.RequestRecordFrom(ctx); ok {
+		l.Listener, l.Host, l.Origin, l.AuthMode = rec.Listener, rec.Host, rec.Origin, rec.AuthMode
+	}
+	return l
+}
+
+// active reports whether this flip is audited (a sink and a policy exist).
+func (a *flagAudit) active() bool { return a != nil && a.sink != nil }
+
+func BoolRef(b bool) *bool { return &b }
+
+// begin writes the durable `requested` line of a loosening flip before the
+// update mutex is taken (bounded, so a stalled fsync cannot queue the kill
+// switch behind it). It returns auditkit.ErrAuditFailed or auditkit.ErrAuditTimeout when the flip
+// must be refused.
+func (f *FeatureFlagService) auditBegin(ctx context.Context, op flagOp, fields auditkit.AuditLine) (*flagAudit, error) {
+	name, enabled := op.name, op.enabled
+	policy, audited := f.auditPolicies[name]
+	if f.audit == nil || !audited {
+		return &flagAudit{}, nil // inactive: no sink or no policy for this flag
+	}
+	a := &flagAudit{sink: f.audit, enabled: enabled, outcome: auditkit.FlagOutcomePersistFailed}
+	a.base = fields
+	a.base.Kind, a.base.Flag, a.base.Scope, a.base.ChangeID = auditkit.AuditKindFlagChg, name, op.auditScope(), uuid.NewString()
+	a.base.Mutation = op.mutationName()
+	if policy.Loosening == nil || !policy.Loosening(enabled) {
+		return a, nil
+	}
+	req := a.base
+	req.Phase, req.New = auditkit.AuditPhaseRequest, BoolRef(enabled)
+	if err := f.audit.AppendBounded(ctx, req); err != nil {
+		if policy.EscapeHatchFor(a.base.Scope) {
+			f.audit.Fallback(req, err)
+			return a, nil
+		}
+		return nil, err
+	}
+	return a, nil
+}
+
+// finish enqueues the `result` line. It is deferred before the update mutex is
+// taken, so it runs after the unlock and never lengthens the critical section.
+func (a *flagAudit) finish() {
+	if !a.active() {
+		return
+	}
+	l := a.base
+	l.Phase, l.Outcome, l.Seq = auditkit.AuditPhaseResult, a.outcome, a.seq
+	l.Previous, l.New = BoolRef(a.previous), BoolRef(a.enabled)
+	a.sink.Enqueue(l)
+}
+
+// Close joins the audit sink's drain goroutine (a no-op without one).
+func (f *FeatureFlagService) Close() {
+	if f.audit != nil {
+		f.audit.Close()
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 
@@ -73,7 +74,7 @@ var sensitiveLogAttributeKeys = map[string]bool{ //nolint:gochecknoglobals
 // JSONHandler doesn't set HandlerOptions.AddSource today, so this is inert
 // in production for now, but several call sites already pass a plain
 // *string* "source" attribute for unrelated domain data (e.g.
-// credentials.go's "credential source", database_service.go's merge source
+// credkit/credentials.go's "credential source", database_service.go's merge source
 // dir) — treating that string as a caller location would be actively wrong,
 // so only the structural object shape is ever read into Source; a string
 // "source" attribute is left to the generic extraKeys fold below like any
@@ -234,13 +235,13 @@ func parseLogLine(line string) (parsedLogLine, bool) {
 //   - approvalStore:      needed by CreateDebugSnapshot to capture pending approvals
 //   - reviewQueuePoller:  late-wired; needed by CreateDebugSnapshot for live instances
 type UtilityService struct {
-	approvalStore     *ApprovalStore
+	approvalStore     *approvalkit.ApprovalStore
 	reviewQueuePoller *session.ReviewQueuePoller
 	activator         WindowActivator
 }
 
 // NewUtilityService creates a UtilityService with the given dependencies.
-func NewUtilityService(approvalStore *ApprovalStore) *UtilityService {
+func NewUtilityService(approvalStore *approvalkit.ApprovalStore) *UtilityService {
 	return &UtilityService{approvalStore: approvalStore, activator: newLaunchServicesActivator()}
 }
 

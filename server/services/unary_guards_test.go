@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -146,19 +147,19 @@ func TestGuardsFlag_ShouldBeAnInjectedInterfaceNotABoolAndFailClosed_WhenConfigU
 	hidden.Hidden = true
 	visible := instance.NewStartedInstanceForTest(t, "flag-visible", &steerRecordingPM{})
 
-	assert.Equal(t, TerminalReadOnly, AccessForUnary(nil, nil))
-	assert.Equal(t, TerminalReadOnly, AccessForUnary(hidden, nil), "no flag injected: guards on")
-	var typedNil *UnaryGuardsFlag
-	assert.Equal(t, TerminalReadOnly, AccessForUnary(hidden, typedNil), "a nil flag value is on")
-	assert.Equal(t, TerminalReadWrite, AccessForUnary(visible, nil))
+	assert.Equal(t, access.TerminalReadOnly, access.AccessForUnary(nil, nil))
+	assert.Equal(t, access.TerminalReadOnly, access.AccessForUnary(hidden, nil), "no flag injected: guards on")
+	var typedNil *access.UnaryGuardsFlag
+	assert.Equal(t, access.TerminalReadOnly, access.AccessForUnary(hidden, typedNil), "a nil flag value is on")
+	assert.Equal(t, access.TerminalReadWrite, access.AccessForUnary(visible, nil))
 
-	flag := &UnaryGuardsFlag{}
+	flag := &access.UnaryGuardsFlag{}
 	assert.True(t, flag.GuardsEnabled(), "the zero value is on")
-	assert.Equal(t, TerminalReadOnly, AccessForUnary(hidden, flag))
+	assert.Equal(t, access.TerminalReadOnly, access.AccessForUnary(hidden, flag))
 	flag.SetEnabled(false)
-	assert.Equal(t, TerminalReadWrite, AccessForUnary(hidden, flag), "off lets a hidden target through")
+	assert.Equal(t, access.TerminalReadWrite, access.AccessForUnary(hidden, flag), "off lets a hidden target through")
 	flag.SetEnabled(true)
-	assert.Equal(t, TerminalReadOnly, AccessForUnary(hidden, flag))
+	assert.Equal(t, access.TerminalReadOnly, access.AccessForUnary(hidden, flag))
 }
 
 // ClearTerminalStatusIfLive guard row (same guard as RestartSession, T-RO-13).

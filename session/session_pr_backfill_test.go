@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/prmirror"
 	"github.com/tstapler/stapler-squad/session/sessionpr"
 
 	"github.com/stretchr/testify/assert"
@@ -595,7 +596,7 @@ func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyO
 	linkPR(t, storage, "u-rb", 11, domain.PRRolePrimary, time.Now())
 	oldBinaryWritesLegacyNumber(t, storage, "rolled-back", 12)
 	t.Cleanup(storage.StopPRMaintenance)
-	driftBefore := PRMirrorDriftCorrected()
+	driftBefore := prmirror.DriftCorrected()
 
 	inst := rollbackSequence(t, storage, "rolled-back")
 
@@ -620,7 +621,7 @@ func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyO
 
 	corrected, _ := reconcilerFor(storage, []*instance.Instance{inst}).RunOnce(context.Background())
 	assert.Zero(t, corrected, "the import is not drift")
-	assert.Equal(t, driftBefore, PRMirrorDriftCorrected())
+	assert.Equal(t, driftBefore, prmirror.DriftCorrected())
 
 	again := loadByTitle(t, storage, "rolled-back")
 	assert.Len(t, again.Snapshot().GitHub.PRs, 2, "a second boot loses nothing")

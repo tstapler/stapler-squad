@@ -10,16 +10,16 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
 func newTymuxInstanceWithStatus(t *testing.T, status domain.Status) *instance.Instance {
 	t.Helper()
-	inst := instance.NewStartedInstanceForTest(t, "upgrade", session.NewTymuxBackend(retainedPaintManager{}))
+	inst := instance.NewStartedInstanceForTest(t, "upgrade", procbackend.NewTymuxBackend(retainedPaintManager{}))
 	inst.Backend = domain.BackendTymux
 	instance.SetStatusForTest(t, inst, status, nil)
 	return inst
@@ -31,7 +31,7 @@ func TestUpgradableWriter_should_UpgradeOnce_When_TymuxInstanceBecomesActive(t *
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	w := h.newUpgradableWriter(inst)
 	upgrades := 0
-	w.SetOnUpgrade(func(services.TerminalWriter) { upgrades++ })
+	w.SetOnUpgrade(func(access.TerminalWriter) { upgrades++ })
 
 	require.Nil(t, w.Writer(), "read-only while the session is PermanentlyFailed")
 	require.Zero(t, upgrades)
@@ -101,7 +101,7 @@ func TestUpgradableWriter_should_UpgradeExactlyOnce_When_WriterIsCalledConcurren
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 	var mu sync.Mutex
 	upgrades := 0
-	w.SetOnUpgrade(func(services.TerminalWriter) { mu.Lock(); upgrades++; mu.Unlock() })
+	w.SetOnUpgrade(func(access.TerminalWriter) { mu.Lock(); upgrades++; mu.Unlock() })
 	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
 	var wg sync.WaitGroup
@@ -239,10 +239,10 @@ func TestUpgradableWriter_should_NotExposeWriterToOtherCallers_UntilUpgradeCallb
 	inst := newTymuxInstanceWithStatus(t, domain.PermanentlyFailed)
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 	entered, release := make(chan struct{}), make(chan struct{})
-	w.SetOnUpgrade(func(services.TerminalWriter) { close(entered); <-release })
+	w.SetOnUpgrade(func(access.TerminalWriter) { close(entered); <-release })
 	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
-	first := make(chan services.TerminalWriter, 1)
+	first := make(chan access.TerminalWriter, 1)
 	go func() { first <- w.Writer() }()
 	<-entered
 	require.Nil(t, w.Writer(), "input must not be forwarded before UpgradeSubscriber has run")
@@ -260,7 +260,7 @@ func TestWireWriterUpgrade_should_NotBlockReadLoop_When_ResizeVoteIsSlow(t *test
 	entered, release, voted := make(chan struct{}), make(chan struct{}), make(chan [2]int, 1)
 	_ = h.wireWriterUpgrade(context.Background(), writerUpgrade{
 		hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(100, 30),
-		vote: func(_ context.Context, _ services.TerminalWriter, cols, rows int) {
+		vote: func(_ context.Context, _ access.TerminalWriter, cols, rows int) {
 			close(entered)
 			<-release // a hung SetWindowSize / CapturePaneContentRaw
 			voted <- [2]int{cols, rows}
@@ -268,7 +268,7 @@ func TestWireWriterUpgrade_should_NotBlockReadLoop_When_ResizeVoteIsSlow(t *test
 	})
 	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
-	got := make(chan services.TerminalWriter, 1)
+	got := make(chan access.TerminalWriter, 1)
 	go func() { got <- w.Writer() }() // the input read loop triggering the upgrade
 	select {
 	case writer := <-got:
@@ -291,7 +291,7 @@ func TestWireWriterUpgrade_should_UpgradeCapabilityBeforeExposingWriter(t *testi
 	size := mustSize(t, 90, 20)
 	_ = h.wireWriterUpgrade(context.Background(), writerUpgrade{
 		hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(90, 20),
-		vote: func(_ context.Context, _ services.TerminalWriter, _, _ int) {},
+		vote: func(_ context.Context, _ access.TerminalWriter, _, _ int) {},
 	})
 	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NotNil(t, w.Writer())

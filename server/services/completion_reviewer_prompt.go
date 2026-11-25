@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 )
 
 // completionReviewSystemPrompt documents the call's contract for the model. It is not the
@@ -26,7 +26,7 @@ func buildCompletionReviewUserPrompt(itemContext string) string {
 // and prose around the JSON (real `claude -p` output routinely wraps it). ok is false for
 // missing/malformed JSON and for empty learnings (the model's valid "nothing to record").
 func ParseReviewOutcome(raw string) (learnings string, ok bool) {
-	candidates := session.ExtractJSONObjects(raw)
+	candidates := backlogaux.ExtractJSONObjects(raw)
 	for i := len(candidates) - 1; i >= 0; i-- {
 		var out struct {
 			Learnings string `json:"learnings"`

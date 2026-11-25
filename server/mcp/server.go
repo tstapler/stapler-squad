@@ -8,23 +8,30 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogflow"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
-	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
 // coreConfig holds the optional dependencies injected through CoreOption, so
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
-	flowSvc   *backlogflow.BacklogFlowService
+	// userPRs backs the GitHub PR tools; nil leaves them unregistered.
+	userPRs UserPRSource
+	flowSvc FlowService
+	// peers backs list_workspace_peers; nil makes the tool answer ErrUnavailable.
+	peers     PeerLister
 	plugins   *session.PluginRegistry
 	refParser TrackerRefParser
+	// wakeMetrics is the process-wide wake counter mirror; nil drops counts (a nil *wakes.Metrics is a no-op).
+	wakeMetrics *wakes.Metrics
+	// openWorktree builds worktrees for the VCS and stuck-report tools; nil reports them unavailable.
+	openWorktree WorktreeOpener
+	// github is the GitHub client for the issue/PR/commit tools; nil reports GitHub unavailable.
+	github GitHub
+	// nudgeGate guards diagnose_nudge_session's write; nil makes the nudge refuse (fail closed).
+	nudgeGate NudgeGate
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }
@@ -34,9 +41,40 @@ type CoreOption func(*coreConfig)
 
 // WithFlowService enables the flow-observability tools. Without it they are
 // registered but return ErrUnavailable. The HTTP path passes the same instance
-// the RPC handler uses, so one aggregator cache serves both.
-func WithFlowService(svc *backlogflow.BacklogFlowService) CoreOption {
+// the RPC handler uses, so one aggregator cache serves both. Pass an untyped
+// nil or a non-nil value: a typed-nil pointer defeats the absent-service guard.
+func WithFlowService(svc FlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
+}
+
+// WithWorkspacePeers supplies the query behind list_workspace_peers. Without it the tool
+// answers ErrUnavailable. Pass an untyped nil or a non-nil value.
+func WithWorkspacePeers(p PeerLister) CoreOption {
+	return func(c *coreConfig) { c.peers = p }
+}
+
+// WorkspacePeersFromOptions returns the peer lister the options carry, or nil.
+func WorkspacePeersFromOptions(opts ...CoreOption) PeerLister {
+	return newCoreConfig(opts).peers
+}
+
+// WithUserPRCache enables the GitHub PR tools. Without it they are not
+// registered. Pass an untyped nil or a non-nil value: a typed-nil pointer
+// defeats the absent-source guard.
+func WithUserPRCache(src UserPRSource) CoreOption {
+	return func(c *coreConfig) { c.userPRs = src }
+}
+
+// WithNudgeGate supplies the write-time safety check diagnose_nudge_session
+// runs before typing into a pane. Without it the nudge refuses. Pass an untyped
+// nil or a non-nil value: a typed-nil pointer defeats the absent-gate guard.
+func WithNudgeGate(g NudgeGate) CoreOption {
+	return func(c *coreConfig) { c.nudgeGate = g }
+}
+
+// NudgeGateFromOptions returns the nudge gate the options carry, or nil.
+func NudgeGateFromOptions(opts ...CoreOption) NudgeGate {
+	return newCoreConfig(opts).nudgeGate
 }
 
 // WithPluginRegistry supplies the item-source plugins the tracker import tools
@@ -51,10 +89,39 @@ func WithTrackerRefParser(p TrackerRefParser) CoreOption {
 	return func(c *coreConfig) { c.refParser = p }
 }
 
+// WithWakeMetrics supplies the shared wake counter mirror the identity gate and
+// peer-help tools count into, so the composition root's dispatcher reads the
+// same instance. Without it those counts are dropped.
+func WithWakeMetrics(m *wakes.Metrics) CoreOption {
+	return func(c *coreConfig) { c.wakeMetrics = m }
+}
+
+// WakeMetricsFromOptions returns the wake metrics the options carry, or nil.
+// It lets wiring tests prove the MCP core and the dispatcher share one instance.
+func WakeMetricsFromOptions(opts ...CoreOption) *wakes.Metrics {
+	return newCoreConfig(opts).wakeMetrics
+}
+
+// UserPRSourceFromOptions returns the PR source the options carry, or nil.
+// It lets wiring tests inspect what the composition root injected.
+func UserPRSourceFromOptions(opts ...CoreOption) UserPRSource {
+	return newCoreConfig(opts).userPRs
+}
+
 // FlowServiceFromOptions returns the flow service the options carry, or nil.
 // It lets wiring tests prove two call sites hold the same instance.
-func FlowServiceFromOptions(opts ...CoreOption) *backlogflow.BacklogFlowService {
+func FlowServiceFromOptions(opts ...CoreOption) FlowService {
 	return newCoreConfig(opts).flowSvc
+}
+
+// PluginRegistryFromOptions returns the plugin registry the options carry, or nil.
+func PluginRegistryFromOptions(opts ...CoreOption) *session.PluginRegistry {
+	return newCoreConfig(opts).plugins
+}
+
+// TrackerRefParserFromOptions returns the tracker ref parser the options carry, or nil.
+func TrackerRefParserFromOptions(opts ...CoreOption) TrackerRefParser {
+	return newCoreConfig(opts).refParser
 }
 
 func newCoreConfig(opts []CoreOption) coreConfig {
@@ -69,7 +136,6 @@ func newCoreConfig(opts []CoreOption) coreConfig {
 // Shared by the stdio path (RunServer) and the HTTP path (NewHTTPHandler).
 // storage is optional — when nil, backlog tools are not registered.
 // eventBus is optional — when nil, triage-complete notifications are disabled.
-// prCache is optional — when nil, GitHub PR tools are not registered.
 // backlogEnabled is optional — when nil, backlog/goal tools are always enabled
 // (matches pre-flag behavior, used by tests). When set, it gates registration
 // at startup (belt-and-suspenders) and is threaded into each backlog/goal
@@ -83,14 +149,13 @@ func newCoreConfig(opts []CoreOption) coreConfig {
 // opts carry optional dependencies (see CoreOption).
 func NewCore(
 	store session.InstanceStore,
-	svc *services.SessionService,
-	sbMgr *scrollback.ScrollbackManager,
+	svc SessionRPC,
+	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
-	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener reviewgate.AutoReopenSpawner,
-	backlogSvc *backlogsvc.BacklogService,
+	autoReopener AutoReopener,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.MCPServer {
@@ -103,7 +168,7 @@ func NewCore(
 
 	registerModules(s, defaultToolModules(coreDeps{
 		store: store, svc: svc, sbMgr: sbMgr, storage: storage, eventBus: eventBus,
-		prCache: prCache, backlogEnabled: backlogEnabled, autoReopener: autoReopener,
+		backlogEnabled: backlogEnabled, autoReopener: autoReopener,
 		backlogSvc: backlogSvc, liveCheck: liveCheck, cfg: cfg,
 	}))
 	return s
@@ -114,23 +179,21 @@ func NewCore(
 // existing HTTP server so Claude sessions can connect without spawning a
 // subprocess.
 // eventBus is optional — pass nil to disable triage-complete notifications.
-// prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore.
 func NewHTTPHandler(
 	store session.InstanceStore,
-	svc *services.SessionService,
-	sbMgr *scrollback.ScrollbackManager,
+	svc SessionRPC,
+	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
-	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener reviewgate.AutoReopenSpawner,
-	backlogSvc *backlogsvc.BacklogService,
+	autoReopener AutoReopener,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) *mcpserver.StreamableHTTPServer {
-	core := NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...)
+	core := NewCore(store, svc, sbMgr, storage, eventBus, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...)
 	log.InfoLog().Printf("[mcp] link_session_to_item wired: backlogSvc=%v liveCheck=%v", backlogSvc != nil, liveCheck != nil)
 	// Stateless mode: accept any session ID rather than tracking them in memory.
 	// This allows Claude Code sessions to survive server restarts without needing
@@ -144,22 +207,20 @@ func NewHTTPHandler(
 // sbMgr provides read access to terminal scrollback data persisted on disk.
 // storage is used for backlog tools (optional; pass nil to disable).
 // eventBus is optional — pass nil to disable triage-complete notifications on stdio path.
-// prCache is optional — pass nil to disable GitHub PR tools.
 // backlogEnabled is optional — see NewCore.
 // autoReopener/backlogSvc/liveCheck are optional — see NewCore. The stdio fallback path
-// (buildMCPDeps in main.go) only builds Phase 1 (CoreDeps) dependencies, so callers on
+// (server.RunStdioMCP) only builds Phase 1 (CoreDeps) dependencies, so callers on
 // that path pass nil for all three and get NewCore's documented nil-behavior for each.
 func RunServer(
 	ctx context.Context,
 	store session.InstanceStore,
-	svc *services.SessionService,
-	sbMgr *scrollback.ScrollbackManager,
+	svc SessionRPC,
+	sbMgr TerminalScrollback,
 	storage *session.Storage,
 	eventBus *events.EventBus,
-	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener reviewgate.AutoReopenSpawner,
-	backlogSvc *backlogsvc.BacklogService,
+	autoReopener AutoReopener,
+	backlogSvc BacklogRPC,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
 ) error {
@@ -172,7 +233,7 @@ func RunServer(
 		log.InfoLog().Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, backlogEnabled, autoReopener, backlogSvc, liveCheck, opts...))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

@@ -12,7 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -66,7 +66,7 @@ type historyBranchEntry struct {
 
 // historySnapshot is an immutable COW record stored in atomic.Value.
 type historySnapshot struct {
-	cache *session.ClaudeSessionHistory
+	cache *claudehistory.ClaudeSessionHistory
 	at    time.Time
 }
 
@@ -95,6 +95,13 @@ type SearchService struct {
 
 	branchCache    sync.Map // map[string]*historyBranchEntry  keyed by projectPath
 	branchCacheTTL time.Duration
+
+	// Background index sync (see search_service_sync.go).
+	syncInterval  time.Duration
+	unarySyncWait time.Duration // how long unary search waits for the first sync
+	syncedOnce    sync.Once
+	loopDone      atomic.Pointer[chan struct{}] // closed when the sync loop goroutine exits; nil until started
+	syncedCh      chan struct{}                 // closed after the first successful sync
 }
 
 // SetResolveConversationUUID wires the tmux-UUID → Claude-UUID resolver.
@@ -113,6 +120,8 @@ func NewSearchService(
 		snippetGenerator: snippetGenerator,
 		historyCacheTTL:  historyCacheTTL,
 		branchCacheTTL:   60 * time.Second,
+		syncedCh:         make(chan struct{}),
+		unarySyncWait:    unarySyncWait,
 	}
 }
 
@@ -173,7 +182,7 @@ func (ss *SearchService) liveSessionStatus(conversationID string) sessionv1.Sess
 // getOrRefreshHistoryCache returns the cached history or refreshes it if stale.
 // Fast-path reads are lock-free (atomic.Value Load). Concurrent refreshes are
 // coalesced via singleflight so at most one disk scan runs at a time.
-func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session.ClaudeSessionHistory, error) {
+func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*claudehistory.ClaudeSessionHistory, error) {
 	ctx, span := telemetry.StartSpan(ctx, "SearchService.getOrRefreshHistoryCache")
 	defer span.End()
 
@@ -194,7 +203,7 @@ func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session
 	// Slow path: coalesce concurrent refreshes with singleflight.
 	span.SetAttributes(attribute.Bool("cache.hit", false))
 	type result struct {
-		hist *session.ClaudeSessionHistory
+		hist *claudehistory.ClaudeSessionHistory
 	}
 	v, err, _ := ss.historyGroup.Do("refresh", func() (interface{}, error) {
 		// Re-check after winning the coalesce race — another goroutine may have
@@ -208,7 +217,7 @@ func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session
 
 		_, loadSpan := telemetry.StartSpan(ctx, "SearchService.loadHistoryFromDisk")
 		loadStart := time.Now()
-		hist, loadErr := session.NewClaudeSessionHistoryFromClaudeDir()
+		hist, loadErr := claudehistory.NewClaudeSessionHistoryFromClaudeDir()
 		loadDuration := time.Since(loadStart)
 		loadSpan.SetAttributes(attribute.Int64("load.duration_ms", loadDuration.Milliseconds()))
 		if loadErr != nil {
@@ -255,7 +264,7 @@ func (ss *SearchService) ListClaudeHistory(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
-	var entries []session.ClaudeHistoryEntry
+	var entries []claudehistory.ClaudeHistoryEntry
 
 	if req.Msg.Project != nil && *req.Msg.Project != "" {
 		entries = hist.GetByProject(*req.Msg.Project)
@@ -355,9 +364,9 @@ func (ss *SearchService) ListClaudeHistory(
 // follow-up lookup (e.g. GetMessagesFromConversationFile) can reuse it.
 func (ss *SearchService) resolveHistoryEntry(
 	ctx context.Context,
-	hist *session.ClaudeSessionHistory,
+	hist *claudehistory.ClaudeSessionHistory,
 	id string,
-) (*session.ClaudeHistoryEntry, string, error) {
+) (*claudehistory.ClaudeHistoryEntry, string, error) {
 	entry, err := hist.GetByID(id)
 	if err == nil {
 		return entry, id, nil
@@ -508,10 +517,61 @@ func (ss *SearchService) GetClaudeHistoryMessages(
 }
 
 // SearchClaudeHistory performs full-text search across Claude conversation history.
+//
+// The search index is kept fresh by the background sync loop (see
+// StartSyncLoop), so this never syncs on the request path; before the first
+// sync completes it returns CodeUnavailable.
 func (ss *SearchService) SearchClaudeHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SearchClaudeHistoryRequest],
 ) (*connect.Response[sessionv1.SearchClaudeHistoryResponse], error) {
+	resp, err := ss.searchClaudeHistory(ctx, req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(resp), nil
+}
+
+// searchClaudeHistory is the shared search pipeline behind the unary and
+// streaming RPCs.
+func (ss *SearchService) searchClaudeHistory(
+	ctx context.Context,
+	msg *sessionv1.SearchClaudeHistoryRequest,
+) (*sessionv1.SearchClaudeHistoryResponse, error) {
+	raw, err := ss.runRawSearch(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	protoResults := ss.buildProtoResults(raw.results.Results, msg.Query, raw.hist)
+	protoResults = ss.applyResultPostProcessing(protoResults, msg, raw.hist, raw.requestedLimit, raw.needsPostProcessing)
+
+	return &sessionv1.SearchClaudeHistoryResponse{
+		Results: protoResults,
+		// #nosec G115 -- TotalMatches is the number of search hits across local
+		// Claude history, far below int32 range.
+		TotalMatches: int32(raw.results.TotalMatches),
+		QueryTimeMs:  raw.results.QueryTime.Milliseconds(),
+		HasMore:      raw.results.TotalMatches > raw.offset+len(protoResults),
+	}, nil
+}
+
+// rawSearch is the scored, not-yet-enriched outcome of the engine query.
+type rawSearch struct {
+	hist                *claudehistory.ClaudeSessionHistory
+	results             *search.SearchResults
+	offset              int
+	requestedLimit      int
+	needsPostProcessing bool
+}
+
+// runRawSearch validates the request, guards on the index being synced and
+// runs the BM25 query. Snippet/metadata enrichment is left to buildProtoResults
+// so the streaming RPC can enrich one batch at a time.
+func (ss *SearchService) runRawSearch(
+	ctx context.Context,
+	msg *sessionv1.SearchClaudeHistoryRequest,
+) (*rawSearch, error) {
+	req := connect.NewRequest(msg)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String(telemetry.AttrSearchQuery, req.Msg.Query),
@@ -537,32 +597,13 @@ func (ss *SearchService) SearchClaudeHistory(
 			fmt.Errorf("offset is not supported together with group_by_session, exclude_automation_sessions, or project"))
 	}
 
+	if err := ss.requireIndexSynced(ctx); err != nil {
+		return nil, err
+	}
+
 	hist, err := ss.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
-	}
-
-	_, syncSpan := telemetry.StartSpan(ctx, "SearchEngine.IncrementalSync")
-	syncStart := time.Now()
-	syncResult, err := ss.searchEngine.IncrementalSync(hist)
-	syncDuration := time.Since(syncStart)
-	if err != nil {
-		// IncrementalSync returns a nil result on a failed full rebuild.
-		syncSpan.RecordError(err)
-		syncSpan.End()
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
-	}
-	syncSpan.SetAttributes(
-		attribute.Int64("sync.duration_ms", syncDuration.Milliseconds()),
-		attribute.Bool("sync.was_full_rebuild", syncResult.WasFullRebuild),
-		attribute.Int("sync.sessions_added", syncResult.SessionsAdded),
-		attribute.Int("sync.sessions_updated", syncResult.SessionsUpdated),
-		attribute.Int("sync.sessions_removed", syncResult.SessionsRemoved),
-	)
-	syncSpan.End()
-
-	if syncResult.HasChanges() || syncResult.WasFullRebuild {
-		log.Info("search index sync", "result", syncResult.String())
 	}
 
 	requestedLimit := int(req.Msg.Limit)
@@ -622,11 +663,26 @@ func (ss *SearchService) SearchClaudeHistory(
 	)
 	searchSpan.End()
 
-	tokenizer := ss.searchEngine.GetTokenizer()
-	queryTokens := tokenizer.Tokenize(req.Msg.Query)
+	return &rawSearch{
+		hist:                hist,
+		results:             searchResults,
+		offset:              offset,
+		requestedLimit:      requestedLimit,
+		needsPostProcessing: needsPostProcessing,
+	}, nil
+}
 
-	protoResults := make([]*sessionv1.SearchResult, 0, len(searchResults.Results))
-	for _, result := range searchResults.Results {
+// buildProtoResults enriches engine hits with snippets and session metadata.
+func (ss *SearchService) buildProtoResults(
+	results []search.SearchResult,
+	query string,
+	hist *claudehistory.ClaudeSessionHistory,
+) []*sessionv1.SearchResult {
+	tokenizer := ss.searchEngine.GetTokenizer()
+	queryTokens := tokenizer.Tokenize(query)
+
+	protoResults := make([]*sessionv1.SearchResult, 0, len(results))
+	for _, result := range results {
 		entry, _ := hist.GetByID(result.SessionID)
 
 		doc := ss.searchEngine.GetDocument(result.DocID)
@@ -680,14 +736,5 @@ func (ss *SearchService) SearchClaudeHistory(
 		})
 	}
 
-	protoResults = ss.applyResultPostProcessing(protoResults, req.Msg, hist, requestedLimit, needsPostProcessing)
-
-	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{
-		Results: protoResults,
-		// #nosec G115 -- TotalMatches is the number of search hits across local
-		// Claude history, far below int32 range.
-		TotalMatches: int32(searchResults.TotalMatches),
-		QueryTimeMs:  searchResults.QueryTime.Milliseconds(),
-		HasMore:      searchResults.TotalMatches > offset+len(protoResults),
-	}), nil
+	return protoResults
 }

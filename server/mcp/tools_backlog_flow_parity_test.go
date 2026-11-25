@@ -20,8 +20,8 @@ import (
 
 // The three entry points take the flow service as a trailing variadic option.
 var (
-	_ func(...CoreOption) *backlogflow.BacklogFlowService = FlowServiceFromOptions
-	_                                                     = NewHTTPHandler
+	_ func(...CoreOption) FlowService = FlowServiceFromOptions
+	_                                 = NewHTTPHandler
 )
 
 func TestNewCore_should_ReturnUnavailableOrData_When_WithFlowServiceAbsentOrPresent(t *testing.T) {
@@ -29,7 +29,7 @@ func TestNewCore_should_ReturnUnavailableOrData_When_WithFlowServiceAbsentOrPres
 	storage := newTestBacklogStorage(t)
 	store := &stubStore{}
 
-	without := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, nil)
+	without := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil)
 	tool := without.GetTool("get_flow_summary")
 	require.NotNil(t, tool, "flow tools are registered even when the service is absent")
 	res, err := tool.Handler(context.Background(), makeToolReq(map[string]any{}))
@@ -37,7 +37,7 @@ func TestNewCore_should_ReturnUnavailableOrData_When_WithFlowServiceAbsentOrPres
 	assert.Equal(t, ErrUnavailable, parseResult(t, res)["error"].(map[string]any)["code"])
 
 	svc := backlogflow.NewFlowServiceFromStorage(storage)
-	with := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, nil, WithFlowService(svc))
+	with := NewCore(store, nil, nil, storage, nil, nil, nil, nil, nil, WithFlowService(svc))
 	res, err = with.GetTool("get_flow_summary").Handler(context.Background(), makeToolReq(map[string]any{"window_days": float64(7), "sections": []any{"tiles"}}))
 	require.NoError(t, err)
 	assert.NotNil(t, parseResult(t, res)["summary"], "an empty seeded database still returns a summary")
@@ -53,9 +53,9 @@ func TestNewCore_should_RegisterFlowToolsOnlyInsideBacklogFlagAndStorage(t *test
 		"list_flow_deadlock_candidates", "list_flow_thrash_episodes", "get_item_flow_timeline",
 	}
 
-	disabled := NewCore(store, nil, nil, storage, nil, nil, func() bool { return false }, nil, nil, nil, WithFlowService(svc))
-	noStorage := NewCore(store, nil, nil, nil, nil, nil, nil, nil, nil, nil, WithFlowService(svc))
-	enabled := NewCore(store, nil, nil, storage, nil, nil, func() bool { return true }, nil, nil, nil, WithFlowService(svc))
+	disabled := NewCore(store, nil, nil, storage, nil, func() bool { return false }, nil, nil, nil, WithFlowService(svc))
+	noStorage := NewCore(store, nil, nil, nil, nil, nil, nil, nil, nil, WithFlowService(svc))
+	enabled := NewCore(store, nil, nil, storage, nil, func() bool { return true }, nil, nil, nil, WithFlowService(svc))
 
 	for _, name := range flowTools {
 		assert.Nilf(t, disabled.GetTool(name), "%s must not register when the backlog flag is off", name)
@@ -80,7 +80,7 @@ func TestNewHTTPHandler_should_AcceptFlowServiceOption(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	svc := backlogflow.NewFlowServiceFromStorage(storage)
 
-	h := NewHTTPHandler(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, nil, WithFlowService(svc))
+	h := NewHTTPHandler(&stubStore{}, nil, nil, storage, nil, nil, nil, nil, nil, WithFlowService(svc))
 
 	assert.NotNil(t, h)
 	assert.Same(t, svc, FlowServiceFromOptions(WithFlowService(svc)), "the option carries the caller's instance, not a copy")

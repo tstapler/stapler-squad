@@ -55,7 +55,7 @@ Verdicts: **real stall** (the session was not finished and something stopped it)
 **mislabelled** (a different cause reported as "max turns reached"), **not a stall** (the stop is
 expected or deliberate).
 
-### Inside the driver (`session/autonomous_driver.go`)
+### Inside the driver (`session/autonomous/autonomous_driver.go`; the permalinks below are pinned to the pre-move path)
 
 | id | where | symbol | what the code does | reported today | verdict |
 |----|-------|--------|--------------------|----------------|---------|

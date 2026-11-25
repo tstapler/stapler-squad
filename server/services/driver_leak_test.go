@@ -4,7 +4,7 @@ package services
 // config.LoadConfig() can write config.json into whichever test's
 // STAPLER_SQUAD_TEST_DIR is current, racing that test's TempDir RemoveAll.
 
-// Tests must start drivers they own with session.StartSessionDriverForTest; the
-// nosessiondrivertest analyzer rejects a raw session.StartSessionDriver.
+// Tests must start drivers they own with driver.StartSessionDriverForTest; the
+// nosessiondrivertest analyzer rejects a raw driver.StartSessionDriver.
 // Drivers started by production code under test (CreateSession etc.) are
 // covered by stopSessionDriverOnCleanup / setupForkTestFixture below.

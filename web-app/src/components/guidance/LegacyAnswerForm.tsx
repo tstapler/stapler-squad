@@ -20,12 +20,22 @@ interface AnswerFormProps {
 export function LegacyAnswerForm(props: AnswerFormProps) {
   switch (props.request.questionType) {
     case "yes-no":
-      return <YesNoAnswer {...props} />;
+      return <WithFreeForm {...props}><YesNoAnswer {...props} /></WithFreeForm>;
     case "multiple-choice":
-      return <MultipleChoiceAnswer {...props} />;
+      return <WithFreeForm {...props}><MultipleChoiceAnswer {...props} /></WithFreeForm>;
     default:
       return <ShortAnswerForm {...props} />;
   }
+}
+
+/** Choice questions still accept a typed answer: the agent's options are suggestions, not the only valid replies. */
+function WithFreeForm({ children, ...props }: AnswerFormProps & { children: React.ReactNode }) {
+  return (
+    <>
+      {children}
+      <ShortAnswerForm {...props} />
+    </>
+  );
 }
 
 function YesNoAnswer({ request, busy, onSubmit }: AnswerFormProps) {
@@ -83,12 +93,19 @@ function ShortAnswerForm({ request, busy, onSubmit }: AnswerFormProps) {
         if (trimmed) onSubmit(trimmed);
       }}
     >
-      <input
-        type="text"
+      <textarea
         className={styles.shortAnswerInput}
         value={value}
+        rows={3}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="Type your answer…"
+        onKeyDown={(e) => {
+          // Enter inserts a newline; Ctrl/Cmd+Enter submits.
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing && value.trim()) {
+            e.preventDefault();
+            onSubmit(value.trim());
+          }
+        }}
+        placeholder="Or type a free-form answer… (Ctrl+Enter to send)"
         disabled={busy}
         aria-label={`Answer for: ${request.questionText}`}
         data-testid={`guidance-answer-input-${request.id}`}

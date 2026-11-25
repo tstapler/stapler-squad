@@ -1133,7 +1133,7 @@ func TestBug4_AcceptEditsPattern(t *testing.T) {
 // immediately followed by an ellipsis or 1-3 dots ("Roosting…"). The batched summary format
 // interposes a comma-separated clause list ("Searching for 9 patterns, reading 2 files, ...")
 // between the verb and the ellipsis, so the line fell through the whole priority chain to the
-// StatusUnknown catch-all — which session/autonomous_driver.go's waitForIdle treats as idle,
+// StatusUnknown catch-all — which session/autonomous/autonomous_driver.go's waitForIdle treats as idle,
 // eventually firing a spurious "keep going" nudge after the 60s settle window.
 //
 // The widened pattern requires the batched-clause branch to contain a digit (a tool-call

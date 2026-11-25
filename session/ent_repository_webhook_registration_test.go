@@ -404,36 +404,6 @@ func TestReconcileWebhookRegistration_should_AllowOnlyOneWinner_When_DifferentRe
 	assert.Equal(t, []int{1, 1}, []int{w, g})
 }
 
-func TestIntegrationCredential_should_AuthenticateOnlyWhileActive_When_IssuedAndRevoked(t *testing.T) {
-	r := NewTestEntRepository(t)
-	ctx := context.Background()
-	info := IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: "ws-1", AllowedDirRoot: "/tmp/repo"}
-
-	token, err := r.IssueIntegrationCredential(ctx, info)
-	require.NoError(t, err)
-	assert.Contains(t, token, integrationTokenPrefix)
-
-	got, err := r.AuthenticateIntegrationToken(ctx, token)
-	require.NoError(t, err)
-	assert.Equal(t, info, *got)
-
-	stored, err := r.Client.IntegrationCredential.Query().Only(ctx)
-	require.NoError(t, err)
-	assert.NotContains(t, stored.TokenSha256, token, "the plaintext token must never be stored")
-
-	_, err = r.AuthenticateIntegrationToken(ctx, token+"x")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-	_, err = r.AuthenticateIntegrationToken(ctx, "")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-
-	_, err = r.IssueIntegrationCredential(ctx, info)
-	assert.ErrorIs(t, err, domain.ErrConflict, "re-issuing must not silently rotate an existing principal")
-
-	require.NoError(t, r.RevokeIntegrationCredential(ctx, "gh-signal"))
-	_, err = r.AuthenticateIntegrationToken(ctx, token)
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-}
-
 // A constructor that sets Client but misses initStores would leave an embedded store
 // nil and panic only at the first call.
 func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(t *testing.T) {
@@ -455,7 +425,7 @@ func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(
 }
 
 // initStores must wire the Instances write ports on every constructor path: a nil port
-// panics only on the first Create with a PR link or the first Delete of a UUID session.
+// panics only on the first Create or Update with a PR link or the first Delete of a UUID session.
 func TestEntRepository_should_WireInstanceWritePorts_When_ConstructedByAnyPath(t *testing.T) {
 	t.Parallel()
 	seeded := NewTestEntRepository(t)
@@ -474,6 +444,14 @@ func TestEntRepository_should_WireInstanceWritePorts_When_ConstructedByAnyPath(t
 		n, err := repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID(uuid)).Count(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, 1, n, "%s: Create must write the PR link through the UpsertSessionPRSet port", name)
+
+		bare := domain.InstanceData{Title: "upd-" + name, UUID: "uuid-upd-" + name, Path: "/p", Program: "claude"}
+		require.NoError(t, repo.Create(ctx, bare), name)
+		bare.PRs = []domain.PRView{{Ref: ref, Role: domain.PRRolePrimary, AttachSource: domain.AttachSourceCreatedFromURL}}
+		require.NoError(t, repo.Update(ctx, bare), name)
+		n, err = repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID(bare.UUID)).Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, n, "%s: Update must write the PR link through the UpsertSessionPRSet port", name)
 
 		require.NoError(t, repo.Delete(ctx, title), name)
 		n, err = repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID(uuid)).Count(ctx)

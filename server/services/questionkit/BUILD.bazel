@@ -1,0 +1,73 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "questionkit",
+    srcs = [
+        "action_result.go",
+        "answer_listener.go",
+        "askuserquestion_parser.go",
+        "guidance_dialog_canary.go",
+        "guidance_dialog_gone_sampler.go",
+        "guidance_request_hook_mirror.go",
+        "guidance_request_mirror_proto.go",
+        "item_session_lookup.go",
+        "notification_quality_metrics.go",
+        "pending_question_store.go",
+        "question_delivery_track.go",
+        "question_meta.go",
+        "reply_idempotency.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/questionkit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/secretscan",
+        "//session/dialogpresence",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "//session/panereply",
+        "//telemetry",
+        "@com_github_google_uuid//:uuid",
+        "@io_opentelemetry_go_otel//attribute",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":questionkit",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "questionkit_test",
+    srcs = [
+        "askuserquestion_parser_test.go",
+        "boundary_test.go",
+        "parity_golden_test.go",
+        "parity_shim_test.go",
+        "pending_question_store_test.go",
+    ],
+    data = glob(["testdata/**"]) + ["//session/testdata:all"],
+    embed = [":questionkit"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/panereply",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

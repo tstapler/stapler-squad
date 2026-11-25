@@ -20,7 +20,7 @@ import (
 //   - Active replaces the old Running/Ready/Loading/NeedsApproval states.
 //   - Hibernated sessions have their tmux session killed and a checkpoint written.
 //   - Crashed sessions had their tmux pane exit abnormally (remain-on-exit dead pane,
-//     non-zero exit/signal) as detected by SessionHealthChecker (session/health.go).
+//     non-zero exit/signal) as detected by SessionHealthChecker (session/autonomous/health.go).
 //     Unlike Hibernated, transitioning to Crashed is not operator-initiated.
 //   - Failed sessions had their async creation pipeline (Epic 2.2) fail before
 //     ever reaching Active. Stopped stays terminal — no Stopped→Failed edge is

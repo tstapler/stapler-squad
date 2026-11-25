@@ -77,7 +77,7 @@ func TestBuildRuntimeDeps_ShouldSeedGateAndYieldZeroHistoryRows_WhenHiddenInstan
 		t.Fatalf("BuildRuntimeDeps: %v", err)
 	}
 	t.Cleanup(func() { gate.Stop() })
-	_ = rt
+	t.Cleanup(rt.StopBootInit) // registered after the state dir, so it runs first
 
 	if !gate.Seeded() {
 		t.Fatal("BuildRuntimeDeps did not seed the delivery gate")

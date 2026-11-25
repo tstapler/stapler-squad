@@ -49,7 +49,7 @@ never exit 2 for `AskUserQuestion` (ADR-005, "Spike results").
 
 The route is still closed in code. `spikeS1HookReplyPassed` is a compile-time constant set
 to `false`, and `stage:hook_reply` resolves on only when it is true
-(`server/services/feature_flags_notification_actions.go`). The spike record says its result
+(`server/services/flagsvc/feature_flags_notification_actions.go`). The spike record says its result
 awaits the owner's review, and ADR-008 gates the stage on that compiled-in spike result. Setting the flag does not open the route. Flipping the constant is a code change
 the owner decides.
 
@@ -102,7 +102,7 @@ state is `aborted_partial`.
   `human_active` when browser input reached that pane in the last 5 s. This matters because
   an answer to a visible session can collide with a person typing; hidden sessions have no
   person. The signal is the last browser-originated pane input recorded in
-  `paneWriter.SendInput` (`server/services/human_activity.go`). A person who attaches with
+  `paneWriter.SendInput` (`server/services/access/human_activity.go`). A person who attaches with
   their own `tmux attach` or types through ssq-mux is not covered; ADR-004 lists that as a
   residual risk. Each refusal increments `human_active_refusal_total`.
 - **Tier B local only.** A keystroke is Tier B and is refused on the remote listener
@@ -151,7 +151,7 @@ match attempt counts into `question_dialog_match_total{result}`. When more than 
 least 5 attempts in 1 hour mismatch, the canary raises one notification, "Question answers
 paused", and hook-mirrored question rows degrade to `read_only` (question, options, Open
 session, no answer control) until the share recovers
-(`server/services/guidance_dialog_canary.go`). Agent-created rows use a durable route and
+(`server/services/questionkit/guidance_dialog_canary.go`). Agent-created rows use a durable route and
 are unaffected. After a Claude Code update, run the layout re-check in
 `docs/how-to/verify-notification-actions-rollout.md`, section 5.
 

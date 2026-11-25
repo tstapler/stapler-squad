@@ -11,11 +11,13 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/flow"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -78,7 +80,7 @@ func buildBacklogEngines(storage *session.Storage) backlogEngines {
 		// posture immediately below (see
 		// project_plans/backlog-sdd-default-pipeline/implementation/plan.md
 		// Task 1.1.1c).
-		if seedErr := session.EnsureDefaultSDDPipelineMode(context.Background(), pipelineModeRepo); seedErr != nil {
+		if seedErr := pipelinemode.EnsureDefaultSDDPipelineMode(context.Background(), pipelineModeRepo); seedErr != nil {
 			log.Warn("failed to seed default sdd pipeline mode, continuing without it", "err", seedErr)
 		}
 		if cachingPipelineEngine, err := pipeline.NewPipelineEngine(pipelineModeRepo); err != nil {
@@ -225,7 +227,7 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 	}
 	quotaGate := services.NewQuotaGate(
 		// config.LoadConfig() re-reads config.json from disk on every call
-		// (same pattern as feature_flag_service.go's GetFeatureFlags) — cfg
+		// (same pattern as flagsvc/feature_flag_service.go's GetFeatureFlags) — cfg
 		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
 		// never refreshed, so closing over cfg.Quota directly would freeze
 		// every Quota field at boot, contradicting this closure's whole
@@ -439,7 +441,7 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	sessionService.SetAutonomousStuckRespawner(backlogSvc)
 	backlogSvc.SetStaleWorkInspector(sessionService.StaleWorkInspector())
 	// Wire the zombie-session liveness checker (pre-mortem F3, Task 2.1.3d):
-	// reuses the existing session.Registry + Instance.TmuxSessionExists rather
+	// reuses the existing registry.Registry + Instance.TmuxSessionExists rather
 	// than inventing a new liveness mechanism. Acquire failure (session not
 	// tracked live) is treated as "not alive" — the whole point of this check
 	// is to catch sessions whose DB row looks active but whose process is gone.
@@ -481,6 +483,6 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
 	// instead of only finding out disabled on the first TriggerHandoffSummary
 	// call's Code.FailedPrecondition.
-	sessionService.SetFeatureController("handoff-summary", services.HandoffSummaryFeatureController{})
+	sessionService.SetFeatureController("handoff-summary", flagsvc.HandoffSummaryFeatureController{})
 	return nil
 }

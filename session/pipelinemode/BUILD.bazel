@@ -1,0 +1,54 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "pipelinemode",
+    srcs = [
+        "pipeline_mode_seed.go",
+        "pipeline_mode_validation.go",
+        "prompt_sections.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/pipelinemode",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/domain",
+        "//session/stagecfg",
+        "//session/tokens",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pipelinemode",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "pipelinemode_test",
+    srcs = [
+        "pipeline_mode_seed_test.go",
+        "pipeline_mode_validation_test.go",
+        "prompt_sections_test.go",
+    ],
+    embed = [":pipelinemode"],
+    deps = [
+        "//session/domain",
+        "//session/internal/entdbtest",
+        "//session/stagecfg",
+        "//tools/bzl/ent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

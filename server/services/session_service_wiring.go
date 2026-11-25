@@ -12,21 +12,28 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
-func (s *SessionService) GetApprovalStore() *ApprovalStore {
+func (s *SessionService) GetApprovalStore() *approvalkit.ApprovalStore {
 	return s.approvalStore
 }
 
@@ -180,7 +187,7 @@ func (s *SessionService) resolveMCPServerURL() string {
 
 // SetRegistry wires the Registry into this service. Called during server startup after
 // the Registry is constructed in BuildServiceDeps.
-func (s *SessionService) SetRegistry(r *session.Registry) {
+func (s *SessionService) SetRegistry(r *registry.Registry) {
 	s.registry = r
 }
 
@@ -241,7 +248,7 @@ func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
 func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.AutonomousSvc }
 
 // DeadPaneRecorder is the health checker's sink for dead-pane stop snapshots.
-func (s *SessionService) DeadPaneRecorder() session.DeadPaneRecorder {
+func (s *SessionService) DeadPaneRecorder() autonomous.DeadPaneRecorder {
 	return s.AutonomousSvc.RecordDeadPane
 }
 
@@ -269,7 +276,7 @@ func (s *SessionService) SetHistoryLinker(hl *importer.HistoryLinker) {
 // after server startup are added to it (previously only the boot-time instance list
 // ever reached it via a one-shot SetInstances call — see server/dependencies.go).
 // Must be called during server startup before any session-creation RPCs are used.
-func (s *SessionService) SetSessionTagPoller(poller *session.SessionTagClassificationPoller) {
+func (s *SessionService) SetSessionTagPoller(poller *tagpoller.SessionTagClassificationPoller) {
 	s.sessionTagPoller = poller
 }
 
@@ -289,7 +296,7 @@ func (s *SessionService) SetHeadlessClient(c headless.PoolClient) {
 }
 
 // autonomousDriverClient prefers the selector-backed client over the raw claude pool.
-func (s *SessionService) autonomousDriverClient() session.HeadlessPoolClient {
+func (s *SessionService) autonomousDriverClient() autonomous.HeadlessPoolClient {
 	if s.headlessClient != nil {
 		return s.headlessClient
 	}
@@ -459,7 +466,7 @@ func (s *SessionService) SetPermissionRequestHandler(handler sshremote.Permissio
 
 // SetMemoryCacheReader wires the HibernationSweeper so that ListSessions can
 // populate memory_rss_mb, estimated_savings_mb, and system_memory_pct fields.
-func (s *SessionService) SetMemoryCacheReader(r session.MemoryCacheReader) {
+func (s *SessionService) SetMemoryCacheReader(r sweeper.MemoryCacheReader) {
 	s.memoryCacheReader = r
 }
 
@@ -471,7 +478,7 @@ func (s *SessionService) SetStatusManager(mgr *instance.InstanceStatusManager) {
 }
 
 // SetExternalDiscovery sets the external session discovery for accessing mux-enabled sessions.
-func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSessionDiscovery) {
+func (s *SessionService) SetExternalDiscovery(discovery *external.ExternalSessionDiscovery) {
 	s.externalDiscovery = discovery
 	s.checkpointSvc.SetExternalDiscovery(discovery)
 	s.terminalSvc.SetExternalDiscovery(discovery)
@@ -480,7 +487,7 @@ func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSession
 // SetTmuxStreamerManager wires the shared ExternalTmuxStreamerManager so StopShell
 // can evict a shell's streamer when the shell closes. Must be called during server
 // startup with the same instance passed to NewConnectRPCWebSocketHandler.
-func (s *SessionService) SetTmuxStreamerManager(mgr *session.ExternalTmuxStreamerManager) {
+func (s *SessionService) SetTmuxStreamerManager(mgr *external.ExternalTmuxStreamerManager) {
 	s.tmuxStreamerManager = mgr
 }
 
@@ -546,7 +553,7 @@ func (s *SessionService) SetJulesConfigDependencies(keys julesKeyManager, source
 // spins up a second, independent cache/circuit-breaker/singleflight-group
 // over the same OS keychain entry. A no-op if credChain is nil (should not
 // happen outside tests that bypass NewSessionServiceWithSearchEngine).
-func (s *SessionService) SetJulesKeyringTokenSource(tokens julesKeyringTokenSource) {
+func (s *SessionService) SetJulesKeyringTokenSource(tokens credkit.JulesKeyringTokenSource) {
 	if s.credChain != nil {
 		s.credChain.SetJulesTokenSource(tokens)
 	}

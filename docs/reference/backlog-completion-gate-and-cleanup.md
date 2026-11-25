@@ -29,6 +29,16 @@ A rejection:
   (currently 3), the *next* `report_blocked` call escalates straight to
   `review` for a human instead of bouncing back to `ready`.
 
+### Attempted, target not met
+
+An honest miss (a measured threshold the work did not reach) has its own outcome, so it does not loop on
+the rejection above. `report_progress` accepts `status=not_met` with a required note holding the measured
+result; it is stored as `AcStatusFail`. `request_review` treats a failed criterion that has a note as
+attempted, not unmet, and moves the item to `review` even when `SkipReviewGate` is set (it never
+auto-completes). It also appends a `[request_review:ac_not_met]` note and sends one INPUT_REQUIRED/HIGH
+notification. The done-side AC-complete check still counts the criterion unsatisfied, so the owner decides:
+waive it (audited), relax it, or file a follow-up. A `fail` or `in_progress` criterion is still rejected.
+
 ## Synchronous cleanup on every terminal transition
 
 `CleanupTerminalItem` (`server/services/backlog_service.go`) runs

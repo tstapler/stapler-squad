@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
+	"github.com/tstapler/stapler-squad/session/conflictretry"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -25,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // PRFixSpawner can reopen a pr_pending item for rework when CI checks fail or
@@ -267,9 +269,9 @@ func (l *BacklogLifecycleListener) itemHasPRReference(ctx context.Context, er *s
 //
 // Deliberately narrow: only items in review status, with no PR reference
 // recorded yet (pr_number == 0 — the cheap in-process filter applied before
-// any GitHub API call), and no live work/review session (hasActiveSession) —
-// an item still being actively worked or reviewed is left alone; its own
-// normal flow will eventually report or create the PR. On a match, reuses
+// any GitHub API call). An item with a live work/review session (hasActiveSession)
+// is left alone unless its PR already merged; its own normal flow will
+// eventually report or create an open PR. On a match, reuses
 // SetBacklogItemPRAndTransition (Epic 3.1's own primary-write path,
 // session/storage.go) — no duplicate PR-field-writing logic. On no match (no
 // open PR yet for the item's branch), this is an expected no-op, retried
@@ -298,9 +300,9 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileOrphanedAgentPRs ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
-		if hasActiveSession(sessions) {
-			continue // still legitimately in flight — its own normal flow will report/create the PR
-		}
+		// A live (typically idle) work session must not hide a PR that already merged (R2); it only
+		// defers the open-PR case below, where its own flow may still report the PR itself.
+		active := hasActiveSession(sessions)
 
 		// ListItemSessions orders ascending by CreatedAt — keep overwriting so
 		// this ends up holding the most recent work session, mirroring
@@ -327,11 +329,13 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 			}
 			continue // no PR yet (or a transient lookup failure) — retried next tick
 		}
-		if info.State != "open" {
-			continue // a closed/merged PR for this branch is handled by other reconcilers, not this backstop
+		// A merged PR is recorded too: review->pr_pending, after which ReconcilePRPending re-verifies the
+		// branch and moves the item to done. A closed (unmerged) PR is not this backstop's concern.
+		if info.State != github.PRStateMerged && (active || info.State != github.PRStateOpen) {
+			continue
 		}
 
-		summary := fmt.Sprintf("Reconciliation backstop: found an existing open PR #%d for this item's branch %q with no report_pr_created call on record.", info.Number, wt.BranchName)
+		summary := fmt.Sprintf("Reconciliation backstop: found an existing %s PR #%d for this item's branch %q with no report_pr_created call on record.", info.State, info.Number, wt.BranchName)
 		// nil guard: this reconciler only ever lists review-status items
 		// (filter above), so it never hits the reassignment path.
 		if setErr := l.recordOrphanedAgentPR(ctx, item.ID, info, summary); setErr != nil {
@@ -1078,7 +1082,7 @@ func (l *BacklogLifecycleListener) handlePRPendingTransitionFailed(ctx context.C
 		return
 	}
 	if item.PrNumber <= 0 || item.PrURL == "" ||
-		item.Status == string(domain.BacklogStatusPRPending) || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+		item.Status == string(domain.BacklogStatusPRPending) || terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return // already recovered, or resolved to a terminal state, by the time we got here
 	}
 	l.recoverDriftedPRItem(ctx, item, caller)
@@ -1635,16 +1639,16 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	// its "needs manual attention" notice then apply.
 	overrideActive, grantedHere := false, false
 	if capOpen, prAttempts := l.conflictRowState(ctx, er, itemID); conflictOnly && !capOpen {
-		switch l.conflictRetries.Take(itemID, l.conflictRetryNow(), session.ConflictRetryInterval, prAttempts) {
-		case session.ConflictRetryGranted:
+		switch l.conflictRetries.Take(itemID, l.conflictRetryNow(), conflictretry.ConflictRetryInterval, prAttempts) {
+		case conflictretry.ConflictRetryGranted:
 			overrideActive, grantedHere, due = true, true, true
-		case session.ConflictRetryThrottled:
+		case conflictretry.ConflictRetryThrottled:
 			overrideActive = true
-		case session.ConflictRetryExhausted:
+		case conflictretry.ConflictRetryExhausted:
 			if l.conflictRetries.MarkExhaustedNotified(itemID) {
 				l.notify(itemID,
 					"Auto-rework paused",
-					session.ConflictExhaustionMessage(itemTitle, l.conflictRetries.SessionsRan(itemID), l.conflictRetries.FailedStarts(itemID)),
+					conflictretry.ConflictExhaustionMessage(itemTitle, l.conflictRetries.SessionsRan(itemID), l.conflictRetries.FailedStarts(itemID)),
 					8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 					true, true, // urgent, important — automated retry gave up; a genuine dead end
 				)
@@ -2138,7 +2142,7 @@ func findPRPendingItemForEvent(ctx context.Context, er *session.EntRepository, r
 	return nil, false
 }
 
-// TriggerPRFixForEvent satisfies services.PRFixEventRouter (defined in the
+// TriggerPRFixForEvent satisfies webhooktrigger.PRFixEventRouter (defined in the
 // consuming package, per the `interface-pollution-checklist` skill). It
 // looks up the pr_pending item tracking (repoFullName, prNumber) and, if
 // found, runs the same per-item reconciliation ReconcilePRPending's 60s tick

@@ -6,18 +6,18 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
 func TestHandleActuatorNudgeOutcomes_ServesTotalsAndSince(t *testing.T) {
-	rec := session.NewNudgeOutcomeRecorder("", nil)
-	defer session.SwapNudgeOutcomeRecorder(rec)()
-	rec.Record(session.NudgeKindStall, session.NudgeOutcomeDelivered, "S1")
+	rec := nudgeoutcomes.NewNudgeOutcomeRecorder("", nil)
+	defer nudgeoutcomes.SwapNudgeOutcomeRecorder(rec)()
+	rec.Record(nudgeoutcomes.NudgeKindStall, nudgeoutcomes.NudgeOutcomeDelivered, "S1")
 
 	w := httptest.NewRecorder()
 	handleActuatorNudgeOutcomes(w, httptest.NewRequest(http.MethodGet, "/actuator/nudge-outcomes", nil))
 
-	var body session.NudgeOutcomeReport
+	var body nudgeoutcomes.NudgeOutcomeReport
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v: %s", err, w.Body.String())
 	}

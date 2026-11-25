@@ -47,7 +47,7 @@ const (
 // subscriber is connected.
 //
 // Check (3) allowlists idle-equivalent statuses -- isIdleStatus's
-// {StatusIdle, StatusReady, StatusSuccess} (session/autonomous_driver.go) --
+// {StatusIdle, StatusReady, StatusSuccess} (session/autonomous/autonomous_driver.go) --
 // plus StatusUnknown, rather than denylisting unsafe ones, so a new
 // DetectedStatus value is unsafe by default. StatusUnknown is ambiguous: it's
 // both MatchLines' ready-prompt catch-all (session/detection/pattern_set.go)

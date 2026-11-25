@@ -9,6 +9,7 @@ def _size_and_shards_impl(ctx):
     asserts.equals(env, "enormous", got["size"])
     asserts.equals(env, 4, got["shard_count"])
     asserts.equals(env, "small", go_test_defaults("server/services", {"size": "small"})["size"])
+    asserts.equals(env, {"size": "large"}, go_test_defaults("session/unfinished", {}))
     asserts.equals(env, {}, go_test_defaults("config", {}))
     return unittest.end(env)
 

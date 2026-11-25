@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -37,7 +38,7 @@ type guidanceReaperStore interface {
 type GuidanceSessionReaper struct {
 	store    guidanceReaperStore
 	sessions SessionEnds
-	mirror   *GuidanceHookMirror
+	mirror   *questionkit.GuidanceHookMirror
 	cleared  func(reason string)
 	now      func() time.Time
 }
@@ -45,7 +46,7 @@ type GuidanceSessionReaper struct {
 // NewGuidanceSessionReaper builds the reaper. mirror (optional) also runs the
 // 30-day questions_json purge and drops cache entries; cleared counts
 // guidance_mirror_cleared_total.
-func NewGuidanceSessionReaper(store guidanceReaperStore, sessions SessionEnds, mirror *GuidanceHookMirror, cleared func(reason string)) *GuidanceSessionReaper {
+func NewGuidanceSessionReaper(store guidanceReaperStore, sessions SessionEnds, mirror *questionkit.GuidanceHookMirror, cleared func(reason string)) *GuidanceSessionReaper {
 	return &GuidanceSessionReaper{store: store, sessions: sessions, mirror: mirror, cleared: cleared, now: time.Now}
 }
 
@@ -101,7 +102,7 @@ func (r *GuidanceSessionReaper) reap(ctx context.Context, match func(*domain.Gui
 			continue
 		}
 		if r.mirror != nil {
-			r.mirror.pending.Forget(QuestionKey{SessionUUID: row.AskerSessionUUID, QuestionID: row.ID})
+			r.mirror.ForgetPending(questionkit.QuestionKey{SessionUUID: row.AskerSessionUUID, QuestionID: row.ID})
 		}
 		if applied && r.cleared != nil {
 			r.cleared(domain.CancelReasonSessionEnded.String())

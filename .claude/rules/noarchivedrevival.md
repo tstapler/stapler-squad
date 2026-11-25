@@ -2,12 +2,12 @@
 
 In the automated-lifecycle files, a call to `Start(false)`, `RecoverFromStopped()`, `restartForRetry(...)`, `TransitionToActiveIf(...)`, or `transitionToLocked(..., Active)` must be preceded by an archival check (`IsArchived()` or an `ArchivedAt != nil` comparison) — never revive a session that was deliberately archived.
 
-Files in scope (`tools/lint/noarchivedrevival`): `session/health.go`, `session/review_queue_poller.go`, `session/session_driver.go`, `session/instance/instance_claude.go`, `session/instance/instance_serialization.go`, `session/instance/hot_restore.go` (`HotRestoreIfLive` checks `IsArchived()` before and after the status flip), `server/dependencies.go`, `server/dependencies_instances.go` (the boot-time instance start loop), `server/wakes/revive.go` (`reviveStoppedOwner` is the only wake code that revives, and checks `IsArchived()` itself), `server/services/question_answer_router.go` (a ratchet: the `resume` route never revives), `server/services/session_service_clear_terminal.go` (`ClearTerminalStatusIfLive` goes through `HotRestoreIfLive`), `server/services/session_federation*.go` (federation is read-only and never starts a session).
+Files in scope (`tools/lint/noarchivedrevival`): `session/autonomous/health.go`, `session/review_queue_poller.go`, `session/driver/session_driver.go`, `session/instance/instance_claude.go`, `session/instance/instance_serialization.go`, `session/instance/hot_restore.go` (`HotRestoreIfLive` checks `IsArchived()` before and after the status flip), `server/dependencies.go`, `server/dependencies_instances.go` (the boot-time instance start loop), `server/wakes/revive.go` (`reviveStoppedOwner` is the only wake code that revives, and checks `IsArchived()` itself), `server/services/question_answer_router.go` (a ratchet: the `resume` route never revives), `server/services/session_service_clear_terminal.go` (`ClearTerminalStatusIfLive` goes through `HotRestoreIfLive`), `server/services/federation/{session_federation,session_federation_terminal,session_federation_dial,federated_watch_aggregator}.go` (federation is read-only and never starts a session).
 
 **Wrong:**
 ```go
-func recoverMissingSession(instance *Instance) {
-	if err := instance.Start(false); err != nil { // revives an archived session
+func recoverMissingSession(inst *instance.Instance) {
+	if err := inst.Start(false); err != nil { // revives an archived session
 		...
 	}
 }
@@ -15,11 +15,14 @@ func recoverMissingSession(instance *Instance) {
 
 **Right:**
 ```go
-func (h *SessionHealthChecker) checkSingleSession(instance *Instance) {
-	if reason, skip := healthCheckSkipReason(instance); skip { // reads snap.ArchivedAt
-		return
+func (h *SessionHealthChecker) checkSingleSession(inst *instance.Instance, paneStatus map[string]tmux.PaneDeadStatus) HealthCheckResult {
+	result := HealthCheckResult{IsHealthy: true}
+	if reason, skip := healthCheckSkipReason(inst); skip { // reads snap.ArchivedAt
+		result.Actions = append(result.Actions, reason)
+		return result
 	}
-	h.checkTmuxHealth(instance) // -> recoverMissingSession -> Start(false)
+	h.checkTmuxHealth(inst, paneStatus, &result) // -> recoverMissingSession -> Start(false)
+	return result
 }
 ```
 

@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -18,21 +19,31 @@ func TestStartup_ShouldUseNarrowServiceDepsAndNeverCallBuildDependencies_WhenHid
 	patterns := []string{
 		"*_test.go",
 		"../services/*gate*_test.go",
+		"../services/*/*gate*_test.go",
 		"../services/gatestats*_test.go",
+		"../services/*/gatestats*_test.go",
 		"../services/legacy_hidden_counters_test.go",
+		"../services/*/legacy_hidden_counters_test.go",
 		"../services/session_service_events*_test.go",
+		"../services/*/session_service_events*_test.go",
 		"../services/hidden_*_test.go",
+		"../services/*/hidden_*_test.go",
 		"../services/session_service_diagnose_test.go",
+		"../services/*/session_service_diagnose_test.go",
 		"../slack_gate_test.go",
 		"../gatestats_listener_test.go",
 	}
 	forbidden := map[string]bool{"BuildDependencies": true, "NewServerWithDeps": true}
 	scanned := 0
 	fset := token.NewFileSet()
+	leafFiles := 0 // services leaf tests matched; zero means the leaf globs went dead (e.g. missing Bazel data)
 	for _, pat := range patterns {
 		files, err := filepath.Glob(pat)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if strings.HasPrefix(pat, "../services/*/") {
+			leafFiles += len(files)
 		}
 		for _, f := range files {
 			scanned++
@@ -58,6 +69,9 @@ func TestStartup_ShouldUseNarrowServiceDepsAndNeverCallBuildDependencies_WhenHid
 				return true
 			})
 		}
+	}
+	if leafFiles == 0 {
+		t.Fatal("no ../services/*/ leaf test files matched; the leaf globs are dead")
 	}
 	if scanned < 10 {
 		t.Fatalf("scanned only %d files; the glob patterns drifted", scanned)

@@ -10,17 +10,19 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
-func smprMutate(svc *FeatureFlagService, scope string, mutation sessionv1.FlagMutation) error {
+func smprMutate(svc *flagsvc.FeatureFlagService, scope string, mutation sessionv1.FlagMutation) error {
 	_, err := svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
 		Name: config.SessionMultiPRFlag, Scope: scope, Mutation: mutation,
 	}))
 	return err
 }
 
-func smprSet(t *testing.T, svc *FeatureFlagService, scope string, on bool) {
+func smprSet(t *testing.T, svc *flagsvc.FeatureFlagService, scope string, on bool) {
 	t.Helper()
 	m := sessionv1.FlagMutation_FLAG_MUTATION_SET_DISABLED
 	if on {
@@ -31,7 +33,7 @@ func smprSet(t *testing.T, svc *FeatureFlagService, scope string, on bool) {
 
 func TestSessionMultiPRFlag_ShouldRoundTripThroughUpdateFeatureFlag(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.False(t, config.SessionMultiPR(config.SessionMultiPRScopePoller))
 
 	smprSet(t, svc, config.SessionMultiPRScopePoller, true)
@@ -42,7 +44,7 @@ func TestSessionMultiPRFlag_ShouldRoundTripThroughUpdateFeatureFlag(t *testing.T
 
 func TestSessionMultiPRFlag_ShouldStoreOutOfOrderScopeButResolveInOrder(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 
 	smprSet(t, svc, config.SessionMultiPRScopeUI, true)
 	assert.False(t, config.SessionMultiPR(config.SessionMultiPRScopeUI), "stored, but poller/backlog/actions are off")
@@ -64,7 +66,7 @@ func TestSessionMultiPRFlag_ShouldStoreOutOfOrderScopeButResolveInOrder(t *testi
 
 func TestSessionMultiPRFlag_RefresherOffKillSwitch(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.True(t, config.SessionMultiPRRefresher(), "refresher runs by default")
 
 	smprSet(t, svc, config.SessionMultiPRScopeRefresherOff, true)
@@ -83,7 +85,7 @@ func TestSessionMultiPRFlag_RefresherOffKillSwitch(t *testing.T) {
 
 func TestSessionMultiPRFlag_ShouldRejectUnknownScope(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	err := smprMutate(svc, "reader:nope", sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
@@ -91,7 +93,7 @@ func TestSessionMultiPRFlag_ShouldRejectUnknownScope(t *testing.T) {
 
 func TestArtifactScanV2Flag_ShouldRegisterGlobalOnlyDefaultOff(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	assert.False(t, testFlagRegistry().Default(config.ArtifactScanV2Flag))
 	assert.False(t, config.LoadConfig().ArtifactScanV2Enabled())
 	require.NoError(t, flagUpdate(svc, config.ArtifactScanV2Flag, true))
@@ -99,7 +101,7 @@ func TestArtifactScanV2Flag_ShouldRegisterGlobalOnlyDefaultOff(t *testing.T) {
 }
 
 // readbackScope returns the stored value of a scope as the flag panel reports it.
-func readbackScope(t *testing.T, svc *FeatureFlagService, scope string) bool {
+func readbackScope(t *testing.T, svc *flagsvc.FeatureFlagService, scope string) bool {
 	t.Helper()
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
@@ -119,8 +121,8 @@ func readbackScope(t *testing.T, svc *FeatureFlagService, scope string) bool {
 
 func TestSessionMultiPRAudit_ShouldLetRefresherOffPersistWithFallback_WhenSinkIsDownButRefuseReaderScopes(t *testing.T) {
 	e := newAuditEnv(t)
-	e.svc.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
-	e.mfs.setFailWrite(errDiskFull)
+	e.svc.MergeAuditPolicies(flagsvc.SessionMultiPRFlagAuditPolicies())
+	e.mfs.SetFailWrite(errDiskFull)
 
 	err := smprMutate(e.svc, config.SessionMultiPRScopePoller, sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED)
 	require.Error(t, err, "opening a reader stays refused while the sink is down")
@@ -129,5 +131,5 @@ func TestSessionMultiPRAudit_ShouldLetRefresherOffPersistWithFallback_WhenSinkIs
 	require.NoError(t, smprMutate(e.svc, config.SessionMultiPRScopeRefresherOff, sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED),
 		"the kill switch is the escape hatch for a sink fault")
 	assert.False(t, config.LoadConfig().SessionMultiPRRefresher())
-	assert.GreaterOrEqual(t, e.degradedCount(auditModeFallbackLog), 1)
+	assert.GreaterOrEqual(t, e.degradedCount(auditkit.AuditModeFallbackLog), 1)
 }

@@ -17,13 +17,14 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestFlagGates_ShouldReadServiceRegistry(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	plain, err := services.NewSessionServiceFromConfig(services.FlagRegistry())
+	plain, err := services.NewSessionServiceFromConfig(flagsvc.FlagRegistry())
 	require.NoError(t, err)
 
 	flipped, err := services.NewSessionServiceFromConfig(flipFlagDefault("programs:cli-flag-probe"))
@@ -51,9 +52,9 @@ func TestRegisterChangelogHandlers_ShouldGateOnServiceRegistry(t *testing.T) {
 		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/changelog", nil))
 		return rec.Code
 	}
-	plain, err := services.NewSessionServiceFromConfig(services.FlagRegistry())
+	plain, err := services.NewSessionServiceFromConfig(flagsvc.FlagRegistry())
 	require.NoError(t, err)
-	flipped, err := services.NewSessionServiceFromConfig(flipFlagDefault(services.ChangelogFlagName))
+	flipped, err := services.NewSessionServiceFromConfig(flipFlagDefault(featureflags.ChangelogFlagName))
 	require.NoError(t, err)
 
 	assert.Equal(t, http.StatusOK, status(plain), "changelog defaults on")
@@ -102,10 +103,10 @@ func TestNewServerWithDeps_ShouldWireServiceRegistryIntoFlagGates(t *testing.T) 
 		changelogFlagCache.at = time.Time{}
 		changelogFlagCache.mu.Unlock()
 	})
-	plain := services.FlagRegistry()
+	plain := flagsvc.FlagRegistry()
 
 	_, base := serveWithRegistry(t, plain, http.MethodGet, "/api/changelog", "")
-	_, flipped := serveWithRegistry(t, flipFlagDefault(services.ChangelogFlagName), http.MethodGet, "/api/changelog", "")
+	_, flipped := serveWithRegistry(t, flipFlagDefault(featureflags.ChangelogFlagName), http.MethodGet, "/api/changelog", "")
 	assert.Equal(t, http.StatusOK, base.Code, "changelog defaults on")
 	assert.Equal(t, http.StatusNotFound, flipped.Code, "flipped default turns the route off")
 
@@ -118,7 +119,7 @@ func TestNewServerWithDeps_ShouldWireServiceRegistryIntoFlagGates(t *testing.T) 
 		return res.Enabled
 	}
 	assert.False(t, updateEnabled(plain), "update-check defaults off")
-	assert.True(t, updateEnabled(flipFlagDefault(services.UpdateCheckFlagName)), "flipped default turns it on")
+	assert.True(t, updateEnabled(flipFlagDefault(featureflags.UpdateCheckFlagName)), "flipped default turns it on")
 
 	const probe = "/api/session.v1.SessionService/ProbeProgram"
 	_, baseProbe := serveWithRegistry(t, plain, http.MethodPost, probe, "{}")
@@ -157,5 +158,5 @@ func TestRegisterChangelogHandlers_ShouldReportUpdateCheckEnabledFromServiceRegi
 		require.NoError(t, err)
 		return (&Server{mux: http.NewServeMux()}).registerChangelogHandlers(sessions).Current().Enabled
 	}
-	assert.NotEqual(t, enabled(services.FlagRegistry()), enabled(flipFlagDefault(services.UpdateCheckFlagName)))
+	assert.NotEqual(t, enabled(flagsvc.FlagRegistry()), enabled(flipFlagDefault(featureflags.UpdateCheckFlagName)))
 }

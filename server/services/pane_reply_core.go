@@ -13,6 +13,10 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -62,12 +66,12 @@ const (
 	AnswerTargetVisible
 )
 
-func (t AnswerTarget) admits(a TerminalAccess) bool {
+func (t AnswerTarget) admits(a access.TerminalAccess) bool {
 	switch t {
 	case AnswerTargetHidden:
-		return a == TerminalReadOnly
+		return a == access.TerminalReadOnly
 	case AnswerTargetVisible:
-		return a == TerminalReadWrite
+		return a == access.TerminalReadWrite
 	}
 	return false
 }
@@ -82,15 +86,6 @@ func (t AnswerTarget) mismatchOutcome() (sessionv1.ReplyOutcome, string) {
 
 // errAnswerTargetMismatch is returned when the session is not the kind the target admits.
 var errAnswerTargetMismatch = errors.New("session is not the kind of answer target requested")
-
-// replyOutcomeResult is what a reply attempt returns and what the idempotency
-// table caches.
-type replyOutcomeResult struct {
-	Outcome    sessionv1.ReplyOutcome
-	RetryAfter int32
-	// Err is a Connect error the leader returned; followers return it too.
-	Err error
-}
 
 // replyLimiters are the operator rails. They are checked with Reserve so a NOT_SENT can cancel.
 type replyLimiters struct {
@@ -183,17 +178,17 @@ func (l *replyLimiters) forget(sessionUUID string) {
 // obtainable with a PendingQuestionClaim, and only for a session of the kind
 // its AnswerTarget admits.
 type QuestionReplyWriter struct {
-	claim PendingQuestionClaim
+	claim questionkit.PendingQuestionClaim
 	inst  *instance.Instance
 	after func(time.Duration) <-chan time.Time
 }
 
-// QuestionReplyWriter returns the writer for claim on inst, or ErrReadOnly for
+// newQuestionReplyWriter returns the writer for claim on inst, or ErrReadOnly for
 // a zero claim (never claimed) and errAnswerTargetMismatch when this access is
 // not the kind target admits.
-func (a TerminalAccess) QuestionReplyWriter(target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance, after func(time.Duration) <-chan time.Time) (*QuestionReplyWriter, error) {
+func newQuestionReplyWriter(a access.TerminalAccess, target AnswerTarget, claim questionkit.PendingQuestionClaim, inst *instance.Instance, after func(time.Duration) <-chan time.Time) (*QuestionReplyWriter, error) {
 	if !claim.Valid() || inst == nil {
-		return nil, ErrReadOnly
+		return nil, access.ErrReadOnly
 	}
 	if !target.admits(a) {
 		return nil, errAnswerTargetMismatch
@@ -217,13 +212,13 @@ func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *instance.H
 // no policy about which sessions may be answered: the caller passes an
 // AnswerTarget and the core refuses a session of the other kind with zero writes.
 type PaneReplyCore struct {
-	store            *PendingQuestionStore
+	store            *questionkit.PendingQuestionStore
 	limiters         *replyLimiters
-	auditSink        func() *AuditSink
+	auditSink        func() *auditkit.AuditSink
 	count            func(label string)
 	after            func(time.Duration) <-chan time.Time
 	controllerActive func(*instance.Instance) bool
-	canary           *DialogMatchCanary
+	canary           *questionkit.DialogMatchCanary
 }
 
 // paneReplyCore builds the core from the service's current seams.
@@ -247,20 +242,20 @@ type replyInput struct {
 
 // Run is the leader's path: limiters, claim, audit, lease, write. cache is
 // true when the result must be returned to a Retry instead of attempted again.
-func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyInput, inst *instance.Instance, facts steerRequestFacts) (res replyOutcomeResult, cache bool) {
-	key := QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}
-	done := func(o sessionv1.ReplyOutcome) replyOutcomeResult {
+func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyInput, inst *instance.Instance, facts steerRequestFacts) (res questionkit.ReplyOutcomeResult, cache bool) {
+	key := questionkit.QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}
+	done := func(o sessionv1.ReplyOutcome) questionkit.ReplyOutcomeResult {
 		c.count(replyOutcomeLabel(o))
-		return replyOutcomeResult{Outcome: o}
+		return questionkit.ReplyOutcomeResult{Outcome: o}
 	}
 	reservation, retryAfter, ok := c.limiters.reserve(in.sessionUUID)
 	if !ok {
 		secs := int32((retryAfter + time.Second - 1) / time.Second)
 		c.count(replyOutcomeLabel(sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED))
-		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, RetryAfter: max(secs, 1)}, false
+		return questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, RetryAfter: max(secs, 1)}, false
 	}
 	claim, cr := c.store.Claim(key)
-	if cr != ClaimOK {
+	if cr != questionkit.ClaimOK {
 		reservation.cancel()
 		return done(sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING), false
 	}
@@ -270,7 +265,7 @@ func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyIn
 		reservation.cancel()
 		c.count(replyLabelAuditFailed)
 		log.Error("[Reply] audit append failed; nothing written", "session", in.sessionUUID, "err", aerr)
-		return replyOutcomeResult{Err: connect.NewError(connect.CodeInternal, errors.New("audit log unavailable, reply not sent"))}, false
+		return questionkit.ReplyOutcomeResult{Err: connect.NewError(connect.CodeInternal, errors.New("audit log unavailable, reply not sent"))}, false
 	}
 	res, stage, consumed := c.writeUnderLease(ctx, target, in, claim, inst)
 	if consumed {
@@ -297,12 +292,12 @@ func (e *replyWriteError) Error() string { return "reply refused before the firs
 // writeUnderLease is the Reply chain's acquirer: it takes the lease, runs the
 // before-first-byte checks and the one write. consumed is true when the digit
 // may have reached the pane.
-func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget, in replyInput, claim PendingQuestionClaim, inst *instance.Instance) (res replyOutcomeResult, stage string, consumed bool) {
+func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget, in replyInput, claim questionkit.PendingQuestionClaim, inst *instance.Instance) (res questionkit.ReplyOutcomeResult, stage string, consumed bool) {
 	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	if !ok {
-		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT}, replyStageLeaseBusy, false
+		return questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT}, replyStageLeaseBusy, false
 	}
-	writer, werr := AccessFor(inst).QuestionReplyWriter(target, claim, inst, c.after)
+	writer, werr := newQuestionReplyWriter(access.AccessFor(inst), target, claim, inst, c.after)
 	if werr != nil {
 		lease.Release()
 		out := sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT
@@ -310,26 +305,26 @@ func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget
 		if errors.Is(werr, errAnswerTargetMismatch) {
 			out, stage = target.mismatchOutcome()
 		}
-		return replyOutcomeResult{Outcome: out}, stage, false
+		return questionkit.ReplyOutcomeResult{Outcome: out}, stage, false
 	}
 	rs, err := writer.SubmitReply(ctx, lease, in.digit, c.beforeFirstByteChecks(target, claim, inst))
 	return mapReplyStage(rs, err)
 }
 
-func mapReplyStage(rs panereply.ReplyStage, err error) (replyOutcomeResult, string, bool) {
+func mapReplyStage(rs panereply.ReplyStage, err error) (questionkit.ReplyOutcomeResult, string, bool) {
 	var refused *replyWriteError
 	switch rs {
 	case panereply.StageDialogClosed:
-		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT}, replyStageDialogClosed, true
+		return questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT}, replyStageDialogClosed, true
 	case panereply.StageDialogStillOpen:
-		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageDialogStillOpen, true
+		return questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageDialogStillOpen, true
 	case panereply.StageWriteEntered:
-		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageIndeterminate, true
+		return questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageIndeterminate, true
 	}
 	if errors.As(err, &refused) {
-		return replyOutcomeResult{Outcome: refused.outcome}, refused.stage, false
+		return questionkit.ReplyOutcomeResult{Outcome: refused.outcome}, refused.stage, false
 	}
-	return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT}, replyStageNotSent, false
+	return questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT}, replyStageNotSent, false
 }
 
 // beforeFirstByteChecks run under the lease, after the audit append, in order:
@@ -337,9 +332,9 @@ func mapReplyStage(rs panereply.ReplyStage, err error) (replyOutcomeResult, stri
 // controller is active (its value is never read: it is blank for 6-9 s after any
 // key and cannot tell a question from a permission dialog); and the structural
 // match of a fresh live capture, which is authoritative.
-func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim PendingQuestionClaim, inst *instance.Instance) func() error {
+func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim questionkit.PendingQuestionClaim, inst *instance.Instance) func() error {
 	return func() error {
-		if !target.admits(AccessFor(inst)) {
+		if !target.admits(access.AccessFor(inst)) {
 			out, stage := target.mismatchOutcome()
 			return &replyWriteError{out, stage}
 		}
@@ -354,7 +349,7 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, replyStageNotWaiting}
 		}
 		matched := panereply.DialogMatch(capture, claim.Question().Dialog)
-		c.canary.Record(DialogMatchResultOf(matched))
+		c.canary.Record(questionkit.DialogMatchResultOf(matched))
 		if !matched {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT, replyStageStalePrompt}
 		}
@@ -364,20 +359,20 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 
 // ---- audit and metrics ----
 
-func (c *PaneReplyCore) auditLine(in replyInput, claim PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) AuditLine {
+func (c *PaneReplyCore) auditLine(in replyInput, claim questionkit.PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) auditkit.AuditLine {
 	q := claim.Question()
 	idx := int(in.digit - '0')
 	label := ""
 	if idx >= 1 && idx <= len(q.Dialog.Labels) {
 		label = truncateRunes(q.Dialog.Labels[idx-1], 80)
 	}
-	return AuditLine{
-		Kind: auditKindReply, ChangeID: uuid.NewString(),
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: q.SessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: q.QuestionID, ReplyID: in.replyID, OptionIndex: idx, OptionLabel: label, QuestionToken: q.Token,
 		Listener: facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
 		UserAgent: facts.userAgent, AuthMode: facts.refusal.AuthMode,
-		PeerLoopback: boolRef(facts.refusal.PeerLoopback), Proxied: boolRef(facts.refusal.Proxied),
+		PeerLoopback: flagsvc.BoolRef(facts.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.refusal.Proxied),
 	}
 }
 
@@ -390,19 +385,19 @@ func truncateRunes(s string, n int) string {
 }
 
 // appendRequest is the durable pre-write line: no audit, no write.
-func (c *PaneReplyCore) appendRequest(ctx context.Context, line AuditLine) error {
-	line.Phase = auditPhaseRequest
+func (c *PaneReplyCore) appendRequest(ctx context.Context, line auditkit.AuditLine) error {
+	line.Phase = auditkit.AuditPhaseRequest
 	sink := c.auditSink()
 	if sink == nil {
-		return ErrAuditFailed
+		return auditkit.ErrAuditFailed
 	}
 	return sink.AppendBounded(ctx, line)
 }
 
 // appendResult records the outcome after the write; a fault here cannot
 // undo anything, so it logs.
-func (c *PaneReplyCore) appendResult(line AuditLine, res replyOutcomeResult, stage string) {
-	line.Phase, line.Outcome, line.Stage = auditPhaseResult, replyOutcomeLabel(res.Outcome), stage
+func (c *PaneReplyCore) appendResult(line auditkit.AuditLine, res questionkit.ReplyOutcomeResult, stage string) {
+	line.Phase, line.Outcome, line.Stage = auditkit.AuditPhaseResult, replyOutcomeLabel(res.Outcome), stage
 	sink := c.auditSink()
 	if sink == nil {
 		return

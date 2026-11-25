@@ -92,7 +92,7 @@ Press `t` from the main session list to toggle into PTY list view.
 
 ### Core Components
 
-#### 1. PTYDiscovery Service (`session/pty_discovery.go`)
+#### 1. PTYDiscovery Service (`session/ptydiscovery/pty_discovery.go`)
 
 **Purpose:** Discovers and monitors PTY connections
 
@@ -400,11 +400,11 @@ func (pd *PTYDiscovery) BroadcastCommand(paths []string, command string) error
 
 ## References
 
-- PTY Discovery Implementation: `session/pty_discovery.go`
+- PTY Discovery Implementation: `session/ptydiscovery/pty_discovery.go`
 - UI Components: `ui/pty_list.go`, `ui/pty_preview.go`
 - Command Handlers: `cmd/commands/pty.go`
 - Command Registry: `cmd/init.go` (PTY commands section)
-- Test Suite: `session/pty_discovery_test.go`
+- Test Suite: `session/ptydiscovery/pty_discovery_test.go`
 
 ## Contributing
 

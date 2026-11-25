@@ -8,6 +8,7 @@ set -u
 root="${BZL_TAGS_ROOT:-$(git rev-parse --show-toplevel)}"
 cd "$root" || exit 2
 tags='no-sandbox|local|requires-network|external|no-cache|no-remote-cache'
+nontag='^[[:space:]]*(name|actual|importpath)[[:space:]]*=[[:space:]]*"[^"]*",?[[:space:]]*$'
 reason='#[[:space:]]*tag-reason:[[:space:]]*.+\(#[0-9]+\)'
 baseline=tools/bzl/test-tags-baseline.txt
 
@@ -30,7 +31,11 @@ for f in $files; do
     hit=""
     case "$f" in
       *bazelrc) hit=$(printf '%s' "$code" | grep -E 'tag' | grep -oE "(^|[=, +-])($tags)($|[, ])" | tr -d '=, +-' | head -n1) ;;
-      *) hit=$(printf '%s' "$code" | grep -oE "\"($tags)\"" | tr -d '"' | head -n1) ;;
+      *)
+        # A package or target named like a tag (name = "external") is not a tag.
+        if ! printf '%s' "$code" | grep -qE "$nontag"; then
+          hit=$(printf '%s' "$code" | grep -oE "\"($tags)\"" | tr -d '"' | head -n1)
+        fi ;;
     esac
     if [ -n "$hit" ]; then
       if ! printf '%s\n%s\n' "$prev" "$line" | grep -qE "$reason"; then

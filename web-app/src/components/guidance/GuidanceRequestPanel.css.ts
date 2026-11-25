@@ -73,16 +73,52 @@ export const badgeAnswered = style({
   border: `1px solid ${vars.color.success}`,
 });
 
-export const questionText = style({
+const questionTextBase = {
   margin: 0,
+  whiteSpace: "pre-wrap" as const,
+  overflowWrap: "anywhere" as const,
+  minWidth: 0,
   fontSize: vars.fontSize.base,
   color: vars.color.textPrimary,
-});
+};
 
-export const answerText = style({
+const answerTextBase = {
   margin: 0,
+  whiteSpace: "pre-wrap" as const,
+  overflowWrap: "anywhere" as const,
+  minWidth: 0,
   fontSize: vars.fontSize.sm,
   color: vars.color.textSecondary,
+};
+
+const lineClamp = {
+  display: "-webkit-box",
+  WebkitLineClamp: 5,
+  WebkitBoxOrient: "vertical" as const,
+  overflow: "hidden",
+};
+
+/** Wraps the question text and its toggle so the badge/text flex layout is unchanged. */
+export const questionWrapper = style({ flex: 1, minWidth: 0 });
+
+export const questionClamped = style({ ...questionTextBase, ...lineClamp });
+export const questionExpanded = style(questionTextBase);
+
+export const answerClamped = style({ ...answerTextBase, ...lineClamp });
+export const answerExpanded = style(answerTextBase);
+
+/** "Show more" / "Show less" toggle button. */
+export const expandToggle = style({
+  display: "inline-block",
+  marginTop: vars.space["1"],
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: vars.color.accentText,
+  fontSize: vars.fontSize.sm,
+  fontWeight: 600,
+  cursor: "pointer",
+  selectors: { "&:hover": { textDecoration: "underline" } },
 });
 
 export const actions = style({
@@ -114,11 +150,16 @@ export const answerButton = style({
 
 export const shortAnswerForm = style({
   display: "flex",
+  alignItems: "flex-end",
   gap: vars.space["2"],
 });
 
 export const shortAnswerInput = style({
   flex: 1,
+  minWidth: 0,
+  minHeight: "4.5em",
+  resize: "vertical",
+  fontFamily: "inherit",
   padding: `${vars.space["2"]} ${vars.space["3"]}`,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,

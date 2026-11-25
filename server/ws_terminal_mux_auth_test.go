@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -49,7 +50,7 @@ type muxAuthHarness struct {
 
 func muxAuthOptions(srv *Server) []wsconn.TerminalMuxOption {
 	return []wsconn.TerminalMuxOption{
-		wsconn.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		wsconn.WithTerminalMuxOriginPolicy(access.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
 		wsconn.WithTerminalMuxDispatchers(srv.unaryDispatcher),
 	}
 }
@@ -70,7 +71,7 @@ func newMuxAuthHarness(t *testing.T) *muxAuthHarness {
 	bridge := wsconn.NewTerminalMuxBridgeForHandler(wsHandler, 2, muxAuthOptions(srv)...)
 	srv.mux.Handle(wsconn.TerminalMuxPath, bridge)
 	authMW := middleware.Auth(h.v)
-	srv.setUnaryDispatcher(services.ListenerRemote, srv.remoteDispatcher(authMW, true))
+	srv.setUnaryDispatcher(access.ListenerRemote, srv.remoteDispatcher(authMW, true))
 	h.ts = httptest.NewUnstartedServer(srv.remoteChain(authMW, true))
 	srv.SetOrigins([]string{"https://" + h.ts.Listener.Addr().String()})
 	h.ts.StartTLS()

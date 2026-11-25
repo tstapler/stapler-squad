@@ -18,14 +18,15 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 const (
-	completionReviewerFlagName      = "backlog:completion-reviewer"
 	maxConcurrentCompletionReviews  = 8
 	completionReviewDedupWindow     = 10 * time.Minute
 	completionReviewCallTimeout     = 3 * time.Minute
@@ -101,7 +102,7 @@ func StartCompletionReviewerSubscriber(ctx context.Context, bus *events.EventBus
 
 // completionReviewerEnabled reads the flag live on every completion event.
 func completionReviewerEnabled() bool {
-	return config.LoadConfig().GetFeatureFlag(completionReviewerFlagName)
+	return config.LoadConfig().GetFeatureFlag(featureflags.CompletionReviewerFlagName)
 }
 
 func (r *completionReviewer) start(ctx context.Context, bus *events.EventBus) <-chan struct{} {
@@ -207,7 +208,7 @@ func (r *completionReviewer) review(ctx context.Context, item *backlogdto.Backlo
 	if err != nil {
 		log.Debug("completion_reviewer: session lookup failed, reviewing without sessions", "item", item.ID, "err", err)
 	}
-	raw, err := r.call(ctx, completionReviewSystemPrompt, buildCompletionReviewUserPrompt(session.BuildCompletionReviewContext(item, sessions)))
+	raw, err := r.call(ctx, completionReviewSystemPrompt, buildCompletionReviewUserPrompt(backlogaux.BuildCompletionReviewContext(item, sessions)))
 	if err != nil {
 		r.fail("ai call", item.ID, err)
 		return

@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -179,13 +178,13 @@ func TestEnforcement_GraphBypassStaysWithinItsLimits(t *testing.T) {
 	})
 	t.Run("an agent never gets the graph bypass", func(t *testing.T) {
 		item := enfItemAt(t, storage, domain.BacklogStatusDone)
-		ctx := services.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
+		ctx := domain.WithTransitionActor(t.Context(), instance.TriggeredByAgent)
 		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), domain.ErrTransitionNotAllowed)
 		assert.Equal(t, string(domain.BacklogStatusDone), storedStatus(t, storage, item.ID))
 	})
 	t.Run("an unknown actor fails closed to the agent", func(t *testing.T) {
 		item := enfItemAt(t, storage, domain.BacklogStatusDone)
-		ctx := services.WithTransitionActor(t.Context(), "robot")
+		ctx := domain.WithTransitionActor(t.Context(), "robot")
 		require.ErrorIs(t, enfTransition(ctx, svc, item.ID, domain.BacklogStatusRefining, enfOverride), domain.ErrTransitionNotAllowed)
 	})
 }

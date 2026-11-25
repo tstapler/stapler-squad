@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/domain"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 
@@ -157,7 +158,7 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 	// Fork dispatch: when fork_source_id is set, copy the source conversation
 	// file and set resume_id to the new UUID so the normal start path picks it
 	// up with --resume.
-	srcPath, findErr := session.FindConversationFilePath(ctx, msg.ForkSourceId)
+	srcPath, findErr := claudehistory.FindConversationFilePath(ctx, msg.ForkSourceId)
 	if findErr != nil {
 		return connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("fork source conversation not found: %w", findErr))

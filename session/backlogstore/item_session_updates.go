@@ -128,7 +128,7 @@ func (b *Backlog) UpdateItemSessionEndedWithDetail(ctx context.Context, id strin
 }
 
 // UpdateItemSessionFailureCapture records the absolute path to a durable raw-output
-// capture file (session.WriteHeadlessFailureCapture) for a headless triage/review
+// capture file (backlogaux.WriteHeadlessFailureCapture) for a headless triage/review
 // call that errored or produced unparseable output — see the failure_capture_path
 // schema comment. Set independently of UpdateItemSessionEndedWithReason (a separate,
 // orthogonal column) so a caller that already wrote the capture file to disk can
@@ -187,6 +187,21 @@ func (b *Backlog) UpdateItemSessionCost(ctx context.Context, id string, usd floa
 	}
 	if _, err := q.Save(ctx); err != nil {
 		return fmt.Errorf("failed to update cost on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionBranch replaces an ItemSession's branch_name, the ownership evidence
+// ReconcilePRPending checks a merged PR's head branch against. Used when report_pr_created accepts
+// a PR opened from a different (fallback) branch under the override path, so the later merge
+// check agrees with the attach-time check.
+func (b *Backlog) UpdateItemSessionBranch(ctx context.Context, id string, branch string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+	if err := b.client.ItemSession.UpdateOneID(parsedID).SetBranchName(branch).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set branch_name on item session %s: %w", id, err)
 	}
 	return nil
 }

@@ -5,18 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 func TestSDDTemplates_should_ShareTheDefaultProtocolRules(t *testing.T) {
 	t.Parallel()
 	shared := map[string]string{
-		"work discipline": session.ForSeed(session.SecWorkDiscipline), "blocker routing": session.ForSeed(session.SecBlockerRouting),
-		"never end": session.ForSeed(session.SecNeverEnd), "on pass": session.ForSeed(session.SecOnPass), "on fail": session.ForSeed(session.OnFailSection()),
+		"work discipline": pipelinemode.ForSeed(pipelinemode.SecWorkDiscipline), "blocker routing": pipelinemode.ForSeed(pipelinemode.SecBlockerRouting),
+		"never end": pipelinemode.ForSeed(pipelinemode.SecNeverEnd), "on pass": pipelinemode.ForSeed(pipelinemode.SecOnPass), "on fail": pipelinemode.ForSeed(pipelinemode.OnFailSection()),
 	}
 	for name, want := range shared {
-		if !strings.Contains(session.SddInitialPromptTemplate, want) {
+		if !strings.Contains(pipelinemode.SddInitialPromptTemplate, want) {
 			t.Errorf("sdd initial prompt is missing the shared %s section", name)
 		}
 		if !strings.Contains(strings.ReplaceAll(taskProtocolBlock, "`", ""), want) {

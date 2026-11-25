@@ -51,6 +51,8 @@ func newTestHistoryHandlers(t *testing.T, count int, queryTerm string) (*history
 
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, events.NewEventBus(100))
+	// Stand in for the background sync loop, which production starts at boot.
+	require.NoError(t, svc.SyncSearchIndexNow(context.Background()))
 	return &historyHandlers{svc: svc}, ids
 }
 

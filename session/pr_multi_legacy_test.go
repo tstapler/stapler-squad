@@ -1,8 +1,9 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/instance"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Characterization tests of today's single-PR behavior (session-multi-pr-tracking
@@ -32,26 +33,5 @@ func TestLegacySetGitHubPR_OverwriteLeavesTerminalFlagStale(t *testing.T) {
 	}
 	if !snap.GitHubPRStatusTerminal {
 		t.Error("GitHubPRStatusTerminal was cleared by SetGitHubPR; legacy behavior leaves it stale (true)")
-	}
-}
-
-// The terminal scan now attaches every push URL it sees instead of linking once,
-// and clears the stored terminal flag when it changes the number of a session
-// that cannot hold a link (T2.2.1). A session that already tracks #42 keeps it.
-func TestLegacyScanAndLinkPRURL_AccumulatesLinks(t *testing.T) {
-	t.Parallel()
-	const first = "remote:      https://github.com/acme/app/pull/42\n"
-	const second = "remote:      https://github.com/acme/app/pull/43\n"
-
-	inst := newPRTestInstance(t)
-	seen := scannedPRURLs{}
-
-	scanAndLinkPRURL(inst, true, seen, nil, first)
-	if got := attachNumbers(t, inst); len(got) != 1 || got[0] != 42 {
-		t.Fatalf("first scan: PRs = %v, want [42]", got)
-	}
-	scanAndLinkPRURL(inst, true, seen, nil, first+second)
-	if got := attachNumbers(t, inst); len(got) != 2 || got[0] != 42 || got[1] != 43 {
-		t.Errorf("second scan: PRs = %v, want [42 43] (a later push URL is scanned too)", got)
 	}
 }

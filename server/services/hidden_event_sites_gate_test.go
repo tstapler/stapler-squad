@@ -12,7 +12,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -108,8 +108,8 @@ func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGa
 	require.NoError(t, e.svc.storage.AddInstance(inst))
 	e.svc.AutonomousSvc.SetInstanceFinder(func(_ string) *instance.Instance { return inst })
 
-	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
-	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "all good"})
+	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
+	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, autonomous.AutonomousDriverOutcome{Done: true, Reason: "all good"})
 
 	got := e.collect(t)
 	failures := notificationsOf(got, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE))

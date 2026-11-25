@@ -11,7 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
@@ -358,7 +358,7 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 		}
 	}()
 
-	history, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	history, err := claudehistory.NewClaudeSessionHistoryFromClaudeDir()
 	if err != nil {
 		g.failStage(ctx, sourceSessionID, sourceSessionTitle, "transcript", err, now, false)
 		return

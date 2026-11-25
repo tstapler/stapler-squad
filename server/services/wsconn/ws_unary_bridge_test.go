@@ -20,7 +20,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 const (
@@ -130,7 +130,7 @@ func newBridgeHarnessTLS(t *testing.T, listener string, useTLS bool, opts ...Una
 		return nil
 	}, opts...)
 	baseCtx, cancel := context.WithCancel(context.Background())
-	srv := httptest.NewUnstartedServer(services.WithRequestRecord(listener, listener == services.ListenerRemote)(bridge))
+	srv := httptest.NewUnstartedServer(access.WithRequestRecord(listener, listener == access.ListenerRemote)(bridge))
 	srv.Config.BaseContext = func(_ net.Listener) context.Context { return baseCtx }
 	dialer := websocket.DefaultDialer
 	if useTLS {
@@ -195,7 +195,7 @@ func decodeListFiles(t *testing.T, f unaryFrame) *sessionv1.ListFilesResponse {
 }
 
 func TestUnaryWsBridge_should_DispatchAllowedRead_with_UpgradeIdentity(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	origin := "http://" + h.srv.Listener.Addr().String()
 	c := h.connect(http.Header{"Origin": {origin}, "Cookie": {"cs_auth=tok"}, "X-Forwarded-For": {"203.0.113.9"}})
 
@@ -221,7 +221,7 @@ func TestUnaryWsBridge_should_DispatchAllowedRead_with_UpgradeIdentity(t *testin
 }
 
 func TestUnaryWsBridge_should_AnswerOutOfOrder_When_FirstCallIsSlow(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 
 	sendListFiles(t, c, 1, "gate:slow")
@@ -239,7 +239,7 @@ func TestUnaryWsBridge_should_AnswerOutOfOrder_When_FirstCallIsSlow(t *testing.T
 }
 
 func TestUnaryWsBridge_should_DenyMethodsOutsideAllowlist(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 
 	for i, m := range []string{writeFileMethod, "/session.v1.SessionService/UpdateFeatureFlag", "/nope.Svc/Whatever", "/../etc/passwd"} {
@@ -254,7 +254,7 @@ func TestUnaryWsBridge_should_DenyMethodsOutsideAllowlist(t *testing.T) {
 }
 
 func TestUnaryWsBridge_should_RejectForbiddenMetaHeaders_Without_InvokingHandler(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 
 	for i, key := range []string{"Origin", "Host", "X-Forwarded-For", "Cookie", "Authorization", "Connect-Timeout-Ms", "origin"} {
@@ -269,7 +269,7 @@ func TestUnaryWsBridge_should_RejectForbiddenMetaHeaders_Without_InvokingHandler
 
 func TestUnaryWsBridge_should_ReturnResourceExhausted_When_InFlightCapExceeded(t *testing.T) {
 	const limit = 6
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxInFlight(limit))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxInFlight(limit))
 	c := h.connect(nil)
 
 	for i := 1; i <= limit; i++ {
@@ -288,7 +288,7 @@ func TestUnaryWsBridge_should_ReturnResourceExhausted_When_InFlightCapExceeded(t
 }
 
 func TestUnaryWsBridge_should_CancelHandler_And_WriteNoResponse_When_CancelReceived(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 
 	sendListFiles(t, c, 5, "gate:c")
@@ -304,7 +304,7 @@ func TestUnaryWsBridge_should_CancelHandler_And_WriteNoResponse_When_CancelRecei
 }
 
 func TestUnaryWsBridge_should_ReturnDeadlineExceeded_When_TimeoutMsElapses(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 
 	sendRequest(t, c, 1, listFilesMethod, unaryRequestMeta{TimeoutMs: 50}, mustProto(t, &sessionv1.ListFilesRequest{SessionId: "gate:d"}))
@@ -314,7 +314,7 @@ func TestUnaryWsBridge_should_ReturnDeadlineExceeded_When_TimeoutMsElapses(t *te
 }
 
 func TestUnaryWsBridge_should_CancelAllInFlight_When_ServerContextEnds(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	for i := 1; i <= 3; i++ {
 		sendListFiles(t, c, uint32(2*i-1), "gate:s"+strconv.Itoa(i))
@@ -334,7 +334,7 @@ func TestUnaryWsBridge_should_CancelAllInFlight_When_ServerContextEnds(t *testin
 }
 
 func TestUnaryWsBridge_should_ReassembleLargeResponse(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	const size = 2 << 20
 
@@ -400,7 +400,7 @@ func TestUnaryWriter_should_Refuse_When_ReadyQueueFull(t *testing.T) {
 }
 
 func TestUnaryWsBridge_should_AnswerOversizeFrame_And_StayOpen(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 
 	sendRequest(t, c, 7, listFilesMethod, unaryRequestMeta{}, make([]byte, 300*1024))
@@ -413,7 +413,7 @@ func TestUnaryWsBridge_should_AnswerOversizeFrame_And_StayOpen(t *testing.T) {
 }
 
 func TestUnaryWsBridge_should_Close1009_When_FrameExceedsHardLimit(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	_ = c.WriteMessage(websocket.BinaryMessage, make([]byte, unaryReadLimitBytes+1024))
 	require.NoError(t, c.SetReadDeadline(time.Now().Add(readWait)))
@@ -431,7 +431,7 @@ func TestUnaryWsBridge_should_Close1003_When_FrameMalformedOrText(t *testing.T) 
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			h := newBridgeHarness(t, services.ListenerLocal)
+			h := newBridgeHarness(t, access.ListenerLocal)
 			c := h.connect(nil)
 			send(c)
 			require.NoError(t, c.SetReadDeadline(time.Now().Add(readWait)))
@@ -442,7 +442,7 @@ func TestUnaryWsBridge_should_Close1003_When_FrameMalformedOrText(t *testing.T) 
 }
 
 func TestUnaryWsBridge_should_CloseSocket_When_PongDeadlineMissed(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, 40*time.Millisecond))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, 40*time.Millisecond))
 	c := h.connect(nil)
 	c.SetPingHandler(func(string) error { return nil }) // never answer pings
 	require.NoError(t, c.SetReadDeadline(time.Now().Add(readWait)))
@@ -451,14 +451,14 @@ func TestUnaryWsBridge_should_CloseSocket_When_PongDeadlineMissed(t *testing.T) 
 }
 
 func TestUnaryWsBridge_should_AnswerPingWithPong(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	require.NoError(t, c.WriteMessage(websocket.BinaryMessage, encodeUnaryControl(unaryFramePing, 0)))
 	assert.Equal(t, unaryFramePong, readFrame(t, c).Type)
 }
 
 func TestUnaryWsBridge_should_FailClosed_When_DispatcherUnset(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	h.bridge.dispatchers = func(string) http.Handler { return nil }
 	c := h.connect(nil)
 	sendListFiles(t, c, 1, "x")
@@ -468,7 +468,7 @@ func TestUnaryWsBridge_should_FailClosed_When_DispatcherUnset(t *testing.T) {
 }
 
 func TestUnaryWsBridge_should_RefuseUpgrade_When_Query_Origin_or_PolicyMissing(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	u := "ws" + strings.TrimPrefix(h.srv.URL, "http") + UnaryWsPath
 
 	_, resp, err := websocket.DefaultDialer.Dial(u+"?token=abc", nil)
@@ -480,22 +480,22 @@ func TestUnaryWsBridge_should_RefuseUpgrade_When_Query_Origin_or_PolicyMissing(t
 		require.Error(t, err, origin)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode, origin)
 	}
-	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(services.ListenerLocal, "query"))
-	assert.EqualValues(t, 3, h.bridge.Metrics().UpgradeDenied(services.ListenerLocal, "origin"))
+	assert.EqualValues(t, 1, h.bridge.Metrics().UpgradeDenied(access.ListenerLocal, "query"))
+	assert.EqualValues(t, 3, h.bridge.Metrics().UpgradeDenied(access.ListenerLocal, "origin"))
 
-	remote := newBridgeHarness(t, services.ListenerRemote) // no remote policy installed: fail closed
+	remote := newBridgeHarness(t, access.ListenerRemote) // no remote policy installed: fail closed
 	ru := "ws" + strings.TrimPrefix(remote.srv.URL, "http") + UnaryWsPath
 	_, resp, err = websocket.DefaultDialer.Dial(ru, http.Header{"Origin": {"https://anything.example"}})
 	require.Error(t, err)
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
 	// remote harness stamps AuthModeRequired; the gate itself is covered over the real chain.
-	remoteOK := newBridgeHarness(t, services.ListenerRemote, WithUnaryOriginPolicy(services.ListenerRemote, func(*http.Request) bool { return true }))
+	remoteOK := newBridgeHarness(t, access.ListenerRemote, WithUnaryOriginPolicy(access.ListenerRemote, func(*http.Request) bool { return true }))
 	remoteOK.connect(nil)
 }
 
 func TestUnaryWsBridge_should_Return426_When_NotAnUpgrade(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	resp, err := http.Get(h.srv.URL + UnaryWsPath)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -515,7 +515,7 @@ func TestWsUnaryAllowlist_should_MatchSharedFixture(t *testing.T) {
 }
 
 func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	m := h.bridge.Metrics()
 	c := h.connect(nil)
 
@@ -543,7 +543,7 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 	u := "ws" + strings.TrimPrefix(h.srv.URL, "http") + UnaryWsPath
 	_, _, err := websocket.DefaultDialer.Dial(u, http.Header{"Origin": {"https://evil.example"}})
 	require.Error(t, err)
-	assert.EqualValues(t, 1, m.UpgradeDenied(services.ListenerLocal, "origin"), "ws_unary_upgrade_denied_total{listener,reason}")
+	assert.EqualValues(t, 1, m.UpgradeDenied(access.ListenerLocal, "origin"), "ws_unary_upgrade_denied_total{listener,reason}")
 
 	// The same tallies, as the /actuator/ws-unary endpoint serves them.
 	rep := h.bridge.Report()
@@ -552,7 +552,7 @@ func TestUnaryBridge_ShouldIncrementActuatorCounters_WhenCallsDeniedAndInflight(
 		{Method: wsUnaryMethodOther, Code: "permission_denied", Count: 1},
 	}, rep.CallsTotal)
 	assert.Equal(t, []UnaryWsDeniedCount{{Method: wsUnaryMethodOther, Count: 1}}, rep.DeniedTotal)
-	assert.Equal(t, []UnaryWsUpgradeDeniedCount{{Listener: services.ListenerLocal, Reason: "origin", Count: 1}}, rep.UpgradeDeniedTotal)
+	assert.Equal(t, []UnaryWsUpgradeDeniedCount{{Listener: access.ListenerLocal, Reason: "origin", Count: 1}}, rep.UpgradeDeniedTotal)
 	assert.Zero(t, rep.Inflight)
 }
 

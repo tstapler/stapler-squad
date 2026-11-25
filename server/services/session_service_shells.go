@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -103,7 +104,7 @@ func (s *SessionService) SpawnShell(
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
 	}
 
-	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(inst, s.guards).Writer(nil); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}
@@ -193,7 +194,7 @@ func (s *SessionService) RestartShell(
 			fmt.Errorf("session %q is not running", req.Msg.SessionId))
 	}
 
-	if _, err := AccessForUnary(inst, s.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(inst, s.guards).Writer(nil); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.SessionId, err))
 	}

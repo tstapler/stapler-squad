@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 )
 
 func TestToolInputUnrenderable(t *testing.T) {
@@ -47,9 +48,9 @@ func TestBroadcastApprovalNotification_ShouldStampUnrenderable_OnlyWhenTheInputC
 			defer bus.Close()
 			ctx := t.Context()
 			ch, _ := bus.Subscribe(ctx)
-			h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+			h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 
-			h.BroadcastApprovalNotification("sess-1", &PendingApproval{ID: "appr-1", SessionID: "sess-1", ToolName: "Bash", ToolInput: tt.input})
+			h.BroadcastApprovalNotification("sess-1", &approvalkit.PendingApproval{ID: "appr-1", SessionID: "sess-1", ToolName: "Bash", ToolInput: tt.input})
 
 			ev := <-ch
 			if tt.want {
