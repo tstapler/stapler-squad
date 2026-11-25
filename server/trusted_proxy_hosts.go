@@ -16,7 +16,7 @@ const TrustedProxyHostsEnv = "STAPLER_SQUAD_TRUSTED_PROXY_HOSTS"
 var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // ParseTrustedProxyHosts splits raw on commas and keeps entries that are plain
-// DNS names: no scheme, port, path, wildcard, IP literal or "localhost". Rejected
+// DNS names with at least one dot: no scheme, port, path, wildcard, IP literal or "localhost". Rejected
 // entries are logged and returned, never silently trusted.
 func ParseTrustedProxyHosts(raw string) (valid, rejected []string) {
 	for _, entry := range strings.Split(raw, ",") {
@@ -35,7 +35,8 @@ func ParseTrustedProxyHosts(raw string) (valid, rejected []string) {
 }
 
 func validTrustedProxyHost(host string) bool {
-	if len(host) > 253 || host == "localhost" || net.ParseIP(host) != nil {
+	// A single label (e.g. "internal") could resolve through a search domain to a host the operator did not mean.
+	if len(host) > 253 || !strings.Contains(host, ".") || host == "localhost" || net.ParseIP(host) != nil {
 		return false
 	}
 	for _, label := range strings.Split(host, ".") {

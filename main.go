@@ -508,9 +508,9 @@ var (
 				}
 
 				if raw := os.Getenv(server.TrustedProxyHostsEnv); raw != "" {
-					valid, _ := server.ParseTrustedProxyHosts(raw)
+					valid, rejected := server.ParseTrustedProxyHosts(raw)
 					srv.SetTrustedProxyHosts(valid)
-					log.Info("Trusted proxy hosts for the local listener", "hosts", valid)
+					log.Info("Trusted proxy hosts for the local listener", "hosts", valid, "rejected", len(rejected))
 				}
 
 				if err := setupLocalAuth(srv, cfg, !remoteAccessFlag && !cfg.PasskeyEnabled); err != nil {

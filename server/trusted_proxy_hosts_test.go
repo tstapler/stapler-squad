@@ -14,9 +14,9 @@ const proxyHost = "8543--main--ws--me.apps.example.com"
 
 func TestParseTrustedProxyHosts(t *testing.T) {
 	t.Parallel()
-	valid, rejected := ParseTrustedProxyHosts(" " + proxyHost + " , APPS.Example.com ,,https://a.example.com,b.example.com:8543,*.example.com,127.0.0.1,localhost,::1,-bad.example.com,a_b.example.com,evil.com/path")
+	valid, rejected := ParseTrustedProxyHosts(" " + proxyHost + " , APPS.Example.com ,,https://a.example.com,b.example.com:8543,*.example.com,127.0.0.1,localhost,::1,-bad.example.com,a_b.example.com,evil.com/path,internal")
 	assert.Equal(t, []string{proxyHost, "apps.example.com"}, valid)
-	assert.Equal(t, []string{"https://a.example.com", "b.example.com:8543", "*.example.com", "127.0.0.1", "localhost", "::1", "-bad.example.com", "a_b.example.com", "evil.com/path"}, rejected)
+	assert.Equal(t, []string{"https://a.example.com", "b.example.com:8543", "*.example.com", "127.0.0.1", "localhost", "::1", "-bad.example.com", "a_b.example.com", "evil.com/path", "internal"}, rejected)
 }
 
 func TestHostGuard_should_AllowOnlyTrustedProxyHostAndItsOrigin(t *testing.T) {
