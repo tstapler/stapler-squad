@@ -958,9 +958,11 @@ type triageResultJSON struct {
 // BuildStageConfigSnapshotFallback has nothing to reconstruct from.
 func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:       item.ID,
-		PublicId: item.PublicIDRaw,
-		Title:    item.Title,
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		IsIntegrationChild: item.IsIntegrationChild,
+		IntegrationChildId: item.IntegrationChildID,
+		Title:              item.Title,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:   int32(item.Priority),
 		Status:     string(item.Status),
@@ -1054,6 +1056,8 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.Workflow
 	p := &sessionv1.BacklogItem{
 		WorkflowSuggestions: workflowSuggestionsToProto(backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
 		Id:                  item.ID,
+		IsIntegrationChild:  item.IsIntegrationChild,
+		IntegrationChildId:  item.IntegrationChildID,
 		Title:               item.Title,
 		Description:         item.Description,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))

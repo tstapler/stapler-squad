@@ -366,6 +366,10 @@ message BacklogItem {
   repeated PrHold pr_holds = 48;
   // workflow_suggestions are diagnose-session recommendations (detail responses only).
   repeated WorkflowSuggestion workflow_suggestions = 49;
+  // is_integration_child marks an epic's auto-created end-to-end check child.
+  bool is_integration_child = 50;
+  // integration_child_id is set on an epic to its integration child's ID ("" = none).
+  string integration_child_id = 51;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency

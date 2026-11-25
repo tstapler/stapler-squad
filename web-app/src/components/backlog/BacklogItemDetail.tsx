@@ -50,6 +50,7 @@ import { BacklogFileBrowserModal } from "./BacklogFileBrowserModal";
 import { JulesDispatchDialog } from "./JulesDispatchDialog";
 import { LifecycleSummary } from "./detail/LifecycleSummary";
 import { DependenciesSection } from "./detail/DependenciesSection";
+import { IntegrationCheckSection } from "./detail/IntegrationCheckSection";
 import { PlanningSection } from "./detail/PlanningSection";
 import { ReviewingSection } from "./detail/ReviewingSection";
 import { LastReviewResultSection } from "./detail/LastReviewResultSection";
@@ -1664,6 +1665,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
         <GateBlockingSection item={item} />
 
         <DependenciesSection item={item} onItemClick={onItemClick} />
+        <IntegrationCheckSection item={item} onItemClick={onItemClick} />
 
         {/* Durable guidance requests scoped to this item (AC3) — same shared
             component also embedded in TriageReviewPanel and SessionDetailView.

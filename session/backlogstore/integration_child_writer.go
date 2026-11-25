@@ -1,0 +1,178 @@
+package backlogstore
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+)
+
+// IntegrationCheckACPrefix marks an epic acceptance criterion whose remainder is the end-to-end check command.
+const IntegrationCheckACPrefix = "e2e:"
+
+// ExtractE2ECommand returns the epic's end-to-end check command: the text after the first
+// "e2e:" acceptance criterion, else fallback (the pipeline mode's done_command_template).
+// "" means the epic defines none.
+func ExtractE2ECommand(acceptanceCriteriaJSON, fallback string) string {
+	var acs []domain.AcCriterion
+	if acceptanceCriteriaJSON != "" && json.Unmarshal([]byte(acceptanceCriteriaJSON), &acs) == nil {
+		for _, ac := range acs {
+			text := strings.TrimSpace(ac.Text)
+			if len(text) >= len(IntegrationCheckACPrefix) && strings.EqualFold(text[:len(IntegrationCheckACPrefix)], IntegrationCheckACPrefix) {
+				if cmd := strings.TrimSpace(text[len(IntegrationCheckACPrefix):]); cmd != "" {
+					return cmd
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// integrationGate blocks an epic's done transition while its integration child is unresolved.
+func (b *Backlog) integrationGate(ctx context.Context, epic *ent.BacklogItem) error {
+	if epic.IntegrationChildID == nil {
+		return nil
+	}
+	child, err := b.client.BacklogItem.Get(ctx, *epic.IntegrationChildID)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil // a hard-deleted child can never finish; treat as resolved, like a deleted blocker
+		}
+		return fmt.Errorf("check integration child of %s: %w", epic.ID, err)
+	}
+	if !slices.Contains(domain.TerminalStatusStrings(), child.Status) {
+		return fmt.Errorf("%w: integration child %s is %s", backlogdto.ErrIntegrationCheckPending, child.ID, child.Status)
+	}
+	return nil
+}
+
+// CreateIntegrationChild creates the epic's integration child, blocked on every sibling, and
+// records it as the epic's IntegrationChildID. Idempotent: when the epic already has one it is
+// returned with created=false. e2eCommand must be non-empty.
+func (b *Backlog) CreateIntegrationChild(ctx context.Context, epicID string, siblingIDs []string, e2eCommand string) (child *backlogdto.BacklogItemData, created bool, err error) {
+	if strings.TrimSpace(e2eCommand) == "" {
+		return nil, false, fmt.Errorf("integration child needs a non-empty e2e command")
+	}
+	parsedEpic, err := b.ResolveBacklogItemLookup(ctx, epicID)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: invalid epic id %q: %v", domain.ErrNotFound, epicID, err)
+	}
+	tx, err := b.client.Tx(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("create integration child: begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	epic, err := tx.BacklogItem.Get(ctx, parsedEpic)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, false, fmt.Errorf("%w: epic %s", domain.ErrNotFound, epicID)
+		}
+		return nil, false, err
+	}
+	if epic.IntegrationChildID != nil {
+		existing, getErr := tx.BacklogItem.Get(ctx, *epic.IntegrationChildID)
+		if getErr != nil {
+			return nil, false, fmt.Errorf("load existing integration child: %w", getErr)
+		}
+		data := BacklogItemToData(existing)
+		return &data, false, nil
+	}
+
+	siblings := make([]uuid.UUID, 0, len(siblingIDs))
+	for _, sid := range siblingIDs {
+		parsed, perr := b.ResolveBacklogItemLookup(ctx, sid)
+		if perr != nil {
+			return nil, false, fmt.Errorf("%w: invalid sibling id %q: %v", domain.ErrNotFound, sid, perr)
+		}
+		if parsed != parsedEpic {
+			siblings = append(siblings, parsed)
+		}
+	}
+
+	publicID, err := backlogdto.NewBacklogItemID()
+	if err != nil {
+		return nil, false, fmt.Errorf("generate integration child public id: %w", err)
+	}
+	acs, _ := json.Marshal([]domain.AcCriterion{{Index: 0, Text: "End-to-end check passes: " + e2eCommand, Status: domain.AcStatusPending}})
+	item, err := tx.BacklogItem.Create().
+		SetTitle("Integration check: " + epic.Title).
+		SetPublicID(publicID.String()).
+		SetDescription(integrationChildPrompt(epic.Title, e2eCommand)).
+		SetAcceptanceCriteria(string(acs)).
+		SetPriority(epic.Priority).
+		SetStatus(string(domain.BacklogStatusReady)).
+		SetRepoPath(epic.RepoPath).
+		SetBaseBranch(epic.BaseBranch).
+		SetPipelineMode(epic.PipelineMode).
+		SetSkipPlanning(true).
+		SetAutoSpawnSession(true).
+		SetIsIntegrationChild(true).
+		SetLabels([]string{"integration-check"}).
+		Save(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("create integration child: %w", err)
+	}
+	for _, sib := range siblings {
+		if err := tx.BacklogItemDependency.Create().SetBlockerID(sib).SetBlockedID(item.ID).Exec(ctx); err != nil {
+			return nil, false, fmt.Errorf("add integration dependency %s -> %s: %w", sib, item.ID, err)
+		}
+	}
+	// CAS: a concurrent creator that committed first leaves integration_child_id set.
+	affected, err := tx.BacklogItem.Update().
+		Where(backlogitem.ID(parsedEpic), backlogitem.IntegrationChildIDIsNil()).
+		SetIntegrationChildID(item.ID).
+		Save(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("record integration child on epic: %w", err)
+	}
+	if affected == 0 {
+		return nil, false, fmt.Errorf("integration child for epic %s was created concurrently", epicID)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("create integration child: commit: %w", err)
+	}
+	data := BacklogItemToData(item)
+	return &data, true, nil
+}
+
+func integrationChildPrompt(epicTitle, cmd string) string {
+	return fmt.Sprintf("All sibling items of the epic %q are done, but each passed on its own checks. "+
+		"Verify the whole feature works end to end.\n\nRun this end-to-end check and make it pass:\n\n    %s\n\n"+
+		"Do not mark the criterion done unless the command exits 0. If it fails, report the failing files/areas; "+
+		"do not paper over the failure.", epicTitle, cmd)
+}
+
+// GetEpicForIntegrationChild returns the epic whose IntegrationChildID is childID, or ErrNotFound.
+func (b *Backlog) GetEpicForIntegrationChild(ctx context.Context, childID string) (*backlogdto.BacklogItemData, error) {
+	parsed, err := b.ResolveBacklogItemLookup(ctx, childID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, childID, err)
+	}
+	epic, err := b.client.BacklogItem.Query().Where(backlogitem.IntegrationChildID(parsed)).Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: no epic owns integration child %s", domain.ErrNotFound, childID)
+		}
+		return nil, err
+	}
+	data := BacklogItemToData(epic)
+	return &data, nil
+}
+
+// IncrementIntegrationFixCount atomically bumps the epic's fix-child counter.
+func (b *Backlog) IncrementIntegrationFixCount(ctx context.Context, epicID string) error {
+	parsed, err := b.ResolveBacklogItemLookup(ctx, epicID)
+	if err != nil {
+		return fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, epicID, err)
+	}
+	return b.client.BacklogItem.UpdateOneID(parsed).AddIntegrationFixCount(1).Exec(ctx)
+}

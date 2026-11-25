@@ -227,6 +227,11 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         <span className={styles.statusLabel} data-testid="backlog-item-card-status">
           {getStatusLabel(item.status)}
         </span>
+        {item.isIntegrationChild && (
+          <span className={styles.integrationBadge} data-testid="integration-check-badge">
+            Integration Check
+          </span>
+        )}
         {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
       </div>
 
