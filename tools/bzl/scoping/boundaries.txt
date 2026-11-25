@@ -34,6 +34,7 @@ server/services/uploads !server/web
 server/services/summaryrpc !server/web
 server/services/claudesettings !server/web
 server/services/hookrecv !server/web
+server/services/forwardsync !server/web
 server/services/questionkit !server/web
 session/ptyio !server
 session/ptydiscovery !server

@@ -1,0 +1,387 @@
+== comment builders
+closeFor("")="Closed automatically — the linked backlog item was marked done in stapler-squad."
+closeWithPR("","")="Closed automatically — the linked backlog item was marked done in stapler-squad."
+closeWithPR("","https://github.com/o/r/pull/1")="Closed automatically — the linked backlog item was marked done in stapler-squad Implemented in: https://github.com/o/r/pull/1."
+started("")="Work has started on this issue in stapler-squad."
+closeFor("h1")="Closed automatically — the linked backlog item was marked done in stapler-squad on host `h1`."
+closeWithPR("h1","")="Closed automatically — the linked backlog item was marked done in stapler-squad on host `h1`."
+closeWithPR("h1","https://github.com/o/r/pull/1")="Closed automatically — the linked backlog item was marked done in stapler-squad on host `h1` Implemented in: https://github.com/o/r/pull/1."
+started("h1")="Work has started on this issue in stapler-squad on host `h1`."
+closeFor("a b")="Closed automatically — the linked backlog item was marked done in stapler-squad on host `a b`."
+closeWithPR("a b","")="Closed automatically — the linked backlog item was marked done in stapler-squad on host `a b`."
+closeWithPR("a b","https://github.com/o/r/pull/1")="Closed automatically — the linked backlog item was marked done in stapler-squad on host `a b` Implemented in: https://github.com/o/r/pull/1."
+started("a b")="Work has started on this issue in stapler-squad on host `a b`."
+stateComment="Moved to \"In Review\" automatically — the linked backlog item was marked done in stapler-squad."
+reviewComment("")="A pull request has been opened for this issue."
+reviewComment("https://github.com/o/r/pull/5")="A pull request has been opened for this issue: https://github.com/o/r/pull/5"
+reviewComment("https://github.com/o/r/issues/5")="A pull request has been opened for this issue."
+reviewComment("http://github.com/o/r/pull/5")="A pull request has been opened for this issue."
+reviewComment("https://github.com/o/r/pull/x")="A pull request has been opened for this issue."
+reviewComment("https://github.com/o/r/pull/5/files")="A pull request has been opened for this issue: https://github.com/o/r/pull/5/files"
+reviewComment("https://example.com/o/r/pull/5")="A pull request has been opened for this issue."
+reviewComments[0]="A pull request has been opened for this issue."
+reviewComments[1]="A pull request has been opened for this issue: https://github.com/o/r/pull/1"
+reviewComments[2]="Pull requests have been opened for this issue:\n- https://github.com/o/r/pull/1 (merged)\n- https://github.com/o/r/pull/2 (unknown)"
+reviewComments[3]="Pull requests have been opened for this issue:\n- https://github.com/o/r/pull/1 (merged)"
+reviewComments[4]="A pull request has been opened for this issue."
+reviewComments[5]="Pull requests have been opened for this issue:\n- https://github.com/o/r/pull/1 (unknown)\n- https://github.com/o/r/pull/2 (merged)"
+alreadyPosted("","in_progress")=false
+alreadyPosted("","review")=false
+alreadyPosted("","done")=false
+alreadyPosted("in_progress","in_progress")=true
+alreadyPosted("in_progress","review")=false
+alreadyPosted("in_progress","done")=false
+alreadyPosted("review","in_progress")=true
+alreadyPosted("review","review")=true
+alreadyPosted("review","done")=false
+timeouts forward=30s progress=15s
+pluginID=github_issues
+defaultDeps(empty registry): plugin=false token=true
+defaultDeps(nil registry): plugin=false token=true
+defaultDeps(non-closer github_issues): plugin=false
+defaultDeps(closer github_issues): plugin=true
+== forward sync: source-linked items
+case closer enabled=true ext="42"
+    readstate cfg={} ext="42"
+    close cfg={} ext="42" labels=["bug" "p1"] closeLabel="shipped"
+    comment cfg={} ext="42" body="Closed automatically — the linked backlog item was marked done in stapler-squad on host `host-a` Implemented in: https://github.com/o/r/pull/9."
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+    failures n=0 truncated=false
+case closer enabled=true ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case closer enabled=false ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case closer enabled=false ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case closer-noreader enabled=true ext="42"
+    close cfg={} ext="42" labels=["bug" "p1"] closeLabel="shipped"
+    comment cfg={} ext="42" body="Closed automatically — the linked backlog item was marked done in stapler-squad on host `host-a` Implemented in: https://github.com/o/r/pull/9."
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+    failures n=0 truncated=false
+case closer-noreader enabled=true ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case closer-noreader enabled=false ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case closer-noreader enabled=false ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case updater enabled=true ext="42"
+    updatestate cfg={} ext="42" target="shipped"
+    comment cfg={} ext="42" body="Moved to \"shipped\" automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+    failures n=0 truncated=false
+case updater enabled=true ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case updater enabled=false ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case updater enabled=false ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case plain enabled=true ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case plain enabled=true ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case plain enabled=false ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case plain enabled=false ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case none enabled=true ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case none enabled=true ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case none enabled=false ext="42"
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case none enabled=false ext=""
+    store status=done watermark=nil lastProgress=""
+    failures n=0 truncated=false
+case closer no label no host no pr zero ts
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=local-now lastProgress=""
+    failures n=0 truncated=false
+case closer host only
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad on host `h1`."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer pr only
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad Implemented in: https://github.com/o/r/pull/3."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer host and pr
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad on host `h1` Implemented in: https://github.com/o/r/pull/3."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer close error
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel="x"
+    store status=done watermark=nil lastProgress=""
+    failures n=1 truncated=false
+      failure "forward-sync close failed for item <ITEM>: github: rate limited" errored=1
+case closer comment error keeps watermark
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer already closed
+    readstate cfg={} ext="7"
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+    failures n=0 truncated=false
+case closer already closed zero ts
+    readstate cfg={} ext="7"
+    store status=done watermark=local-now lastProgress=""
+    failures n=0 truncated=false
+case closer state open
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer state read error still closes
+    readstate cfg={} ext="7"
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer-noreader already closed is ignored
+    close cfg={} ext="7" labels=[] closeLabel=""
+    comment cfg={} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer bad source config
+    readstate cfg=not-json ext="7"
+    close cfg=not-json ext="7" labels=[] closeLabel=""
+    comment cfg=not-json ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case closer rich source config
+    readstate cfg={"owner":"o","repo":"r","host":"github.com"} ext="7"
+    close cfg={"owner":"o","repo":"r","host":"github.com"} ext="7" labels=[] closeLabel=""
+    comment cfg={"owner":"o","repo":"r","host":"github.com"} ext="7" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case updater target state
+    updatestate cfg={} ext="ENG-1" target="In Review"
+    comment cfg={} ext="ENG-1" body="Moved to \"In Review\" automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+    failures n=0 truncated=false
+case updater empty target
+    store status=done watermark=nil lastProgress=""
+    failures n=1 truncated=false
+      failure "forward-sync target state not configured for item <ITEM>" errored=1
+case updater update error
+    updatestate cfg={} ext="ENG-1" target="Shipped"
+    store status=done watermark=nil lastProgress=""
+    failures n=1 truncated=false
+      failure "forward-sync state update failed for item <ITEM>: no workflow state named \"Shipped\" found" errored=1
+case updater comment error
+    updatestate cfg={} ext="ENG-1" target="Done"
+    comment cfg={} ext="ENG-1" body="Moved to \"Done\" automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+    failures n=0 truncated=false
+case updater zero ts
+    updatestate cfg={} ext="ENG-1" target="Done"
+    comment cfg={} ext="ENG-1" body="Moved to \"Done\" automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=local-now lastProgress=""
+    failures n=0 truncated=false
+== forward sync: sourceless (imported) items
+case issue ok
+    token host="github.com"
+    readstate cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42"
+    close cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" labels=[] closeLabel=""
+    comment cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+case issue with pr and host
+    token host="github.com"
+    readstate cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42"
+    close cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" labels=[] closeLabel=""
+    comment cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" body="Closed automatically — the linked backlog item was marked done in stapler-squad on host `h` Implemented in: https://github.com/acme/widget/pull/99."
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+case issue token miss
+    token host="github.com"
+    store status=done watermark=nil lastProgress=""
+case issue close error
+    token host="github.com"
+    readstate cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42"
+    close cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" labels=[] closeLabel=""
+    store status=done watermark=nil lastProgress=""
+case issue already closed
+    token host="github.com"
+    readstate cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42"
+    store status=done watermark=2026-07-08T09:10:11Z lastProgress=""
+case issue no reader
+    token host="github.com"
+    close cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" labels=[] closeLabel=""
+    comment cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="42" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=2026-03-04T05:06:07.123456789Z lastProgress=""
+case issue no plugin
+    store status=done watermark=nil lastProgress=""
+case pull url
+    store status=done watermark=nil lastProgress=""
+case foreign host
+    store status=done watermark=nil lastProgress=""
+case ghe host skipped
+    store status=done watermark=nil lastProgress=""
+case empty url
+    store status=done watermark=nil lastProgress=""
+case garbage url
+    store status=done watermark=nil lastProgress=""
+case issue zero close ts
+    token host="github.com"
+    readstate cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="1"
+    close cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="1" labels=[] closeLabel=""
+    comment cfg={"host":"github.com","owner":"acme","repo":"widget"} ext="1" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    store status=done watermark=local-now lastProgress=""
+== progress comments
+case in_progress last="" source=true
+    progress cfg={"k":"v"} ext="42" body="Work has started on this issue in stapler-squad on host `host-abc`."
+    store status=in_progress watermark=2026-03-04T05:06:07.123456789Z lastProgress="in_progress"
+case in_progress last="" source=false
+    progress cfg={"host":"github.com","owner":"o","repo":"r"} ext="42" body="Work has started on this issue in stapler-squad on host `host-abc`."
+    store status=in_progress watermark=2026-03-04T05:06:07.123456789Z lastProgress="in_progress"
+case in_progress last="in_progress" source=true
+    store status=in_progress watermark=nil lastProgress="in_progress"
+case in_progress last="in_progress" source=false
+    store status=in_progress watermark=nil lastProgress="in_progress"
+case in_progress last="review" source=true
+    store status=in_progress watermark=nil lastProgress="review"
+case in_progress last="review" source=false
+    store status=in_progress watermark=nil lastProgress="review"
+case review last="" source=true
+    progress cfg={"k":"v"} ext="42" body="A pull request has been opened for this issue: https://github.com/o/r/pull/5"
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review last="" source=false
+    progress cfg={"host":"github.com","owner":"o","repo":"r"} ext="42" body="A pull request has been opened for this issue: https://github.com/o/r/pull/5"
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review last="in_progress" source=true
+    progress cfg={"k":"v"} ext="42" body="A pull request has been opened for this issue: https://github.com/o/r/pull/5"
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review last="in_progress" source=false
+    progress cfg={"host":"github.com","owner":"o","repo":"r"} ext="42" body="A pull request has been opened for this issue: https://github.com/o/r/pull/5"
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review last="review" source=true
+    store status=review watermark=nil lastProgress="review"
+case review last="review" source=false
+    store status=review watermark=nil lastProgress="review"
+case done last="" source=true
+    store status=done watermark=nil lastProgress=""
+case done last="" source=false
+    store status=done watermark=nil lastProgress=""
+case done last="in_progress" source=true
+    store status=done watermark=nil lastProgress="in_progress"
+case done last="in_progress" source=false
+    store status=done watermark=nil lastProgress="in_progress"
+case done last="review" source=true
+    store status=done watermark=nil lastProgress="review"
+case done last="review" source=false
+    store status=done watermark=nil lastProgress="review"
+case triage last="" source=true
+    store status=triage watermark=nil lastProgress=""
+case triage last="" source=false
+    store status=triage watermark=nil lastProgress=""
+case triage last="in_progress" source=true
+    store status=triage watermark=nil lastProgress="in_progress"
+case triage last="in_progress" source=false
+    store status=triage watermark=nil lastProgress="in_progress"
+case triage last="review" source=true
+    store status=triage watermark=nil lastProgress="review"
+case triage last="review" source=false
+    store status=triage watermark=nil lastProgress="review"
+case in_progress no host
+    progress cfg={"k":"v"} ext="42" body="Work has started on this issue in stapler-squad."
+    store status=in_progress watermark=2026-03-04T05:06:07.123456789Z lastProgress="in_progress"
+case in_progress zero updatedAt
+    progress cfg={"k":"v"} ext="42" body="Work has started on this issue in stapler-squad on host `h`."
+    store status=in_progress watermark=nil lastProgress="in_progress"
+case in_progress post error
+    progress cfg={"k":"v"} ext="42" body="Work has started on this issue in stapler-squad."
+    store status=in_progress watermark=nil lastProgress=""
+case review no pr skips
+    store status=review watermark=nil lastProgress=""
+case review malformed pr
+    progress cfg={"k":"v"} ext="42" body="A pull request has been opened for this issue."
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review foreign pr
+    progress cfg={"k":"v"} ext="42" body="A pull request has been opened for this issue."
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review issue url as pr
+    progress cfg={"k":"v"} ext="42" body="A pull request has been opened for this issue."
+    store status=review watermark=2026-03-04T05:06:07.123456789Z lastProgress="review"
+case review zero updatedAt
+    progress cfg={"k":"v"} ext="42" body="A pull request has been opened for this issue: https://github.com/o/r/pull/5"
+    store status=review watermark=nil lastProgress="review"
+case no external url
+    store status=in_progress watermark=nil lastProgress=""
+case source without external id uses url
+    store status=in_progress watermark=nil lastProgress=""
+case sourceless pull url
+    store status=in_progress watermark=nil lastProgress=""
+case sourceless ghe url
+    store status=in_progress watermark=nil lastProgress=""
+case sourceless no plugin
+    store status=in_progress watermark=nil lastProgress=""
+case source plugin not a poster
+    store status=in_progress watermark=nil lastProgress=""
+case source plugin unregistered
+    store status=in_progress watermark=nil lastProgress=""
+nil item: no panic
+empty id: no panic
+forward nil/empty item: no panic
+== forward subscriber event filtering
+event nil payload
+event item updated
+event transition to review
+event transition to in_progress
+event transition to done nil item
+event transition to done
+    readstate cfg={} ext="e4"
+    close cfg={} ext="e4" labels=[] closeLabel="lbl"
+    comment cfg={} ext="e4" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+    readstate cfg={} ext="marker"
+    close cfg={} ext="marker" labels=[] closeLabel="lbl"
+    comment cfg={} ext="marker" body="Closed automatically — the linked backlog item was marked done in stapler-squad."
+item e1 watermark=nil
+item e2 watermark=nil
+item e3 watermark=nil
+item e4 watermark=2026-03-04T05:06:07.123456789Z
+subscriber stopped on ctx cancel
+missing dependency nil bus: done closed
+missing dependency nil registry: done closed
+missing dependency nil syncloop: done closed
+missing dependency nil storage: done closed
+== progress subscriber event filtering
+flag off, ignored kinds/statuses sent
+flag reads after filtered events + one in_progress: 1
+flag on
+    progress cfg={} ext="5" body="Work has started on this issue in stapler-squad."
+    progress cfg={} ext="6" body="A pull request has been opened for this issue: https://github.com/o/r/pull/6"
+item 4 lastProgress="" watermark=nil
+item 5 lastProgress="in_progress" watermark=2026-07-08T09:10:11Z
+item 6 lastProgress="review" watermark=2026-07-08T09:10:11Z
+subscriber stopped on ctx cancel
+missing dependency nil bus: done closed
+missing dependency nil flag: done closed
+missing dependency nil registry: done closed
+missing dependency nil syncloop: done closed
+missing dependency nil storage: done closed

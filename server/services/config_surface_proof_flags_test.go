@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/forwardsync"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -70,7 +71,7 @@ func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.GithubIssueProgressCommentsFlagName, setting.(bool))
-		return GitHubIssueProgressCommentsEnabled(testFlagRegistry())
+		return forwardsync.GitHubIssueProgressCommentsEnabled(testFlagRegistry())
 	}, false, true)
 }
 

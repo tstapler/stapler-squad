@@ -1,4 +1,4 @@
-package services
+package forwardsync
 
 // backlog_github_progress_sync.go — EventBus subscriber that comments on the
 // linked GitHub issue when a backlog item starts work (in_progress) or opens a
