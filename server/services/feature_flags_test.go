@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -193,7 +194,7 @@ func TestGetFeatureFlags_should_ReturnEmptyStatusDetail_When_ProviderReturnsEmpt
 // both the enabled and explicitly-disabled cases.
 func TestGetFeatureFlags_should_ReflectHandoffSummaryConfigState_When_QueriedEnabledOrDisabled(t *testing.T) {
 	svc := newFeatureFlagService(t)
-	svc.SetFeatureController("handoff-summary", HandoffSummaryFeatureController{})
+	svc.SetFeatureController("handoff-summary", flagsvc.HandoffSummaryFeatureController{})
 
 	findFlag := func(t *testing.T) *sessionv1.FeatureFlag {
 		t.Helper()
@@ -238,7 +239,7 @@ func TestGetFeatureFlags_should_ReflectHandoffSummaryConfigState_When_QueriedEna
 // toggle lives at config.json's handoff_summary.enabled key, not the generic
 // feature-flags map UpdateFeatureFlag persists to.
 func TestHandoffSummaryFeatureController_EnableAndDisable_should_ReturnClearError(t *testing.T) {
-	ctrl := HandoffSummaryFeatureController{}
+	ctrl := flagsvc.HandoffSummaryFeatureController{}
 
 	err := ctrl.Enable(context.Background())
 	require.Error(t, err)

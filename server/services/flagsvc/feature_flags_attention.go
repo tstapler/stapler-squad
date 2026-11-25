@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"github.com/tstapler/stapler-squad/config"
@@ -9,12 +9,12 @@ import (
 // default OFF and global-only; they are plain registry flags read from config at
 // decision time, so a flip takes effect without a restart. No env vars.
 const (
-	attentionProseQuestionDetectionFlagName   = "attention_prose_question_detection"
-	sessionEventLogFlagName                   = "session_event_log"
-	attentionAckBypassFixFlagName             = "attention_ack_bypass_fix"
-	attentionIdleClockOutputFlagName          = "attention_idle_clock_output"
-	attentionProseQuestionLLMTiebreakFlagName = "attention_prose_question_llm_tiebreak"
-	attentionInboxConsolidationFlagName       = "attention_inbox_consolidation"
+	AttentionProseQuestionDetectionFlagName   = "attention_prose_question_detection"
+	SessionEventLogFlagName                   = "session_event_log"
+	AttentionAckBypassFixFlagName             = "attention_ack_bypass_fix"
+	AttentionIdleClockOutputFlagName          = "attention_idle_clock_output"
+	AttentionProseQuestionLLMTiebreakFlagName = "attention_prose_question_llm_tiebreak"
+	AttentionInboxConsolidationFlagName       = "attention_inbox_consolidation"
 )
 
 // AttentionFlags is one point-in-time read of the six flags. Callers that run a
@@ -32,15 +32,15 @@ type AttentionFlags struct {
 // ResolveAttentionFlags reads the six flags from cfg.
 // reg must be non-nil.
 func ResolveAttentionFlags(cfg *config.Config, reg *featureflags.Registry) AttentionFlags {
-	reg = flagReader{reg: reg}.registry()
+	reg = FlagReader{Reg: reg}.registry()
 	on := func(name string) bool { return reg.Enabled(cfg, name) }
 	return AttentionFlags{
-		ProseQuestionDetection:   on(attentionProseQuestionDetectionFlagName),
-		SessionEventLog:          on(sessionEventLogFlagName),
-		AckBypassFix:             on(attentionAckBypassFixFlagName),
-		IdleClockOutput:          on(attentionIdleClockOutputFlagName),
-		ProseQuestionLLMTiebreak: on(attentionProseQuestionLLMTiebreakFlagName),
-		InboxConsolidation:       on(attentionInboxConsolidationFlagName),
+		ProseQuestionDetection:   on(AttentionProseQuestionDetectionFlagName),
+		SessionEventLog:          on(SessionEventLogFlagName),
+		AckBypassFix:             on(AttentionAckBypassFixFlagName),
+		IdleClockOutput:          on(AttentionIdleClockOutputFlagName),
+		ProseQuestionLLMTiebreak: on(AttentionProseQuestionLLMTiebreakFlagName),
+		InboxConsolidation:       on(AttentionInboxConsolidationFlagName),
 	}
 }
 

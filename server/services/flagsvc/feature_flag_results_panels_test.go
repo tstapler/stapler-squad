@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"testing"

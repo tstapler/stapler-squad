@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 // Prune audit outcomes and count keys (kind=prune lines carry counts only).
@@ -141,10 +142,10 @@ func pruneAuditLine(f steerRequestFacts, p notifications.PrunePlan, includeUnrea
 	counts[pruneCountVisible] = p.Visible
 	return auditkit.AuditLine{
 		Kind: auditkit.AuditKindPrune, ChangeID: uuid.NewString(),
-		MatchedCount: &matched, IncludeUnreadActionable: boolRef(includeUnread), Counts: counts,
+		MatchedCount: &matched, IncludeUnreadActionable: flagsvc.BoolRef(includeUnread), Counts: counts,
 		Listener: f.refusal.Listener, PeerAddr: f.refusal.Peer, Host: f.refusal.Host, Origin: f.refusal.Origin,
 		UserAgent: f.userAgent, AuthMode: f.refusal.AuthMode,
-		PeerLoopback: boolRef(f.refusal.PeerLoopback), Proxied: boolRef(f.refusal.Proxied),
+		PeerLoopback: flagsvc.BoolRef(f.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.refusal.Proxied),
 	}
 }
 

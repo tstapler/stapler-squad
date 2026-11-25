@@ -128,6 +128,7 @@ filegroup(
         "//server/services/devtools:go_sources",
         "//server/services/featureflags:go_sources",
         "//server/services/federation:go_sources",
+        "//server/services/flagsvc:go_sources",
         "//server/services/fsops:go_sources",
         "//server/services/fsops/fsopstest:go_sources",
         "//server/services/fsops/memfs:go_sources",

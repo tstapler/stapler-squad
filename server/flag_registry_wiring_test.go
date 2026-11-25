@@ -10,11 +10,12 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 // flipFlagDefault returns a copy of the process registry with name's default inverted.
 func flipFlagDefault(name string) *featureflags.Registry {
-	specs := services.FlagRegistry().Specs()
+	specs := flagsvc.FlagRegistry().Specs()
 	for i := range specs {
 		if specs[i].Name == name {
 			specs[i].Default = !specs[i].Default

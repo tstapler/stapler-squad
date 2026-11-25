@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -70,9 +71,11 @@ func (m *GuidanceHookMirror) SetPaneCapture(fn func(ctx context.Context, session
 // guidance_mirror_failed_total and guidance_mirror_cleared_total; either may be nil.
 // reg must be non-nil.
 func NewGuidanceHookMirror(store guidanceMirrorStore, pending *PendingQuestionStore, failed, cleared func(reason string), reg *featureflags.Registry) *GuidanceHookMirror {
-	fr := flagReader{reg: reg}
+	fr := flagsvc.FlagReader{Reg: reg}
 	return &GuidanceHookMirror{store: store, pending: pending, bound: guidanceMirrorBound, failed: failed, cleared: cleared,
-		enabled: func() bool { return fr.effectiveFlag(askUserQuestionStructuredFlagName, scopeStageRender) }}
+		enabled: func() bool {
+			return fr.EffectiveFlag(flagsvc.AskUserQuestionStructuredFlagName, flagsvc.ScopeStageRender)
+		}}
 }
 
 // HookMirrorRequest is one AskUserQuestion to mirror.

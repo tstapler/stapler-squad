@@ -49,7 +49,7 @@ never exit 2 for `AskUserQuestion` (ADR-005, "Spike results").
 
 The route is still closed in code. `spikeS1HookReplyPassed` is a compile-time constant set
 to `false`, and `stage:hook_reply` resolves on only when it is true
-(`server/services/feature_flags_notification_actions.go`). The spike record says its result
+(`server/services/flagsvc/feature_flags_notification_actions.go`). The spike record says its result
 awaits the owner's review, and ADR-008 gates the stage on that compiled-in spike result. Setting the flag does not open the route. Flipping the constant is a code change
 the owner decides.
 

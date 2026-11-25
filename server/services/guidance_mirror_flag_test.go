@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -50,7 +51,7 @@ func TestGuidanceMirror_should_ReadTheFlagLivePerCall_When_ItFlipsAfterConstruct
 	_, ok := m.Mirror(mirrorReq(t, "toolu_a", "First?", true))
 	require.False(t, ok)
 
-	require.NoError(t, config.LoadConfig().SetFeatureFlagScope(askUserQuestionStructuredFlagName, scopeStageRender, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlagScope(flagsvc.AskUserQuestionStructuredFlagName, flagsvc.ScopeStageRender, true))
 
 	id, ok := m.Mirror(mirrorReq(t, "toolu_b", "Second?", true))
 	require.True(t, ok)

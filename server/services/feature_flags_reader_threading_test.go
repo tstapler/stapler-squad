@@ -6,15 +6,16 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // Constructor threading: each site below builds its flagReader from the registry it was given, so an
 // injected registry whose default differs from the process one must change the answer.
-var inlineApprove = scopePrefixAction + "APPROVE"
+var inlineApprove = flagsvc.ScopePrefixAction + "APPROVE"
 
 func inlineOnRegistry() *featureflags.Registry {
-	return flippedDefaults(notificationInlineActionsFlagName, askUserQuestionStructuredFlagName)
+	return flippedDefaults(flagsvc.NotificationInlineActionsFlagName, flagsvc.AskUserQuestionStructuredFlagName)
 }
 
 func TestNewGuidanceHookMirror_ShouldGateOnInjectedRegistry(t *testing.T) {

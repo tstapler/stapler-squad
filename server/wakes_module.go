@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -163,10 +164,10 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 		},
 	}
 	activeWakeLifecycle.Store(lc)
-	services.SetWakeFlagListener(func() { lc.Reconcile(ctx) })
+	flagsvc.SetWakeFlagListener(func() { lc.Reconcile(ctx) })
 	lc.sync(ctx)
 	srv.shutdownHooks = append(srv.shutdownHooks, func() {
-		services.SetWakeFlagListener(nil)
+		flagsvc.SetWakeFlagListener(nil)
 		activeWakeLifecycle.Store(nil)
 		lc.shutdown()
 	})

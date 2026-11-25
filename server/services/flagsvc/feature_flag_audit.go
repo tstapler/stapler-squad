@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func flagRequestFields(ctx context.Context, peer string, header http.Header) aud
 // active reports whether this flip is audited (a sink and a policy exist).
 func (a *flagAudit) active() bool { return a != nil && a.sink != nil }
 
-func boolRef(b bool) *bool { return &b }
+func BoolRef(b bool) *bool { return &b }
 
 // begin writes the durable `requested` line of a loosening flip before the
 // update mutex is taken (bounded, so a stalled fsync cannot queue the kill
@@ -50,7 +50,7 @@ func (f *FeatureFlagService) auditBegin(ctx context.Context, op flagOp, fields a
 		return a, nil
 	}
 	req := a.base
-	req.Phase, req.New = auditkit.AuditPhaseRequest, boolRef(enabled)
+	req.Phase, req.New = auditkit.AuditPhaseRequest, BoolRef(enabled)
 	if err := f.audit.AppendBounded(ctx, req); err != nil {
 		if policy.EscapeHatchFor(a.base.Scope) {
 			f.audit.Fallback(req, err)
@@ -69,7 +69,7 @@ func (a *flagAudit) finish() {
 	}
 	l := a.base
 	l.Phase, l.Outcome, l.Seq = auditkit.AuditPhaseResult, a.outcome, a.seq
-	l.Previous, l.New = boolRef(a.previous), boolRef(a.enabled)
+	l.Previous, l.New = BoolRef(a.previous), BoolRef(a.enabled)
 	a.sink.Enqueue(l)
 }
 

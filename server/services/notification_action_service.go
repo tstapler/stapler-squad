@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 // notification_action_service.go is the single InvokeNotificationAction
@@ -76,7 +77,7 @@ type ApprovalChoice struct {
 // QuestionReplier answers a pending AskUserQuestion. RouteFor tells the
 // dispatcher where the write goes so it can pick the tier and flag gate.
 type QuestionReplier interface {
-	RouteFor(sessionID string) (route answerRoute, known bool)
+	RouteFor(sessionID string) (route flagsvc.AnswerRoute, known bool)
 	ReplyToQuestion(ctx context.Context, a QuestionAnswer) (ActionResult, error)
 }
 
@@ -93,7 +94,7 @@ type QuestionAnswer struct {
 	Confirm bool
 	// ExpectedRoute is the route the dispatcher gated this call on; when set,
 	// the answer is STALE if the session's route has changed since.
-	ExpectedRoute *answerRoute
+	ExpectedRoute *flagsvc.AnswerRoute
 }
 
 // GuidanceAnswerer answers a durable guidance request.
@@ -135,22 +136,22 @@ type actionFlags interface {
 	// Inline resolves a notification_inline_actions decision point.
 	Inline(decisionPoint string) bool
 	// Answer resolves the three-flag ANSWER_QUESTION composition for route.
-	Answer(route answerRoute) bool
+	Answer(route flagsvc.AnswerRoute) bool
 }
 
 // configActionFlags resolves against the live config and the compiled spike
 // evidence. Tests inject evidence to stand in for a recorded spike result.
 type configActionFlags struct {
-	ev flagEvidence
-	fr flagReader
+	ev flagsvc.FlagEvidence
+	fr flagsvc.FlagReader
 }
 
 func (f configActionFlags) Inline(dp string) bool {
-	return f.fr.resolveEffectiveFlag(config.LoadConfig(), f.ev, notificationInlineActionsFlagName, dp)
+	return f.fr.ResolveEffectiveFlag(config.LoadConfig(), f.ev, flagsvc.NotificationInlineActionsFlagName, dp)
 }
 
-func (f configActionFlags) Answer(route answerRoute) bool {
-	return f.fr.resolveAnswerQuestion(config.LoadConfig(), f.ev, route)
+func (f configActionFlags) Answer(route flagsvc.AnswerRoute) bool {
+	return f.fr.ResolveAnswerQuestion(config.LoadConfig(), f.ev, route)
 }
 
 // actionAudit appends audit lines; *auditkit.AuditSink satisfies it.
@@ -200,7 +201,7 @@ type ActionDelegates struct {
 func NewNotificationActionDispatcher(d ActionDelegates, audit func() actionAudit, reg *featureflags.Registry) *NotificationActionDispatcher {
 	return &NotificationActionDispatcher{
 		approvals: d.Approvals, questions: d.Questions, guidance: d.Guidance, backlog: d.Backlog, cancels: d.Cancels, resolver: d.Resolver,
-		flags: configActionFlags{ev: compiledFlagEvidence, fr: flagReader{reg: reg}}, audit: audit, metrics: defaultActionMetrics(), reopen: defaultReopenTracker,
+		flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: reg}}, audit: audit, metrics: defaultActionMetrics(), reopen: defaultReopenTracker,
 		cache: newActionIdempotency(actionCacheMax), now: time.Now,
 	}
 }
@@ -308,12 +309,12 @@ func validateAction(m *sessionv1.InvokeNotificationActionRequest) string {
 }
 
 // resolveRoute finds the answer route of an ANSWER_QUESTION; other kinds have none.
-func (d *NotificationActionDispatcher) resolveRoute(m *sessionv1.InvokeNotificationActionRequest) (answerRoute, ActionResult, bool) {
+func (d *NotificationActionDispatcher) resolveRoute(m *sessionv1.InvokeNotificationActionRequest) (flagsvc.AnswerRoute, ActionResult, bool) {
 	if m.GetActionKind() != sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION {
-		return routeDurableRecord, ActionResult{}, false
+		return flagsvc.RouteDurableRecord, ActionResult{}, false
 	}
 	if d.questions == nil {
-		return 0, outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage), true
+		return 0, outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage), true
 	}
 	if m.GetSessionId() == "" {
 		return 0, outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "session_id is required"), true
@@ -327,7 +328,7 @@ func (d *NotificationActionDispatcher) resolveRoute(m *sessionv1.InvokeNotificat
 
 // tierOf is the tier of kind: the table row, except an ANSWER_QUESTION whose
 // route is a durable record (Tier A).
-func tierOf(kind sessionv1.ActionKind, route answerRoute) sessionv1.ActionTier {
+func tierOf(kind sessionv1.ActionKind, route flagsvc.AnswerRoute) sessionv1.ActionTier {
 	if kind == sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION {
 		return answerTier(route)
 	}
@@ -343,7 +344,7 @@ func (d *NotificationActionDispatcher) tierGate(ctx context.Context, call Action
 		return ActionResult{}, false
 	}
 	if caller.listener == ListenerClassRemote {
-		if d.flags.Inline(scopeChannelTierB) {
+		if d.flags.Inline(flagsvc.ScopeChannelTierB) {
 			return ActionResult{}, false
 		}
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, unavailableDesktopOnly), true
@@ -356,18 +357,18 @@ func (d *NotificationActionDispatcher) tierGate(ctx context.Context, call Action
 
 // flagGate applies the flag matrix: the action's scope (ANSWER_QUESTION composes
 // its route gate) and, on the remote listener, channel:remote.
-func (d *NotificationActionDispatcher) flagGate(kind sessionv1.ActionKind, route answerRoute, caller callerInfo) (ActionResult, bool) {
-	on := d.flags.Inline(scopePrefixAction + kindName(kind))
+func (d *NotificationActionDispatcher) flagGate(kind sessionv1.ActionKind, route flagsvc.AnswerRoute, caller callerInfo) (ActionResult, bool) {
+	on := d.flags.Inline(flagsvc.ScopePrefixAction + kindName(kind))
 	if kind == sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION {
 		on = d.flags.Answer(route)
 	}
 	if on && caller.listener == ListenerClassRemote {
-		on = d.flags.Inline(scopeChannelRemote)
+		on = d.flags.Inline(flagsvc.ScopeChannelRemote)
 	}
 	if on {
 		return ActionResult{}, false
 	}
-	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage), true
+	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage), true
 }
 
 func payloadHash(m *sessionv1.InvokeNotificationActionRequest) string {
@@ -391,7 +392,7 @@ func boolField(b bool) string {
 }
 
 // execute audits and runs the delegate for the closed set of kinds.
-func (d *NotificationActionDispatcher) execute(ctx context.Context, call ActionCall, caller callerInfo, tier sessionv1.ActionTier, route answerRoute) (ActionResult, error) {
+func (d *NotificationActionDispatcher) execute(ctx context.Context, call ActionCall, caller callerInfo, tier sessionv1.ActionTier, route flagsvc.AnswerRoute) (ActionResult, error) {
 	line := d.auditLine(call.Msg, caller)
 	if tier == sessionv1.ActionTier_ACTION_TIER_B {
 		if err := d.appendRequest(ctx, line); err != nil {
@@ -403,7 +404,7 @@ func (d *NotificationActionDispatcher) execute(ctx context.Context, call ActionC
 	return res, err
 }
 
-func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv1.InvokeNotificationActionRequest, route answerRoute) (ActionResult, error) {
+func (d *NotificationActionDispatcher) delegate(ctx context.Context, m *sessionv1.InvokeNotificationActionRequest, route flagsvc.AnswerRoute) (ActionResult, error) {
 	p := m.GetParams()
 	switch m.GetActionKind() {
 	case sessionv1.ActionKind_ACTION_KIND_APPROVE, sessionv1.ActionKind_ACTION_KIND_DENY:
@@ -570,7 +571,7 @@ func (s *SessionService) InvokeNotificationAction(
 ) (*connect.Response[sessionv1.InvokeNotificationActionResponse], error) {
 	if s.actionDispatcher == nil {
 		return connect.NewResponse(&sessionv1.InvokeNotificationActionResponse{
-			Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, Detail: flagOffMessage,
+			Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, Detail: flagsvc.FlagOffMessage,
 		}), nil
 	}
 	resp, err := s.actionDispatcher.Invoke(ctx, ActionCall{Msg: req.Msg, Peer: req.Peer().Addr, Header: req.Header()})

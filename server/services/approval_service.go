@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/queue"
 
@@ -135,7 +136,7 @@ func (as *ApprovalService) resolveApproval(ctx context.Context, approvalID, deci
 	// reviewer explicitly overrides (Story 2.2.4). The lookup itself always runs (its
 	// result is what the override log line reports); only the early-return decision is
 	// conditional on overrideCIBlock.
-	if decisionStr == "allow" && config.LoadConfig().GetFeatureFlag(blockApprovalOnCIFailureFlagName) && as.liveFinder != nil {
+	if decisionStr == "allow" && config.LoadConfig().GetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName) && as.liveFinder != nil {
 		if inst := as.liveFinder.FindLiveInstance(sessionID); inst != nil {
 			// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
 			// fields on its own goroutine under inst.mu (session/instance.go's mu doc

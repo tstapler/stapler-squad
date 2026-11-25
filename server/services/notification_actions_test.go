@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -199,11 +200,11 @@ func TestBuildDescriptors_ShouldMarkTierBDesktopOnly_WhenListenerRemote(t *testi
 }
 
 type fakeRoutes struct {
-	route answerRoute
+	route flagsvc.AnswerRoute
 	known bool
 }
 
-func (f fakeRoutes) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
+func (f fakeRoutes) RouteFor(string) (flagsvc.AnswerRoute, bool) { return f.route, f.known }
 
 func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTierBEffective(t *testing.T) {
 	t.Parallel()
@@ -214,11 +215,11 @@ func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTi
 		available bool
 		tier      sessionv1.ActionTier
 	}{
-		{"stopped or archived session", fakeRoutes{routeDurableRecord, true}, false, true, sessionv1.ActionTier_ACTION_TIER_A},
-		{"stopped session with tierB off", fakeRoutes{routeDurableRecord, true}, true, true, sessionv1.ActionTier_ACTION_TIER_A},
-		{"live session with tierB on", fakeRoutes{routeLiveKeystrokeVisible, true}, false, true, sessionv1.ActionTier_ACTION_TIER_B},
-		{"live hidden session with tierB on", fakeRoutes{routeLiveKeystrokeHidden, true}, false, true, sessionv1.ActionTier_ACTION_TIER_B},
-		{"live session with tierB off", fakeRoutes{routeLiveKeystrokeVisible, true}, true, false, sessionv1.ActionTier_ACTION_TIER_B},
+		{"stopped or archived session", fakeRoutes{flagsvc.RouteDurableRecord, true}, false, true, sessionv1.ActionTier_ACTION_TIER_A},
+		{"stopped session with tierB off", fakeRoutes{flagsvc.RouteDurableRecord, true}, true, true, sessionv1.ActionTier_ACTION_TIER_A},
+		{"live session with tierB on", fakeRoutes{flagsvc.RouteLiveKeystrokeVisible, true}, false, true, sessionv1.ActionTier_ACTION_TIER_B},
+		{"live hidden session with tierB on", fakeRoutes{flagsvc.RouteLiveKeystrokeHidden, true}, false, true, sessionv1.ActionTier_ACTION_TIER_B},
+		{"live session with tierB off", fakeRoutes{flagsvc.RouteLiveKeystrokeVisible, true}, true, false, sessionv1.ActionTier_ACTION_TIER_B},
 		{"unknown session", fakeRoutes{}, false, false, sessionv1.ActionTier_ACTION_TIER_B},
 	}
 	for _, tc := range cases {
@@ -228,7 +229,7 @@ func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTi
 			f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = PendingQuestion{}
 			b := f.builder()
 			b.sources.Routes = tc.routes
-			f.flags[scopeChannelTierB] = !tc.tierBOff
+			f.flags[flagsvc.ScopeChannelTierB] = !tc.tierBOff
 			recs := []*sessionv1.NotificationHistoryRecord{questionRecord("n1", "s1", "q1")}
 			b.Annotate(context.Background(), recs, ListenerClassRemote)
 			d := recs[0].Actions[0]
@@ -454,10 +455,10 @@ func TestControlPolicies_ShouldMakeResumeScheduledLocalOnly(t *testing.T) {
 
 func TestAnswerTier_ShouldBeTierBOnlyForLiveKeystroke(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, answerTier(routeLiveKeystrokeHidden))
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, answerTier(routeLiveKeystrokeVisible))
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, answerTier(routeDurableRecord))
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, answerTier(routeHookReply))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, answerTier(flagsvc.RouteLiveKeystrokeHidden))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, answerTier(flagsvc.RouteLiveKeystrokeVisible))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, answerTier(flagsvc.RouteDurableRecord))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, answerTier(flagsvc.RouteHookReply))
 }
 
 // kindsWithoutPolicy lists the non-zero kind values of names with no table row.

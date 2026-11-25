@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"testing"
@@ -39,35 +39,35 @@ func TestLoadAttentionFlags_ShouldUseInjectedDefaults_WhenRegistryInjected(t *te
 
 func TestFlagReader_ShouldResolveDecisionPointsAgainstInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	reg := flippedDefaults(notificationInlineActionsFlagName, askUserQuestionStructuredFlagName,
-		agentWakeTriggersFlagName)
-	injected, global := flagReader{reg: reg}, flagReader{testFlagRegistry()}
+	reg := flippedDefaults(NotificationInlineActionsFlagName, AskUserQuestionStructuredFlagName,
+		AgentWakeTriggersFlagName)
+	injected, global := FlagReader{Reg: reg}, FlagReader{testFlagRegistry()}
 
 	cases := []struct{ name, dp string }{
-		{notificationInlineActionsFlagName, scopePrefixAction + "APPROVE"},
-		{askUserQuestionStructuredFlagName, scopeStageRender},
-		{agentWakeTriggersFlagName, "dispatcher"},
-		{agentWakeTriggersFlagName, scopePrefixTrigger + "at"},
+		{NotificationInlineActionsFlagName, ScopePrefixAction + "APPROVE"},
+		{AskUserQuestionStructuredFlagName, ScopeStageRender},
+		{AgentWakeTriggersFlagName, "dispatcher"},
+		{AgentWakeTriggersFlagName, ScopePrefixTrigger + "at"},
 	}
 	for _, c := range cases {
 		t.Run(c.name+"/"+c.dp, func(t *testing.T) {
-			assert.False(t, global.effectiveFlag(c.name, c.dp), "global registry default is off")
-			assert.True(t, injected.effectiveFlag(c.name, c.dp), "injected registry default is on")
+			assert.False(t, global.EffectiveFlag(c.name, c.dp), "global registry default is off")
+			assert.True(t, injected.EffectiveFlag(c.name, c.dp), "injected registry default is on")
 		})
 	}
 
 	// hidden_session_reply defaults ON in the process registry, so the injected one (flipped OFF) must close the route.
-	cfg := matrixCfg(notificationInlineActionsFlagName, tv(true), map[string]tri{scopePrefixAction + actionKindAnswerQuestion: tv(true)})
-	assert.True(t, flagReader{testFlagRegistry()}.resolveAnswerQuestion(cfg, compiledFlagEvidence, routeLiveKeystrokeHidden))
-	assert.False(t, flagReader{reg: flippedDefaults(hiddenSessionReplyFlagName)}.resolveAnswerQuestion(cfg, compiledFlagEvidence, routeLiveKeystrokeHidden))
+	cfg := matrixCfg(NotificationInlineActionsFlagName, tv(true), map[string]tri{ScopePrefixAction + ActionKindAnswerQuestion: tv(true)})
+	assert.True(t, FlagReader{testFlagRegistry()}.ResolveAnswerQuestion(cfg, CompiledFlagEvidence, RouteLiveKeystrokeHidden))
+	assert.False(t, FlagReader{Reg: flippedDefaults(featureflags.HiddenSessionReplyFlagName)}.ResolveAnswerQuestion(cfg, CompiledFlagEvidence, RouteLiveKeystrokeHidden))
 }
 
 func TestWireNotificationActionFlags_ShouldSeedControllersFromInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	ff := NewFeatureFlagServiceWithRegistry(flippedDefaults(backgroundActivityFeedFlagName, agentWakeTriggersFlagName))
-	wireNotificationActionFlags(ff)
+	ff := NewFeatureFlagServiceWithRegistry(flippedDefaults(BackgroundActivityFeedFlagName, AgentWakeTriggersFlagName))
+	WireNotificationActionFlags(ff)
 
-	bg, wake := ff.featureControllers[backgroundActivityFeedFlagName], ff.featureControllers[agentWakeTriggersFlagName]
+	bg, wake := ff.featureControllers[BackgroundActivityFeedFlagName], ff.featureControllers[AgentWakeTriggersFlagName]
 	require.NotNil(t, bg)
 	require.NotNil(t, wake)
 	assert.False(t, bg.IsEnabled(), "global default on, injected default off")

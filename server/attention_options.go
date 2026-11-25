@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -15,15 +15,15 @@ const attentionFlagsTTL = 5 * time.Second
 
 type attentionFlagsCache struct {
 	ttl  time.Duration
-	load func() services.AttentionFlags
+	load func() flagsvc.AttentionFlags
 	now  func() time.Time
 
 	mu      sync.Mutex
-	flags   services.AttentionFlags
+	flags   flagsvc.AttentionFlags
 	expires time.Time
 }
 
-func (c *attentionFlagsCache) get() services.AttentionFlags {
+func (c *attentionFlagsCache) get() flagsvc.AttentionFlags {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if now := c.now(); !now.Before(c.expires) {
@@ -43,14 +43,14 @@ func (c *attentionFlagsCache) options() (session.DeterminerOptions, session.Rule
 }
 
 // newAttentionFlagsCache caches load for attentionFlagsTTL.
-func newAttentionFlagsCache(load func() services.AttentionFlags) *attentionFlagsCache {
+func newAttentionFlagsCache(load func() flagsvc.AttentionFlags) *attentionFlagsCache {
 	return &attentionFlagsCache{ttl: attentionFlagsTTL, load: load, now: time.Now}
 }
 
 // newAttentionOptionsSource adapts the live-settable attention flags, resolved
 // through reg, to the session package, which cannot import server/services.
 func newAttentionOptionsSource(reg *featureflags.Registry) session.FlagOptionsSource {
-	return newAttentionFlagsCache(func() services.AttentionFlags {
-		return services.LoadAttentionFlags(reg)
+	return newAttentionFlagsCache(func() flagsvc.AttentionFlags {
+		return flagsvc.LoadAttentionFlags(reg)
 	}).options
 }

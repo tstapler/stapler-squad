@@ -173,3 +173,4 @@ docs-coverage-trend.json
 
 # The access kernel golden is the one tracked .gz
 !server/services/access/testdata/*.gz
+!server/services/flagsvc/testdata/*.gz

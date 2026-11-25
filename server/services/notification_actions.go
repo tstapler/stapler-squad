@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -101,9 +102,9 @@ var controlPolicies = map[Control]actionPolicy{
 
 // answerTier is the tier of an ANSWER_QUESTION on route: only a live keystroke
 // writes into a pane.
-func answerTier(route answerRoute) sessionv1.ActionTier {
+func answerTier(route flagsvc.AnswerRoute) sessionv1.ActionTier {
 	switch route {
-	case routeLiveKeystrokeHidden, routeLiveKeystrokeVisible:
+	case flagsvc.RouteLiveKeystrokeHidden, flagsvc.RouteLiveKeystrokeVisible:
 		return sessionv1.ActionTier_ACTION_TIER_B
 	default:
 		return sessionv1.ActionTier_ACTION_TIER_A
@@ -127,7 +128,7 @@ type DescriptorSources struct {
 
 // answerRouteLookup is the slice of AnswerRouter the descriptor builder reads.
 type answerRouteLookup interface {
-	RouteFor(sessionID string) (route answerRoute, known bool)
+	RouteFor(sessionID string) (route flagsvc.AnswerRoute, known bool)
 }
 
 // ApprovalLookup returns the ids of approvals still waiting for a decision.
@@ -179,10 +180,10 @@ type DescriptorBuilder struct {
 // NewDescriptorBuilder builds a builder reading the live flags.
 // reg must be non-nil.
 func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *DescriptorBuilder {
-	fr := flagReader{reg: reg}
+	fr := flagsvc.FlagReader{Reg: reg}
 	return &DescriptorBuilder{sources: src, flag: func(dp string) bool {
-		return fr.effectiveFlag(notificationInlineActionsFlagName, dp)
-	}, hookReplyOn: func() bool { return fr.effectiveAnswerQuestion(routeHookReply) }}
+		return fr.EffectiveFlag(flagsvc.NotificationInlineActionsFlagName, dp)
+	}, hookReplyOn: func() bool { return fr.EffectiveAnswerQuestion(flagsvc.RouteHookReply) }}
 }
 
 // pageKeys are the entity keys of the unresolved records of one page.
@@ -289,10 +290,10 @@ func (b *DescriptorBuilder) describe(r *sessionv1.NotificationHistoryRecord, st 
 func (b *DescriptorBuilder) gate(in []*sessionv1.NotificationActionDescriptor, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
 	out := in[:0:0]
 	for _, d := range in {
-		if !b.flag(scopePrefixAction + kindName(d.GetKind())) {
+		if !b.flag(flagsvc.ScopePrefixAction + kindName(d.GetKind())) {
 			continue
 		}
-		if lc == ListenerClassRemote && !b.flag(scopeChannelRemote) {
+		if lc == ListenerClassRemote && !b.flag(flagsvc.ScopeChannelRemote) {
 			continue
 		}
 		out = append(out, d)
@@ -344,7 +345,7 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 	if !live {
 		return b.tabbedQuestionDescriptor(r, st, lc)
 	}
-	tier := answerTier(routeLiveKeystrokeHidden)
+	tier := answerTier(flagsvc.RouteLiveKeystrokeHidden)
 	d := &sessionv1.NotificationActionDescriptor{
 		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: tier, Available: true,
 		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: key.QuestionID,
@@ -385,7 +386,7 @@ func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionD
 	d.Tier = answerTier(route)
 	// A live keystroke is Tier B: offered remotely only when channel:remote:tierB is effective,
 	// the same check the dispatcher's tierGate makes.
-	return route == routeDurableRecord || b.flag(scopeChannelTierB)
+	return route == flagsvc.RouteDurableRecord || b.flag(flagsvc.ScopeChannelTierB)
 }
 
 // tabbedQuestionDescriptor is ANSWER_QUESTION for an open hook row in the
@@ -399,7 +400,7 @@ func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHi
 		return nil
 	}
 	d := &sessionv1.NotificationActionDescriptor{
-		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: answerTier(routeLiveKeystrokeHidden), Available: true,
+		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: answerTier(flagsvc.RouteLiveKeystrokeHidden), Available: true,
 		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: id, SessionId: r.GetSessionId(),
 	}
 	for i, q := range g.Tabbed {

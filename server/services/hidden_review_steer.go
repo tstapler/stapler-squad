@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -170,7 +171,7 @@ func (s *SessionService) steerAuditLine(ctx context.Context, inst *instance.Inst
 		MessageLen: len(msg), MessageSHA256: hex.EncodeToString(sum[:]), MessagePreview: steerPreview(msg),
 		Listener: f.refusal.Listener, PeerAddr: f.refusal.Peer, Host: f.refusal.Host, Origin: f.refusal.Origin,
 		UserAgent: f.userAgent, AuthMode: f.refusal.AuthMode,
-		PeerLoopback: boolRef(f.refusal.PeerLoopback), Proxied: boolRef(f.refusal.Proxied),
+		PeerLoopback: flagsvc.BoolRef(f.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.refusal.Proxied),
 	}
 }
 
@@ -178,7 +179,7 @@ func (s *SessionService) auditSink() *auditkit.AuditSink {
 	if s.featureFlagSvc == nil {
 		return nil
 	}
-	return s.featureFlagSvc.audit
+	return s.featureFlagSvc.AuditSink()
 }
 
 // appendSteerRequest writes the durable pre-write line. With the guards on a

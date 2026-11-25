@@ -47,7 +47,7 @@ attachMobileInput(container, { ...opts, onAnomaly: telemetry.onAnomaly, onDiagno
 
 | Flag | Default | Notes |
 |---|---|---|
-| `mobile_input_layer` | on (server default in `server/services/feature_flag_service.go`; client constant `MOBILE_INPUT_LAYER_DEFAULT` in `flagStore.ts` must equal it, a test asserts it) | Rollback-only kill switch, live-settable in the feature-flag panel with per-scope override. Off falls back to the plain terminal, and ghostty is then not used on Android phones. Affects only the Android class. |
+| `mobile_input_layer` | on (server default in `server/services/flagsvc/feature_flag_service.go`; client constant `MOBILE_INPUT_LAYER_DEFAULT` in `flagStore.ts` must equal it, a test asserts it) | Rollback-only kill switch, live-settable in the feature-flag panel with per-scope override. Off falls back to the plain terminal, and ghostty is then not used on Android phones. Affects only the Android class. |
 | `mobile_input_queue` | off | Queue keystrokes while disconnected and send on reconnect **(planned, PR-B)**. Needs the layer flag. |
 | `mobile_input_diagnostics` | off | The full diagnostics sheet **(planned, PR-C)**. The minimal `?inputdebug=1` panel is not behind it. |
 | `mobile_input_compose` | off | Compose box for longer input **(planned)**. |
