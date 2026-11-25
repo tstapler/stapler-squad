@@ -1,4 +1,4 @@
-package services
+package completionreview
 
 // completion_reviewer.go — EventBus subscriber that, when a backlog item reaches done,
 // asks a tool-less one-shot headless call what future sessions should know and appends the
@@ -95,13 +95,13 @@ func StartCompletionReviewerSubscriber(ctx context.Context, bus *events.EventBus
 	}
 	r := &completionReviewer{
 		storage: storage, call: call, memory: memory, notifier: notifier,
-		enabled: completionReviewerEnabled,
+		enabled: CompletionReviewerEnabled,
 	}
 	return r.start(ctx, bus)
 }
 
-// completionReviewerEnabled reads the flag live on every completion event.
-func completionReviewerEnabled() bool {
+// CompletionReviewerEnabled reads the flag live on every completion event.
+func CompletionReviewerEnabled() bool {
 	return config.LoadConfig().GetFeatureFlag(featureflags.CompletionReviewerFlagName)
 }
 

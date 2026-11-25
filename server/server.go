@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/federation"
@@ -1428,7 +1429,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
 		// flag per event, so it is live-togglable from Settings > Feature Flags.
-		completionReviewDone := services.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, services.NewHeadlessCompletionReviewCall(), services.NewFileMemoryStore(), &services.EventBusNotifier{Bus: deps.EventBus})
+		completionReviewDone := completionreview.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, completionreview.NewHeadlessCompletionReviewCall(), completionreview.NewFileMemoryStore(), &services.EventBusNotifier{Bus: deps.EventBus})
 		srv.backgroundTasksWG.Go(func() { <-completionReviewDone })
 	}
 
