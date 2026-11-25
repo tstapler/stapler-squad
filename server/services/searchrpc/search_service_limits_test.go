@@ -1,7 +1,10 @@
 package searchrpc
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
@@ -33,4 +36,33 @@ func TestSearchClaudeHistory_should_ApplyDefaultAndMaximumLimit_When_ManySession
 			require.Len(t, resp.Msg.Results, tc.want)
 		})
 	}
+}
+
+func TestSearchClaudeHistory_should_OversampleRawFetchFivefold_When_ProjectFilterDropsTopHits(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Equal-length messages whose "zebra" count differs give strictly ordered scores (no ties).
+	msg := func(k int) string {
+		return strings.Repeat("zebra ", k) + strings.Repeat("pad ", 12-k)
+	}
+	sessions := map[string]testConvSession{}
+	for k := 3; k <= 10; k++ { // 8 higher-scoring sessions in another project
+		sessions[fmt.Sprintf("other-%02d", k)] = testConvSession{project: "/repo/other", messages: []testConvMsg{{role: "user", content: msg(k), time: base}}}
+	}
+	sessions["keep-1"] = testConvSession{project: "/repo/keep", messages: []testConvMsg{{role: "user", content: msg(1), time: base}}}
+	sessions["keep-2"] = testConvSession{project: "/repo/keep", messages: []testConvMsg{{role: "user", content: msg(2), time: base}}}
+	seedClaudeHome(t, sessions)
+	svc := setupSyncedSearchService(t)
+
+	// Limit 2 fetches 2*5=10 raw hits; the two kept sessions rank 9th and 10th.
+	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
+		Query:   "zebra",
+		Limit:   2,
+		Project: ptr("/repo/keep"),
+	}))
+	require.NoError(t, err)
+	ids := make([]string, 0, len(resp.Msg.Results))
+	for _, r := range resp.Msg.Results {
+		ids = append(ids, r.SessionId)
+	}
+	require.Equal(t, []string{"keep-2", "keep-1"}, ids)
 }
