@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -481,10 +482,10 @@ func (s *SessionService) setupRemoteSessionTarget(
 			errors.New("remote session support is not configured on this server"))
 	}
 
-	target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remoteAddr(resolvedRemote.Host)}
+	target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remote.RemoteAddr(resolvedRemote.Host)}
 	clientConfig := ssh.ClientConfig{
 		User:            resolvedRemote.User,
-		Auth:            resolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
+		Auth:            remote.ResolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
 		HostKeyCallback: s.remoteKnownHosts.HostKeyCallback(),
 	}
 	runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(s.sshClientPool()))

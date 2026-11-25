@@ -5,7 +5,7 @@
   "method": "TrustRemoteHostKey",
   "protoFile": "proto/session/v1/remote.proto",
   "markerFound": true,
-  "handlerFile": "server/services/remote_service.go",
+  "handlerFile": "server/services/remote/remote_service.go",
   "tested": true,
   "testIds": [
     "TestTrustRemoteHostKey_Then_TestRemoteConnection_RoundTripSucceeds",
@@ -15,5 +15,5 @@
     "TestDraftFlow_GenerateIdentity_TrustHostKey_Then_CreateRemote_RoundTripSucceeds",
     "remote-workspaces \u003e add a remote, test connection, trust the host key, verify Connected status"
   ],
-  "lastModified": "2026-08-17T00:00:00Z"
+  "lastModified": "2026-11-24T20:03:28.126704311-08:00"
 }

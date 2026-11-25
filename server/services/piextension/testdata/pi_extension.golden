@@ -1,0 +1,50 @@
+# constants
+reping=2m0s grace=4m0s
+String(0)=unknown
+String(1)=loaded
+String(2)=failed
+String(-1)=unknown
+String(99)=unknown
+# default grace window boundary (graceWindow unset)
+first=unknown
+at-grace=unknown
+past-grace=failed
+stays-failed=failed
+after-ping=loaded
+# custom grace window, loaded->failed->loaded
+loaded=loaded
+loaded-at-grace=loaded
+loaded-past-grace=failed
+recovered=loaded
+reping-extends=loaded
+# ping first keeps firstObservedAt
+entry ok=true state=loaded first=2026-09-02T12:00:00Z last=2026-09-02T12:00:10Z
+# isolation, empty id, forget
+x=failed y=unknown empty="unknown"
+x-forgotten=true size=1
+x-after-forget=unknown
+# real clock, default window
+real-first=unknown
+real-loaded=loaded
+# absent
+absent GET -> 200 headers[Content-Type=application/json] body="{\"installed\":false}\n"
+absent POST -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+absent PUT -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+absent DELETE -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+absent HEAD -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+absent PATCH -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+# present file, then directory at the same path
+file GET -> 200 headers[Content-Type=application/json] body="{\"installed\":true}\n"
+file POST -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+file PUT -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+file DELETE -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+file HEAD -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+file PATCH -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+dir GET -> 200 headers[Content-Type=application/json] body="{\"installed\":true}\n"
+# unresolvable home
+nohome GET -> 200 headers[Content-Type=application/json] body="{\"installed\":false}\n"
+nohome POST -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+nohome PUT -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+nohome DELETE -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+nohome HEAD -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"
+nohome PATCH -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="method not allowed\n"

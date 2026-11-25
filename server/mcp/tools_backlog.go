@@ -1393,11 +1393,19 @@ func (h *backlogHandlers) getLinkedItem(ctx context.Context, req mcpgo.CallToolR
 	if item, itemErr := h.storage.GetBacklogItem(ctx, is.BacklogItemID); itemErr == nil {
 		title, status = item.Title, item.Status
 	}
-	return okResult(GetLinkedItemResult{
+	res := GetLinkedItemResult{
 		MCPResult: MCPResult{Success: true},
 		Linked:    true, ItemID: is.BacklogItemID, ItemTitle: title, ItemStatus: status,
-		Role: is.Role, StartedAt: is.StartedAt,
-	}), nil
+		Role: is.Role, StartedAt: is.StartedAt, LastProgressAt: is.LastProgressAt,
+	}
+	if is.LastProgressAt != nil {
+		age := int64(time.Since(*is.LastProgressAt).Seconds())
+		if age < 0 {
+			age = 0
+		}
+		res.HeartbeatAgeSeconds = &age
+	}
+	return okResult(res), nil
 }
 
 // --- request_review ---

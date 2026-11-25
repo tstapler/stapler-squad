@@ -1396,7 +1396,7 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 
 // GetItemSourceByID retrieves a single item source's domain data by UUID
 // string. Used by the GitHub forward-sync EventBus subscriber (see
-// server/services/backlog_github_forward_sync.go) to look up a backlog item's
+// server/services/forwardsync/backlog_github_forward_sync.go) to look up a backlog item's
 // source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
 // needing an *EntRepository handle of its own.
 func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*backlogdto.ItemSourceData, error) {

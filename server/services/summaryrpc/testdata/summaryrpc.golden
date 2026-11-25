@@ -1,0 +1,107 @@
+== session get
+missing: err=<nil>
+missing: {}
+status=pending: err=<nil>
+status=pending: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-0","session_title":"t-pending","status":"SESSION_SUMMARY_STATUS_PENDING","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+status=generating: err=<nil>
+status=generating: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-1","session_title":"t-generating","status":"SESSION_SUMMARY_STATUS_GENERATING","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+status=ready: err=<nil>
+status=ready: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-2","session_title":"t-ready","status":"SESSION_SUMMARY_STATUS_READY","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+status=error: err=<nil>
+status=error: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-3","session_title":"t-error","status":"SESSION_SUMMARY_STATUS_ERROR","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+status=: err=<nil>
+status=: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-4","session_title":"t-","status":"SESSION_SUMMARY_STATUS_UNSPECIFIED","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+status=bogus: err=<nil>
+status=bogus: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-5","session_title":"t-bogus","status":"SESSION_SUMMARY_STATUS_UNSPECIFIED","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+status=READY: err=<nil>
+status=READY: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-status-6","session_title":"t-READY","status":"SESSION_SUMMARY_STATUS_UNSPECIFIED","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+full: err=<nil>
+full: {"summary":{"cost":{"data_unavailable":true,"estimated_cost_usd":1.25,"total_tokens":"12345"},"decisions":{"auto_approved":1,"denied":3,"manually_approved":2,"review_queue_resolved":4,"still_open":5},"diff":{"added":40,"files_changed":3,"removed":5},"error_message":"em","error_stage":"es","generated_at":"2026-03-04T05:07:37Z","markdown":"# md","narrative":"narrative text","narrative_fallback_used":true,"session_id":"sess-full","session_title":"full","status":"SESSION_SUMMARY_STATUS_READY","timeline":{"duration_ms":"90000","started_at":"2026-03-04T05:06:07Z","stopped_at":"2026-03-04T05:07:37Z"}}}
+stale: err=<nil>
+stale: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"generation did not complete, possibly due to a server restart","error_stage":"restart-interrupted","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-stale","session_title":"stale","status":"SESSION_SUMMARY_STATUS_ERROR","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+fresh: err=<nil>
+fresh: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":0,"files_changed":0,"removed":0},"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-fresh","session_title":"fresh","status":"SESSION_SUMMARY_STATUS_GENERATING","timeline":{"duration_ms":"0","started_at":null,"stopped_at":null}}}
+closed-db: code=internal msg="internal: failed to query session summary: sql: database is closed"
+closed-db resp nil: true
+== session regenerate
+nil finder, no row: code=not_found msg="not_found: no session summary or live session found for \"nothing\""
+resp nil: true
+empty finder, no row: code=not_found msg="not_found: no session summary or live session found for \"nothing\""
+live no row: err=<nil>
+live no row: {"summary":{"cost":null,"decisions":null,"diff":null,"error_message":"","error_stage":"","generated_at":null,"markdown":"","narrative":"","narrative_fallback_used":false,"session_id":"sess-live","session_title":"live title","status":"SESSION_SUMMARY_STATUS_PENDING","timeline":null}}
+live final: status=ready title="live title" added=0 removed=0 files=0 fallback=false narrative="regen narrative" err=""/""
+live prompt:
+Session title: live title
+Session goal: ship it sk-ant-api03-GOLDENSENTINEL0123456789abcdefABCDEF
+
+Decisions:
+No approval decisions were recorded.
+
+Diff:
+
+live pool calls: 1
+persisted row: err=<nil>
+persisted row: {"summary":{"cost":{"data_unavailable":false,"estimated_cost_usd":0,"total_tokens":"0"},"decisions":{"auto_approved":0,"denied":0,"manually_approved":0,"review_queue_resolved":0,"still_open":0},"diff":{"added":10,"files_changed":2,"removed":4},"error_message":"","error_stage":"","generated_at":"\u003ctime\u003e","markdown":"","narrative":"old narrative","narrative_fallback_used":false,"session_id":"sess-persisted","session_title":"persisted title","status":"SESSION_SUMMARY_STATUS_READY","timeline":{"duration_ms":"0","started_at":"\u003ctime\u003e","stopped_at":null}}}
+persisted final: status=ready title="persisted title" added=10 removed=4 files=2 started=true narrative="regen narrative"
+persisted prompt:
+Session title: persisted title
+
+Decisions:
+No approval decisions were recorded.
+
+Diff:
+
+closed-db: code=internal msg="internal: failed to query session summary: sql: database is closed"
+== handoff get
+missing: err=<nil>
+missing: {}
+status=pending: err=<nil>
+status=pending: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-0","session_title":"t-pending","status":"HANDOFF_SUMMARY_STATUS_PENDING","summary_text":""}}
+status=generating: err=<nil>
+status=generating: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-1","session_title":"t-generating","status":"HANDOFF_SUMMARY_STATUS_GENERATING","summary_text":""}}
+status=ready: err=<nil>
+status=ready: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-2","session_title":"t-ready","status":"HANDOFF_SUMMARY_STATUS_READY","summary_text":""}}
+status=error: err=<nil>
+status=error: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-3","session_title":"t-error","status":"HANDOFF_SUMMARY_STATUS_ERROR","summary_text":""}}
+status=: err=<nil>
+status=: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-4","session_title":"t-","status":"HANDOFF_SUMMARY_STATUS_UNSPECIFIED","summary_text":""}}
+status=bogus: err=<nil>
+status=bogus: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-5","session_title":"t-bogus","status":"HANDOFF_SUMMARY_STATUS_UNSPECIFIED","summary_text":""}}
+status=READY: err=<nil>
+status=READY: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":null,"middle_messages_summarized":0,"session_id":"hs-status-6","session_title":"t-READY","status":"HANDOFF_SUMMARY_STATUS_UNSPECIFIED","summary_text":""}}
+full: err=<nil>
+full: {"summary":{"active_task":"task","error_message":"em","error_stage":"es","generated_at":"2026-03-04T05:07:07Z","generation_started_at":"2026-03-04T05:06:07Z","middle_messages_summarized":17,"session_id":"hs-full","session_title":"full","status":"HANDOFF_SUMMARY_STATUS_READY","summary_text":"text"}}
+stale: err=<nil>
+stale: {"summary":{"active_task":"","error_message":"generation did not complete (server restart or hung call)","error_stage":"stale","generated_at":null,"generation_started_at":"\u003ctime\u003e","middle_messages_summarized":0,"session_id":"hs-stale","session_title":"stale","status":"HANDOFF_SUMMARY_STATUS_ERROR","summary_text":""}}
+closed-db: code=internal msg="internal: failed to query handoff summary: sql: database is closed"
+== handoff trigger
+disabled: code=failed_precondition msg="failed_precondition: handoff summary generation is disabled"
+disabled resp nil: true
+disabled row persisted: false
+enabled first: err=<nil>
+enabled first: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":"\u003ctime\u003e","middle_messages_summarized":0,"session_id":"hs-trig","session_title":"hs-trig","status":"HANDOFF_SUMMARY_STATUS_GENERATING","summary_text":""}}
+enabled first has generation_started_at: true
+first final: status=ready title="hs-trig" task="' section...\n\nhandoff generated" text="[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window — treat it as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary; they were already addressed. Your current task is identified in the '## Active Task' section...\n\nhandoff generated" stage="" msg=""
+first prompt:
+Session title: hs-trig
+
+Head:
+[user] Please add input validation to the signup form.
+[assistant] Sure — I'll start by looking at the existing form component.
+
+Middle (to summarize):
+(nothing to summarize — conversation was short)
+
+Tail:
+[user] Also make sure email format is checked.
+[assistant] Added a regex-based email check in validateSignup.go.
+
+Produce a handoff summary as described in your instructions, ending with a '## Active Task' heading naming the concrete next step based on the Tail's most recent state.
+enabled second: err=<nil>
+enabled second: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":"\u003ctime\u003e","middle_messages_summarized":0,"session_id":"hs-trig","session_title":"persisted handoff title","status":"HANDOFF_SUMMARY_STATUS_GENERATING","summary_text":""}}
+no transcript: err=<nil>
+no transcript: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":"\u003ctime\u003e","middle_messages_summarized":0,"session_id":"hs-no-transcript","session_title":"hs-no-transcript","status":"HANDOFF_SUMMARY_STATUS_GENERATING","summary_text":""}}
+no transcript final: status=error stage="transcript" msg="conversation file not found for session ID: hs-no-transcript"
+in-flight: err=<nil>
+in-flight: {"summary":{"active_task":"","error_message":"","error_stage":"","generated_at":null,"generation_started_at":"\u003ctime\u003e","middle_messages_summarized":0,"session_id":"hs-inflight","session_title":"inflight title","status":"HANDOFF_SUMMARY_STATUS_GENERATING","summary_text":""}}
+closed-db: code=internal msg="internal: failed to query handoff summary: sql: database is closed"

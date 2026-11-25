@@ -29,7 +29,7 @@ var (
 	piExtensionHealthResolver   func(sessionID, program string) sessionv1.PiExtensionHealth
 )
 
-// SetPiExtensionHealthResolver wires server/services.PiExtensionHealthTracker
+// SetPiExtensionHealthResolver wires server/services/piextension.PiExtensionHealthTracker
 // (pi-support Epic 4.2) into InstanceToProto. adapters cannot import
 // server/services directly (services already imports adapters), so server.go's
 // wireDepsIntoServer supplies this closure during real server wiring, exactly

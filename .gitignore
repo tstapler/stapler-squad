@@ -128,6 +128,7 @@ docs/registry/coverage-gaps.json
 
 # Uploaded files (user-supplied, not source)
 uploads/
+!server/services/uploads/
 
 # Benchmark baselines — persisted via GitHub Actions cache (see
 # .github/workflows/benchmark.yml), not
@@ -176,3 +177,4 @@ docs-coverage-trend.json
 # The questionkit parity golden is tracked too
 !server/services/questionkit/testdata/*.gz
 !server/services/flagsvc/testdata/*.gz
+!server/services/claudesettings/testdata/*.gz

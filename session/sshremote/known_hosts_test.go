@@ -229,7 +229,7 @@ func TestHostKeyCallback_ReturnsNil_When_HostPreviouslyTrusted(t *testing.T) {
 // tmux.SSHRunner dial path) and Verify() (the direct-call path) surface a
 // mismatch as two DIFFERENT concrete error shapes -- the raw
 // *knownhosts.KeyError versus *ErrHostKeyMismatch -- so a caller checking
-// errors.As against only one of them (as server/services/remote_service.go
+// errors.As against only one of them (as server/services/remote/remote_service.go
 // used to) silently misses the other. IsHostKeyMismatch must return true
 // for both, and false for the unrelated "unknown host" and "nil" cases.
 func TestIsHostKeyMismatch_ClassifiesBothCallPathsIdentically(t *testing.T) {
