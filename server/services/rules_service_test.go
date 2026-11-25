@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -1635,7 +1636,7 @@ func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *t
 	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
-	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
+	svc.SetClaudeSettingsWatcher(claudesettings.NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
 		svc.rebuildClaudeSettingsRules(rules)
 	}))
 
@@ -1653,7 +1654,7 @@ func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGood
 	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
-	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
+	svc.SetClaudeSettingsWatcher(claudesettings.NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
 		svc.rebuildClaudeSettingsRules(rules)
 	}))
 
