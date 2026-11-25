@@ -37,7 +37,8 @@ func goldenObserve(kind string, hit bool, d time.Duration) {
 	ArtifactSearchStats.Observe(kind, hit, d)
 }
 
-var testDirSuffix = regexp.MustCompile(`TestSearchrpcGolden\d+`)
+// The test temp dir lives under $TMPDIR, which differs between local runs, CI and the Bazel sandbox.
+var testDirSuffix = regexp.MustCompile(`(?:/[^/"\s\\]+)*/TestSearchrpcGolden\d+`)
 
 // A symlink entry's size is the length of its target path, which embeds the random temp dir.
 var symlinkSize = regexp.MustCompile(`("name":"(?:dangling|linkfile|linkdir)","path":"[^"]*","is_dir":(?:true|false),"size":)\d+`)
@@ -54,7 +55,7 @@ func (g *goldenRec) section(name string) { fmt.Fprintf(&g.sb, "\n=== %s\n", name
 
 func (g *goldenRec) line(format string, args ...any) {
 	out := g.scrubber.Replace(fmt.Sprintf(format, args...))
-	fmt.Fprintf(&g.sb, "%s\n", testDirSuffix.ReplaceAllString(out, "TestSearchrpcGolden<N>"))
+	fmt.Fprintf(&g.sb, "%s\n", testDirSuffix.ReplaceAllString(out, "<TESTTMP>"))
 }
 
 func (g *goldenRec) msg(label string, m proto.Message) {
@@ -67,6 +68,9 @@ func (g *goldenRec) msg(label string, m proto.Message) {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		g.line("%s: unmarshal error %v", label, err)
 		return
+	}
+	if top, ok := v.(map[string]any); ok {
+		delete(top, "queryTimeMs") // wall-clock timing, nonzero only under load
 	}
 	out, _ := json.MarshalIndent(v, "", " ")
 	g.line("%s: %s", label, out)
@@ -98,12 +102,7 @@ func TestSearchrpcGolden(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 	root := t.TempDir()
-	tmpEnv := os.Getenv("TMPDIR")
-	pairs := []string{root, "<ROOT>", home, "<HOME>"}
-	if tmpEnv != "" {
-		pairs = append(pairs, tmpEnv, "<TMPDIR>")
-	}
-	g := &goldenRec{scrubber: strings.NewReplacer(pairs...)}
+	g := &goldenRec{scrubber: strings.NewReplacer(root, "<ROOT>", home, "<HOME>")}
 
 	goldenSearch(t, g)
 	goldenPathMatching(g, root, home)
@@ -304,7 +303,7 @@ func goldenPathMatching(g *goldenRec, root, home string) {
 		"/", "//", "///", "/.", "/..", "/../..", "~", "~/", "~/x", "~/../x", "~root", "~/..", home, home + "/", home + "/..",
 		"/etc", "/etc/", "/etc/passwd", "/etcetera", "/etc/../tmp", "/usr/bin/../lib", "/proc/self", "/dev/null", "/run/user",
 		"/lib64/x", "/boot", "/sys/kernel", "/bin", "/sbin", "/usr",
-		"/tmp", "/tmp/", "/tmp/../etc", "/tmpx", "/var/tmp/x", "/var/tmpx", "$TMPDIR", "${TMPDIR}/x", "$HOME", "${HOME}/x", "$HOME/../x", "$NOPE", "${NOPE}/x",
+		"/tmp", "/tmp/", "/tmp/../etc", "/tmpx", "/var/tmp/x", "/var/tmpx", "$HOME", "${HOME}/x", "$HOME/../x", "$NOPE", "${NOPE}/x",
 		"relative", "./relative", "../up", "..", ".", "", " ", "-f", "-rf", "--", "--no-preserve-root", "-",
 		ctx.Cwd, ctx.Cwd + "/", ctx.Cwd + "/sub", ctx.Cwd + "/../x", ctx.Cwd + "x", ctx.RepoRoot, ctx.RepoRoot + "/f", ctx.RepoRoot + "/../f",
 		"/a//b/../c/./d", "/a/b/c/../../..", "/\x00nul", "/with space/x", "/uni/日本語", "~/日本語", strings.Repeat("/a", 200),
@@ -459,7 +458,7 @@ func (g *goldenRec) recorder(label string, rec *httptest.ResponseRecorder, json 
 	for _, k := range keys {
 		hdr = append(hdr, k+"="+strings.Join(res.Header[k], ","))
 	}
-	body := testDirSuffix.ReplaceAllString(g.scrubber.Replace(rec.Body.String()), "TestSearchrpcGolden<N>")
+	body := testDirSuffix.ReplaceAllString(g.scrubber.Replace(rec.Body.String()), "<TESTTMP>")
 	body = symlinkSize.ReplaceAllString(body, "${1}0")
 	body = dirSize.ReplaceAllString(body, "${1}0")
 	if json {
