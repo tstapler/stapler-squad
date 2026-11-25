@@ -70,7 +70,7 @@ export function PaneHeader({
           title="Drag to swap with another pane"
           aria-label="Drag to swap panes"
           data-testid={`pane-drag-handle-${pane.id}`}
-        >
+        >{/* analytics-exempt */}
           <GripVertical size={14} aria-hidden="true" />
         </span>
       )}

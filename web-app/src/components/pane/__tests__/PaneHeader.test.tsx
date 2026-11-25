@@ -1,3 +1,4 @@
+import type AxeCore from "axe-core";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import { PaneHeader } from "../PaneHeader";
@@ -158,7 +159,7 @@ describe("PaneHeader — drag handle accessibility", () => {
   // axe `aria-prohibited-attr`: aria-label is not allowed on a role-less <span> (failed the UX Analysis axe spec).
   it("drag handle carries a role that permits its aria-label", async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const axe = require("axe-core") as typeof import("axe-core");
+    const axe = require("axe-core") as typeof AxeCore;
     const { container } = renderHeader({ onDragStart: jest.fn() });
 
     const handle = screen.getByTestId("pane-drag-handle-p1");
