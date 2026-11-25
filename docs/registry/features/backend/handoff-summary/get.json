@@ -5,7 +5,7 @@
   "method": "GetHandoffSummary",
   "protoFile": "proto/session/v1/handoff_summary.proto",
   "markerFound": true,
-  "handlerFile": "server/services/handoff_summary_service.go",
+  "handlerFile": "server/services/summaryrpc/handoff_summary_service.go",
   "tested": true,
   "testIds": [
     "TestGetHandoffSummary_ReturnsNilWhenNoRowExists",

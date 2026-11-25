@@ -1,4 +1,4 @@
-package services
+package summaryrpc
 
 import (
 	"context"
@@ -33,10 +33,10 @@ type liveInstanceFinder interface {
 // Reads/writes the SessionSummary ent table directly, via generator.FindRowBySessionID
 // (never via SessionService's live-instance machinery), so a summary remains
 // retrievable after its Session row is gone (AC-3). Queries are delegated to
-// SessionSummaryGenerator rather than issuing them here because server/services must
-// not import session/ent's query/error-handling helpers directly (.golangci.yml's
-// no_ent_in_services/forbidigo rules) — ent access stays confined to the session
-// package, translated to the domain.ErrNotFound sentinel at the boundary.
+// SessionSummaryGenerator rather than issuing them here because server/services code
+// must not use session/ent's query helpers (.golangci.yml's no_ent_in_services/forbidigo
+// rules; this leaf imports session/ent only for the row type, by explicit exclusion);
+// errors translate to the domain.ErrNotFound sentinel at the boundary.
 type SessionSummaryService struct {
 	generator *summaries.SessionSummaryGenerator
 	instances liveInstanceFinder
