@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
@@ -94,7 +95,7 @@ type ServerDependencies struct {
 	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
 	// from wireDepsIntoServer with the server's lifecycle context so it stops cleanly
 	// on shutdown.
-	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+	ClaudeSettingsWatcher *claudesettings.ClaudeSettingsWatcher
 
 	// SlackNotifier is the single shared Slack notifier instance, wired into
 	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
@@ -612,7 +613,7 @@ type RuntimeDeps struct {
 
 	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
 	// its full doc comment).
-	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+	ClaudeSettingsWatcher *claudesettings.ClaudeSettingsWatcher
 
 	// SlackNotifier is the single shared Slack notifier instance (see the
 	// identically-named field on ServerDependencies for its full doc comment).

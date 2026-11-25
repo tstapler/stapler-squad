@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session"
@@ -63,7 +64,7 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 
 // GetClaudeSettingsWatcher returns the claude-settings file watcher for starting/stopping it
 // with the server lifecycle (see wireDepsIntoServer).
-func (s *SessionService) GetClaudeSettingsWatcher() *ClaudeSettingsWatcher {
+func (s *SessionService) GetClaudeSettingsWatcher() *claudesettings.ClaudeSettingsWatcher {
 	if s.rulesSvc == nil {
 		return nil
 	}

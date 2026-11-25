@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
@@ -723,7 +724,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 // so it can be unit-tested directly without needing config.IsTestMode() to be false.
 func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassifier, cwd string, eventBus *events.EventBus) {
 	var claudeSettingsRules []classifier.Rule
-	for _, result := range LoadClaudeSettingsRulesDetailed(cwd) {
+	for _, result := range claudesettings.LoadClaudeSettingsRulesDetailed(cwd) {
 		claudeSettingsRules = append(claudeSettingsRules, result.Rules...)
 	}
 	if len(claudeSettingsRules) == 0 {
@@ -897,7 +898,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
 	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
-	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
+	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
 		rulesSvc.rebuildClaudeSettingsRules(rules)
 		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
 		// notify is false for Start()'s initial priming reload — the operator already saw a

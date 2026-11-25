@@ -123,6 +123,7 @@ filegroup(
         "//server/services/auditkit:go_sources",
         "//server/services/backlogflow:go_sources",
         "//server/services/backlogsvc:go_sources",
+        "//server/services/claudesettings:go_sources",
         "//server/services/credkit:go_sources",
         "//server/services/debugseed:go_sources",
         "//server/services/devtools:go_sources",

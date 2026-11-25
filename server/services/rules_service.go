@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -61,7 +62,7 @@ type RulesService struct {
 	// claudeSettingsWatcher owns the fsnotify watch + debounce + last-known-good cache for
 	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
 	// is unavailable) — ReloadClaudeSettingsRules degrades to CodeUnimplemented in that case.
-	claudeSettingsWatcher *ClaudeSettingsWatcher
+	claudeSettingsWatcher *claudesettings.ClaudeSettingsWatcher
 
 	// approvalSvc is nil until SetApprovalService is called — reconcilePendingApprovals
 	// no-ops when nil, same idiom as claudeSettingsWatcher.
@@ -106,7 +107,7 @@ type reconciliationResolver interface {
 // SetClaudeSettingsWatcher wires the watcher constructed alongside this service in
 // NewSessionService. Same same-function setter-injection idiom as SetHistoryLinker/
 // SetHeadlessPool elsewhere in this package.
-func (rs *RulesService) SetClaudeSettingsWatcher(w *ClaudeSettingsWatcher) {
+func (rs *RulesService) SetClaudeSettingsWatcher(w *claudesettings.ClaudeSettingsWatcher) {
 	rs.claudeSettingsWatcher = w
 }
 
