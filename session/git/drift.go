@@ -19,7 +19,7 @@ import (
 const DefaultBranchDriftThreshold = 50
 
 // SteeringBranchDriftThreshold is the lower drift threshold used by the PostToolUse
-// steering hook (server/services/hook_receiver_drift.go) that fires after every git
+// steering hook (server/services/hookrecv/hook_receiver_drift.go) that fires after every git
 // commit/push inside an autonomous backlog work session. Deliberately smaller than
 // DefaultBranchDriftThreshold: that threshold governs when review itself blocks and
 // is calibrated to "comfortably past normal multi-day activity"; this one governs

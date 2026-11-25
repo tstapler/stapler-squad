@@ -133,6 +133,7 @@ filegroup(
         "//server/services/fsops:go_sources",
         "//server/services/fsops/fsopstest:go_sources",
         "//server/services/fsops/memfs:go_sources",
+        "//server/services/hookrecv:go_sources",
         "//server/services/importsvc:go_sources",
         "//server/services/insights:go_sources",
         "//server/services/internal/streammetrics:go_sources",
