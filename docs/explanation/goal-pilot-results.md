@@ -21,7 +21,7 @@ Status: **runner and operator command built, hook coexistence checked live once,
 ## Hook coexistence
 
 - Verified statically (`settings_test.go`): the generated settings file holds Stapler Squad's Stop and PermissionRequest hooks and no `/goal` hook, because `/goal` registers its own session-scoped Stop hook at runtime. The two live in different sources, so they cannot overwrite each other in the file.
-- **Verified at runtime (one live run, `claude -p '/goal the file hello.txt exists ... or stop after 3 turns' --output-format stream-json --verbose --settings s.json --max-budget-usd 0.30 --model haiku`):** `s.json` held only a Stop hook that appends a line to a marker file. Outcome: exit 0, result `subtype=success`, 4 turns, `total_cost_usd` 0.0145, goal met (`hello.txt` created), and the marker file had exactly one line, so the settings-file Stop hook fired once alongside `/goal`'s without error. Single run, one condition; it does not show behaviour when the goal is not met.
+- **Verified at runtime (one live run, `claude -p '/goal the file hello.txt exists ... or stop after 3 turns' --output-format stream-json --verbose --settings s.json --max-budget-usd 0.30 --model haiku`):** `s.json` held only a Stop hook that appends a line to a marker file. Outcome: exit 0, result `subtype=success`, 4 turns, `total_cost_usd` 0.0145, goal met (`hello.txt` created), and the marker file had exactly one line, so the settings-file Stop hook fired once and the `/goal` run still completed without error (I did not separately observe `/goal`'s own hook firing). Single run, one condition; it does not show behaviour when the goal is not met.
 
 ## Comparison plan
 
