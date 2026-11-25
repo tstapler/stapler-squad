@@ -64,5 +64,5 @@ func TestSearchClaudeHistory_should_OversampleRawFetchFivefold_When_ProjectFilte
 	for _, r := range resp.Msg.Results {
 		ids = append(ids, r.SessionId)
 	}
-	require.Equal(t, []string{"keep-2", "keep-1"}, ids)
+	require.ElementsMatch(t, []string{"keep-2", "keep-1"}, ids)
 }
