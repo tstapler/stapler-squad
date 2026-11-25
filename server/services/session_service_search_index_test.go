@@ -81,7 +81,7 @@ func TestNewSessionServiceWithSearchEngine_UsesInjectedEngine(t *testing.T) {
 	if svc == nil {
 		t.Fatal("NewSessionServiceWithSearchEngine returned nil")
 	}
-	if svc.searchSvc.searchEngine != injected {
+	if svc.searchSvc.SearchEngine() != injected {
 		t.Error("NewSessionServiceWithSearchEngine did not wire through the injected search engine")
 	}
 }

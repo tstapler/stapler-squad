@@ -14,7 +14,7 @@ import (
 // (it's an atomic pointer), but two t.Parallel() tests both redirecting it still race
 // semantically: one test's log lines would land in another test's capture buffer.
 // Every swap site in this package (captureLogs, captureInfoLog/captureErrorLog in
-// session_service_client_log_test.go, and the inline swaps in search_service_test.go
+// session_service_client_log_test.go, and the inline swaps in searchrpc/search_service_test.go
 // and slack_notifier_test.go) must hold this lock for the full swap-to-restore window.
 var SlogDefaultMu sync.Mutex
 
