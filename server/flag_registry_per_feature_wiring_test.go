@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/forwardsync"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -139,7 +140,7 @@ func TestNewServerWithDeps_ShouldWireServiceRegistryIntoFlagGates(t *testing.T) 
 		require.NotNil(t, gate, "wireDepsIntoServer must start the progress-sync subscriber")
 		return gate()
 	}
-	wantProgress := services.GitHubIssueProgressCommentsEnabled(plain)
+	wantProgress := forwardsync.GitHubIssueProgressCommentsEnabled(plain)
 	assert.Equal(t, wantProgress, progressGate(plain))
 	assert.Equal(t, !wantProgress, progressGate(flipFlagDefault("github_issue_progress_comments")), "subscriber gate follows the service registry")
 }

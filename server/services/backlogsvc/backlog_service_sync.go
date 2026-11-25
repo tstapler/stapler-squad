@@ -225,7 +225,7 @@ func (s *BacklogService) TriggerSync(
 
 // Registry returns the plugin registry backing TriggerSync, or nil if none is
 // wired. Exposed so server.go can wire the GitHub forward-sync EventBus
-// subscriber (server/services/backlog_github_forward_sync.go) with the same
+// subscriber (server/services/forwardsync/backlog_github_forward_sync.go) with the same
 // registry TriggerSync uses, without needing its own copy of the dependency
 // graph that builds it (see server/dependencies.go's syncRegistry).
 func (s *BacklogService) Registry() *session.PluginRegistry {

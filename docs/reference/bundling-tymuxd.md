@@ -104,7 +104,7 @@ already-gated global default, then `BackendTmux`. This override path is
 the global default (same property as `StreamHubSessionOverrides`).
 
 `TymuxRolloutService.SetTymuxSessionOverride` (the ConnectRPC handler in
-`server/services/tymux_rollout_service.go`) is a real, working implementation:
+`server/services/adminmisc/tymux_rollout_service.go`) is a real, working implementation:
 it forwards its request's tri-state `force_tymux` field straight to
 `config.SetTymuxSessionOverride`, and `GetTymuxRolloutStatus` reports the
 current `TymuxSessionOverrides` map back in full — so an operator-facing
@@ -325,7 +325,7 @@ an unverified peer.
 | Fetch/embed the binary | `scripts/fetch-tymuxd.sh`, `Makefile` (`fetch-tymuxd`, `build-tymuxd-embed`, `build-embedded-tymux`), `session/tymux/binary_embedded.go` |
 | Global rollout gate | `config.ResolveGlobalTymuxDefault`, `config.RecordTymuxRollbackRehearsalCompleted`, `STAPLER_SQUAD_USE_TYMUX`, `main.go`'s `resolveStartupBackend` |
 | Per-session override | `config.SetTymuxSessionOverride`/`GetTymuxSessionOverride`, `config.TymuxSessionOverrides`, `session.ResolveSessionBackend` |
-| Operator RPC surface | `server/services/tymux_rollout_service.go` (`TymuxRolloutService`) |
+| Operator RPC surface | `server/services/adminmisc/tymux_rollout_service.go` (`TymuxRolloutService`) |
 | Supervision | `session/tymux/supervise.go` (`EnsureDaemonRunning`, `checkDaemonHealthy`, `StopTymuxd`), `session/procbackend/backend_tymux.go` |
 | Keep-alive across restarts | `--tymuxd-keep-server` (`main.go`) |
 | Decisions | `project_plans/tymux-bundled-integration/decisions/ADR-001` through `ADR-004` |
