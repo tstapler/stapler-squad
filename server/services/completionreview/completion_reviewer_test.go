@@ -1,4 +1,4 @@
-package services
+package completionreview
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -243,7 +244,7 @@ func TestFileMemoryStore_Append_ConcurrentWrites_NeverCorrupt(t *testing.T) {
 }
 
 func TestCompletionReviewerFlag_should_BeRegisteredDefaultOff(t *testing.T) {
-	for _, f := range testFlagRegistry().Specs() {
+	for _, f := range flagsvc.FlagRegistry().Specs() {
 		if f.Name == featureflags.CompletionReviewerFlagName {
 			assert.False(t, f.Default)
 			return
