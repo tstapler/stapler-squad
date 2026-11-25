@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
@@ -27,7 +28,7 @@ import (
 func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	svc := services.NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	return func(name string, on bool) {
 		t.Helper()
 		_, err := svc.UpdateFeatureFlag(context.Background(),

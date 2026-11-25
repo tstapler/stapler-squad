@@ -1,14 +1,14 @@
-package services
+package flagsvc
 
 import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 )
 
-// sessionMultiPRFlagAuditPolicies audits the multi-PR flags like the
+// SessionMultiPRFlagAuditPolicies audits the multi-PR flags like the
 // notification-actions flags: turning one on loosens (it opens a new reader or
 // scan path), so the flip is audit-fsynced and refused while the sink is down.
-func sessionMultiPRFlagAuditPolicies() map[string]featureflags.FlagAuditPolicy {
+func SessionMultiPRFlagAuditPolicies() map[string]featureflags.FlagAuditPolicy {
 	return map[string]featureflags.FlagAuditPolicy{
 		config.SessionMultiPRFlag: {
 			Loosening: notificationActionsFlagAuditPolicy.Loosening,

@@ -17,18 +17,16 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-// githubIssueProgressCommentsFlagName gates the in_progress and review comments.
-const githubIssueProgressCommentsFlagName = "github_issue_progress_comments"
-
 // GitHubIssueProgressCommentsEnabled reads the flag live, so a Settings toggle
 // applies without a restart.
 func GitHubIssueProgressCommentsEnabled(reg *featureflags.Registry) bool {
-	return flagReader{reg}.enabled(config.LoadConfig(), githubIssueProgressCommentsFlagName)
+	return flagsvc.FlagReader{Reg: reg}.Enabled(config.LoadConfig(), featureflags.GithubIssueProgressCommentsFlagName)
 }
 
 // issueProgressCommenter posts a comment and returns the issue's post-comment

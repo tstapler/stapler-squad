@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"os"
@@ -10,12 +10,12 @@ import (
 )
 
 var attentionFlagNames = []string{
-	attentionProseQuestionDetectionFlagName,
-	sessionEventLogFlagName,
-	attentionAckBypassFixFlagName,
-	attentionIdleClockOutputFlagName,
-	attentionProseQuestionLLMTiebreakFlagName,
-	attentionInboxConsolidationFlagName,
+	AttentionProseQuestionDetectionFlagName,
+	SessionEventLogFlagName,
+	AttentionAckBypassFixFlagName,
+	AttentionIdleClockOutputFlagName,
+	AttentionProseQuestionLLMTiebreakFlagName,
+	AttentionInboxConsolidationFlagName,
 }
 
 func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceForEachOfSixFlags(t *testing.T) {
@@ -51,7 +51,7 @@ func TestFlagFlip_Should_TakeEffectNextPollCycleWithoutRestart_When_SetLive(t *t
 	before := LoadAttentionFlags(testFlagRegistry())
 	require.False(t, before.ProseQuestionDetection)
 
-	require.NoError(t, flagUpdate(svc, attentionProseQuestionDetectionFlagName, true))
+	require.NoError(t, flagUpdate(svc, AttentionProseQuestionDetectionFlagName, true))
 
 	require.True(t, LoadAttentionFlags(testFlagRegistry()).ProseQuestionDetection)
 	require.False(t, before.ProseQuestionDetection, "a snapshot taken for a cycle must not change mid-cycle")

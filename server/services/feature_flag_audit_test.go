@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
@@ -25,12 +26,12 @@ const (
 	// flagTightening and flagLoosening are existing registry flags used as
 	// stand-ins: one audited as a tightening flip, one with a loosening policy.
 	flagTightening = "backlog:conversation-view"
-	flagLoosening  = programCLIFlagProbeFlagName // default on; turning it off loosens
+	flagLoosening  = flagsvc.ProgramCLIFlagProbeFlagName // default on; turning it off loosens
 	flagHatch      = "backlog:sdd-default-pipeline"
 )
 
 type auditEnv struct {
-	svc      *FeatureFlagService
+	svc      *flagsvc.FeatureFlagService
 	sink     *auditkit.AuditSink
 	mfs      *memfs.MemFS
 	clk      *gateTestClock
@@ -50,7 +51,7 @@ func newAuditEnv(t *testing.T) *auditEnv {
 		auditkit.WithAuditFS(e.mfs), auditkit.WithAuditClock(e.clk.Now), auditkit.WithAuditLogger(lg),
 		auditkit.WithAuditAfter(func(time.Duration) <-chan time.Time { return e.timeout }),
 		auditkit.WithAuditDegradedCounter(func(m string) { e.mu.Lock(); e.degraded[m]++; e.mu.Unlock() }))
-	e.svc = NewFeatureFlagService()
+	e.svc = flagsvc.NewFeatureFlagService()
 	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{
 		flagTightening: {},
 		flagLoosening:  {Loosening: func(enabled bool) bool { return !enabled }},
@@ -237,7 +238,7 @@ func TestFlagChangeAudit_ShouldGiveEachFlipItsOwnChangeIDAndIncreasingSeq_WhenFl
 
 func TestUpdateFeatureFlag_ShouldRollBackADefaultOnFlagByDeletion_WhenNoAuditIsConfigured(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	svc.SetFeatureController(flagLoosening, &fakeFeatureController{enabled: true, failDisable: assert.AnError})
 	_, err := svc.UpdateFeatureFlag(context.Background(),
 		connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{Name: flagLoosening, Enabled: false}))

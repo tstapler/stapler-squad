@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -15,7 +16,7 @@ import (
 
 func TestConfigSurfaceProof_SessionMultiPR_ChangesReader(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		smprSet(t, svc, config.SessionMultiPRScopePoller, setting.(bool))
 		return config.SessionMultiPR(config.SessionMultiPRScopePoller)
@@ -26,7 +27,7 @@ func TestConfigSurfaceProof_SessionMultiPR_ChangesReader(t *testing.T) {
 // flip must not change it (the scope is read as an explicit override only).
 func TestConfigSurfaceProof_SessionMultiPR_RefresherOff_StopsRefresher(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		off := setting.(bool) // the value under test is "refresher runs"
 		mutation := sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE

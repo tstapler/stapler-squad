@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"slices"
@@ -13,21 +13,21 @@ import (
 // Spec.Default is what GetFeatureFlags reports and what the call site resolves to when never persisted.
 var coreFlagSpecTable = []featureflags.Spec{
 	{
-		Name:        programCLIFlagProbeFlagName,
+		Name:        ProgramCLIFlagProbeFlagName,
 		Description: "Check that a program exists on the server and read its --help flags (Program Config and session creation). Turn off to disable the ProbeProgram RPC immediately. Default: on.",
 		Default:     true,
 	},
 	{
-		Name:        githubIssueProgressCommentsFlagName,
+		Name:        featureflags.GithubIssueProgressCommentsFlagName,
 		Description: "Comment on the linked GitHub issue when a backlog item starts work (in_progress, naming the host) and when it opens a PR (review). The done-transition close comment is not gated by this flag. Default: off.",
 	},
 	{
-		Name:        ChangelogFlagName,
+		Name:        featureflags.ChangelogFlagName,
 		Description: "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
 		Default:     true,
 	},
 	{
-		Name:        UpdateCheckFlagName,
+		Name:        featureflags.UpdateCheckFlagName,
 		Description: "Update check: poll GitHub Releases (ETag-conditional, at most every 6 hours) and show a badge when a newer release exists. Contacts api.github.com, so it is opt-in. Never runs on source builds. Requires the changelog flag. Default: off.",
 	},
 	{
@@ -59,7 +59,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Show a formatted 'Review Results' panel (overall outcome, per-criterion rows with evidence, raw-JSON toggle) on the backlog item detail view. Default: off.",
 	},
 	{
-		Name:        blockApprovalOnCIFailureFlagName,
+		Name:        BlockApprovalOnCIFailureFlagName,
 		Description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
 	},
 	{
@@ -67,7 +67,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
 	},
 	{
-		Name:        completionReviewerFlagName,
+		Name:        featureflags.CompletionReviewerFlagName,
 		Description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
@@ -108,11 +108,11 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
 	{
-		Name:        githubPriorityAdmissionFlagName,
+		Name:        GithubPriorityAdmissionFlagName,
 		Description: "Priority-aware admission control for outbound GitHub API calls: background pollers/sync back off once a resource's (core/search/graphql) remaining quota drops below a reserved headroom, so interactive GitHub actions (merge, comment, refresh) keep succeeding. Protects this stapler-squad instance's own interactive GitHub calls only — does not coordinate with other machines sharing the same GitHub token. Default: off.",
 	},
 	{
-		Name:        githubGraphQLMigrationFlagName,
+		Name:        GithubGraphQLMigrationFlagName,
 		Description: "Route GetPRInfoCtx's PR-metadata fetch through a single native GraphQL request instead of the `gh pr view` CLI shell-out, cutting the REST-equivalent call count for PR status refreshes. Default: off.",
 	},
 	{
@@ -121,7 +121,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Default:     config.DefaultTCCEnrichmentConsent,
 	},
 	{
-		Name:        worktreeChangeDetectionFlagName,
+		Name:        WorktreeChangeDetectionFlagName,
 		Description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
 	{
@@ -224,32 +224,32 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Scopes:      gateFlagScopes(),
 	},
 	{
-		Name:        terminalWriteLeaseFlagName,
+		Name:        featureflags.TerminalWriteLeaseFlagName,
 		Description: "Per-session terminal write lease: the driver's prompt and answer keys, steers, nudges, MCP writes and rate-limit recovery take turns writing to a session's terminal instead of interleaving. Turn off only to restore the pre-lease behavior if the lease misbehaves (every write then proceeds unserialized). Applies at once; global only. Default: on.",
 		Default:     true,
 	},
 	{
-		Name:        hiddenSessionReplyFlagName,
+		Name:        featureflags.HiddenSessionReplyFlagName,
 		Description: "Hidden-session Reply: answer a background session's single-select question from the toast, tray or read-only view by writing one option digit to its terminal. The kill switch for the Reply path only; it does not affect the write guards. Every reply is audited before it is written. Applies at once; global only. Default: on.",
 		Default:     true,
 	},
 	{
-		Name:        backgroundActivityFeedFlagName,
+		Name:        BackgroundActivityFeedFlagName,
 		Description: "Background tab activity feed: show what each background session actually did (finished, stopped, waiting) instead of the history-only selector. Turn off to restore the legacy selector with no data impact. Turning it back on after an explicit off is audit-fsynced and refused while the audit sink is down. Applies at once; global only. Default: on.",
 		Default:     backgroundActivityFeedDefault,
 	},
 	{
-		Name:        notificationInlineActionsFlagName,
+		Name:        NotificationInlineActionsFlagName,
 		Description: "Inline notification actions: approve, deny, answer and decide from the notification row. Server-checked on every invocation; off reduces actions to Open session and keeps the legacy approve/deny path. Scopes: channel:remote, channel:remote:tierB, action:<kind>. Applies at once. Default: off.",
 		Scopes:      notificationInlineActionScopes(),
 	},
 	{
-		Name:        askUserQuestionStructuredFlagName,
+		Name:        AskUserQuestionStructuredFlagName,
 		Description: "Structured AskUserQuestion: render, answer and hook-reply stages for durable question rows. A stage's new writes are refused when it resolves off; existing rows stay visible. Scopes: stage:render, stage:answer, stage:hook_reply (each also needs the stage before it). Applies at once. Default: off.",
 		Scopes:      askUserQuestionStructuredScopes(),
 	},
 	{
-		Name:        agentWakeTriggersFlagName,
+		Name:        AgentWakeTriggersFlagName,
 		Description: "Agent wake triggers: the dispatcher and the schedule_wake, list_wakes, cancel_wake and request_help tools. Off stops the dispatcher and the tools return flag_off; rows are kept. Scopes: trigger:<type>, tool:<name>; a scoped true runs the dispatcher for that type only. Applies at once. Default: off.",
 		Scopes:      agentWakeTriggerScopes(),
 	},
@@ -263,7 +263,7 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Artifact scan v2: the rescan that rebuilds every session's artifact blob with typed records. Off until the owner flips it after a dry run on a database copy; turning it off stops further rescans. Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        hiddenSessionReadonlyGuardsFlagName,
+		Name:        featureflags.HiddenSessionReadonlyGuardsFlagName,
 		Description: "Hidden-session write guards: the UI's write RPCs (terminal input, steer, restart, workspace switch, program and auto-approve changes) refuse a hidden (background) session, except the backlog Steer of a live review session, which stays audited. Turn off only to restore the previous behavior if a guard blocks a legitimate action; every write allowed while off is recorded in the audit log. Applies at once; global only. Default: on.",
 		Default:     true,
 	},
@@ -288,56 +288,56 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Default:     config.WorkflowEngineEnforceSystemDefault,
 	},
 	{
-		Name:        filesEditingFlagName,
+		Name:        FilesEditingFlagName,
 		Description: "Files editing: allow saving edits from the Files tab (WriteFile). Enforced server-side; hidden-session and archived-session guards still apply. Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        filesViewerV2FlagName,
+		Name:        FilesViewerV2FlagName,
 		Description: "Files viewer v2: the revamped Files tab layout and content search. Turn off to fall back to the legacy layout at the next mount. Applies at once; global only. Default: on.",
 		Default:     true,
 	},
 	{
-		Name:        filesMergePhoneFlagName,
+		Name:        FilesMergePhoneFlagName,
 		Description: "Files phone merge: the conflict-merge UI on phone-sized screens. Turn off to fall back to keep-mine/keep-theirs only. Applies at once; global only. Default: on.",
 		Default:     true,
 	},
 	{
-		Name:        filesRangeReadFlagName,
+		Name:        FilesRangeReadFlagName,
 		Description: "Files ranged reads: serve large files in byte ranges (ADR-036). Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        filesDeltaWriteFlagName,
+		Name:        FilesDeltaWriteFlagName,
 		Description: "Files delta writes: save large-file edits as patches (ADR-036). Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        filesEditLargeFlagName,
+		Name:        FilesEditLargeFlagName,
 		Description: "Files large-file editing: allow editing files over the 1 MiB cap through ranged reads and delta writes (ADR-036). Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        attentionProseQuestionDetectionFlagName,
+		Name:        AttentionProseQuestionDetectionFlagName,
 		Description: "Attention prose-question detection: treat a turn that ends in a plain-prose question as needing you (an Asked a question item). Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        sessionEventLogFlagName,
+		Name:        SessionEventLogFlagName,
 		Description: "Session event log: record per-session attention events (turn ends, state changes) for the timeline. Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        attentionAckBypassFixFlagName,
+		Name:        AttentionAckBypassFixFlagName,
 		Description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        attentionIdleClockOutputFlagName,
+		Name:        AttentionIdleClockOutputFlagName,
 		Description: "Attention idle clock from output: measure idleness and waiting-for-agent time from the last meaningful output instead of any touch. Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        attentionProseQuestionLLMTiebreakFlagName,
+		Name:        AttentionProseQuestionLLMTiebreakFlagName,
 		Description: "Attention prose-question LLM tiebreak: ask a model to settle borderline prose-question detections. Needs prose-question detection on. Applies at once; global only. Default: off.",
 	},
 	{
-		Name:        attentionInboxConsolidationFlagName,
+		Name:        AttentionInboxConsolidationFlagName,
 		Description: "Attention inbox consolidation: show the unified Attention list in place of the separate review queue views. Applies at once; global only. Default: off.",
 	},
 }
 
 // coreFlagSpecs returns a copy so callers cannot reorder or edit the table.
-func coreFlagSpecs() []featureflags.Spec { return slices.Clone(coreFlagSpecTable) }
+func CoreFlagSpecs() []featureflags.Spec { return slices.Clone(coreFlagSpecTable) }

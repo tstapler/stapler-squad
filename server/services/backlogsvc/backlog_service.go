@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -573,7 +574,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		sourceBackend:        storage,
 		sessionCreator:       creator,
 		cfg:                  cfg,
-		flags:                services.FlagRegistry(),
+		flags:                flagsvc.FlagRegistry(),
 		engine:               engine,
 		pipelineEngine:       pipelineEngine,
 		pipelineModeRepo:     pipelineModeRepo,

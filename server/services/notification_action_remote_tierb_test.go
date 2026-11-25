@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -17,13 +18,13 @@ import (
 func remoteTierBEnv(t *testing.T, tierB bool) (*routerEnv, *NotificationActionDispatcher) {
 	t.Helper()
 	e := newRouterEnv(t) // isolates the state dir, so flags are set after it
-	enableInline(t, "action:ANSWER_QUESTION", scopeChannelRemote)
+	enableInline(t, "action:ANSWER_QUESTION", flagsvc.ScopeChannelRemote)
 	if tierB {
-		require.NoError(t, config.LoadConfig().SetFeatureFlagScope(notificationInlineActionsFlagName, scopeChannelTierB, true))
+		require.NoError(t, config.LoadConfig().SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopeChannelTierB, true))
 	}
 	audit := &recordingAudit{}
 	d := NewNotificationActionDispatcher(ActionDelegates{Questions: e.router}, func() actionAudit { return audit }, testFlagRegistry())
-	d.flags = configActionFlags{ev: compiledFlagEvidence, fr: flagReader{testFlagRegistry()}}
+	d.flags = configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
 	return e, d
 }
 

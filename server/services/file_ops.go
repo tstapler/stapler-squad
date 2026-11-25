@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -22,18 +23,30 @@ type FilesFlags interface {
 	EditLarge(ctx context.Context) bool
 }
 
-type globalFilesFlags struct{ reader flagReader }
+type globalFilesFlags struct{ reader flagsvc.FlagReader }
 
 func (f globalFilesFlags) enabled(name string) bool {
-	return f.reader.enabled(config.LoadConfig(), name)
+	return f.reader.Enabled(config.LoadConfig(), name)
 }
 
-func (f globalFilesFlags) Editing(context.Context) bool    { return f.enabled(filesEditingFlagName) }
-func (f globalFilesFlags) ViewerV2(context.Context) bool   { return f.enabled(filesViewerV2FlagName) }
-func (f globalFilesFlags) MergePhone(context.Context) bool { return f.enabled(filesMergePhoneFlagName) }
-func (f globalFilesFlags) RangeRead(context.Context) bool  { return f.enabled(filesRangeReadFlagName) }
-func (f globalFilesFlags) DeltaWrite(context.Context) bool { return f.enabled(filesDeltaWriteFlagName) }
-func (f globalFilesFlags) EditLarge(context.Context) bool  { return f.enabled(filesEditLargeFlagName) }
+func (f globalFilesFlags) Editing(context.Context) bool {
+	return f.enabled(flagsvc.FilesEditingFlagName)
+}
+func (f globalFilesFlags) ViewerV2(context.Context) bool {
+	return f.enabled(flagsvc.FilesViewerV2FlagName)
+}
+func (f globalFilesFlags) MergePhone(context.Context) bool {
+	return f.enabled(flagsvc.FilesMergePhoneFlagName)
+}
+func (f globalFilesFlags) RangeRead(context.Context) bool {
+	return f.enabled(flagsvc.FilesRangeReadFlagName)
+}
+func (f globalFilesFlags) DeltaWrite(context.Context) bool {
+	return f.enabled(flagsvc.FilesDeltaWriteFlagName)
+}
+func (f globalFilesFlags) EditLarge(context.Context) bool {
+	return f.enabled(flagsvc.FilesEditLargeFlagName)
+}
 
 // FilePolicy holds the collaborators every file operation shares. Guard is read by
 // the FileWriter only; Telemetry serves that writer and the search handler.
@@ -59,7 +72,7 @@ type FileOps struct {
 // and a nil Telemetry records nothing.
 func NewFileOps(policy FilePolicy, backend fsops.FileBackend) *FileOps {
 	if policy.Flags == nil {
-		policy.Flags = globalFilesFlags{reader: flagReader{FlagRegistry()}}
+		policy.Flags = globalFilesFlags{reader: flagsvc.FlagReader{Reg: flagsvc.FlagRegistry()}}
 	}
 	if policy.Telemetry == nil {
 		policy.Telemetry = fsops.NoopFilesTelemetry{}

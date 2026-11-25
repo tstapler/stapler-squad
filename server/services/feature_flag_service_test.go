@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/paneactivity"
@@ -46,7 +47,7 @@ func (probeStubHandler) ProbeProgram(context.Context, *connect.Request[sessionv1
 func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	path, handler := sessionv1connect.NewSessionServiceHandler(probeStubHandler{}, connect.WithInterceptors(
-		interceptors.NewScopedFeatureFlagInterceptor(programCLIFlagProbeFlagName, func() bool { return ProgramCLIFlagProbeEnabled(testFlagRegistry()) }, ProgramCLIFlagProbeGatedMethod)))
+		interceptors.NewScopedFeatureFlagInterceptor(flagsvc.ProgramCLIFlagProbeFlagName, func() bool { return flagsvc.ProgramCLIFlagProbeEnabled(testFlagRegistry()) }, flagsvc.ProgramCLIFlagProbeGatedMethod)))
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 	ts := httptest.NewServer(mux)
@@ -58,14 +59,14 @@ func TestProgramCLIFlagProbe_should_GateProbeProgramPerRequest_When_FlagToggled(
 	}
 
 	require.NoError(t, call(), "default is on when never persisted")
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(programCLIFlagProbeFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.ProgramCLIFlagProbeFlagName, false))
 	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(call()))
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(programCLIFlagProbeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.ProgramCLIFlagProbeFlagName, true))
 	require.NoError(t, call())
 }
 
 func TestFeatureFlagService_should_ListProbeFlagDefaultOn_When_NeverPersisted(t *testing.T) {
-	require.True(t, testFlagRegistry().Default(programCLIFlagProbeFlagName))
+	require.True(t, testFlagRegistry().Default(flagsvc.ProgramCLIFlagProbeFlagName))
 }
 
 // recordingObserver is a deliverygate.FlagObserver that records the names it is told about.
@@ -86,7 +87,7 @@ func (r *recordingObserver) seen() []string {
 	return append([]string(nil), r.names...)
 }
 
-func flagUpdate(svc *FeatureFlagService, name string, enabled bool) error {
+func flagUpdate(svc *flagsvc.FeatureFlagService, name string, enabled bool) error {
 	_, err := svc.UpdateFeatureFlag(context.Background(),
 		connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{Name: name, Enabled: enabled}))
 	return err
@@ -98,7 +99,7 @@ func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testin
 	svctest.WithIsolatedStateDir(t)
 	const flag = "browser-passthrough"
 	const iterations = 50
-	flags := NewFeatureFlagService()
+	flags := flagsvc.NewFeatureFlagService()
 	quota := NewQuotaSettingsService()
 
 	errCh := make(chan error, 2*iterations)
@@ -140,7 +141,7 @@ func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testin
 	}
 }
 
-func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
+func statusDetailOf(t *testing.T, svc *flagsvc.FeatureFlagService, name string) string {
 	t.Helper()
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
@@ -155,7 +156,7 @@ func statusDetailOf(t *testing.T, svc *FeatureFlagService, name string) string {
 
 func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_WhenFlagIsFlippedOrRolledBack(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	obs := &recordingObserver{}
 	svc.SetFlagObserver(obs)
 
@@ -169,7 +170,7 @@ func TestUpdateFeatureFlag_ShouldNotifyTheFlagObserverAfterEveryPersistedChange_
 
 func TestUpdateFeatureFlag_ShouldRefuseOnlyEnablingWithFailedPrecondition_WhenEnableGuardReportsAReason(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	reason := "stats writer not running"
 	svc.SetEnableGuard("backlog", func() string { return reason })
 
@@ -196,7 +197,7 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 	names := []string{"stats writer not running", "Gate is OFF", "Gate is OFF for kind review"}
 	perms := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
 	for _, p := range perms {
-		svc := NewFeatureFlagService()
+		svc := flagsvc.NewFeatureFlagService()
 		want := make([]string, 0, 3)
 		for _, i := range p {
 			svc.AddStatusDetailSource("backlog", sources[names[i]])
@@ -205,7 +206,7 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 		require.Equal(t, strings.Join(want, "; "), statusDetailOf(t, svc, "backlog"), "order %v", p)
 	}
 
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.Equal(t, "", statusDetailOf(t, svc, "backlog"), "an empty detail means no source contributed")
 	svc.AddStatusDetailSource("backlog", func() string { return "" })
 	require.Equal(t, "", statusDetailOf(t, svc, "backlog"))
@@ -218,7 +219,7 @@ func TestStatusDetail_ShouldJoinEverySourceInRegistrationOrderAndKeepTheSetterSl
 
 func TestFeatureFlagStatusDetail_ReportsInertAndSource_WhenStallNudgeOnDiagnoseOff(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 
 	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.AutonomousStallNudgeFeatureFlag))
 	require.Equal(t, "Default: Off (not set explicitly)", statusDetailOf(t, svc, config.DiagnoseNudgeFeatureFlag))
@@ -247,7 +248,7 @@ func TestModeResolver_ReturnsShadow_WhenNoFlagSetAndReaderIsProductionReader(t *
 	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineShadowFeatureFlag, "fixture: nothing is set")
 	require.NotContains(t, cfg.FeatureFlags, config.WorkflowEngineEnforceFeatureFlag, "fixture: nothing is set")
 
-	src := NewWorkflowEngineModeSource(config.LoadConfig, nil, testFlagRegistry())
+	src := flagsvc.NewWorkflowEngineModeSource(config.LoadConfig, nil, testFlagRegistry())
 
 	require.Equal(t, workflowengine.ModeShadow, src.Mode(), "an unset shadow flag resolves to its registered default (on), not Off")
 }
@@ -275,24 +276,24 @@ func TestModeFlags_DefaultShadowOnEnforceOff_AndComposeToThreeLegalModes(t *test
 		{"both explicit off", set(map[string]bool{shadow: false, enforce: false}), workflowengine.ModeOff},
 	}
 	for _, tc := range cases {
-		require.Equal(t, tc.want, WorkflowEngineModeFromConfig(tc.cfg, testFlagRegistry()), tc.name)
+		require.Equal(t, tc.want, flagsvc.WorkflowEngineModeFromConfig(tc.cfg, testFlagRegistry()), tc.name)
 	}
 }
 
 func TestWorkflowEngineModeFlags_AreLive_WhenToggledThroughUpdateFeatureFlag(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)}
-	src := NewWorkflowEngineModeSource(config.LoadConfig, clock, testFlagRegistry())
-	svc := NewFeatureFlagService()
+	src := flagsvc.NewWorkflowEngineModeSource(config.LoadConfig, clock, testFlagRegistry())
+	svc := flagsvc.NewFeatureFlagService()
 	require.Equal(t, workflowengine.ModeShadow, src.Mode())
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
 	require.Equal(t, workflowengine.ModeShadow, src.Mode(), "the cached mode is reused inside the TTL")
-	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	clock.Advance(flagsvc.WorkflowEngineModeTTL + time.Millisecond)
 	require.Equal(t, workflowengine.ModeEnforce, src.Mode(), "enforce applies after at most the TTL, no restart")
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
-	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	clock.Advance(flagsvc.WorkflowEngineModeTTL + time.Millisecond)
 	require.Equal(t, workflowengine.ModeShadow, src.Mode())
 }
 
@@ -306,7 +307,7 @@ func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(
 	require.Equal(t, config.WorkflowEngineEnforceDefault, got[config.WorkflowEngineEnforceFeatureFlag])
 
 	// GetFeatureFlags reports the same defaults the production reader resolves.
-	resp, err := NewFeatureFlagService().GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	resp, err := flagsvc.NewFeatureFlagService().GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
 	reported := map[string]bool{}
 	for _, f := range resp.Msg.Flags {
@@ -314,7 +315,7 @@ func TestWorkflowEngineModeFlags_RegistryDefaultsMatchConfigAndProductionReader(
 	}
 	require.True(t, reported[config.WorkflowEngineShadowFeatureFlag])
 	require.False(t, reported[config.WorkflowEngineEnforceFeatureFlag])
-	require.Equal(t, workflowengine.ModeShadow, NewWorkflowEngineModeSource(config.LoadConfig, nil, testFlagRegistry()).Mode())
+	require.Equal(t, workflowengine.ModeShadow, flagsvc.NewWorkflowEngineModeSource(config.LoadConfig, nil, testFlagRegistry()).Mode())
 }
 
 // plainFlagReads returns "file:line" for each plain GetFeatureFlag call (which
@@ -401,13 +402,13 @@ func f(c *C) bool { return c.GetFeatureFlagWithDefault(config.WorkflowEngineShad
 func modeFlagObservable(t *testing.T, flag string, enabled bool, observe func(*workflowengine.SwitchableWorkflowEngine, *countingShadow) any) any {
 	t.Helper()
 	clock := &modeTestClock{now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)}
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
 	require.NoError(t, flagUpdate(svc, flag, enabled))
 	rec := &countingShadow{}
 	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil,
-		NewWorkflowEngineModeSource(config.LoadConfig, clock, testFlagRegistry()), workflowengine.WithShadowRecorder(rec))
+		flagsvc.NewWorkflowEngineModeSource(config.LoadConfig, clock, testFlagRegistry()), workflowengine.WithShadowRecorder(rec))
 	return observe(sel, rec)
 }
 
@@ -506,7 +507,7 @@ func TestModeFor_OperatorRowMatchesProductionReader_ForEveryFlagCombination(t *t
 				flags[enforce] = *e
 			}
 			cfg := &config.Config{FeatureFlags: flags}
-			require.Equalf(t, WorkflowEngineModeFromConfig(cfg, testFlagRegistry()), workflowengine.ModeForClassFlags(domain.ClassOperator, cfg), "flags=%v", flags)
+			require.Equalf(t, flagsvc.WorkflowEngineModeFromConfig(cfg, testFlagRegistry()), workflowengine.ModeForClassFlags(domain.ClassOperator, cfg), "flags=%v", flags)
 		}
 	}
 }
@@ -546,27 +547,27 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
-	src := workflowengine.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock)
-	svc := NewFeatureFlagService()
+	src := workflowengine.NewFlagClassModeSource(config.LoadConfig, flagsvc.WorkflowEngineModeTTL, clock)
+	svc := flagsvc.NewFeatureFlagService()
 	require.Equal(t, workflowengine.ModeShadow, src.ModeFor(domain.ClassOperator))
 	require.Equal(t, workflowengine.ModeShadow, src.ModeFor(domain.ClassAgent))
 	require.Equal(t, workflowengine.ModeOff, src.ModeFor(domain.CallerClass("bogus")))
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
 	require.Equal(t, workflowengine.ModeShadow, src.ModeFor(domain.ClassOperator), "cached inside the TTL")
-	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	clock.Advance(flagsvc.WorkflowEngineModeTTL + time.Millisecond)
 	require.Equal(t, workflowengine.ModeEnforce, src.ModeFor(domain.ClassOperator))
 	require.Equal(t, workflowengine.ModeEnforce, src.Mode(), "Mode() is the operator class")
 	require.Equal(t, workflowengine.ModeShadow, src.ModeFor(domain.ClassAgent), "the operator flag does not enforce another class")
 	require.Equal(t, workflowengine.ModeShadow, src.ModeFor(domain.ClassSystem))
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, true))
-	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	clock.Advance(flagsvc.WorkflowEngineModeTTL + time.Millisecond)
 	require.Equal(t, workflowengine.ModeEnforce, src.ModeFor(domain.ClassAgent))
 	require.Equal(t, workflowengine.ModeShadow, src.ModeFor(domain.ClassSystem), "the agent flag does not enforce the system class")
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceSystemFeatureFlag, true))
-	clock.Advance(workflowEngineModeTTL + time.Millisecond)
+	clock.Advance(flagsvc.WorkflowEngineModeTTL + time.Millisecond)
 	require.Equal(t, workflowengine.ModeEnforce, src.ModeFor(domain.ClassSystem))
 }
 
@@ -576,12 +577,12 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionA
 	require.True(t, ok)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		clock := &modeTestClock{now: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
-		svc := NewFeatureFlagService()
+		svc := flagsvc.NewFeatureFlagService()
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, false))
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceSystemFeatureFlag, setting.(bool)))
-		sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
+		sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, flagsvc.NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
 		// idea->done has no edge: an unchecked system write is allowed until its class enforces.
 		return sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil)
 	}, true, false)
@@ -593,11 +594,11 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAns
 	require.True(t, ok)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
-		svc := NewFeatureFlagService()
+		svc := flagsvc.NewFeatureFlagService()
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineShadowFeatureFlag, true))
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, false))
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, setting.(bool)))
-		sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
+		sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, flagsvc.NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
 		// idea->done has no edge: an unchecked agent write is allowed until its class enforces.
 		return sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil)
 	}, true, false)
@@ -606,17 +607,17 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAns
 func TestSelectorModeFor_UsesTheClassAwareSource(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
 	sel := workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil,
-		workflowengine.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock))
+		workflowengine.NewFlagClassModeSource(config.LoadConfig, flagsvc.WorkflowEngineModeTTL, clock))
 	require.Equal(t, workflowengine.ModeEnforce, sel.ModeFor(domain.ClassOperator))
 	require.Equal(t, workflowengine.ModeShadow, sel.ModeFor(domain.ClassAgent))
 }
 
 func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFlag(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	ctx := context.Background()
 	helpers := []struct {
 		name string
@@ -643,7 +644,7 @@ func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFla
 
 func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	for _, name := range []string{
 		"files:editing", "files:viewer-v2", "files:merge-phone",
 		"files:range-read", "files:delta-write", "files:edit-large",
@@ -664,14 +665,14 @@ func TestFilesFlags_ShouldRejectScopedUpdate_When_ScopeSupplied(t *testing.T) {
 // GetFeatureFlagWithDefault for a registered flag. The literal agrees with the
 // registry today; the list is a ratchet, so a new literal fails the test.
 var dfltKnownLiteralSites = map[string]bool{
-	"server/changelog_handler.go|" + ChangelogFlagName:                       true,
-	"server/changelog_handler.go|" + UpdateCheckFlagName:                     true,
-	"server/services/guards_flag.go|" + hiddenSessionReadonlyGuardsFlagName:  true,
-	"server/services/hidden_question_reply.go|" + hiddenSessionReplyFlagName: true,
-	"server/services/lease_flag.go|" + terminalWriteLeaseFlagName:            true,
-	"github/client.go|" + githubGraphQLMigrationFlagName:                     true,
-	"github/http_client.go|" + githubPriorityAdmissionFlagName:               true,
-	"session/gitwt/manager.go|" + worktreeChangeDetectionFlagName:            true,
+	"server/changelog_handler.go|" + featureflags.ChangelogFlagName:                       true,
+	"server/changelog_handler.go|" + featureflags.UpdateCheckFlagName:                     true,
+	"server/services/guards_flag.go|" + featureflags.HiddenSessionReadonlyGuardsFlagName:  true,
+	"server/services/hidden_question_reply.go|" + featureflags.HiddenSessionReplyFlagName: true,
+	"server/services/lease_flag.go|" + featureflags.TerminalWriteLeaseFlagName:            true,
+	"github/client.go|" + flagsvc.GithubGraphQLMigrationFlagName:                          true,
+	"github/http_client.go|" + flagsvc.GithubPriorityAdmissionFlagName:                    true,
+	"session/gitwt/manager.go|" + flagsvc.WorktreeChangeDetectionFlagName:                 true,
 }
 
 // dfltKnownPlainReadDisagreements are plain GetFeatureFlag reads of a flag whose
@@ -879,7 +880,7 @@ func f(c *C) { c.GetFeatureFlagWithDefault(a, featureFlagDefault(a)) }`)
 	require.Empty(t, dfltDefaultViolations(files, dfltStringConsts(files)))
 }
 
-func flagStates(t *testing.T, svc *FeatureFlagService) map[string]bool {
+func flagStates(t *testing.T, svc *flagsvc.FeatureFlagService) map[string]bool {
 	t.Helper()
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
@@ -892,7 +893,7 @@ func flagStates(t *testing.T, svc *FeatureFlagService) map[string]bool {
 
 func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAliveFalse_WhenFreshConfig(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	got := flagStates(t, NewFeatureFlagService())
+	got := flagStates(t, flagsvc.NewFeatureFlagService())
 
 	for name, want := range map[string]bool{
 		"request_coalescing":   true,
@@ -910,7 +911,7 @@ func TestGetFeatureFlags_ShouldReportCoalescingTrueWsFalseWsRemoteFalseKeepAlive
 
 func TestKnownFeatureFlags_ShouldReportKeepAliveFalse_WhenFreshConfig_AndTrueAfterFlip(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.False(t, flagStates(t, svc)["window_keep_alive"])
 
 	require.NoError(t, flagUpdate(svc, "window_keep_alive", true))
@@ -927,7 +928,7 @@ var mobileInputFlagDefaults = map[string]bool{
 
 func TestListFeatureFlags_ShouldIncludeMobileInputLayerWithMergedDefaultAndKillSwitchDescription_When_FreshServer(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	resp, err := NewFeatureFlagService().GetFeatureFlags(context.Background(),
+	resp, err := flagsvc.NewFeatureFlagService().GetFeatureFlags(context.Background(),
 		connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
 	byName := map[string]*sessionv1.FeatureFlag{}
@@ -947,7 +948,7 @@ func TestListFeatureFlags_ShouldIncludeMobileInputLayerWithMergedDefaultAndKillS
 
 func TestMobileInputLayer_ShouldBeLiveSettable_When_UpdateFeatureFlag(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	require.NoError(t, flagUpdate(svc, "mobile_input_layer", false))
 	require.False(t, flagStates(t, svc)["mobile_input_layer"])
 	require.NoError(t, flagUpdate(svc, "mobile_input_layer", true))

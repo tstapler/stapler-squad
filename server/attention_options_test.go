@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 func TestAttentionFlagsCache_Should_ReloadOnlyAfterTTL_When_FlagFlips(t *testing.T) {
@@ -16,7 +16,7 @@ func TestAttentionFlagsCache_Should_ReloadOnlyAfterTTL_When_FlagFlips(t *testing
 	c := &attentionFlagsCache{
 		ttl:  5 * time.Second,
 		now:  func() time.Time { return clock },
-		load: func() services.AttentionFlags { loads++; return services.AttentionFlags{AckBypassFix: ackBypass} },
+		load: func() flagsvc.AttentionFlags { loads++; return flagsvc.AttentionFlags{AckBypassFix: ackBypass} },
 	}
 
 	_, r := c.options()

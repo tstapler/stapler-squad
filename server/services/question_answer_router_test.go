@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -275,13 +276,13 @@ func TestAnswerRouter_ShouldReportTheRouteOfEachSessionState(t *testing.T) {
 	tests := []struct {
 		name      string
 		sessionID string
-		want      answerRoute
+		want      flagsvc.AnswerRoute
 		known     bool
 	}{
-		{"hidden live", e.inst.UUID, routeLiveKeystrokeHidden, true},
-		{"visible live", visible.UUID, routeLiveKeystrokeVisible, true},
-		{"stopped", stopped.UUID, routeDurableRecord, true},
-		{"archived", archived.UUID, routeDurableRecord, true},
+		{"hidden live", e.inst.UUID, flagsvc.RouteLiveKeystrokeHidden, true},
+		{"visible live", visible.UUID, flagsvc.RouteLiveKeystrokeVisible, true},
+		{"stopped", stopped.UUID, flagsvc.RouteDurableRecord, true},
+		{"archived", archived.UUID, flagsvc.RouteDurableRecord, true},
 		{"unknown", "nope", 0, false},
 	}
 	for _, tt := range tests {
@@ -401,7 +402,7 @@ func TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterT
 	inst, pm := e.addVisible("route-flip")
 	d := panereply.QuestionDialog{Question: "Pick a colour", Labels: []string{"Red", replyColorLabel, "Blue"}}
 	qid := e.hookRow(inst, d)
-	gated := routeDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
+	gated := flagsvc.RouteDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
 
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
 		SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-flip", ExpectedRoute: &gated,

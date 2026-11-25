@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
@@ -604,7 +605,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		connect.WithInterceptors(interceptors.NewScopedFeatureFlagInterceptor(
 			"programs:cli-flag-probe",
 			programCLIFlagProbeGate(deps.SessionService),
-			services.ProgramCLIFlagProbeGatedMethod,
+			flagsvc.ProgramCLIFlagProbeGatedMethod,
 		), interceptors.NewFederatedSessionGuard()),
 	)
 	// Build the capture tap registry now so an env-enabled tap logs its ACTIVE warning at startup.
@@ -871,7 +872,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.BacklogService != nil {
 		blOpts := append(
 			ConnectOptions(deps.ErrorRegistry),
-			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", services.BacklogFlagEnabled)),
+			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", flagsvc.BacklogFlagEnabled)),
 		)
 		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath

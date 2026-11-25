@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -480,6 +481,6 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
 	// instead of only finding out disabled on the first TriggerHandoffSummary
 	// call's Code.FailedPrecondition.
-	sessionService.SetFeatureController("handoff-summary", services.HandoffSummaryFeatureController{})
+	sessionService.SetFeatureController("handoff-summary", flagsvc.HandoffSummaryFeatureController{})
 	return nil
 }

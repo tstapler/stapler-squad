@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -79,16 +80,16 @@ type AnswerRouter struct {
 }
 
 // RouteFor says where an answer to a question of sessionID would go.
-func (r *AnswerRouter) RouteFor(sessionID string) (answerRoute, bool) {
+func (r *AnswerRouter) RouteFor(sessionID string) (flagsvc.AnswerRoute, bool) {
 	s := r.sessions(sessionID)
 	switch s.phase {
 	case phaseLive:
 		if access.AccessFor(s.inst) == access.TerminalReadOnly {
-			return routeLiveKeystrokeHidden, true
+			return flagsvc.RouteLiveKeystrokeHidden, true
 		}
-		return routeLiveKeystrokeVisible, true
+		return flagsvc.RouteLiveKeystrokeVisible, true
 	case phaseStopped, phaseArchived:
-		return routeDurableRecord, true
+		return flagsvc.RouteDurableRecord, true
 	case phaseUnknown:
 	}
 	return 0, false
@@ -123,7 +124,7 @@ func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "route_changed"}, nil
 	}
 	if !r.flags.Answer(gate) {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage), nil
+		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage), nil
 	}
 	switch route {
 	case domain.DeliveryRouteLiveKeystroke:

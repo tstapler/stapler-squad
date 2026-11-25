@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -532,7 +533,7 @@ func failingCIInstance(sessionID string) *instance.Instance {
 
 func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -574,7 +575,7 @@ func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
 
 func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -603,7 +604,7 @@ func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 // lookup error, since GitHubCheckConclusion is not persisted.
 func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -625,7 +626,7 @@ func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
 // never wired, e.g. an older deployment) — must behave exactly as if the flag were off.
 func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store) // liveFinder left nil
@@ -642,7 +643,7 @@ func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
 
 func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -828,7 +829,7 @@ func prViewFor(t *testing.T, number int, state domain.PRState, conclusion string
 
 func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	// The stale scalar says "success" (left by merged #11); the active PR #12 is red.
 	inst := multiPRInstance(t, "session-M", "success",
@@ -849,7 +850,7 @@ func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(
 
 func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 
 	// The scalar still says "failure" from merged #11, but the active PR #12 is green.
 	inst := multiPRInstance(t, "session-N", ciConclusionFailure,

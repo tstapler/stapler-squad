@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // globalScopeLiteral is the scope a client sends for a global set, so a client
 // that drops `scope` on a per-kind click is refused instead of writing the
 // global value.
-const globalScopeLiteral = "global"
+const GlobalScopeLiteral = "global"
 
 // ScopedFeatureController is an optional extension of FeatureController for a
 // flag whose in-process component reacts to a per-scope change. A failure rolls
@@ -74,7 +74,7 @@ func (o flagOp) mutationName() string {
 // auditScope is the scope recorded on audit lines and history entries.
 func (o flagOp) auditScope() string {
 	if o.scope == "" {
-		return globalScopeLiteral
+		return GlobalScopeLiteral
 	}
 	return o.scope
 }
@@ -111,8 +111,8 @@ func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string, reg *
 		op.enabled = op.enabling()
 		switch op.scope {
 		case "":
-			return op, invalidFlagRequest("a set needs a scope: %q for the global value or one of %v", globalScopeLiteral, scopes)
-		case globalScopeLiteral:
+			return op, invalidFlagRequest("a set needs a scope: %q for the global value or one of %v", GlobalScopeLiteral, scopes)
+		case GlobalScopeLiteral:
 			op.scope = ""
 		default:
 			if err := validKind(); err != nil {
@@ -120,7 +120,7 @@ func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string, reg *
 			}
 		}
 	case sessionv1.FlagMutation_FLAG_MUTATION_CLEAR_SCOPE:
-		if op.scope == "" || op.scope == globalScopeLiteral {
+		if op.scope == "" || op.scope == GlobalScopeLiteral {
 			return op, invalidFlagRequest("CLEAR_SCOPE needs a registered scope, got %q", op.scope)
 		}
 		if err := validKind(); err != nil {
@@ -161,7 +161,7 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 		cfg = c
 		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
 		if !hadKey {
-			previous = f.reg().Enabled(c, op.name)
+			previous = f.Registry().Enabled(c, op.name)
 		}
 		if op.isSet() {
 			c.ApplyFeatureFlagScope(op.name, op.scope, op.enabled)
@@ -180,7 +180,7 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	}
 	effective := op.enabled
 	if !op.isSet() {
-		effective = f.reg().Enabled(cfg, op.name)
+		effective = f.Registry().Enabled(cfg, op.name)
 		if audit.active() {
 			audit.enabled = effective
 		}
@@ -220,9 +220,9 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to apply scope %q of %q: %w", op.scope, op.name, ctrlErr))
 }
 
-// explicitOffKinds lists the scopable kinds with a persisted explicit false
+// ExplicitOffKinds lists the scopable kinds with a persisted explicit false
 // override of the gate flag, in the registry's order.
-func explicitOffKinds(cfg *config.Config) []deliverygate.HiddenKind {
+func ExplicitOffKinds(cfg *config.Config) []deliverygate.HiddenKind {
 	var out []deliverygate.HiddenKind
 	for _, k := range deliverygate.ScopableKinds {
 		if v, ok := cfg.GetFeatureFlagScopedOverride(config.HiddenSessionGateFeatureFlag, deliverygate.ScopeOf(k)); ok && !v {
@@ -232,11 +232,11 @@ func explicitOffKinds(cfg *config.Config) []deliverygate.HiddenKind {
 	return out
 }
 
-// kindOffStatusDetail is the per-kind half of the explicit-false status line
+// KindOffStatusDetail is the per-kind half of the explicit-false status line
 // (Task 2.11g): one phrase per kind whose override is false. It is a source on
 // the composite provider, so registration order cannot hide it.
-func kindOffStatusDetail(cfg *config.Config) string {
-	kinds := explicitOffKinds(cfg)
+func KindOffStatusDetail(cfg *config.Config) string {
+	kinds := ExplicitOffKinds(cfg)
 	parts := make([]string, 0, len(kinds))
 	for _, k := range kinds {
 		parts = append(parts, fmt.Sprintf("Gate is OFF for kind %s: hidden %s sessions deliver everything", k, k))
@@ -245,21 +245,21 @@ func kindOffStatusDetail(cfg *config.Config) string {
 }
 
 const (
-	gateShadowStatusDetail = "Shadow mode: hidden sessions still notify; would-suppress counts are logged"
+	GateShadowStatusDetail = "Shadow mode: hidden sessions still notify; would-suppress counts are logged"
 	gateOffStatusDetail    = "Gate is OFF: hidden sessions deliver everything"
 )
 
-// globalOffStatusDetail is the global half of the off status line (FG-4): the
+// GlobalOffStatusDetail is the global half of the off status line (FG-4): the
 // effective global value is off and either never set (shadow mode) or
 // explicitly false. It reads the effective value, so it goes silent once the
 // default flips on.
-func (r flagReader) globalOffStatusDetail(cfg *config.Config) string {
+func (r FlagReader) GlobalOffStatusDetail(cfg *config.Config) string {
 	name := config.HiddenSessionGateFeatureFlag
-	if r.enabled(cfg, name) {
+	if r.Enabled(cfg, name) {
 		return ""
 	}
 	if _, explicit := cfg.GetFeatureFlagOverride(name); explicit {
 		return gateOffStatusDetail
 	}
-	return gateShadowStatusDetail
+	return GateShadowStatusDetail
 }

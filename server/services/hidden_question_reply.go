@@ -26,8 +26,6 @@ import (
 // claim, audit, lease and write are PaneReplyCore (pane_reply_core.go); this
 // file keeps the hidden-only policy: the flag, the NOT_HIDDEN verdict and idempotency.
 
-const hiddenSessionReplyFlagName = "hidden_session_reply"
-
 // ReplyFlag is the live hidden_session_reply value. The zero value is OFF: a
 // flag nobody wired, or a config that could not be read, never lets a reply
 // through (fail closed).
@@ -63,7 +61,7 @@ func startupReplyFlag() bool {
 	cfg, err := config.LoadConfigFromPath(filepath.Join(dir, config.ConfigFileName))
 	switch {
 	case err == nil:
-		return cfg.GetFeatureFlagWithDefault(hiddenSessionReplyFlagName, true)
+		return cfg.GetFeatureFlagWithDefault(featureflags.HiddenSessionReplyFlagName, true)
 	case errors.Is(err, os.ErrNotExist):
 		return true
 	default:
@@ -75,8 +73,8 @@ func startupReplyFlag() bool {
 func (s *SessionService) wireReplyFlag() {
 	st := s.replyState()
 	st.flag.SetEnabled(startupReplyFlag())
-	s.featureFlagSvc.SetFeatureController(hiddenSessionReplyFlagName, replyFlagController{flag: st.flag})
-	s.featureFlagSvc.AddStatusDetailSource(hiddenSessionReplyFlagName, func() string {
+	s.featureFlagSvc.SetFeatureController(featureflags.HiddenSessionReplyFlagName, replyFlagController{flag: st.flag})
+	s.featureFlagSvc.AddStatusDetailSource(featureflags.HiddenSessionReplyFlagName, func() string {
 		if st.flag.Enabled() {
 			return ""
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -31,32 +32,32 @@ func injectedRegistry() *featureflags.Registry {
 
 func TestFeatureFlagService_ShouldListOnlyInjectedFlagsWithInjectedDefaults_WhenRegistryInjected(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	got := flagStates(t, NewFeatureFlagServiceWithRegistry(injectedRegistry()))
+	got := flagStates(t, flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry()))
 	assert.Equal(t, map[string]bool{injDefaultOn: true, injDefaultOff: false}, got)
 }
 
 func TestFeatureFlagService_ShouldUseDefaultFlagRegistry_WhenConstructedWithoutRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	got := flagStates(t, NewFeatureFlagService())
+	got := flagStates(t, flagsvc.NewFeatureFlagService())
 	assert.Len(t, got, len(testFlagRegistry().Specs()))
 	assert.NotContains(t, got, injDefaultOn)
 }
 
 func TestUpdateFeatureFlag_ShouldRejectProcessRegistryFlag_WhenRegistryInjectedWithoutIt(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 	_, err := mutateFlag(svc, gateFlag, setOn, "")
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
-	_, err = mutateFlag(svc, injDefaultOn, setOff, globalScopeLiteral)
+	_, err = mutateFlag(svc, injDefaultOn, setOff, flagsvc.GlobalScopeLiteral)
 	require.NoError(t, err)
 }
 
 func TestUpdateFeatureFlag_ShouldResetToInjectedDefault_WhenResetGlobal(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 
-	off, err := mutateFlag(svc, injDefaultOn, setOff, globalScopeLiteral)
+	off, err := mutateFlag(svc, injDefaultOn, setOff, flagsvc.GlobalScopeLiteral)
 	require.NoError(t, err)
 	assert.False(t, off.Enabled)
 
@@ -69,7 +70,7 @@ func TestUpdateFeatureFlag_ShouldResetToInjectedDefault_WhenResetGlobal(t *testi
 
 func TestUpdateFeatureFlag_ShouldFollowInjectedDefault_WhenScopedSetThenCleared(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 
 	set, err := mutateFlag(svc, injDefaultOn, setOff, injScope)
 	require.NoError(t, err)
@@ -83,7 +84,7 @@ func TestUpdateFeatureFlag_ShouldFollowInjectedDefault_WhenScopedSetThenCleared(
 
 func TestUpdateFeatureFlag_ShouldRejectScope_WhenInjectedSpecHasNone(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 	_, err := mutateFlag(svc, injDefaultOff, setOn, injScope)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
@@ -104,11 +105,11 @@ func (c *recordingController) ApplyScope(_ string, enabled bool) error {
 
 func TestUpdateFeatureFlag_ShouldEnableControllerToInjectedDefault_WhenResetGlobal(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 	ctrl := &recordingController{}
 	svc.SetFeatureController(injDefaultOn, ctrl)
 
-	_, err := mutateFlag(svc, injDefaultOn, setOff, globalScopeLiteral)
+	_, err := mutateFlag(svc, injDefaultOn, setOff, flagsvc.GlobalScopeLiteral)
 	require.NoError(t, err)
 	_, err = mutateFlag(svc, injDefaultOn, resetGlob, "")
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestUpdateFeatureFlag_ShouldEnableControllerToInjectedDefault_WhenResetGlob
 
 func TestUpdateFeatureFlag_ShouldApplyInjectedDefaultToScopedController_WhenScopeCleared(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 	ctrl := &recordingController{}
 	svc.SetFeatureController(injDefaultOn, ctrl)
 
@@ -131,7 +132,7 @@ func TestUpdateFeatureFlag_ShouldApplyInjectedDefaultToScopedController_WhenScop
 
 func TestUpdateFeatureFlag_ShouldRunEnableGuard_WhenClearingFalseScopeOverInjectedDefaultOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	svc := NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 	svc.SetEnableGuard(injDefaultOn, func() string { return "blocked" })
 
 	_, err := mutateFlag(svc, injDefaultOn, setOff, injScope)
@@ -143,7 +144,7 @@ func TestUpdateFeatureFlag_ShouldRunEnableGuard_WhenClearingFalseScopeOverInject
 
 func TestFlagChangeAudit_ShouldRecordInjectedDefaultAsPrevious_WhenFlipOfUnsetFlagApplies(t *testing.T) {
 	e := newAuditEnv(t)
-	e.svc = NewFeatureFlagServiceWithRegistry(injectedRegistry())
+	e.svc = flagsvc.NewFeatureFlagServiceWithRegistry(injectedRegistry())
 	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{
 		injDefaultOn: {Loosening: func(enabled bool) bool { return !enabled }},
 	})
@@ -161,7 +162,7 @@ func TestFeatureFlagService_ShouldReportInjectedDefaultInNudgeStatusDetail_WhenF
 	name := config.DiagnoseNudgeFeatureFlag
 	injected := !testFlagRegistry().Default(name)
 	want := map[bool]string{true: "Default: On", false: "Default: Off"}[injected]
-	svc := NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{{Name: name, Default: injected}}))
+	svc := flagsvc.NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{{Name: name, Default: injected}}))
 
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
@@ -172,7 +173,7 @@ func TestFeatureFlagService_ShouldReportInjectedDefaultInNudgeStatusDetail_WhenF
 func TestFlagChangeAudit_ShouldRecordInjectedDefaultAsPrevious_WhenScopedFlipOfUnsetFlagApplies(t *testing.T) {
 	e := newAuditEnv(t)
 	injected := !testFlagRegistry().Default(gateFlag)
-	e.svc = NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{
+	e.svc = flagsvc.NewFeatureFlagServiceWithRegistry(featureflags.NewRegistry([]featureflags.Spec{
 		{Name: gateFlag, Default: injected, Scopes: []string{injScope}},
 	}))
 	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{gateFlag: {}})
