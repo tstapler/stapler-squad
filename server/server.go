@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/escapecode"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/forwardsync"
@@ -1299,7 +1300,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	services.StartExpirationCleanup(serverCtx, deps.SessionService.GetApprovalStore(), &srv.backgroundTasksWG)
 
 	// Register Escape Code Analytics handler for debugging terminal rendering
-	escapeCodeHandler := services.NewEscapeCodeHandler()
+	escapeCodeHandler := escapecode.NewEscapeCodeHandler()
 	escapeCodeHandler.RegisterRoutes(srv.mux)
 	log.Info("Registered Escape Code Analytics handlers at /api/debug/escape-codes/*")
 

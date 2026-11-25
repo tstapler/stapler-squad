@@ -1,0 +1,8 @@
+defaults: limit=0.16666666666666666 burst=10
+a burst+overflow: 1111111111000
+c isolated: 11111111110
+a still throttled: 00
+zero value: 111111111100
+zero value defaults: limit=0.16666666666666666 burst=10
+custom burst 3: 11100
+concurrent allowed=10 buckets=1
