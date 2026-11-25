@@ -7861,6 +7861,7 @@ func TestGetLinkedItem_should_ReportHeartbeatAge_When_ProgressRecorded(t *testin
 	require.True(t, ok, "heartbeat_age_seconds missing: %v", m)
 	assert.InDelta(t, 90, age, 5)
 	assert.Contains(t, m, "last_progress_at")
+}
 
 // AC gate outcome: an honestly missed criterion (report_progress not_met + note) must reach a human
 // via review instead of looping on request_review's rejection, and must never auto-complete.
