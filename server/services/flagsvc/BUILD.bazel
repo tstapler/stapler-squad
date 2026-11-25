@@ -55,10 +55,7 @@ go_test(
         "flag_golden_test.go",
         "helpers_test.go",
     ],
-    data = glob([
-        "feature_flags_attention.go",
-        "testdata/**",
-    ]),
+    data = ["feature_flags_attention.go"] + glob(["testdata/**"]),
     embed = [":flagsvc"],
     deps = [
         "//config",
