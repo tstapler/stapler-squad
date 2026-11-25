@@ -1,4 +1,4 @@
-package services
+package forwardsync
 
 // backlog_github_forward_sync.go — EventBus subscriber implementing forward
 // sync (AC3): closing the linked GitHub issue (or moving the linked Linear/JIRA

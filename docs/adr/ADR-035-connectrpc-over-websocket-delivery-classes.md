@@ -22,7 +22,7 @@ What the code does today (read at `origin/main` f305e57ff):
 | Deny-by-default server table plus REQUEST `meta.headers` allow-list (`Connect-Protocol-Version` only). | `ws_unary_allowlist.go` |
 | Client replays a read over HTTP after `WS_CALL_TIMEOUT_MS` = 8 s, on `resource_exhausted`/`unavailable`, and on socket loss; only for names in `replayable`. A non-replayable call that loses its socket rejects. | `wsUnaryPolicy.ts` `viaWs`, `onWsError` |
 | One in-flight cap per socket (64), one writer with whole-frame priority over CHUNKs, one client send queue (64 frames / 1 MiB) shared by every call. | `ws_unary_bridge.go`, `ws_unary_writer.go`, `unary-ws-transport.ts` |
-| `POST /api/analytics` and `POST /api/client-logs` are **not Connect RPCs** (plain mux handlers, JSON). `LogClientEvents` is. | `server/server.go`, `client_log_handler.go`, `session.proto` |
+| `POST /api/analytics` and `POST /api/client-logs` are **not Connect RPCs** (plain mux handlers, JSON). `LogClientEvents` is. | `server/server.go`, `server/services/adminmisc/client_log_handler.go`, `session.proto` |
 | #1307 (open) makes the analytics batch insert `OnConflictColumns(id).DoNothing()` with a server-assigned id when the client sends none. The model for a naturally idempotent write. | PR 1307 diff |
 | Unload today: analytics drains by `sendBeacon` within a 60 KB aggregate budget then keepalive fetch; `logBuffer` flushes `LogClientEvents` through a keepalive transport; `clientLogShipper` uses keepalive fetch. | `HttpAnalyticsProvider.ts`, `logBuffer.ts`, `clientLogShipper.ts` |
 

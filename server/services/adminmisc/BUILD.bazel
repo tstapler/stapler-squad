@@ -34,6 +34,7 @@ go_test(
     srcs = [
         "adminmisc_golden_test.go",
         "circuit_breaker_handler_test.go",
+        "client_log_batch_cap_test.go",
         "client_log_handler_test.go",
         "log_level_handler_test.go",
         "tymux_rollout_service_test.go",
