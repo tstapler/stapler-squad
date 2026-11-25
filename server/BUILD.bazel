@@ -124,6 +124,7 @@ go_library(
         "//server/services/remote",
         "//server/services/sessionbundle",
         "//server/services/sessionretention",
+        "//server/services/summaryrpc",
         "//server/services/unfinishedwork",
         "//server/services/uploads",
         "//server/services/webhooktrigger",
