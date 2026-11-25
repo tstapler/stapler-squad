@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
+	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
@@ -1109,7 +1110,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// config.FeaturePiSupport as its first line and 404s when the flag is
 	// off — so with the flag off this never records into piHealthTracker's
 	// in-memory map, matching every other pi surface.
-	piHealthTracker := services.NewPiExtensionHealthTracker()
+	piHealthTracker := piextension.NewPiExtensionHealthTracker()
 	approvalHandler.SetPiExtensionHealthTracker(piHealthTracker)
 	srv.mux.HandleFunc("/api/hooks/pi-extension-loaded", approvalHandler.HandlePiExtensionLoaded)
 	log.Info("Registered pi approval-extension health-ping handler at /api/hooks/pi-extension-loaded")
@@ -1122,9 +1123,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNSPECIFIED
 		}
 		switch piHealthTracker.HealthFor(sessionID) {
-		case services.PiExtensionHealthLoaded:
+		case piextension.PiExtensionHealthLoaded:
 			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_LOADED
-		case services.PiExtensionHealthFailed:
+		case piextension.PiExtensionHealthFailed:
 			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_FAILED
 		default:
 			return sessionv1.PiExtensionHealth_PI_EXTENSION_HEALTH_UNKNOWN
@@ -1471,7 +1472,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// pi-support (Epic 2.1, Story 2.1.2): reports whether the global pi approval
 	// extension is installed, so the settings UI can gate its disable-flag warning.
-	piExtensionStatusSvc := services.NewPiExtensionStatusService()
+	piExtensionStatusSvc := piextension.NewPiExtensionStatusService()
 	srv.mux.HandleFunc("/api/pi-extension-status", piExtensionStatusSvc.HandlePiExtensionStatus)
 
 	// Register backlog attachment upload endpoint — durable image attachments
