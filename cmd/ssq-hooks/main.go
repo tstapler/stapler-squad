@@ -1449,7 +1449,7 @@ func installOpenCode() {
 // (server/services/approval_handler.go's resolveSessionID).
 //
 // Per Story 4.2.3, the ping is re-sent every piExtensionRepingInterval
-// (server/services/pi_extension_health.go) for the lifetime of the pi process, in
+// (server/services/piextension/pi_extension_health.go) for the lifetime of the pi process, in
 // addition to the initial load-time ping, so a stapler-squad server restart doesn't
 // permanently strand a live, still-enforcing session's health badge at Unknown —
 // PiExtensionHealthTracker's grace window is sized to comfortably tolerate one

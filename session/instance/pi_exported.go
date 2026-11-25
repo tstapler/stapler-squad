@@ -11,7 +11,7 @@ var (
 )
 
 // SetPiExtensionHealthForgetter wires
-// server/services.PiExtensionHealthTracker.Forget into Instance.Destroy()
+// server/services/piextension.PiExtensionHealthTracker.Forget into Instance.Destroy()
 // (pi-support Epic 4.2, closing the unbounded-map-growth gap: nothing
 // previously evicted a session's tracker entry when it was destroyed).
 // session cannot import server/services directly (services already imports

@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
@@ -83,22 +84,22 @@ type ApprovalHandler struct {
 	store               *approvalkit.ApprovalStore
 	storage             *session.Storage
 	eventBus            *events.EventBus
-	queueChecker        ReviewQueueChecker          // optional: triggers immediate review queue check on new approval
-	classifier          classifier.Classifier       // optional: auto-classify before escalating to manual review
-	analyticsStore      *AnalyticsStore             // optional: record classification decisions
-	domainChecker       *DomainAgeChecker           // optional: escalate requests to newly-registered domains
-	notificationStamper approvalNotificationStamper // optional: stamps approval outcomes on notification records
-	autoApprovalLog     autoApprovalLogger          // optional: writes silent records for auto-approved/denied ops
-	timeout             time.Duration               // default 4m; overridable in tests
-	headlessPool        headlessPoolApprover        // optional: LLM approval for autonomous sessions
-	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
-	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
-	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
-	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
-	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
-	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
-	autoApprovedGate    AutoApprovedGate            // optional: drops hidden-session auto-allow history rows (nil = append all)
-	questions           questionWiring              // optional: Reply's pending-question registry and hook-proof verification
+	queueChecker        ReviewQueueChecker                    // optional: triggers immediate review queue check on new approval
+	classifier          classifier.Classifier                 // optional: auto-classify before escalating to manual review
+	analyticsStore      *AnalyticsStore                       // optional: record classification decisions
+	domainChecker       *DomainAgeChecker                     // optional: escalate requests to newly-registered domains
+	notificationStamper approvalNotificationStamper           // optional: stamps approval outcomes on notification records
+	autoApprovalLog     autoApprovalLogger                    // optional: writes silent records for auto-approved/denied ops
+	timeout             time.Duration                         // default 4m; overridable in tests
+	headlessPool        headlessPoolApprover                  // optional: LLM approval for autonomous sessions
+	autonomousChecker   func(string) bool                     // optional: returns true if sessionID is an autonomous session
+	pollInterval        time.Duration                         // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
+	liveFinder          LiveInstanceFinder                    // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
+	slackNotifier       *SlackNotifier                        // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	dashboardBaseURLFn  func() string                         // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
+	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
+	autoApprovedGate    AutoApprovedGate                      // optional: drops hidden-session auto-allow history rows (nil = append all)
+	questions           questionWiring                        // optional: Reply's pending-question registry and hook-proof verification
 }
 
 // AutoApprovedGate decides whether an auto-approved history row is recorded for
@@ -179,7 +180,7 @@ func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
 
 // SetPiExtensionHealthTracker injects a PiExtensionHealthTracker so
 // HandlePiExtensionLoaded has somewhere to record pings (pi-support Epic 4.2).
-func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *PiExtensionHealthTracker) {
+func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *piextension.PiExtensionHealthTracker) {
 	h.piHealthTracker = t
 }
 
