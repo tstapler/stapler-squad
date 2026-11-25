@@ -29,6 +29,7 @@ server/services/access !server/web
 server/services/flagsvc !server/web
 server/services/approvalkit !server/web
 server/services/auditkit !server/web
+server/services/remote !server/web
 server/services/uploads !server/web
 server/services/claudesettings !server/web
 server/services/questionkit !server/web

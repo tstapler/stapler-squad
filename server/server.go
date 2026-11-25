@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
+	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
 	"github.com/tstapler/stapler-squad/server/services/uploads"
@@ -819,7 +820,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Error("Failed to create known_hosts store, RemoteService disabled", "err", khErr)
 	} else {
 		keyStore := sshremote.NewKeyStore()
-		remoteSvc := services.NewRemoteService(knownHosts, keyStore, config.LoadConfig)
+		remoteSvc := remote.NewRemoteService(knownHosts, keyStore, config.LoadConfig)
 		remotePath, remoteHandler := sessionv1connect.NewRemoteServiceHandler(remoteSvc, ConnectOptions(deps.ErrorRegistry)...)
 		remoteAPIPath := "/api" + remotePath
 		srv.RegisterConnectHandler(remoteAPIPath, http.StripPrefix("/api", remoteHandler))
@@ -854,15 +855,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		})
 		remotesCfg := config.LoadConfig().Remotes
 		for i := range remotesCfg {
-			remote := &remotesCfg[i]
-			prober, proberErr := services.BuildRemoteHealthProber(serverCtx, remote, tmux.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
+			rc := &remotesCfg[i]
+			prober, proberErr := remote.BuildRemoteHealthProber(serverCtx, rc, tmux.DefaultSSHClientPool(), knownHosts, keyStore, healthPublisher)
 			if proberErr != nil {
-				log.Error("failed to build RemoteHealthProber, connection indicator will not update live for this remote", "remote", remote.Name, "err", proberErr)
+				log.Error("failed to build RemoteHealthProber, connection indicator will not update live for this remote", "remote", rc.Name, "err", proberErr)
 				continue
 			}
 			prober.Start(serverCtx)
 			srv.shutdownHooks = append(srv.shutdownHooks, prober.Stop)
-			log.Info("RemoteHealthProber started", "remote", remote.Name)
+			log.Info("RemoteHealthProber started", "remote", rc.Name)
 		}
 	}
 
