@@ -16,7 +16,7 @@ If you rely on being paged, test your Slack and web-push setup yourself.
 ## Flags
 
 Four flags control the feature. A flip applies at once, with no restart
-(`server/services/feature_flag_specs.go`, the `featureflags.Spec` entries).
+(`server/services/flagsvc/feature_flag_specs.go`, the `featureflags.Spec` entries).
 
 | Flag | Default | What it turns on |
 |---|---|---|
@@ -27,7 +27,7 @@ Four flags control the feature. A flip applies at once, with no restart
 
 With `notification_inline_actions` off, every row reduces to Open session and the
 older approve and deny path still works. An action refused for a flag returns the copy
-"This action is turned off. Open session." (`server/services/feature_flags_notification_actions.go`,
+"This action is turned off. Open session." (`server/services/flagsvc/feature_flags_notification_actions.go`,
 `flagOffMessage`).
 
 ### Flip a flag
@@ -46,7 +46,7 @@ Turning a flag on is audited and is refused while the audit sink is down
 (`notificationActionsFlagAuditPolicy`). Turning it off is not refused.
 
 Two stages stay closed whatever you set, because the code gates them on a spike result
-that is not recorded yet (`server/services/feature_flags_notification_actions.go`):
+that is not recorded yet (`server/services/flagsvc/feature_flags_notification_actions.go`):
 
 - `stage:hook_reply` needs `spikeS1HookReplyPassed`, currently `false`.
 - `channel:remote:tierB` needs `spikeS6TierBPassed`, currently `false`.

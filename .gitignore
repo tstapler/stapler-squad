@@ -175,3 +175,4 @@ docs-coverage-trend.json
 !server/services/access/testdata/*.gz
 # The questionkit parity golden is tracked too
 !server/services/questionkit/testdata/*.gz
+!server/services/flagsvc/testdata/*.gz

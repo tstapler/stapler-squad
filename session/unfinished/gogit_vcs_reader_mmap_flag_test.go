@@ -3,7 +3,7 @@ package unfinished
 // White-box test proving the "unfinished:mmap-index" feature flag actually
 // controls gogitstore's mmap loader dynamically — no process restart, via
 // the same persisted config the Settings UI's feature-flag toggle writes to
-// (server/services/feature_flag_service.go, config.SetFeatureFlag). See
+// (server/services/flagsvc/feature_flag_service.go, config.SetFeatureFlag). See
 // gogit_vcs_reader.go's syncMmapIndexFlag and
 // session/unfinished/design/mmap-activation-runbook.md.
 

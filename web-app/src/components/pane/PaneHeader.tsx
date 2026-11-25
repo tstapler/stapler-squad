@@ -8,6 +8,7 @@ import { SessionActionsOverflow } from "@/components/sessions/SessionActionsOver
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { usePaneContext } from "./PaneContext";
+import { titleFirstLine } from "@/lib/pane/paneUtils";
 import {
   paneHeader,
   paneTitle,
@@ -52,7 +53,7 @@ export function PaneHeader({
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
     : null;
   const sessionActions = useSessionActions(session?.id ?? "");
-  const titleText = isListPane ? "Sessions" : (session ? session.title : "Empty");
+  const titleText = isListPane ? "Sessions" : (session ? titleFirstLine(session.title) : "Empty");
 
   return (
     <div
@@ -74,7 +75,7 @@ export function PaneHeader({
           <GripVertical size={14} aria-hidden="true" />
         </span>
       )}
-      <span className={paneTitle} title={titleText}>
+      <span className={paneTitle} title={session?.title ?? titleText}>
         {titleText}
       </span>
       {session && <BacklogOriginBadge entry={backlogIndex.get(session.id)} compact />}

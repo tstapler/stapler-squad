@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"context"
@@ -19,25 +19,25 @@ import (
 // config.GetFeatureFlagScoped resolver.
 
 const (
-	backgroundActivityFeedFlagName    = "background_activity_feed"
-	notificationInlineActionsFlagName = "notification_inline_actions"
-	askUserQuestionStructuredFlagName = "askuserquestion_structured"
-	agentWakeTriggersFlagName         = "agent_wake_triggers"
+	BackgroundActivityFeedFlagName    = "background_activity_feed"
+	NotificationInlineActionsFlagName = "notification_inline_actions"
+	AskUserQuestionStructuredFlagName = "askuserquestion_structured"
+	AgentWakeTriggersFlagName         = "agent_wake_triggers"
 )
 
 // Decision points (scopes) of the flags. Prefixes are the scope vocabulary.
 const (
-	scopeStageRender    = "stage:render"
-	scopeStageAnswer    = "stage:answer"
-	scopeStageHookReply = "stage:hook_reply"
-	scopeChannelRemote  = "channel:remote"
-	scopeChannelTierB   = "channel:remote:tierB"
+	ScopeStageRender    = "stage:render"
+	ScopeStageAnswer    = "stage:answer"
+	ScopeStageHookReply = "stage:hook_reply"
+	ScopeChannelRemote  = "channel:remote"
+	ScopeChannelTierB   = "channel:remote:tierB"
 
-	scopePrefixAction  = "action:"
-	scopePrefixTrigger = "trigger:"
-	scopePrefixTool    = "tool:"
+	ScopePrefixAction  = "action:"
+	ScopePrefixTrigger = "trigger:"
+	ScopePrefixTool    = "tool:"
 
-	actionKindAnswerQuestion = "ANSWER_QUESTION"
+	ActionKindAnswerQuestion = "ANSWER_QUESTION"
 )
 
 // The nominal flag defaults, also the registry defaultValue entries.
@@ -46,7 +46,7 @@ const backgroundActivityFeedDefault = true
 // MCP tools and inline action kinds accepted as scopes (plan Data Model).
 var (
 	wakeToolScopes        = []string{"schedule_wake", "list_wakes", "cancel_wake", "request_help", "request_owner_action"}
-	inlineActionKindNames = []string{"APPROVE", "DENY", actionKindAnswerQuestion, "BACKLOG_DECISION", "ANSWER_GUIDANCE", "CANCEL_WAKE", "CANCEL_PEER_HELP"}
+	inlineActionKindNames = []string{"APPROVE", "DENY", ActionKindAnswerQuestion, "BACKLOG_DECISION", "ANSWER_GUIDANCE", "CANCEL_WAKE", "CANCEL_PEER_HELP"}
 )
 
 func prefixed(prefix string, names []string) []string {
@@ -58,42 +58,42 @@ func prefixed(prefix string, names []string) []string {
 }
 
 func notificationInlineActionScopes() []string {
-	return append([]string{scopeChannelRemote, scopeChannelTierB}, prefixed(scopePrefixAction, inlineActionKindNames)...)
+	return append([]string{ScopeChannelRemote, ScopeChannelTierB}, prefixed(ScopePrefixAction, inlineActionKindNames)...)
 }
 
 func askUserQuestionStructuredScopes() []string {
-	return []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply}
+	return []string{ScopeStageRender, ScopeStageAnswer, ScopeStageHookReply}
 }
 
 // agentWakeTriggerScopes derives the trigger scopes from the domain's closed set,
 // so a new wake trigger type gets its `trigger:<name>` scope automatically.
 func agentWakeTriggerScopes() []string {
-	return append(prefixed(scopePrefixTrigger, domain.AllWakeTriggerTypeNames()), prefixed(scopePrefixTool, wakeToolScopes)...)
+	return append(prefixed(ScopePrefixTrigger, domain.AllWakeTriggerTypeNames()), prefixed(ScopePrefixTool, wakeToolScopes)...)
 }
 
 // Spike evidence compiled in until it is recorded (ADR-008): a gate that needs a
 // spike result stays closed while the constant is false.
 const (
-	// spikeS1HookReplyPassed gates stage:hook_reply; flip when S1 PASS is recorded.
-	spikeS1HookReplyPassed = false
-	// spikeS6TierBPassed gates channel:remote:tierB: S6 PASS (authenticated remote chain,
+	// SpikeS1HookReplyPassed gates stage:hook_reply; flip when S1 PASS is recorded.
+	SpikeS1HookReplyPassed = false
+	// SpikeS6TierBPassed gates channel:remote:tierB: S6 PASS (authenticated remote chain,
 	// research/spike-S6.md) plus the Story 2.8 remote-chain test. The scope itself stays opt-in.
-	spikeS6TierBPassed = true
+	SpikeS6TierBPassed = true
 )
 
-// flagReader resolves flag decisions against an injected registry. A nil
+// FlagReader resolves flag decisions against an injected registry. A nil
 // registry is a programming error: registry() panics rather than guessing defaults.
-type flagReader struct{ reg *featureflags.Registry }
+type FlagReader struct{ Reg *featureflags.Registry }
 
-func (r flagReader) registry() *featureflags.Registry {
-	if r.reg == nil {
+func (r FlagReader) registry() *featureflags.Registry {
+	if r.Reg == nil {
 		panic("services: flagReader has no registry; inject one from the composition root")
 	}
-	return r.reg
+	return r.Reg
 }
 
-// enabled resolves name against cfg with the injected registry's default.
-func (r flagReader) enabled(cfg *config.Config, name string) bool {
+// Enabled resolves name against cfg with the injected registry's default.
+func (r FlagReader) Enabled(cfg *config.Config, name string) bool {
 	return r.registry().Enabled(cfg, name)
 }
 
@@ -123,13 +123,13 @@ var notificationActionsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 	Loosening: func(enabled bool) bool { return enabled },
 }
 
-// notificationActionsFlagAuditPolicies is merged into the service's audit wiring.
-func notificationActionsFlagAuditPolicies() map[string]featureflags.FlagAuditPolicy {
+// NotificationActionsFlagAuditPolicies is merged into the service's audit wiring.
+func NotificationActionsFlagAuditPolicies() map[string]featureflags.FlagAuditPolicy {
 	return map[string]featureflags.FlagAuditPolicy{
-		backgroundActivityFeedFlagName:    notificationActionsFlagAuditPolicy,
-		notificationInlineActionsFlagName: notificationActionsFlagAuditPolicy,
-		askUserQuestionStructuredFlagName: notificationActionsFlagAuditPolicy,
-		agentWakeTriggersFlagName:         notificationActionsFlagAuditPolicy,
+		BackgroundActivityFeedFlagName:    notificationActionsFlagAuditPolicy,
+		NotificationInlineActionsFlagName: notificationActionsFlagAuditPolicy,
+		AskUserQuestionStructuredFlagName: notificationActionsFlagAuditPolicy,
+		AgentWakeTriggersFlagName:         notificationActionsFlagAuditPolicy,
 	}
 }
 
@@ -153,11 +153,11 @@ func startupFlagValue(name string, def bool) bool {
 	}
 }
 
-// wireNotificationActionFlags connects the four flags to live controllers and
+// WireNotificationActionFlags connects the four flags to live controllers and
 // their status_detail. Decision points read the config at decision time via
 // effectiveFlag, so a scoped flip needs no controller.
-func wireNotificationActionFlags(ff *FeatureFlagService) {
-	reg := ff.reg()
+func WireNotificationActionFlags(ff *FeatureFlagService) {
+	reg := ff.Registry()
 	wire := func(name string, ctrl func(liveFlagController) featureflags.FeatureController, offDetail string) {
 		f := &liveFlag{}
 		f.on.Store(startupFlagValue(name, reg.Default(name)))
@@ -169,125 +169,125 @@ func wireNotificationActionFlags(ff *FeatureFlagService) {
 			return offDetail
 		})
 	}
-	wire(backgroundActivityFeedFlagName, func(c liveFlagController) featureflags.FeatureController {
+	wire(BackgroundActivityFeedFlagName, func(c liveFlagController) featureflags.FeatureController {
 		return backgroundActivityFeedFlagController{c}
 	}, backgroundActivityFeedOffDetail)
-	wire(notificationInlineActionsFlagName, func(c liveFlagController) featureflags.FeatureController {
+	wire(NotificationInlineActionsFlagName, func(c liveFlagController) featureflags.FeatureController {
 		return notificationInlineActionsFlagController{c}
 	}, "Inline notification actions are OFF globally; per-action scopes can still enable a decision point")
-	wire(askUserQuestionStructuredFlagName, func(c liveFlagController) featureflags.FeatureController {
+	wire(AskUserQuestionStructuredFlagName, func(c liveFlagController) featureflags.FeatureController {
 		return askUserQuestionStructuredFlagController{c}
 	}, "Structured AskUserQuestion is OFF globally; per-stage scopes can still enable a stage")
-	wire(agentWakeTriggersFlagName, func(c liveFlagController) featureflags.FeatureController { return agentWakeTriggersFlagController{c} }, "Agent wake triggers are OFF globally; per-trigger scopes can still enable a trigger type")
+	wire(AgentWakeTriggersFlagName, func(c liveFlagController) featureflags.FeatureController { return agentWakeTriggersFlagController{c} }, "Agent wake triggers are OFF globally; per-trigger scopes can still enable a trigger type")
 }
 
-// flagOffMessage is the operator copy for the FLAG_OFF action outcome (UX-AC55,
+// FlagOffMessage is the operator copy for the FLAG_OFF action outcome (UX-AC55,
 // UX-AC57); the web counterpart is flagOffMessage in useFeatureFlagValue.ts.
-const flagOffMessage = "This action is turned off. Open session."
+const FlagOffMessage = "This action is turned off. Open session."
 
-// answerRoute is where an ANSWER_QUESTION write goes; it picks the route gate.
-type answerRoute int
+// AnswerRoute is where an ANSWER_QUESTION write goes; it picks the route gate.
+type AnswerRoute int
 
 const (
 	// routeLiveKeystrokeHidden is a live_keystroke write into a hidden session.
-	routeLiveKeystrokeHidden answerRoute = iota
+	RouteLiveKeystrokeHidden AnswerRoute = iota
 	// routeLiveKeystrokeVisible is a live_keystroke write into a visible session.
-	routeLiveKeystrokeVisible
+	RouteLiveKeystrokeVisible
 	// routeDurableRecord is a stored answer (resume, stopped session, agent_mcp row).
-	routeDurableRecord
+	RouteDurableRecord
 	// routeHookReply is a hook_reply write.
-	routeHookReply
+	RouteHookReply
 )
 
-// flagEvidence carries the inputs besides config the matrix needs.
-type flagEvidence struct {
-	s1HookReplyPass bool
-	s6TierBPass     bool
+// FlagEvidence carries the inputs besides config the matrix needs.
+type FlagEvidence struct {
+	S1HookReplyPass bool
+	S6TierBPass     bool
 }
 
-var compiledFlagEvidence = flagEvidence{s1HookReplyPass: spikeS1HookReplyPassed, s6TierBPass: spikeS6TierBPassed}
+var CompiledFlagEvidence = FlagEvidence{S1HookReplyPass: SpikeS1HookReplyPassed, S6TierBPass: SpikeS6TierBPassed}
 
-// effectiveFlag resolves one decision point of name against the live config,
+// EffectiveFlag resolves one decision point of name against the live config,
 // applying the dependency order of the plan's flag matrix (ADR-008).
-func (r flagReader) effectiveFlag(name, decisionPoint string) bool {
-	return r.resolveEffectiveFlag(config.LoadConfig(), compiledFlagEvidence, name, decisionPoint)
+func (r FlagReader) EffectiveFlag(name, decisionPoint string) bool {
+	return r.ResolveEffectiveFlag(config.LoadConfig(), CompiledFlagEvidence, name, decisionPoint)
 }
 
-// effectiveAnswerQuestion resolves the three-flag ANSWER_QUESTION composition.
-func (r flagReader) effectiveAnswerQuestion(route answerRoute) bool {
-	return r.resolveAnswerQuestion(config.LoadConfig(), compiledFlagEvidence, route)
+// EffectiveAnswerQuestion resolves the three-flag ANSWER_QUESTION composition.
+func (r FlagReader) EffectiveAnswerQuestion(route AnswerRoute) bool {
+	return r.ResolveAnswerQuestion(config.LoadConfig(), CompiledFlagEvidence, route)
 }
 
-func (r flagReader) scoped(cfg *config.Config, name, scope string) bool {
+func (r FlagReader) scoped(cfg *config.Config, name, scope string) bool {
 	return r.registry().EnabledScoped(cfg, name, scope)
 }
 
-// resolveEffectiveFlag is effectiveFlag over an injected config and evidence.
+// ResolveEffectiveFlag is effectiveFlag over an injected config and evidence.
 // An unknown decision point of a known flag resolves false (fail closed).
-func (r flagReader) resolveEffectiveFlag(cfg *config.Config, ev flagEvidence, name, dp string) bool {
+func (r FlagReader) ResolveEffectiveFlag(cfg *config.Config, ev FlagEvidence, name, dp string) bool {
 	switch name {
-	case backgroundActivityFeedFlagName:
+	case BackgroundActivityFeedFlagName:
 		return cfg.GetFeatureFlagWithDefault(name, backgroundActivityFeedDefault)
-	case askUserQuestionStructuredFlagName:
+	case AskUserQuestionStructuredFlagName:
 		return r.resolveStage(cfg, ev, dp)
-	case notificationInlineActionsFlagName:
+	case NotificationInlineActionsFlagName:
 		switch {
-		case dp == scopePrefixAction+"OPEN":
+		case dp == ScopePrefixAction+"OPEN":
 			return true
-		case dp == scopeChannelTierB:
-			return r.scoped(cfg, name, dp) && r.scoped(cfg, name, scopeChannelRemote) && ev.s6TierBPass
-		case dp == scopeChannelRemote, strings.HasPrefix(dp, scopePrefixAction):
+		case dp == ScopeChannelTierB:
+			return r.scoped(cfg, name, dp) && r.scoped(cfg, name, ScopeChannelRemote) && ev.S6TierBPass
+		case dp == ScopeChannelRemote, strings.HasPrefix(dp, ScopePrefixAction):
 			return r.scoped(cfg, name, dp)
 		}
-	case agentWakeTriggersFlagName:
+	case AgentWakeTriggersFlagName:
 		if dp == "dispatcher" {
 			return r.dispatcherRunning(cfg)
 		}
-		if strings.HasPrefix(dp, scopePrefixTrigger) || strings.HasPrefix(dp, scopePrefixTool) {
+		if strings.HasPrefix(dp, ScopePrefixTrigger) || strings.HasPrefix(dp, ScopePrefixTool) {
 			return r.scoped(cfg, name, dp) && r.dispatcherRunning(cfg)
 		}
 	}
 	return false
 }
 
-func (r flagReader) resolveStage(cfg *config.Config, ev flagEvidence, dp string) bool {
-	const name = askUserQuestionStructuredFlagName
+func (r FlagReader) resolveStage(cfg *config.Config, ev FlagEvidence, dp string) bool {
+	const name = AskUserQuestionStructuredFlagName
 	switch dp {
-	case scopeStageRender:
-		return r.scoped(cfg, name, scopeStageRender)
-	case scopeStageAnswer:
-		return r.scoped(cfg, name, scopeStageAnswer) && r.resolveStage(cfg, ev, scopeStageRender)
-	case scopeStageHookReply:
-		return r.scoped(cfg, name, scopeStageHookReply) && r.resolveStage(cfg, ev, scopeStageAnswer) && ev.s1HookReplyPass
+	case ScopeStageRender:
+		return r.scoped(cfg, name, ScopeStageRender)
+	case ScopeStageAnswer:
+		return r.scoped(cfg, name, ScopeStageAnswer) && r.resolveStage(cfg, ev, ScopeStageRender)
+	case ScopeStageHookReply:
+		return r.scoped(cfg, name, ScopeStageHookReply) && r.resolveStage(cfg, ev, ScopeStageAnswer) && ev.S1HookReplyPass
 	}
 	return false
 }
 
 // dispatcherRunning: the global value, or any trigger:<type> explicitly true.
-func (r flagReader) dispatcherRunning(cfg *config.Config) bool {
-	const name = agentWakeTriggersFlagName
+func (r FlagReader) dispatcherRunning(cfg *config.Config) bool {
+	const name = AgentWakeTriggersFlagName
 	if r.registry().Enabled(cfg, name) {
 		return true
 	}
 	for scope, v := range cfg.FeatureFlagScopeOverrides(name) {
-		if v && strings.HasPrefix(scope, scopePrefixTrigger) {
+		if v && strings.HasPrefix(scope, ScopePrefixTrigger) {
 			return true
 		}
 	}
 	return false
 }
 
-func (r flagReader) resolveAnswerQuestion(cfg *config.Config, ev flagEvidence, route answerRoute) bool {
-	if !r.resolveEffectiveFlag(cfg, ev, notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion) {
+func (r FlagReader) ResolveAnswerQuestion(cfg *config.Config, ev FlagEvidence, route AnswerRoute) bool {
+	if !r.ResolveEffectiveFlag(cfg, ev, NotificationInlineActionsFlagName, ScopePrefixAction+ActionKindAnswerQuestion) {
 		return false
 	}
 	switch route {
-	case routeLiveKeystrokeHidden:
-		return r.registry().Enabled(cfg, hiddenSessionReplyFlagName)
-	case routeLiveKeystrokeVisible, routeDurableRecord:
-		return r.resolveStage(cfg, ev, scopeStageAnswer)
-	case routeHookReply:
-		return r.resolveStage(cfg, ev, scopeStageHookReply)
+	case RouteLiveKeystrokeHidden:
+		return r.registry().Enabled(cfg, featureflags.HiddenSessionReplyFlagName)
+	case RouteLiveKeystrokeVisible, RouteDurableRecord:
+		return r.resolveStage(cfg, ev, ScopeStageAnswer)
+	case RouteHookReply:
+		return r.resolveStage(cfg, ev, ScopeStageHookReply)
 	}
 	return false
 }

@@ -14,13 +14,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // fastLaneOffRegistry is the default registry with the resync fast-lane default inverted to off, so a
 // site that read the default (fast lane on) is distinguishable from one that read this.
 func fastLaneOffRegistry() *featureflags.Registry {
-	specs := services.FlagRegistry().Specs()
+	specs := flagsvc.FlagRegistry().Specs()
 	for i := range specs {
 		if specs[i].Name == featureflags.TerminalResyncExecGateFastLaneFlagName {
 			specs[i].Default = false

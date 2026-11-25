@@ -5,6 +5,7 @@ import { DndContext, PointerSensor, TouchSensor, useDraggable, useDroppable, use
 import { CSS } from "@dnd-kit/utilities";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LeafPane, PaneId } from "@/lib/pane/paneTypes";
+import { titleFirstLine } from "@/lib/pane/paneUtils";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
 import {
@@ -34,7 +35,7 @@ function entryFor(leaf: LeafPane, sessions: Session[]): PaneEntry {
     return { id: leaf.id, label: leaf.viewKind === "session-list" ? "Sessions" : "Empty", meta: "" };
   }
   // First line only: a multi-paragraph title would otherwise dominate the row.
-  const label = session.title.split("\n")[0].trim() || session.title;
+  const label = titleFirstLine(session.title);
   const meta = [session.branch, session.program, session.category].filter(Boolean).join(" · ");
   return { id: leaf.id, label, meta };
 }

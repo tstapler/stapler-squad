@@ -18,6 +18,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -33,7 +34,7 @@ func gateFlagUpdate(svc *SessionService, ctx context.Context, enabled bool) erro
 	return flagUpdateCtx(ctx, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag, enabled)
 }
 
-func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, enabled bool) error {
+func flagUpdateCtx(ctx context.Context, svc *flagsvc.FeatureFlagService, name string, enabled bool) error {
 	_, err := svc.UpdateFeatureFlag(ctx, connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{Name: name, Enabled: enabled}))
 	return err
 }

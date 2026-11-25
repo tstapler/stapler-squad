@@ -2,9 +2,10 @@ package questionkit
 
 import (
 	"context"
-	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"sort"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"

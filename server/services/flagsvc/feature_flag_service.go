@@ -1,4 +1,4 @@
-package services
+package flagsvc
 
 import (
 	"context"
@@ -31,7 +31,7 @@ const piSupportFlagName = config.FeaturePiSupport
 // blockApprovalOnCIFailureFlagName is shared between the flag registry (feature_flag_specs.go) and
 // ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
 // name can't drift between where it's declared and where it's read.
-const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
+const BlockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 
 // BacklogFlagEnabled reports the live state of the backlog flag, read per request.
 func BacklogFlagEnabled() bool {
@@ -40,12 +40,12 @@ func BacklogFlagEnabled() bool {
 
 // programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
 // Default on; read per request via ProgramCLIFlagProbeEnabled.
-const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
+const ProgramCLIFlagProbeFlagName = "programs:cli-flag-probe"
 
 // ProgramCLIFlagProbeEnabled reports whether ProbeProgram is allowed. It reads
 // config on every call so a Settings toggle applies with no restart.
 func ProgramCLIFlagProbeEnabled(reg *featureflags.Registry) bool {
-	return flagReader{reg}.enabled(config.LoadConfig(), programCLIFlagProbeFlagName)
+	return FlagReader{reg}.Enabled(config.LoadConfig(), ProgramCLIFlagProbeFlagName)
 }
 
 // ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
@@ -59,7 +59,7 @@ const ProgramCLIFlagProbeGatedMethod = "ProbeProgram"
 // session/instance_tmux.go's terminalResyncExecGateFastLaneFlagName
 // precedent. Keep both constants' values in sync if this flag is ever
 // renamed.
-const githubPriorityAdmissionFlagName = "github:priority-admission-control"
+const GithubPriorityAdmissionFlagName = "github:priority-admission-control"
 
 // githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
 // GetPRInfoGraphQL instead of the gh-CLI shell-out (github/client.go). github
@@ -68,7 +68,7 @@ const githubPriorityAdmissionFlagName = "github:priority-admission-control"
 // literal under its own constant of the same name rather than importing it —
 // mirrors githubPriorityAdmissionFlagName's precedent above. Keep both
 // constants' values in sync if this flag is ever renamed.
-const githubGraphQLMigrationFlagName = "github:graphql-pr-info"
+const GithubGraphQLMigrationFlagName = "github:graphql-pr-info"
 
 // handoffSummaryFlagName is the generic-registry name for the
 // restart-with-handoff-summary feature, so the frontend can discover
@@ -108,7 +108,7 @@ func (HandoffSummaryFeatureController) IsEnabled() bool {
 	return config.LoadConfig().HandoffSummary.EnabledOrDefault()
 }
 
-const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
+const WorktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
@@ -128,40 +128,40 @@ func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoP
 // Files-viewer flags (ADR-031, ADR-036). All global-only; read per request by
 // globalFilesFlags, which takes no session argument.
 const (
-	filesEditingFlagName    = "files:editing"
-	filesViewerV2FlagName   = "files:viewer-v2"
-	filesMergePhoneFlagName = "files:merge-phone"
-	filesRangeReadFlagName  = "files:range-read"
-	filesDeltaWriteFlagName = "files:delta-write"
-	filesEditLargeFlagName  = "files:edit-large"
+	FilesEditingFlagName    = "files:editing"
+	FilesViewerV2FlagName   = "files:viewer-v2"
+	FilesMergePhoneFlagName = "files:merge-phone"
+	FilesRangeReadFlagName  = "files:range-read"
+	FilesDeltaWriteFlagName = "files:delta-write"
+	FilesEditLargeFlagName  = "files:edit-large"
 )
 
 // workflowEngineModeTTL is how long a resolved engine mode is reused, so the
 // transition hot path never reads config per call.
-const workflowEngineModeTTL = time.Second
+const WorkflowEngineModeTTL = time.Second
 
 // WorkflowEngineModeFromConfig resolves the engine mode from cfg, reading both
 // flags with their registered defaults (never the plain GetFeatureFlag, which
 // returns false for an unset flag and would silently turn shadow off).
 func WorkflowEngineModeFromConfig(cfg *config.Config, reg *featureflags.Registry) workflowengine.EngineMode {
-	r := flagReader{reg}
+	r := FlagReader{reg}
 	return workflowengine.ModeFromFlags(
-		r.enabled(cfg, config.WorkflowEngineShadowFeatureFlag),
-		r.enabled(cfg, config.WorkflowEngineEnforceFeatureFlag),
+		r.Enabled(cfg, config.WorkflowEngineShadowFeatureFlag),
+		r.Enabled(cfg, config.WorkflowEngineEnforceFeatureFlag),
 	)
 }
 
 // NewWorkflowEngineModeSource is the production mode reader: live config,
 // cached for workflowEngineModeTTL. A nil clock uses real time; a nil reg reads the process registry per resolve.
 func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock, reg *featureflags.Registry) *workflowengine.CachedModeSource {
-	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load(), reg) }, workflowEngineModeTTL, clock)
+	return workflowengine.NewCachedModeSource(func() workflowengine.EngineMode { return WorkflowEngineModeFromConfig(load(), reg) }, WorkflowEngineModeTTL, clock)
 }
 
 // NewWorkflowEngineClassModeSource is the production per-class mode reader:
 // each class resolves its own enforce flag and the shared shadow flag from live
 // config, cached for workflowEngineModeTTL. A nil clock uses real time.
 func NewWorkflowEngineClassModeSource(load func() *config.Config, clock hostclaim.Clock) *workflowengine.FlagClassModeSource {
-	return workflowengine.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
+	return workflowengine.NewFlagClassModeSource(load, WorkflowEngineModeTTL, clock)
 }
 
 // WorkflowEngineShadowStatusDetail renders "Shadow: N divergences/24h" for the
@@ -183,7 +183,7 @@ func WorkflowEngineShadowStatusDetail(snapshot func() workflowengine.ShadowLedge
 // FlagRegistry builds the flag registry from the services-owned specs plus the
 // specs contributed by the composition root (leaf packages' own flags).
 func FlagRegistry(extra ...[]featureflags.Spec) *featureflags.Registry {
-	specs := coreFlagSpecs()
+	specs := CoreFlagSpecs()
 	for _, e := range extra {
 		specs = append(specs, e...)
 	}
@@ -244,16 +244,19 @@ func NewFeatureFlagServiceWithRegistry(reg *featureflags.Registry) *FeatureFlagS
 	return &FeatureFlagService{registry: reg}
 }
 
-// reg returns the registry given at construction.
-func (f *FeatureFlagService) reg() *featureflags.Registry { return f.registry }
+// Registry returns the registry given at construction.
+func (f *FeatureFlagService) Registry() *featureflags.Registry { return f.registry }
 
-// injected returns the registry given at construction; nil only for a nil receiver.
-func (f *FeatureFlagService) injected() *featureflags.Registry {
+// InjectedRegistry returns the registry given at construction; nil only for a nil receiver.
+func (f *FeatureFlagService) InjectedRegistry() *featureflags.Registry {
 	if f == nil {
 		return nil
 	}
 	return f.registry
 }
+
+// AuditSink returns the sink given to SetAudit; nil until set.
+func (f *FeatureFlagService) AuditSink() *auditkit.AuditSink { return f.audit }
 
 // SetFeatureController wires a runtime controller for the named feature flag.
 // When UpdateFeatureFlag is called for this name, the controller's Enable/Disable
@@ -315,7 +318,7 @@ func (f *FeatureFlagService) AddConfigStatusDetailSource(name string, fn func(*c
 }
 
 func (f *FeatureFlagService) statusDetailFor(name string, cfg *config.Config) string {
-	parts := autonomyFlagStatusDetail(name, cfg, f.reg())
+	parts := autonomyFlagStatusDetail(name, cfg, f.Registry())
 	for _, s := range f.statusDetailSlots[name] {
 		if d := s.fn(cfg); d != "" {
 			parts = append(parts, d)
@@ -385,7 +388,7 @@ func (f *FeatureFlagService) GetFeatureFlags(
 ) (*connect.Response[sessionv1.GetFeatureFlagsResponse], error) {
 	cfg := config.LoadConfig()
 
-	specs := f.reg().Specs()
+	specs := f.Registry().Specs()
 	flags := make([]*sessionv1.FeatureFlag, 0, len(specs))
 	for _, kf := range specs {
 		enabled := cfg.GetFeatureFlagWithDefault(kf.Name, kf.Default)
@@ -422,20 +425,20 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	name := req.Msg.GetName()
 
 	// Validate that the flag name is known.
-	spec, known := f.reg().Lookup(name)
+	spec, known := f.Registry().Lookup(name)
 	description, scopes := spec.Description, spec.Scopes
 	if !known {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, f.reg().Names()))
+			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, f.Registry().Names()))
 	}
-	op, err := parseFlagOp(req.Msg, scopes, f.reg())
+	op, err := parseFlagOp(req.Msg, scopes, f.Registry())
 	if err != nil {
 		return nil, err
 	}
 
 	// Only the way on is guarded: disabling and resetting the global value are
 	// never refused. Clearing a scope is guarded only when it turns the kind on.
-	if op.enabling() || clearTurnsKindOn(op, f.reg()) {
+	if op.enabling() || clearTurnsKindOn(op, f.Registry()) {
 		if guard, ok := f.enableGuards[name]; ok {
 			if reason := guard(); reason != "" {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -474,7 +477,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	}
 
 	cfg := config.LoadConfig()
-	enabled := f.reg().Enabled(cfg, name)
+	enabled := f.Registry().Enabled(cfg, name)
 	if op.scope == "" && op.isSet() {
 		enabled = op.enabled // the controller-backed state, as before this change
 	}
@@ -503,7 +506,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
-			previous = f.reg().Default(name)
+			previous = f.Registry().Default(name)
 		}
 		// In-memory mutators: UpdateConfig saves once, so the saving setters
 		// here would fsync config.json twice per flip.

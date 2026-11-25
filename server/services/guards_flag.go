@@ -15,13 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// hiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary
-// write guards (plan Story 5.2). Global only, default on, no env var. Off lets
-// WriteToSession, the steer branch, RestartSession/RestartShell, SpawnShell, SwitchWorkspace
-// and UpdateSession's program/auto_approve accept a hidden target as on main;
-// the stream drops and Reply are governed elsewhere.
-const hiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
-
 // guardsFlagAuditPolicy: off loosens, so it is audited durably before it is
 // persisted; it is also the hatch for a faulty sink, so it is never refused
 // when the sink is down (fallback record only). On is a tightening flip.
@@ -51,10 +44,10 @@ func (s *SessionService) guardsOffStatusDetail() string {
 // an explicit persisted false starts with the guards off; a missing or
 // unreadable config keeps them on.
 func (s *SessionService) wireGuardsFlag() {
-	s.guards.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(hiddenSessionReadonlyGuardsFlagName, true))
+	s.guards.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(featureflags.HiddenSessionReadonlyGuardsFlagName, true))
 	ff := s.featureFlagSvc
-	ff.SetFeatureController(hiddenSessionReadonlyGuardsFlagName, guardsFlagController{flag: s.guards})
-	ff.AddStatusDetailSource(hiddenSessionReadonlyGuardsFlagName, s.guardsOffStatusDetail)
+	ff.SetFeatureController(featureflags.HiddenSessionReadonlyGuardsFlagName, guardsFlagController{flag: s.guards})
+	ff.AddStatusDetailSource(featureflags.HiddenSessionReadonlyGuardsFlagName, s.guardsOffStatusDetail)
 }
 
 // guardBypassState counts steers allowed by the off flag and rate-limits the

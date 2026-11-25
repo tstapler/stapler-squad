@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -371,7 +372,7 @@ func (c *PaneReplyCore) auditLine(in replyInput, claim questionkit.PendingQuesti
 		QuestionID: q.QuestionID, ReplyID: in.replyID, OptionIndex: idx, OptionLabel: label, QuestionToken: q.Token,
 		Listener: facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
 		UserAgent: facts.userAgent, AuthMode: facts.refusal.AuthMode,
-		PeerLoopback: boolRef(facts.refusal.PeerLoopback), Proxied: boolRef(facts.refusal.Proxied),
+		PeerLoopback: flagsvc.BoolRef(facts.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.refusal.Proxied),
 	}
 }
 

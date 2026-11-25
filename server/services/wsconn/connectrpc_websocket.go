@@ -20,6 +20,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 
@@ -453,7 +454,7 @@ type controlModeStreamGeneration struct {
 func NewConnectRPCWebSocketHandler(sessionService *services.SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *external.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
 	flags := sessionService.InjectedFlagRegistry()
 	if flags == nil {
-		flags = services.FlagRegistry() // no session service (tests); production always injects one
+		flags = flagsvc.FlagRegistry() // no session service (tests); production always injects one
 	}
 	return &ConnectRPCWebSocketHandler{
 		sessionService:           sessionService,

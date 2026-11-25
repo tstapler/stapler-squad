@@ -9,6 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -126,7 +127,7 @@ func mapReplyOutcomeValue(o sessionv1.ReplyOutcome, retryAfter int32) questionki
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED:
 		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, RetryAfter: retryAfter}
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED:
-		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage)
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage)
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT,
 		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_HIDDEN,
 		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING,
@@ -172,7 +173,7 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 	r := &AnswerRouter{
 		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
 		visible: s.paneReplyCore, guard: access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity),
-		flags: configActionFlags{ev: compiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
+		flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
 	}
 	r.ensure = s.ensureRegistered(d.Mirror)
 	store := s.replyState().store

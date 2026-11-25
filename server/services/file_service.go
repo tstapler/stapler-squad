@@ -24,6 +24,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
@@ -84,7 +85,7 @@ func NewFileService(workspace WorkspaceProvider) *FileService {
 		workspace:      workspace,
 		ops:            ops,
 		writer:         NewFileWriter(ops, invalidator),
-		search:         newSearchHandler(ops, globalFilesFlags{reader: flagReader{FlagRegistry()}}.ViewerV2),
+		search:         newSearchHandler(ops, globalFilesFlags{reader: flagsvc.FlagReader{Reg: flagsvc.FlagRegistry()}}.ViewerV2),
 		ranges:         newRangeLimiter(),
 		dirCache:       NewDirCache(512, 30*time.Second),
 		gitignoreCache: NewGitignoreCache(256, 5*time.Minute),
@@ -97,7 +98,7 @@ func (s *FileService) SetFlagRegistry(reg *featureflags.Registry) {
 	if reg == nil {
 		panic("services: FileService.SetFlagRegistry requires a non-nil registry")
 	}
-	flags := globalFilesFlags{reader: flagReader{reg}}
+	flags := globalFilesFlags{reader: flagsvc.FlagReader{Reg: reg}}
 	s.ops.policy.Flags = flags
 	s.search.viewerV2 = flags.ViewerV2
 }

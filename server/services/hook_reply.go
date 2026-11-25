@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -56,7 +57,7 @@ func (r *hookReplyResolver) PreAnswer(ctx context.Context, rowID, answer string)
 
 // Reply serves the oldest matching pre-answered row of the session.
 func (r *hookReplyResolver) Reply(ctx context.Context, sessionUUID string, toolInput map[string]interface{}) *hookipc.HookOutput {
-	if sessionUUID == "" || !r.flags.Answer(routeHookReply) {
+	if sessionUUID == "" || !r.flags.Answer(flagsvc.RouteHookReply) {
 		return nil
 	}
 	asked := questionkit.ParseAskUserQuestion(toolInput)

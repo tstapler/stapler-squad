@@ -54,7 +54,7 @@ type Manager struct {
 const diffStatsCacheTTL = 15 * time.Second
 
 // worktreeChangeDetectionFlagName must stay byte-identical to
-// server/services/feature_flag_service.go's constant of the same name --
+// server/services/flagsvc/feature_flag_service.go's constant of the same name --
 // session cannot import server/services (see session/instance_tmux.go:892-894
 // for the established reason), so this is a deliberate duplication, not a typo.
 const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"

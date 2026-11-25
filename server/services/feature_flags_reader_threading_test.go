@@ -10,16 +10,17 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // Constructor threading: each site below builds its flagReader from the registry it was given, so an
 // injected registry whose default differs from the process one must change the answer.
-var inlineApprove = scopePrefixAction + "APPROVE"
+var inlineApprove = flagsvc.ScopePrefixAction + "APPROVE"
 
 func inlineOnRegistry() *featureflags.Registry {
-	return flippedDefaults(notificationInlineActionsFlagName, askUserQuestionStructuredFlagName)
+	return flippedDefaults(flagsvc.NotificationInlineActionsFlagName, flagsvc.AskUserQuestionStructuredFlagName)
 }
 
 func TestNewGuidanceHookMirror_ShouldGateOnInjectedRegistry(t *testing.T) {
@@ -32,21 +33,21 @@ func TestAskUserQuestionRenderGate_ShouldReadTheRenderStageOnly(t *testing.T) {
 	e := newNotificationFlagEnv(t)
 	set := func(scope string) {
 		_, err := e.svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
-			Name: askUserQuestionStructuredFlagName, Scope: scope, Enabled: true,
+			Name: flagsvc.AskUserQuestionStructuredFlagName, Scope: scope, Enabled: true,
 			Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED,
 		}))
 		require.NoError(t, err)
 	}
 	gate := AskUserQuestionRenderGate(testFlagRegistry())
 	assert.False(t, gate())
-	set(scopeStageRender)
+	set(flagsvc.ScopeStageRender)
 	assert.True(t, gate(), "the gate is read per call, so a live flip applies; the answer stage is still off")
 }
 
 func TestAskUserQuestionRenderGate_ShouldStayClosed_WhenOnlyTheAnswerStageIsSet(t *testing.T) {
 	e := newNotificationFlagEnv(t)
 	_, err := e.svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
-		Name: askUserQuestionStructuredFlagName, Scope: scopeStageAnswer, Enabled: true,
+		Name: flagsvc.AskUserQuestionStructuredFlagName, Scope: flagsvc.ScopeStageAnswer, Enabled: true,
 		Mutation: sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED,
 	}))
 	require.NoError(t, err)

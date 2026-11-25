@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -459,7 +460,7 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	driver.Register() // the instance package reaches the session driver only through this hook
 
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
-	flagRegistry := services.FlagRegistry()
+	flagRegistry := flagsvc.FlagRegistry()
 
 	var sessionService *services.SessionService
 	var err error

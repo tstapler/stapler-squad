@@ -1,0 +1,85 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "flagsvc",
+    srcs = [
+        "feature_flag_audit.go",
+        "feature_flag_mutation.go",
+        "feature_flag_service.go",
+        "feature_flag_spans.go",
+        "feature_flag_specs.go",
+        "feature_flags_attention.go",
+        "feature_flags_notification_actions.go",
+        "feature_flags_session_multi_pr.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/flagsvc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/conditional",
+        "//server/deliverygate",
+        "//server/services/access",
+        "//server/services/auditkit",
+        "//server/services/featureflags",
+        "//session",
+        "//session/domain",
+        "//session/hostclaim",
+        "//session/paneactivity",
+        "//session/workflowengine",
+        "//session/workspacepeers",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":flagsvc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "flagsvc_test",
+    srcs = [
+        "branches_test.go",
+        "feature_flag_results_panels_test.go",
+        "feature_flags_attention_test.go",
+        "feature_flags_matrix_test.go",
+        "feature_flags_reader_injected_registry_test.go",
+        "flag_golden_test.go",
+        "helpers_test.go",
+    ],
+    data = ["feature_flags_attention.go"] + glob(["testdata/**"]),
+    embed = [":flagsvc"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/auditkit",
+        "//server/services/featureflags",
+        "//server/services/fsops/memfs",
+        "//server/services/internal/svctest",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
+
+# Read by web-app Jest (flagStore.test.ts cross-checks the mobile_input_layer default); //web-app:jest repo_data.
+exports_files(
+    ["feature_flag_specs.go"],
+    visibility = ["//web-app:__pkg__"],
+)

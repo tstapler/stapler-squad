@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -122,7 +123,7 @@ func (s *SessionService) wireHookReply(storage *session.Storage, acks *GuidanceA
 	if storage == nil {
 		return
 	}
-	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: compiledFlagEvidence, fr: s.flagReader()}}
+	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}}
 	if acks != nil {
 		r.acks = acks
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -51,14 +52,14 @@ func (f *fakeActionApprovals) ResolveApproval(_ context.Context, c ApprovalChoic
 }
 
 type fakeQuestionReplier struct {
-	route  answerRoute
+	route  flagsvc.AnswerRoute
 	known  bool
 	writes atomic.Int32
 	result questionkit.ActionResult
 	last   atomic.Pointer[QuestionAnswer]
 }
 
-func (f *fakeQuestionReplier) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
+func (f *fakeQuestionReplier) RouteFor(string) (flagsvc.AnswerRoute, bool) { return f.route, f.known }
 func (f *fakeQuestionReplier) ReplyToQuestion(_ context.Context, in QuestionAnswer) (questionkit.ActionResult, error) {
 	f.writes.Add(1)
 	f.last.Store(&in)
@@ -120,7 +121,7 @@ type fakeActionFlags struct {
 }
 
 func (f fakeActionFlags) Inline(dp string) bool { return !f.off[dp] }
-func (f fakeActionFlags) Answer(answerRoute) bool {
+func (f fakeActionFlags) Answer(flagsvc.AnswerRoute) bool {
 	return !f.answerOff
 }
 
@@ -175,7 +176,7 @@ type dispatchFixture struct {
 
 func newDispatchFixture() *dispatchFixture {
 	f := &dispatchFixture{
-		approvals: &fakeActionApprovals{}, questions: &fakeQuestionReplier{route: routeLiveKeystrokeHidden, known: true},
+		approvals: &fakeActionApprovals{}, questions: &fakeQuestionReplier{route: flagsvc.RouteLiveKeystrokeHidden, known: true},
 		guidance: &fakeGuidanceAnswerer{}, backlog: &fakeBacklogDecider{}, resolver: &fakeResolver{},
 		metrics: &recordingMetrics{}, audit: &recordingAudit{}, flags: &fakeActionFlags{off: map[string]bool{}},
 	}
@@ -265,11 +266,11 @@ func TestInvokeNotificationAction_ShouldRejectMalformedRequests_WhenKeyKindOrTar
 func TestInvokeNotificationAction_ShouldReturnFlagOffWithZeroWrites_WhenAnswerStageOffOnVisibleSession(t *testing.T) {
 	t.Parallel()
 	f := newDispatchFixture()
-	f.questions.route = routeLiveKeystrokeVisible
+	f.questions.route = flagsvc.RouteLiveKeystrokeVisible
 	f.flags.answerOff = true
 	resp := f.invoke(t, localCtx(t), answerReq("k1"), nil)
 	assert.Equal(t, outFlagOff, resp.Outcome)
-	assert.Equal(t, flagOffMessage, resp.Detail)
+	assert.Equal(t, flagsvc.FlagOffMessage, resp.Detail)
 	assert.Zero(t, f.questions.writes.Load())
 }
 
@@ -280,7 +281,7 @@ func TestInvokeNotificationAction_ShouldReturnFlagOff_WhenActionScopeOffOrRemote
 	assert.Equal(t, outFlagOff, f.invoke(t, localCtx(t), approveReq("k1"), nil).Outcome)
 
 	g := newDispatchFixture()
-	g.flags.off[scopeChannelRemote] = true
+	g.flags.off[flagsvc.ScopeChannelRemote] = true
 	remote := StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 	assert.Equal(t, outFlagOff, g.invoke(t, remote, approveReq("k1"), nil).Outcome)
 	assert.Zero(t, g.approvals.calls.Load())
@@ -402,7 +403,7 @@ func TestActionIdempotency_ShouldEvictOldestKey_WhenOverCapacity(t *testing.T) {
 // Delegate checks stay in force: a CI-blocked approval is INVALID without confirm.
 func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBlocksApproval(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
 	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &instance.Instance{
@@ -525,12 +526,12 @@ func TestInvokeNotificationAction_ShouldStoreAnswerRemotely_WhenRouteIsDurableRe
 	remote := StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 
 	stored := newDispatchFixture()
-	stored.questions.route = routeDurableRecord
+	stored.questions.route = flagsvc.RouteDurableRecord
 	assert.Equal(t, outApplied, stored.invoke(t, remote, answerReq("k1"), nil).Outcome)
 	assert.EqualValues(t, 1, stored.questions.writes.Load(), "stored answer reached the replier")
 
 	live := newDispatchFixture()
-	live.flags.off[scopeChannelTierB] = true // production default: spikeS6TierBPassed is false
+	live.flags.off[flagsvc.ScopeChannelTierB] = true // production default: spikeS6TierBPassed is false
 	resp := live.invoke(t, remote, answerReq("k1"), nil)
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, resp.Outcome)
 	assert.Zero(t, live.questions.writes.Load(), "live keystroke never reaches the pane remotely")

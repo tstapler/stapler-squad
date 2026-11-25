@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -297,7 +298,7 @@ type SessionService struct {
 	prCreationSvc *PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
-	featureFlagSvc *FeatureFlagService
+	featureFlagSvc *flagsvc.FeatureFlagService
 
 	// terminalSvc handles GetTerminalSnapshot/WriteToSession RPCs.
 	terminalSvc *TerminalService
@@ -1009,7 +1010,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
 		artifactSvc:                 &ArtifactService{},
-		featureFlagSvc:              NewFeatureFlagService(),
+		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
@@ -1146,7 +1147,7 @@ func newGatedSessionService(storage session.InstanceStore, flags *featureflags.R
 	eventBus := events.NewEventBus(100)
 	eventBus.SetPublishFilter(gate.PublishFilter())
 	svc := NewSessionService(storage, eventBus)
-	svc.featureFlagSvc = NewFeatureFlagServiceWithRegistry(flags)
+	svc.featureFlagSvc = flagsvc.NewFeatureFlagServiceWithRegistry(flags)
 	svc.fileSvc.SetFlagRegistry(flags)
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
@@ -1154,7 +1155,7 @@ func newGatedSessionService(storage session.InstanceStore, flags *featureflags.R
 	svc.wireLeaseFlag()
 	svc.wireGuardsFlag()
 	svc.wireReplyFlag()
-	wireNotificationActionFlags(svc.featureFlagSvc)
+	flagsvc.WireNotificationActionFlags(svc.featureFlagSvc)
 	return svc
 }
 
@@ -1181,37 +1182,39 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		return ""
 	})
 	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, func(cfg *config.Config) string {
-		return s.flagReader().globalOffStatusDetail(cfg)
+		return s.flagReader().GlobalOffStatusDetail(cfg)
 	})
-	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, flagsvc.KindOffStatusDetail)
 	sink := auditkit.NewAuditSink(config.GetConfigDir,
 		auditkit.WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)
 	ff.SetAudit(sink, map[string]featureflags.FlagAuditPolicy{
-		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
-		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
-		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
-		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
+		config.HiddenSessionGateFeatureFlag:              {}, // every gate flip takes the non-blocking path
+		featureflags.TerminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
+		featureflags.HiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
+		featureflags.HiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
-	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
-	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
+	ff.MergeAuditPolicies(flagsvc.NotificationActionsFlagAuditPolicies())
+	ff.MergeAuditPolicies(flagsvc.SessionMultiPRFlagAuditPolicies())
 }
 
 // flagReader reads flag decisions through this service's registry.
 // NewSessionService starts on the default FlagRegistry; newGatedSessionService swaps in the injected one.
-func (s *SessionService) flagReader() flagReader { return flagReader{reg: s.InjectedFlagRegistry()} }
+func (s *SessionService) flagReader() flagsvc.FlagReader {
+	return flagsvc.FlagReader{Reg: s.InjectedFlagRegistry()}
+}
 
 // InjectedFlagRegistry returns the registry the flag service was built with; nil only for a nil receiver.
 func (s *SessionService) InjectedFlagRegistry() *featureflags.Registry {
 	if s == nil {
 		return nil
 	}
-	return s.featureFlagSvc.injected()
+	return s.featureFlagSvc.InjectedRegistry()
 }
 
 // FeatureFlagRegistry returns the registry the flag service resolves flags against.
 func (s *SessionService) FeatureFlagRegistry() *featureflags.Registry {
-	return s.featureFlagSvc.reg()
+	return s.featureFlagSvc.Registry()
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built

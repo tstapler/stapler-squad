@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -42,7 +43,7 @@ var clsModeProbes = []clsModeProbe{
 // flags in `set` were written through the production flag RPC.
 func clsSelector(t *testing.T, set map[string]bool, opts ...workflowengine.SelectorOption) *workflowengine.SwitchableWorkflowEngine {
 	t.Helper()
-	svc := NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	for _, flag := range []string{
 		config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineEnforceFeatureFlag,
 		config.WorkflowEngineEnforceAgentFeatureFlag, config.WorkflowEngineEnforceSystemFeatureFlag,
@@ -54,7 +55,7 @@ func clsSelector(t *testing.T, set map[string]bool, opts ...workflowengine.Selec
 		require.NoError(t, flagUpdate(svc, flag, want))
 	}
 	clock := &modeTestClock{now: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
-	return workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock), opts...)
+	return workflowengine.NewSwitchableWorkflowEngine(workflowengine.NewDefaultWorkflowEngine(), nil, flagsvc.NewWorkflowEngineClassModeSource(config.LoadConfig, clock), opts...)
 }
 
 // clsEnforced reports whether the class's own answer is the enforced one: the
