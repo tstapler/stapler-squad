@@ -326,7 +326,7 @@ func goldenPathMatching(g *goldenRec, root, home string) {
 		nil, {}, {"-rf"}, {"-rf", "/"}, {"/", "-rf"}, {"/tmp/x", "/etc"}, {"/etc", "/tmp/x"}, {"~", "/tmp"}, {ctx.Cwd + "/a", "-v", ctx.RepoRoot + "/b"},
 		{"-a", "-b"}, {"", ""}, {"/", "/", "/"}, {"relative", "/etc"},
 	}
-	var rows []string
+	rows := make([]string, 0, 6*len(flags)*len(flags)*len(argSets))
 	for _, idx := range []int{-5, -1, 0, 1, 2, 7} {
 		for _, m := range flags {
 			for _, r := range flags {
@@ -455,7 +455,7 @@ func (g *goldenRec) recorder(label string, rec *httptest.ResponseRecorder, json 
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	var hdr []string
+	hdr := make([]string, 0, len(keys))
 	for _, k := range keys {
 		hdr = append(hdr, k+"="+strings.Join(res.Header[k], ","))
 	}
