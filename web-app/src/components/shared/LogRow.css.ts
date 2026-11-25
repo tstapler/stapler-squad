@@ -1,6 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
-import { vars } from "@/styles/theme-contract.css";
+import { vars, zIndex } from "@/styles/theme-contract.css";
 
 // ---------------------------------------------------------------------------
 // T5: Log-level color recipe — WCAG AA compliant hardcoded values.
@@ -95,7 +95,7 @@ export const gutterAbsolute = style({
   top: 0,
   bottom: 0,
   width: GUTTER_WIDTH_PX,
-  zIndex: 10,
+  zIndex: zIndex.raised,
   // Solid background occludes scrolling text beneath gutter
   backgroundColor: vars.color.background,
   display: "flex",

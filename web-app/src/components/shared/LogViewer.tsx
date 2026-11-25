@@ -175,18 +175,19 @@ export const LogViewer = forwardRef<LogViewerHandle, LogViewerProps>(function Lo
   // window.visualViewport (not window.resize) to get the actual visible height.
   // Debounced 400ms to avoid thrashing during keyboard animation.
   useEffect(() => {
-    if (!window.visualViewport) return;
+    const viewport = window.visualViewport;
+    if (!viewport) return;
     let debounceTimer: ReturnType<typeof setTimeout>;
     const handler = () => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        const height = window.visualViewport!.height;
+        const height = viewport.height;
         containerRef.current?.style.setProperty("--log-container-height", `${height}px`);
       }, 400);
     };
-    window.visualViewport.addEventListener("resize", handler);
+    viewport.addEventListener("resize", handler);
     return () => {
-      window.visualViewport!.removeEventListener("resize", handler);
+      viewport.removeEventListener("resize", handler);
       clearTimeout(debounceTimer);
     };
   }, []);
