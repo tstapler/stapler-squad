@@ -409,6 +409,8 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// runs inline, instead of relying solely on the 60s
 	// reconcileTerminalItemSessions safety-net sweep.
 	backlogLifecycleListener.SetWorktreeCleaner(backlogSvc)
+	// Feeds last_progress_at from live PTY output so silent-but-working sessions are not stale_work.
+	backlogLifecycleListener.SetHeartbeatSource(sessionService)
 	// One live-work probe for the lifecycle listener (merge hold), BacklogService
 	// (RULE L) and the cleanup gate; a missed site would silently revert to
 	// kill-at-done, so the wiring is asserted and exported as a gauge.

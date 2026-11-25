@@ -7834,3 +7834,30 @@ func TestSubmitReviewVerdict_should_PersistFailureClassAndWaiver_And_RejectUnkno
 	assert.Equal(t, domain.FailureClassUnattainable, got[0].FailureClass)
 	assert.True(t, got[0].ProposedWaiver)
 }
+
+func TestGetLinkedItem_should_ReportHeartbeatAge_When_ProgressRecorded(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(domain.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	is, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
+		ItemID: item.ID, SessionUUID: callerUUID, SessionRole: instance.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	handler := &backlogHandlers{storage: storage}
+
+	result, err := handler.getLinkedItem(ctx, makeToolReq(nil))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	assert.NotContains(t, m, "heartbeat_age_seconds", "no age before any progress is observed")
+
+	require.NoError(t, storage.TouchItemSessionProgress(context.Background(), is.ID, time.Now().Add(-90*time.Second)))
+	result, err = handler.getLinkedItem(ctx, makeToolReq(nil))
+	require.NoError(t, err)
+	m = parseResult(t, result)
+	age, ok := m["heartbeat_age_seconds"].(float64)
+	require.True(t, ok, "heartbeat_age_seconds missing: %v", m)
+	assert.InDelta(t, 90, age, 5)
+	assert.Contains(t, m, "last_progress_at")
+}
