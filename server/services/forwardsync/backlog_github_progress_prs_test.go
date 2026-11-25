@@ -65,6 +65,30 @@ func TestProgressPRLines_ShouldBeEmpty_WhenNoPRAndBacklogReaderOn(t *testing.T) 
 	require.Empty(t, progressPRLinesFor(t, prLinesCase{readerOn: true}))
 }
 
+// Links attached without Initial.URL carry no stored URL: the lines rebuild it
+// from the ref, and the review comment lists each one.
+func TestProgressPRLines_ShouldRebuildURLFromRef_WhenLinksHaveNoStoredURL(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	cfg := config.LoadConfig()
+	cfg.ApplyFeatureFlagScope(config.SessionMultiPRFlag, config.SessionMultiPRScopePoller, true)
+	cfg.ApplyFeatureFlagScope(config.SessionMultiPRFlag, config.SessionMultiPRScopeBacklog, true)
+	require.NoError(t, config.SaveConfig(cfg))
+	storage := svctest.NewForwardSyncTestStorage(t)
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "t", Status: "review"})
+	require.NoError(t, err)
+	for _, n := range []int{5, 6} {
+		ref, err := domain.NewPRRef("github.com", "o", "r", n)
+		require.NoError(t, err)
+		_, err = storage.AttachItemPR(context.Background(), item.ID, ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBackfill})
+		require.NoError(t, err)
+	}
+	lines := progressPRLines(context.Background(), storage, item)
+	require.Len(t, lines, 2)
+	require.Equal(t,
+		"Pull requests have been opened for this issue:\n- https://github.com/o/r/pull/5 (unknown)\n- https://github.com/o/r/pull/6 (unknown)",
+		progressReviewComments(lines))
+}
+
 func TestProgressPRLines_ShouldFallBackToTrackedURL_WhenBacklogReaderOnAndSetEmpty(t *testing.T) {
 	got := progressPRLinesFor(t, prLinesCase{readerOn: true, prURL: prSetURL})
 	require.Equal(t, []progressPR{{URL: prSetURL}}, got)
