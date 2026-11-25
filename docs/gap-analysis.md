@@ -1001,7 +1001,7 @@ skip it in future rounds.
 ### GAP-124 — Dual escape analytics systems with separate stores
 - **status**: open
 - **severity**: low
-- **files**: `server/services/escape_code_handler.go` (old REST + in-memory),
+- **files**: `server/services/escapecode/escape_code_handler.go` (old REST + in-memory),
   `server/services/analytics_escape_service.go` (new ConnectRPC + ent DB)
 - **detail**: Two independent tracking paths exist. The nav points to the new SQLite-
   backed one at `/analytics/escape`. The old REST debug page at `/debug/escape-codes`
