@@ -5,10 +5,10 @@
   "method": "ReplaceTymuxd",
   "protoFile": "proto/session/v1/tymux_rollout.proto",
   "markerFound": true,
-  "handlerFile": "server/services/tymux_rollout_service.go",
+  "handlerFile": "server/services/adminmisc/tymux_rollout_service.go",
   "tested": true,
   "testIds": [
     "TestReplaceTymuxd_MapsOutcomes"
   ],
-  "lastModified": "2026-10-19T01:26:11.64298059-07:00"
+  "lastModified": "2026-11-25T08:36:00.476975747-08:00"
 }

@@ -1,4 +1,4 @@
-package services
+package adminmisc
 
 import (
 	"net/http"

@@ -1,0 +1,62 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "adminmisc",
+    srcs = [
+        "circuit_breaker_handler.go",
+        "client_log_handler.go",
+        "log_level_handler.go",
+        "tymux_rollout_service.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/adminmisc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//executor",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//session/instance",
+        "//session/tymux",
+        "@com_connectrpc_connect//:connect",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":adminmisc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "adminmisc_test",
+    srcs = [
+        "adminmisc_golden_test.go",
+        "circuit_breaker_handler_test.go",
+        "client_log_handler_test.go",
+        "log_level_handler_test.go",
+        "tymux_rollout_service_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":adminmisc"],
+    deps = [
+        "//executor",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//server/services/internal/svctest",
+        "//session/tymux",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)
