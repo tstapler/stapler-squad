@@ -1,8 +1,11 @@
 package claudesettings
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,15 +26,26 @@ import (
 // pre-move code in server/services (origin/main at 03f52ebcc), so a pass means the move
 // changed no output byte for byte. Regenerate (only for an intended behaviour change) with
 // CLAUDE_SETTINGS_GOLDEN_OUT=<path>.
-const claudeSettingsGoldenPath = "testdata/claude_settings.golden"
+const claudeSettingsGoldenPath = "testdata/claude_settings.golden.gz"
 
 func TestClaudeSettings_ShouldMatchTheRecordedGolden_WhenTheScenariosAreReplayed(t *testing.T) {
 	got := dumpClaudeSettingsScenarios(t)
 	if out := os.Getenv("CLAUDE_SETTINGS_GOLDEN_OUT"); out != "" {
-		require.NoError(t, os.WriteFile(out, []byte(got), 0o644))
+		var buf bytes.Buffer
+		zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		require.NoError(t, err)
+		_, err = zw.Write([]byte(got))
+		require.NoError(t, err)
+		require.NoError(t, zw.Close())
+		require.NoError(t, os.WriteFile(out, buf.Bytes(), 0o644))
 		return
 	}
-	raw, err := os.ReadFile(claudeSettingsGoldenPath)
+	f, err := os.Open(claudeSettingsGoldenPath)
+	require.NoError(t, err)
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	require.NoError(t, err)
+	raw, err := io.ReadAll(zr)
 	require.NoError(t, err)
 	// The one intended difference: encoding/json names the target type's package in its
 	// error text, and the type moved from services to claudesettings.
