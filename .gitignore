@@ -128,6 +128,7 @@ docs/registry/coverage-gaps.json
 
 # Uploaded files (user-supplied, not source)
 uploads/
+!server/services/uploads/
 
 # Benchmark baselines — persisted via GitHub Actions cache (see
 # .github/workflows/benchmark.yml), not

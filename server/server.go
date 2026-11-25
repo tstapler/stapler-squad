@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/sessionretention"
+	"github.com/tstapler/stapler-squad/server/services/uploads"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/server/web"
@@ -1245,7 +1246,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 
 	// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
-	sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
+	sessionUploadHandler := uploads.NewSessionImageUploadHandler(deps.Storage, deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("POST /api/v1/upload-image", sessionUploadHandler.HandleUpload)
 	log.Info("Registered session image upload handler at POST /api/v1/upload-image")
 
@@ -1474,7 +1475,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// for backlog item descriptions, served back via /api/local/serve/.
 	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
 		log.Error("[Server] cannot resolve backlog attachment dir", "err", err)
-	} else if backlogAttachmentHandler, err := services.NewBacklogAttachmentUploadHandler(backlogAttachmentDir); err != nil {
+	} else if backlogAttachmentHandler, err := uploads.NewBacklogAttachmentUploadHandler(backlogAttachmentDir); err != nil {
 		log.Error("[Server] cannot create backlog attachment upload handler", "dir", backlogAttachmentDir, "err", err)
 	} else {
 		srv.mux.HandleFunc("POST /api/v1/upload-backlog-attachment", backlogAttachmentHandler.HandleUpload)
@@ -1485,7 +1486,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// RunWorkflow only accepts paths inside this directory.
 	if workflowAttachmentDir, err := cfg.WorkflowAttachmentDirOrDefault(); err != nil {
 		log.Error("[Server] cannot resolve workflow attachment dir", "err", err)
-	} else if workflowAttachmentHandler, err := services.NewWorkflowAttachmentUploadHandler(workflowAttachmentDir); err != nil {
+	} else if workflowAttachmentHandler, err := uploads.NewWorkflowAttachmentUploadHandler(workflowAttachmentDir); err != nil {
 		log.Error("[Server] cannot create workflow attachment upload handler", "dir", workflowAttachmentDir, "err", err)
 	} else {
 		srv.mux.HandleFunc("POST /api/v1/upload-workflow-attachment", workflowAttachmentHandler.HandleWorkflowUpload)
@@ -1611,7 +1612,7 @@ func registerStaticRoutes(srv *Server) {
 	// Register file upload endpoint — saves clipboard files to a temp directory
 	// so the terminal process can reference them by path (e.g. for Claude Code image paste).
 	pasteDir := filepath.Join(os.TempDir(), "stapler-paste")
-	fileHandler := services.NewFileUploadHandler(pasteDir)
+	fileHandler := uploads.NewFileUploadHandler(pasteDir)
 	srv.mux.HandleFunc("/api/upload/file", fileHandler.HandleUpload)
 	log.Info("Registered file upload handler at /api/upload/file", "dir", pasteDir)
 

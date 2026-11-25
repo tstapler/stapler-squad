@@ -122,6 +122,7 @@ go_library(
         "//server/services/sessionbundle",
         "//server/services/sessionretention",
         "//server/services/unfinishedwork",
+        "//server/services/uploads",
         "//server/services/webhooktrigger",
         "//server/services/wsconn",
         "//server/wakes",
