@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"slices"
 
 	"connectrpc.com/connect"
@@ -44,39 +45,26 @@ type routedSession struct {
 
 type answerSessionFinder func(sessionID string) routedSession
 
-// answerRows is the slice of guidance storage the router reads and writes.
-type answerRows interface {
-	GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*domain.GuidanceRequestData, error)
-	AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error)
-	SetGuidanceDelivery(ctx context.Context, id uuid.UUID, route domain.DeliveryRoute, state domain.DeliveryState, addAttempts int) (bool, error)
-}
-
-// deliverySink is told about every keystroke that may have reached a pane, so
-// acknowledgement can be detected (Task 3.4e).
-type deliverySink interface {
-	Sent(d SentDelivery)
-}
-
 // AnswerRouterDeps are the collaborators of the router. Nil members disable
 // what needs them: no Rows means no durable routes and no delivery state.
 type AnswerRouterDeps struct {
-	Rows   answerRows
-	Mirror *GuidanceHookMirror
-	Acks   deliverySink
+	Rows   questionkit.AnswerRows
+	Mirror *questionkit.GuidanceHookMirror
+	Acks   questionkit.DeliverySink
 }
 
 // AnswerRouter implements QuestionReplier over the ADR-005 ladder.
 type AnswerRouter struct {
 	sessions  answerSessionFinder
 	questions pendingQuestionPeeker
-	reopen    func(PendingQuestion)
-	ensure    func(ctx context.Context, key QuestionKey) bool
+	reopen    func(questionkit.PendingQuestion)
+	ensure    func(ctx context.Context, key questionkit.QuestionKey) bool
 	hidden    replyFunc
 	visible   func() *PaneReplyCore
 	guard     *access.HumanActiveGuard
 	flags     actionFlags
-	rows      answerRows
-	acks      deliverySink
+	rows      questionkit.AnswerRows
+	acks      questionkit.DeliverySink
 }
 
 // RouteFor says where an answer to a question of sessionID would go.
@@ -111,20 +99,20 @@ func deliveryRouteFor(p answerPhase) domain.DeliveryRoute {
 }
 
 // ReplyToQuestion answers one question by the route its session allows.
-func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (ActionResult, error) {
+func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (questionkit.ActionResult, error) {
 	s := r.sessions(in.SessionID)
 	route := deliveryRouteFor(s.phase)
 	if route == "" {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
 	}
 	gate, _ := r.RouteFor(in.SessionID)
 	if in.ExpectedRoute != nil && *in.ExpectedRoute != gate {
 		// The tier and flag gate ran on another route; a live keystroke must not
 		// slip past the Tier B remote gate because the session changed since.
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "route_changed"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "route_changed"}, nil
 	}
 	if !r.flags.Answer(gate) {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage), nil
 	}
 	switch route {
 	case domain.DeliveryRouteLiveKeystroke:
@@ -135,15 +123,15 @@ func (r *AnswerRouter) ReplyToQuestion(ctx context.Context, in QuestionAnswer) (
 		// A hook_reply answer is consumed by the hook that asks for it (hook_reply.go);
 		// an operator ANSWER_QUESTION never selects it.
 	}
-	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "this question cannot be answered here"), nil
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "this question cannot be answered here"), nil
 }
 
 // liveKeystroke writes one digit into the on-screen dialog.
-func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in QuestionAnswer) (ActionResult, error) {
+func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in QuestionAnswer) (questionkit.ActionResult, error) {
 	if qs, ok := r.sequenceQuestions(ctx, in.QuestionID); ok {
 		return r.liveSequence(ctx, s, in, qs)
 	}
-	key := QuestionKey{SessionUUID: in.SessionID, QuestionID: in.QuestionID}
+	key := questionkit.QuestionKey{SessionUUID: in.SessionID, QuestionID: in.QuestionID}
 	if in.Confirm {
 		if res, stop := r.reopenForRetry(ctx, key); stop {
 			return res, nil
@@ -154,26 +142,26 @@ func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in Qu
 		q, ok = r.questions.Peek(key)
 	}
 	if !ok {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}, nil
 	}
 	digit := optionDigit(q.Dialog.Labels, in.OptionLabel)
 	if digit == "" {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
 	}
 	visible := access.AccessFor(s.inst) == access.TerminalReadWrite
 	if visible && r.guard != nil && r.guard.Active(ctx, s.inst) {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, detailHumanActive), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, detailHumanActive), nil
 	}
-	track := r.beginDelivery(ctx, in.QuestionID)
-	track.pending(ctx)
-	var res ActionResult
+	track := questionkit.BeginDelivery(ctx, r.rows, r.acks, in.QuestionID)
+	track.Pending(ctx)
+	var res questionkit.ActionResult
 	var err error
 	if visible {
 		res, err = r.writeVisible(ctx, s.inst, in, digit[0])
 	} else {
 		res, err = r.writeHidden(ctx, in, digit)
 	}
-	track.finish(ctx, res, err, SentDelivery{
+	track.Finish(ctx, res, err, questionkit.SentDelivery{
 		RowID: in.QuestionID, SessionUUID: s.inst.GetStableID(), Dialog: q.Dialog, Route: domain.DeliveryRouteLiveKeystroke,
 		Indeterminate: res.Outcome == sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE,
 	}, in.OptionLabel)
@@ -182,15 +170,15 @@ func (r *AnswerRouter) liveKeystroke(ctx context.Context, s routedSession, in Qu
 
 // writeHidden goes through the existing hidden-session reply handler, which keeps
 // its own flag, idempotency and audit.
-func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit string) (ActionResult, error) {
+func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit string) (questionkit.ActionResult, error) {
 	resp, err := r.hidden(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: in.SessionID, QuestionId: in.QuestionID, ReplyText: digit, ReplyId: in.ReplyID,
 	}))
 	if err != nil {
 		if connect.CodeOf(err) == connect.CodeInvalidArgument || connect.CodeOf(err) == connect.CodePermissionDenied {
-			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+			return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 		}
-		return ActionResult{}, err
+		return questionkit.ActionResult{}, err
 	}
 	return mapReplyOutcome(resp.Msg), nil
 }
@@ -198,45 +186,45 @@ func (r *AnswerRouter) writeHidden(ctx context.Context, in QuestionAnswer, digit
 // writeVisible runs the shared PaneReplyCore against a visible session. The
 // dispatcher already ran the local-caller verdict on the real peer; the core's
 // audit line records the in-process peer as the hidden path does.
-func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in QuestionAnswer, digit byte) (ActionResult, error) {
+func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance, in QuestionAnswer, digit byte) (questionkit.ActionResult, error) {
 	refusal, err := access.EvaluateLocalWrite(ctx, inProcessPeerAddr, access.LocalWriteLocalCaller)
 	if err != nil {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}
 	res, _ := r.visible().Run(ctx, AnswerTargetVisible, replyInput{
 		sessionID: in.SessionID, sessionUUID: inst.GetStableID(), questionID: in.QuestionID, replyID: in.ReplyID, digit: digit,
 	}, inst, steerRequestFacts{refusal: refusal})
 	if res.Err != nil {
-		return ActionResult{}, res.Err
+		return questionkit.ActionResult{}, res.Err
 	}
 	return mapReplyOutcomeValue(res.Outcome, res.RetryAfter), nil
 }
 
 // storeAnswer records the answer on the durable row and pushes nothing.
-func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRoute, in QuestionAnswer) (ActionResult, error) {
+func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRoute, in QuestionAnswer) (questionkit.ActionResult, error) {
 	if r.rows == nil {
-		return notWired(), nil
+		return questionkit.NotWired(), nil
 	}
 	id, err := uuid.Parse(in.QuestionID)
 	if err != nil {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "question_id is not a stored question"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "question_id is not a stored question"), nil
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
 	case err != nil:
-		return ActionResult{}, fmt.Errorf("read question %s: %w", in.QuestionID, err)
+		return questionkit.ActionResult{}, fmt.Errorf("read question %s: %w", in.QuestionID, err)
 	}
 	if res, done := settledAnswer(row); done {
 		return res, nil
 	}
 	if !answerFitsQuestion(row, in.OptionLabel) {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "that option is not available for this question"), nil
 	}
 	stored, err := r.rows.AnswerGuidanceRequest(ctx, id, in.OptionLabel)
 	if err != nil {
-		return ActionResult{}, fmt.Errorf("store answer %s: %w", in.QuestionID, err)
+		return questionkit.ActionResult{}, fmt.Errorf("store answer %s: %w", in.QuestionID, err)
 	}
 	if !stored {
 		return r.alreadyResolved(ctx, id), nil
@@ -244,7 +232,7 @@ func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRou
 	if _, err := r.rows.SetGuidanceDelivery(ctx, id, route, domain.DeliveryStateSavedForLater, 0); err != nil {
 		log.Warn("[AnswerRouter] answer stored but delivery state not recorded", "question", in.QuestionID, "err", err)
 	}
-	return applied(), nil
+	return questionkit.Applied(), nil
 }
 
 // answerFitsQuestion reports whether answer is one the question offers, as the
@@ -285,29 +273,29 @@ func optionOffered(q domain.Question, label string) bool {
 
 // settledAnswer reports a row that can no longer take an answer: cancelled (a
 // session that ended takes a hook or peer row with it) or already answered.
-func settledAnswer(row *domain.GuidanceRequestData) (ActionResult, bool) {
+func settledAnswer(row *domain.GuidanceRequestData) (questionkit.ActionResult, bool) {
 	switch row.Status() {
 	case domain.GuidanceRequestStatusCancelled:
 		if row.CancelReason == domain.CancelReasonSessionEnded {
-			return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, true
+			return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, true
 		}
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED}, true
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED}, true
 	case domain.GuidanceRequestStatusAnswered:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, row.Answer), true
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, row.Answer), true
 	case domain.GuidanceRequestStatusPending:
 	}
-	return ActionResult{}, false
+	return questionkit.ActionResult{}, false
 }
 
 // alreadyResolved reports the value that won a lost race.
-func (r *AnswerRouter) alreadyResolved(ctx context.Context, id uuid.UUID) ActionResult {
+func (r *AnswerRouter) alreadyResolved(ctx context.Context, id uuid.UUID) questionkit.ActionResult {
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
 	if err != nil {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "")
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "")
 	}
 	res, _ := settledAnswer(row)
 	if res.Outcome == 0 {
-		res = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "")
+		res = questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "")
 	}
 	return res
 }

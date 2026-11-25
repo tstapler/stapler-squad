@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -42,7 +43,7 @@ type sequenceInput struct {
 
 // sequenceOutcome is what a sequence attempt returns.
 type sequenceOutcome struct {
-	replyOutcomeResult
+	questionkit.ReplyOutcomeResult
 	// Partial is true when some keys were typed and the answer was not finished.
 	Partial bool
 	Written int
@@ -56,20 +57,20 @@ func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in
 	if !ok {
 		secs := int32((retryAfter + time.Second - 1) / time.Second)
 		c.count(replyOutcomeLabel(sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED))
-		return sequenceOutcome{replyOutcomeResult: replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, RetryAfter: max(secs, 1)}}
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, RetryAfter: max(secs, 1)}}
 	}
 	line := c.sequenceAuditLine(in, inst, facts)
 	if aerr := c.appendRequest(ctx, line); aerr != nil {
 		reservation.cancel()
 		c.count(replyLabelAuditFailed)
 		log.Error("[Reply] audit append failed; nothing written", "session", in.sessionUUID, "err", aerr)
-		return sequenceOutcome{replyOutcomeResult: replyOutcomeResult{Err: connect.NewError(connect.CodeInternal, errors.New("audit log unavailable, reply not sent"))}}
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Err: connect.NewError(connect.CodeInternal, errors.New("audit log unavailable, reply not sent"))}}
 	}
 	out, stage, consumed := c.writeSequenceUnderLease(ctx, target, in, inst)
 	if !consumed {
 		reservation.cancel()
 	}
-	c.appendResult(line, out.replyOutcomeResult, stage)
+	c.appendResult(line, out.ReplyOutcomeResult, stage)
 	c.count(replyOutcomeLabel(out.Outcome))
 	log.Info("hidden_session_reply", "outcome", replyOutcomeLabel(out.Outcome), "stage", stage,
 		"steps_written", out.Written, "steps_total", out.Total, "session", in.sessionUUID)
@@ -81,7 +82,7 @@ func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Insta
 		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: in.sessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: in.questionID, ReplyID: in.replyID, OptionLabel: truncateRunes(in.summary, 80),
-		QuestionToken: QuestionToken(in.question),
+		QuestionToken: questionkit.QuestionToken(in.question),
 		Listener:      facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
 		UserAgent: facts.userAgent, AuthMode: facts.refusal.AuthMode,
 		PeerLoopback: flagsvc.BoolRef(facts.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.refusal.Proxied),
@@ -91,7 +92,7 @@ func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Insta
 // writeSequenceUnderLease is the sequence chain's acquirer.
 func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance) (sequenceOutcome, string, bool) {
 	notSent := func(o sessionv1.ReplyOutcome, stage string) (sequenceOutcome, string, bool) {
-		return sequenceOutcome{replyOutcomeResult: replyOutcomeResult{Outcome: o}}, stage, false
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Outcome: o}}, stage, false
 	}
 	lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterReply)
 	if !ok {

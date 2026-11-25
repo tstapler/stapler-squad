@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // itemWorld is an in-memory backlog item whose status the fake RPCs mutate, so a
@@ -54,7 +55,7 @@ func (w *itemWorld) decider() BacklogDecider {
 	return NewBacklogDecider(BacklogDeciderDeps{Status: w, Transitions: w, Sessions: w, Merger: w})
 }
 
-func decide(t *testing.T, b BacklogDecider, choice string, confirm bool) ActionResult {
+func decide(t *testing.T, b BacklogDecider, choice string, confirm bool) questionkit.ActionResult {
 	t.Helper()
 	res, err := b.Decide(context.Background(), BacklogDecision{ItemID: "item1", Choice: choice, Confirm: confirm, Reason: "needs tests"})
 	require.NoError(t, err)

@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"context"
@@ -15,94 +15,99 @@ const (
 	replyCacheTTL = 10 * time.Minute // INFERRED
 )
 
-// replyPayloadHash binds a reply_id to its payload, so reusing the id for a
+// ReplyPayloadHash binds a reply_id to its payload, so reusing the id for a
 // different session, question or digit is an InvalidArgument.
-type replyPayloadHash [sha256.Size]byte
+type ReplyPayloadHash [sha256.Size]byte
 
-func hashReplyPayload(sessionUUID, questionID string, digit byte) replyPayloadHash {
+// HashReplyPayload hashes the payload a reply_id is bound to.
+func HashReplyPayload(sessionUUID, questionID string, digit byte) ReplyPayloadHash {
 	h := sha256.New()
 	h.Write([]byte(sessionUUID))
 	h.Write([]byte{0})
 	h.Write([]byte(questionID))
 	h.Write([]byte{0})
 	h.Write([]byte{digit})
-	var out replyPayloadHash
+	var out ReplyPayloadHash
 	copy(out[:], h.Sum(nil))
 	return out
 }
 
-type replyBeginRole uint8
+// ReplyBeginRole is what Begin tells the caller to do.
+type ReplyBeginRole uint8
 
 const (
-	// replyLeader: the caller runs the reply and must call finish.
-	replyLeader replyBeginRole = iota
+	// ReplyLeader: the caller runs the reply and must call finish.
+	ReplyLeader ReplyBeginRole = iota
 	// replyFollower: another attempt is in flight; wait on it.
-	replyFollower
+	ReplyFollower
 	// replyCached: a terminal result exists.
-	replyCached
+	ReplyCached
 	// replyMismatch: the id was used with a different payload.
-	replyMismatch
+	ReplyMismatch
 )
 
-type replyFlight struct {
-	hash     replyPayloadHash
+// ReplyFlight is one reply attempt, shared by its leader and followers.
+type ReplyFlight struct {
+	hash     ReplyPayloadHash
 	done     chan struct{}
-	res      replyOutcomeResult
+	res      ReplyOutcomeResult
 	finished bool
 	at       time.Time
 }
 
-// wait returns the attempt's result, or ctx's error.
-func (f *replyFlight) wait(ctx context.Context) (replyOutcomeResult, error) {
+// Wait returns the attempt's result, or ctx's error.
+func (f *ReplyFlight) Wait(ctx context.Context) (ReplyOutcomeResult, error) {
 	select {
 	case <-f.done:
 		return f.res, nil
 	case <-ctx.Done():
-		return replyOutcomeResult{}, ctx.Err()
+		return ReplyOutcomeResult{}, ctx.Err()
 	}
 }
 
-type replyFlightTable struct {
+// ReplyFlightTable tracks in-flight and recently finished replies by reply_id.
+type ReplyFlightTable struct {
 	mu      sync.Mutex
 	now     func() time.Time
-	flights map[string]*replyFlight
+	flights map[string]*ReplyFlight
 	order   []string
 }
 
-func newReplyFlightTable(now func() time.Time) *replyFlightTable {
+// NewReplyFlightTable builds a table on now (time.Now when nil).
+func NewReplyFlightTable(now func() time.Time) *ReplyFlightTable {
 	if now == nil {
 		now = time.Now
 	}
-	return &replyFlightTable{now: now, flights: map[string]*replyFlight{}}
+	return &ReplyFlightTable{now: now, flights: map[string]*ReplyFlight{}}
 }
 
-// begin classifies replyID. A leader owns a new in-flight entry.
-func (t *replyFlightTable) begin(replyID string, h replyPayloadHash) (*replyFlight, replyBeginRole) {
+// Begin classifies replyID. A leader owns a new in-flight entry.
+func (t *ReplyFlightTable) Begin(replyID string, h ReplyPayloadHash) (*ReplyFlight, ReplyBeginRole) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
 	if f := t.flights[replyID]; f != nil {
 		switch {
 		case f.hash != h:
-			return nil, replyMismatch
+			return nil, ReplyMismatch
 		case !f.finished:
-			return f, replyFollower
+			return f, ReplyFollower
 		case now.Sub(f.at) <= replyCacheTTL:
-			return f, replyCached
+			return f, ReplyCached
 		}
 		delete(t.flights, replyID)
 	}
-	f := &replyFlight{hash: h, done: make(chan struct{}), at: now}
+	f := &ReplyFlight{hash: h, done: make(chan struct{}), at: now}
 	t.flights[replyID] = f
 	t.order = append(t.order, replyID)
 	t.evictLocked()
-	return f, replyLeader
+	return f, ReplyLeader
 }
 
-// finish publishes the result to every waiter. Only a terminal result that a
+// Finish publishes the result to every waiter. Only a terminal result that a
 // Retry must not re-attempt is kept (cache); otherwise the id is forgotten, so
 // a Retry after NOT_SENT attempts the write again.
-func (t *replyFlightTable) finish(replyID string, f *replyFlight, res replyOutcomeResult, cache bool) {
+func (t *ReplyFlightTable) Finish(replyID string, f *ReplyFlight, res ReplyOutcomeResult, cache bool) {
 	t.mu.Lock()
 	f.res, f.finished, f.at = res, true, t.now()
 	if !cache && t.flights[replyID] == f {
@@ -114,7 +119,7 @@ func (t *replyFlightTable) finish(replyID string, f *replyFlight, res replyOutco
 
 // evictLocked drops the oldest finished entries beyond the bound; an in-flight
 // entry is never evicted.
-func (t *replyFlightTable) evictLocked() {
+func (t *ReplyFlightTable) evictLocked() {
 	for len(t.flights) > replyCacheMax {
 		evicted := false
 		for i, id := range t.order {
@@ -144,8 +149,8 @@ func (t *replyFlightTable) evictLocked() {
 	}
 }
 
-// size is the number of tracked ids (tests).
-func (t *replyFlightTable) size() int {
+// Size is the number of tracked ids (tests).
+func (t *ReplyFlightTable) Size() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.flights)

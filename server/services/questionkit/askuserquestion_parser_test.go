@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"encoding/json"

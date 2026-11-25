@@ -1,4 +1,4 @@
-package services
+package questionkit
 
 import (
 	"sync"
@@ -7,13 +7,13 @@ import (
 
 // guidance_dialog_canary.go is the layout-drift canary (pre-mortem #5, Task 3.3h).
 // Every answer-time DialogMatch outcome is recorded; when more than half of at
-// least canaryMinAttempts attempts in the last hour mismatch, the canary trips:
+// least CanaryMinAttempts attempts in the last hour mismatch, the canary trips:
 // it raises one operator notification and the descriptors of hook-mirrored
 // questions degrade to read_only until the share falls back to 50% or less.
 
 const (
 	canaryWindow      = time.Hour
-	canaryMinAttempts = 5
+	CanaryMinAttempts = 5
 
 	claudeVersionUnknown = "unknown"
 )
@@ -104,7 +104,7 @@ func (c *DialogMatchCanary) evaluate(result DialogMatchResult) (justTripped bool
 		}
 	}
 	c.attempts = keep
-	over := len(keep) >= canaryMinAttempts && mismatches*2 > len(keep)
+	over := len(keep) >= CanaryMinAttempts && mismatches*2 > len(keep)
 	switch {
 	case over && !c.tripped:
 		c.tripped = true

@@ -1,10 +1,11 @@
-package services
+package questionkit
 
 import (
 	"context"
-	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"sort"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -22,66 +23,66 @@ const (
 	samplerSlowEvery  = 30 * time.Second // per row, afterwards
 	samplerFastWindow = time.Minute
 	samplerStopAfter  = 10 * time.Minute
-	samplerMaxPerPass = 20
+	SamplerMaxPerPass = 20
 	// samplerConfirm is the number of consecutive matching samples that confirm a verdict.
 	samplerConfirm = 2
 )
 
-// dialogVerdict is what one pane capture says about one open row.
-type dialogVerdict uint8
+// DialogVerdict is what one pane capture says about one open row.
+type DialogVerdict uint8
 
 const (
-	verdictIndeterminate dialogVerdict = iota // capture error, unknown layout or unverifiable
-	verdictMatch                              // the row's own dialog is on screen
-	verdictGone                               // the pane positively shows no dialog
-	verdictReplaced                           // another dialog is on screen
+	VerdictIndeterminate DialogVerdict = iota // capture error, unknown layout or unverifiable
+	VerdictMatch                              // the row's own dialog is on screen
+	VerdictGone                               // the pane positively shows no dialog
+	VerdictReplaced                           // another dialog is on screen
 )
 
-// judgeRow classifies capture against row. A row with no rebuildable dialog
+// JudgeRow classifies capture against row. A row with no rebuildable dialog
 // (multi-select, view-only) cannot be told from "another dialog", so a visible
 // dialog is indeterminate for it and only a positively absent one is gone.
-func judgeRow(row *domain.GuidanceRequestData, capture string, err error) dialogVerdict {
+func JudgeRow(row *domain.GuidanceRequestData, capture string, err error) DialogVerdict {
 	if err != nil {
-		return verdictIndeterminate
+		return VerdictIndeterminate
 	}
 	presence := dialogpresence.PaneShowsDialog(capture)
-	if qs, tabbed := tabbedFromRow(row); tabbed {
-		return judgeTabbed(tabbedHeadersMatch(qs), capture, presence)
+	if qs, tabbed := TabbedFromRow(row); tabbed {
+		return judgeTabbed(TabbedHeadersMatch(qs), capture, presence)
 	}
-	dialog, known := dialogFromRow(row)
+	dialog, known := DialogFromRow(row)
 	if known && panereply.DialogMatch(capture, dialog) {
-		return verdictMatch
+		return VerdictMatch
 	}
 	switch {
 	case presence.Absent():
-		return verdictGone
+		return VerdictGone
 	case presence == dialogpresence.DialogShowing && known:
-		return verdictReplaced
+		return VerdictReplaced
 	}
-	return verdictIndeterminate
+	return VerdictIndeterminate
 }
 
-// judgeTabbed is judgeRow for a tabbed row: its own frame is a match, any
+// judgeTabbed is JudgeRow for a tabbed row: its own frame is a match, any
 // other dialog on screen replaced it, and an unrecognised layout is not judged.
-func judgeTabbed(own func(string) bool, capture string, presence dialogpresence.DialogPresence) dialogVerdict {
+func judgeTabbed(own func(string) bool, capture string, presence dialogpresence.DialogPresence) DialogVerdict {
 	switch {
 	case own(capture):
-		return verdictMatch
+		return VerdictMatch
 	case presence.Absent():
-		return verdictGone
+		return VerdictGone
 	case presence == dialogpresence.DialogShowing:
-		return verdictReplaced
+		return VerdictReplaced
 	}
-	return verdictIndeterminate
+	return VerdictIndeterminate
 }
 
-func (v dialogVerdict) cancelReason() (domain.CancelReason, bool) {
+func (v DialogVerdict) cancelReason() (domain.CancelReason, bool) {
 	switch v {
-	case verdictGone:
+	case VerdictGone:
 		return domain.CancelReasonDialogGone, true
-	case verdictReplaced:
+	case VerdictReplaced:
 		return domain.CancelReasonDialogReplaced, true
-	case verdictIndeterminate, verdictMatch:
+	case VerdictIndeterminate, VerdictMatch:
 	}
 	return "", false
 }
@@ -96,7 +97,7 @@ type samplerClearer interface {
 
 type sampleState struct {
 	last    time.Time
-	verdict dialogVerdict
+	verdict DialogVerdict
 	streak  int
 }
 
@@ -136,7 +137,7 @@ func (s *DialogGoneSampler) due(row *domain.GuidanceRequestData, now time.Time) 
 	return now.Sub(st.last) >= every
 }
 
-// Tick samples up to samplerMaxPerPass due rows, longest-unsampled first.
+// Tick samples up to SamplerMaxPerPass due rows, longest-unsampled first.
 func (s *DialogGoneSampler) Tick(ctx context.Context) {
 	rows, err := s.store.ListAllPendingGuidanceRequests(ctx)
 	if err != nil {
@@ -158,8 +159,8 @@ func (s *DialogGoneSampler) Tick(ctx context.Context) {
 		}
 	}
 	sortLongestUnsampled(due, s.states)
-	if len(due) > samplerMaxPerPass {
-		due = due[:samplerMaxPerPass]
+	if len(due) > SamplerMaxPerPass {
+		due = due[:SamplerMaxPerPass]
 	}
 	for _, row := range due {
 		s.sample(ctx, row, now)
@@ -178,7 +179,7 @@ func sortLongestUnsampled(rows []*domain.GuidanceRequestData, states map[string]
 
 func (s *DialogGoneSampler) sample(ctx context.Context, row *domain.GuidanceRequestData, now time.Time) {
 	capture, err := s.capture(ctx, row.AskerSessionUUID)
-	v := judgeRow(row, capture, err)
+	v := JudgeRow(row, capture, err)
 	st := s.states[row.ID]
 	if st == nil {
 		st = &sampleState{}

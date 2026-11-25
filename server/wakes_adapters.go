@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -192,7 +193,7 @@ func (n wakeNotifier) Notify(note wakes.Notification) {
 		// one row per request however often it is raised.
 		sessionID, ntype = note.OwnerSessionUUID, sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED
 		priority = sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
-		meta[services.MetaGuidanceRequestID] = note.GuidanceRequestID
+		meta[questionkit.MetaGuidanceRequestID] = note.GuidanceRequestID
 		meta[services.MetaPeerTitle] = note.PeerTitle
 		notificationID = "peer-help-stalled:" + note.GuidanceRequestID
 	}

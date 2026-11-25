@@ -205,7 +205,7 @@ To repeat the byte check after a Claude Code update:
 
 ## 5. Claude Code layout canary after a Claude Code update (Task 3.3h)
 
-The dialog matcher is pinned to fixtures captured from Claude Code `v2.1.296` (`session/testdata/reply_dialogs/claude_auq_*.txt`; version stated in plan Story 3.3). After any Claude Code update, re-check. A mismatch makes every `DialogMatch` fail closed, and the canary degrades hook-mirrored question rows to `read_only` (`server/services/guidance_dialog_canary.go`: more than half of at least 5 attempts in 1 hour mismatch).
+The dialog matcher is pinned to fixtures captured from Claude Code `v2.1.296` (`session/testdata/reply_dialogs/claude_auq_*.txt`; version stated in plan Story 3.3). After any Claude Code update, re-check. A mismatch makes every `DialogMatch` fail closed, and the canary degrades hook-mirrored question rows to `read_only` (`server/services/questionkit/guidance_dialog_canary.go`: more than half of at least 5 attempts in 1 hour mismatch).
 
 1. Record the new version.
 

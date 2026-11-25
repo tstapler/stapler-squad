@@ -8,6 +8,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 func TestAnswerTarget_Admits(t *testing.T) {
@@ -58,7 +59,7 @@ func TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIs
 			lines := replyLines(e.auditLines())
 			require.Len(t, lines, 2)
 			assert.Equal(t, tt.wantStage, lines[1].Stage)
-			_, still := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: tgt.inst.GetStableID(), QuestionID: qid})
+			_, still := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: tgt.inst.GetStableID(), QuestionID: qid})
 			assert.True(t, still, "the released claim leaves the question pending")
 		})
 	}

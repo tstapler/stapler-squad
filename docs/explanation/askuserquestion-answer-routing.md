@@ -151,7 +151,7 @@ match attempt counts into `question_dialog_match_total{result}`. When more than 
 least 5 attempts in 1 hour mismatch, the canary raises one notification, "Question answers
 paused", and hook-mirrored question rows degrade to `read_only` (question, options, Open
 session, no answer control) until the share recovers
-(`server/services/guidance_dialog_canary.go`). Agent-created rows use a durable route and
+(`server/services/questionkit/guidance_dialog_canary.go`). Agent-created rows use a durable route and
 are unaffected. After a Claude Code update, run the layout re-check in
 `docs/how-to/verify-notification-actions-rollout.md`, section 5.
 
