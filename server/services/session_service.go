@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -194,7 +195,7 @@ type SessionService struct {
 
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
-	searchSvc       *SearchService
+	searchSvc       *searchrpc.SearchService
 	githubSvc       *GitHubService
 	workspaceSvc    *WorkspaceService
 	configSvc       *ConfigService
@@ -987,7 +988,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		concStorage:                 concStorage,
 		eventBus:                    eventBus,
 		reviewQueueSvc:              reviewQueueSvc,
-		searchSvc:                   NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		searchSvc:                   searchrpc.NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:                   NewGitHubService(concStorage),
 		workspaceSvc:                workspaceSvc,
 		configSvc:                   NewConfigService(),

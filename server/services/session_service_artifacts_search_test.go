@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"strings"
 	"testing"
 	"time"
@@ -88,13 +89,13 @@ func TestSearchSessionArtifacts_ShouldReturnTheOwningSession_ForEachKindOfString
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			before := ArtifactSearchQueryCount(tt.kind, "hit")
+			before := searchrpc.ArtifactSearchQueryCount(tt.kind, "hit")
 			resp, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq(tt.query))
 			require.NoError(t, err)
 			require.NotEmpty(t, resp.Msg.Hits, "query %q", tt.query)
 			assert.Equal(t, "u1", resp.Msg.Hits[0].SessionId)
 			assert.Equal(t, tt.wantType, resp.Msg.Hits[0].Matches[0].Type)
-			assert.Greater(t, ArtifactSearchQueryCount(tt.kind, "hit"), before)
+			assert.Greater(t, searchrpc.ArtifactSearchQueryCount(tt.kind, "hit"), before)
 		})
 	}
 }
@@ -102,11 +103,11 @@ func TestSearchSessionArtifacts_ShouldReturnTheOwningSession_ForEachKindOfString
 func TestSearchSessionArtifacts_ShouldCountAMiss_AndAcceptTwoCharsButNotOne(t *testing.T) {
 	t.Parallel()
 	svc := newArtifactSvc(nil, artifactSession("u1", "one", 0, scannedBlob(domain.BranchRecord{Name: "feat-x"})))
-	before := ArtifactSearchQueryCount("text", "miss")
+	before := searchrpc.ArtifactSearchQueryCount("text", "miss")
 	resp, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq("nonexistentzzz"))
 	require.NoError(t, err)
 	assert.Empty(t, resp.Msg.Hits)
-	assert.Greater(t, ArtifactSearchQueryCount("text", "miss"), before)
+	assert.Greater(t, searchrpc.ArtifactSearchQueryCount("text", "miss"), before)
 
 	_, err = svc.SearchSessionArtifacts(context.Background(), artifactSearchReq("ab"))
 	require.NoError(t, err, "2 characters run the search")
