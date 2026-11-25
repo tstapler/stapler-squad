@@ -2,12 +2,14 @@ package backlogmisc
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -17,8 +19,48 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
+
+// deadlineRunner records the context deadline the pool hands the subprocess.
+type deadlineRunner struct{ deadline chan time.Time }
+
+func (r deadlineRunner) Run(ctx context.Context, _ []string, _ io.Reader) (io.ReadCloser, func() error, error) {
+	d, _ := ctx.Deadline()
+	r.deadline <- d
+	return io.NopCloser(strings.NewReader(firstCallJSONHS("s", "ok"))), func() error { return nil }, nil
+}
+
+// timeout_seconds is capped at MaxCallTimeout, defaults when 0, and is honoured below the cap.
+func TestHeadlessService_RunHeadlessCall_should_BoundTheCallDeadline(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		seconds  int32
+		min, max time.Duration
+	}{
+		{"above cap", 100000, headless.MaxCallTimeout - time.Minute, headless.MaxCallTimeout},
+		{"default", 0, headless.DefaultCallTimeout - time.Minute, headless.DefaultCallTimeout},
+		{"explicit", 30, 20 * time.Second, 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := deadlineRunner{deadline: make(chan time.Time, 1)}
+			_, client := newHeadlessTestServer(t, headless.NewPoolWithRunner(headless.PoolConfig{}, r))
+			stream, err := client.RunHeadlessCall(context.Background(), connect.NewRequest(&sessionv1.RunHeadlessCallRequest{
+				FeatureKey: "custom", UserPrompt: "p", TimeoutSeconds: tc.seconds,
+			}))
+			require.NoError(t, err)
+			for stream.Receive() {
+			}
+			require.NoError(t, stream.Err())
+			remaining := time.Until(<-r.deadline)
+			assert.LessOrEqual(t, remaining, tc.max)
+			assert.Greater(t, remaining, tc.min)
+		})
+	}
+}
 
 func lastStatusEvent(t *testing.T, item *backlogdto.BacklogItemData) backlogdto.BacklogStatusEventData {
 	t.Helper()
