@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/session/claudehistory"
 )
@@ -86,6 +87,29 @@ func TestIncrementalSyncContext_should_ReturnContextError_When_AlreadyCancelled(
 }
 
 // Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
+// With an up-to-date index there is no per-session loop to notice the cancel,
+// so only the up-front check can return the error.
+func TestIncrementalSyncContext_should_ReturnContextError_When_AlreadyCancelledAndNothingChanged(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hist := writeHistory(t, 3)
+	engine := NewSearchEngine()
+	if _, err := engine.IncrementalSync(hist); err != nil {
+		t.Fatal(err)
+	}
+	// An empty HOME indexes nothing, so mark every session as up to date by hand.
+	md := engine.GetSyncMetadata()
+	for _, entry := range hist.GetAll() {
+		md.Sessions[entry.ID] = &SessionIndexMetadata{SessionID: entry.ID, UpdatedAt: entry.UpdatedAt, MessageCount: entry.MessageCount}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := engine.IncrementalSyncContext(ctx, hist); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
 func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_CancelledMidIncrementalPass(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	hist := writeHistory(t, 5)
@@ -100,6 +124,7 @@ func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_Canc
 		md.Sessions[id] = &SessionIndexMetadata{SessionID: id, DocCount: 2}
 	}
 	md.TotalSessions, md.TotalDocuments = 3, 6
+	md.LastIncrementalSync = time.Time{}
 
 	_, err := engine.IncrementalSyncContext(newCancelAfterCtx(1), hist)
 
@@ -114,11 +139,62 @@ func TestIncrementalSyncContext_should_RefreshTotalsAndStayIncremental_When_Canc
 		t.Errorf("TotalSessions=%d TotalDocuments=%d with %d tracked sessions: totals must match the removals already applied",
 			got.TotalSessions, got.TotalDocuments, len(got.Sessions))
 	}
+	if got.LastIncrementalSync.IsZero() {
+		t.Error("a cancelled incremental pass that applied removals must stamp LastIncrementalSync")
+	}
 	res, err := engine.IncrementalSync(hist)
 	if err != nil {
 		t.Fatalf("follow-up sync: %v", err)
 	}
 	if res.WasFullRebuild {
 		t.Error("follow-up sync after a cancelled incremental pass must not be a full rebuild")
+	}
+}
+
+// Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
+// The ctx budget of 1 is spent by the up-front check, so the cancel lands in
+// the updates loop (no session is added).
+func TestIncrementalSyncContext_should_StampLastIncrementalSync_When_CancelledInUpdatesLoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hist := writeHistory(t, 3)
+	engine := NewSearchEngine()
+	if _, err := engine.IncrementalSync(hist); err != nil {
+		t.Fatal(err)
+	}
+	md := engine.GetSyncMetadata()
+	for _, entry := range hist.GetAll() {
+		md.Sessions[entry.ID] = &SessionIndexMetadata{SessionID: entry.ID, UpdatedAt: entry.UpdatedAt, MessageCount: entry.MessageCount + 1}
+	}
+	md.LastIncrementalSync = time.Time{}
+
+	_, err := engine.IncrementalSyncContext(newCancelAfterCtx(1), hist)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if engine.GetSyncMetadata().LastIncrementalSync.IsZero() {
+		t.Error("a pass cancelled in the updates loop must stamp LastIncrementalSync")
+	}
+}
+
+// Not parallel: t.Setenv keeps conversation-file lookup inside an empty HOME.
+// A pre-cancelled rebuild must still clear the metadata, so the up-front ctx
+// check may only guard the incremental path.
+func TestIncrementalSyncContext_should_ClearMetadata_When_RebuildStartsWithCancelledCtx(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hist := writeHistory(t, 3)
+	engine := NewSearchEngine()
+	if _, err := engine.IncrementalSync(hist); err != nil {
+		t.Fatal(err)
+	}
+	engine.GetSyncMetadata().Version = -1 // next sync takes the full-rebuild path
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := engine.IncrementalSyncContext(ctx, hist); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if engine.GetSyncMetadata() != nil {
+		t.Error("a cancelled rebuild must clear the sync metadata so the next sync rebuilds")
 	}
 }
