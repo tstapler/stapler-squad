@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/adminmisc"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
@@ -932,7 +933,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register HeadlessService handler (nil guard: pool may be absent if claude not found).
 	if deps.HeadlessPool != nil {
-		hlSvc := services.NewHeadlessService(deps.HeadlessPool)
+		hlSvc := backlogmisc.NewHeadlessService(deps.HeadlessPool)
 		hlPath, hlHandler := sessionv1connect.NewHeadlessServiceHandler(hlSvc, ConnectOptions(deps.ErrorRegistry)...)
 		hlAPIPath := "/api" + hlPath
 		srv.RegisterConnectHandler(hlAPIPath, http.StripPrefix("/api", hlHandler))
@@ -943,7 +944,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// the selector's backends report their own availability).
 	{
 		llmPath, llmHandler := sessionv1connect.NewLLMBackendServiceHandler(
-			services.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
+			backlogmisc.NewLLMBackendService(deps.LLMSelector), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+llmPath, http.StripPrefix("/api", llmHandler))
 		log.Info("Registered LLMBackendService handler", "path", "/api"+llmPath)
 	}
@@ -1349,7 +1350,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// storage layer (create/transition/update/archive/delete), simulating a
 		// second actor (reconciler, another tab) without walking a real
 		// TransitionBacklogItemStatus RPC through its engine/gate checks.
-		backlogMutateHandler := services.NewBacklogDebugMutateHandler(deps.Storage)
+		backlogMutateHandler := backlogmisc.NewBacklogDebugMutateHandler(deps.Storage)
 		backlogMutateHandler.RegisterRoutes(srv.mux)
 		log.Info("Registered backlog debug mutate handlers at /api/debug/backlog/mutate-* (e2e-local only)")
 

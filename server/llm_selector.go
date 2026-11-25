@@ -5,7 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -14,7 +14,7 @@ import (
 // Selector.Resolve, so installing agy/gemini later needs no restart.
 func buildLLMSelector(pool *headless.Pool) *headless.Selector {
 	settings := func() headless.BackendSettings {
-		return services.BackendSettingsFromConfig(config.LiveLLMBackends())
+		return backlogmisc.BackendSettingsFromConfig(config.LiveLLMBackends())
 	}
 	sel := headless.NewSelector(settings)
 	sel.Register(headless.NewClaudeBackend(pool))

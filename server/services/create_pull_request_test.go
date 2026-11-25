@@ -32,7 +32,7 @@ import (
 )
 
 // firstCallJSONPR returns a valid first-call stream-json terminal "result" line
-// for DraftPullRequest tests, matching the schema headless_service_test.go's
+// for DraftPullRequest tests, matching the schema backlogmisc/headless_service_test.go's
 // firstCallJSONHS uses. Marshaled via encoding/json (rather than string
 // concatenation) so a multi-line result string is escaped correctly.
 // total_cost_usd (not cost_usd) matches the real CLI's field name — see

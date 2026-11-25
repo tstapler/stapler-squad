@@ -1,4 +1,4 @@
-package services
+package backlogmisc
 
 import (
 	"context"
@@ -296,7 +296,7 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 // wake triggers filter on it.
 func TestEveryBacklogKindMapped(t *testing.T) {
 	t.Parallel()
-	f, err := parser.ParseFile(token.NewFileSet(), "../../session/domain/backlogdto/backlog_hooks.go", nil, 0)
+	f, err := parser.ParseFile(token.NewFileSet(), "../../../session/domain/backlogdto/backlog_hooks.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

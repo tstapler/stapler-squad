@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -19,7 +19,7 @@ import (
 
 // This file lives in the external session_test package (not the internal
 // session package like ent_repository_backlog_test.go) because it needs to
-// import server/services.BacklogItemEventPublisher (the real adapter), which
+// import server/services/backlogmisc.BacklogItemEventPublisher (the real adapter), which
 // itself imports session — an internal test file in package session cannot
 // import anything that transitively imports session without Go's "import
 // cycle not allowed in test" build error. See Epic 2.1's implementation notes
@@ -59,7 +59,7 @@ func (panickingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogI
 
 // TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucceeds
 // wires a real *pkgevents.EventBus into the repository via SetItemChangePublisher
-// (through the real server/services.BacklogItemEventPublisher adapter) and asserts
+// (through the real server/services/backlogmisc.BacklogItemEventPublisher adapter) and asserts
 // a subscriber receives a BacklogItemChanged event with the correct old/new status
 // after a successful CAS transition (Task 2.1.1b, R4 happy path).
 func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucceeds(t *testing.T) {
@@ -69,7 +69,7 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -108,7 +108,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -181,7 +181,7 @@ func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -219,7 +219,7 @@ func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAre
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -254,7 +254,7 @@ func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFields
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -298,7 +298,7 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -333,7 +333,7 @@ func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *t
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -362,7 +362,7 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to unarchive",
@@ -405,7 +405,7 @@ func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArc
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item never archived",
@@ -442,7 +442,7 @@ func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -471,7 +471,7 @@ func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDe
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -519,7 +519,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -602,7 +602,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -657,7 +657,7 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -709,7 +709,7 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -766,7 +766,7 @@ func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtI
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -815,7 +815,7 @@ func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_Commit
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -862,7 +862,7 @@ func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouc
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -909,7 +909,7 @@ func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -958,7 +958,7 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -1004,7 +1004,7 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 // (Epic 8.2, Task 8.2.1b) lives in this file (package session_test), not
 // session/ent_repository_backlog_test.go as plan.md's Story 8.2.1 literally
 // names — a real ItemChangePublisher assertion needs the
-// server/services.BacklogItemEventPublisher adapter, which imports session,
+// server/services/backlogmisc.BacklogItemEventPublisher adapter, which imports session,
 // so it can only be exercised from this external test package (see this
 // file's own header comment for the import-cycle reasoning). Mirrors
 // TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges's
@@ -1016,7 +1016,7 @@ func TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called(t *
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -1056,7 +1056,7 @@ func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
