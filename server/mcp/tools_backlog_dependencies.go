@@ -111,6 +111,45 @@ func (h *backlogHandlers) mutateDependency(_ context.Context, req mcpgo.CallTool
 	return mcpgo.NewToolResultText(fmt.Sprintf("%s dependency: %s is blocked by %s.", op.verb, blocked, blocker)), nil
 }
 
+// --- create_epic_integration_child ---
+
+// createEpicIntegrationChild is the epic-planning-complete hook for agent planners: call it once
+// every child of an epic exists. It creates the epic's integration child (blocked on every sibling).
+func (h *backlogHandlers) createEpicIntegrationChild(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if r := featureDisabledResult(h.enabledCheck); r != nil {
+		return r, nil
+	}
+	if h.backlogSvc == nil {
+		return errResult(ErrUnavailable, errBacklogSvcNotWired, ""), nil
+	}
+	args := req.GetArguments()
+	epicID, bad := requireUUIDArg(args, "epic_item_id")
+	if bad != nil {
+		return bad, nil
+	}
+	raw, _ := args["sibling_item_ids"].([]any)
+	siblings := make([]string, 0, len(raw))
+	for _, v := range raw {
+		id, ok := v.(string)
+		if !ok || validateUUID(id) != nil {
+			return errResult(ErrInvalidArgument, "sibling_item_ids must be UUID strings", ""), nil
+		}
+		siblings = append(siblings, id)
+	}
+	if len(siblings) == 0 {
+		return errResult(ErrInvalidArgument, "sibling_item_ids is required", ""), nil
+	}
+	resp, err := h.backlogSvc.CreateEpicIntegrationChild(ctx, connect.NewRequest(&sessionv1.CreateEpicIntegrationChildRequest{
+		EpicItemId: epicID, SiblingItemIds: siblings,
+	}))
+	if err != nil {
+		return connectErrResult("create_epic_integration_child", err), nil
+	}
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Integration child %s is in place for epic %s, blocked on %d sibling(s). The epic cannot be marked done until it is done.",
+		resp.Msg.Item.Id, epicID, len(siblings))), nil
+}
+
 // --- trigger_triage ---
 
 func (h *backlogHandlers) triggerTriage(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -234,6 +273,19 @@ func registerBacklogDependencyTools(s *mcpserver.MCPServer, h *backlogHandlers) 
 	s.AddTool(edgeTool("remove_backlog_item_dependency",
 		"Remove a blocker->blocked dependency edge. Idempotent: removing an edge that does not exist succeeds."),
 		h.removeBacklogItemDependency)
+
+	s.AddTool(
+		mcpgo.NewTool("create_epic_integration_child",
+			mcpgo.WithDescription("Call once after planning an epic, when every child item exists: creates the epic's single integration child, blocked on every sibling, which runs the epic's end-to-end check (its \"e2e:\" acceptance criterion, else the pipeline mode's done command) and gates the epic's done transition. Idempotent. Fails with failed_precondition when the epic_integration_child_enabled flag is off or the epic defines no e2e command."),
+			mcpgo.WithString("epic_item_id", mcpgo.Description("UUID of the epic item"), mcpgo.Required()),
+			mcpgo.WithArray("sibling_item_ids",
+				mcpgo.Description("UUIDs of every child of the epic (max 200)"),
+				mcpgo.Items(map[string]any{"type": "string"}),
+				mcpgo.Required(),
+			),
+		),
+		h.createEpicIntegrationChild,
+	)
 
 	s.AddTool(
 		mcpgo.NewTool("trigger_triage",
