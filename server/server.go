@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/forwardsync"
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
@@ -1424,7 +1425,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// BacklogService's plugin registry/key provider so behavior matches
 	// TriggerSync; both are nil-safe when the backlog feature isn't wired.
 	if deps.BacklogService != nil {
-		forwardSyncDone := services.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
+		forwardSyncDone := forwardsync.StartBacklogGitHubForwardSyncSubscriber(serverCtx, deps.EventBus, deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)
 		srv.backgroundTasksWG.Go(func() { <-forwardSyncDone })
 
 		progressSyncDone := startProgressSyncSubscriber(serverCtx, deps.EventBus, githubProgressCommentsGate(deps.SessionService), deps.BacklogService.Registry(), deps.BacklogService.SyncLoopForForwardSync(), deps.Storage)

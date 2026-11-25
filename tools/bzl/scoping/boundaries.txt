@@ -35,6 +35,7 @@ server/services/summaryrpc !server/web
 server/services/claudesettings !server/web
 server/services/completionreview !server/web
 server/services/hookrecv !server/web
+server/services/forwardsync !server/web
 server/services/piextension !server/web
 server/services/questionkit !server/web
 session/ptyio !server
