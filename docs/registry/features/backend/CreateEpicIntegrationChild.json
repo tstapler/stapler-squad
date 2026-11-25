@@ -1,0 +1,16 @@
+{
+  "id": "CreateEpicIntegrationChild",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "CreateEpicIntegrationChild",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestCreateEpicIntegrationChild_should_ReturnItem_When_FlagOnAndE2EAC",
+    "TestCreateEpicIntegrationChild_should_ReturnFailedPrecondition_When_FlagOff",
+    "TestCreateEpicIntegrationChild_should_ReturnFailedPrecondition_When_NoE2ECommand",
+    "TestCreateEpicIntegrationChild_should_ReturnInvalidArgument_When_TooManySiblings"
+  ],
+  "lastModified": "2026-11-25T12:15:38.264586836-08:00"
+}

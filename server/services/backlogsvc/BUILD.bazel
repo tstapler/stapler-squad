@@ -14,6 +14,7 @@ go_library(
         "backlog_service_dequeue_backoff.go",
         "backlog_service_engine_status.go",
         "backlog_service_epic.go",
+        "backlog_service_epic_rpc.go",
         "backlog_service_events.go",
         "backlog_service_gates.go",
         "backlog_service_headless_callers.go",

@@ -892,6 +892,18 @@ message AddBacklogItemDependencyResponse {
   BacklogItem item = 1;
 }
 
+message CreateEpicIntegrationChildRequest {
+  // Epic whose planning just completed.
+  string epic_item_id = 1;
+  // Every sibling the integration child must wait for.
+  repeated string sibling_item_ids = 2;
+}
+
+message CreateEpicIntegrationChildResponse {
+  // The integration child (existing one when the epic already has it).
+  BacklogItem item = 1;
+}
+
 message RemoveBacklogItemDependencyRequest {
   string blocker_item_id = 1;
   string blocked_item_id = 2;
@@ -2014,6 +2026,12 @@ service BacklogService {
   // archived status, or is deleted). Rejects self-dependency and any edge
   // that would close a dependency cycle.
   rpc AddBacklogItemDependency(AddBacklogItemDependencyRequest) returns (AddBacklogItemDependencyResponse) {}
+
+  // CreateEpicIntegrationChild is the epic-planning-complete hook: it creates the epic's single
+  // integration child, blocked on every sibling, from the epic's "e2e:" acceptance criterion or its
+  // pipeline mode's done_command_template. Idempotent. FAILED_PRECONDITION when the
+  // epic_integration_child_enabled flag is off or the epic defines no end-to-end command.
+  rpc CreateEpicIntegrationChild(CreateEpicIntegrationChildRequest) returns (CreateEpicIntegrationChildResponse) {}
 
   // RemoveBacklogItemDependency deletes the blocker→blocked edge. Idempotent:
   // removing an edge that does not exist succeeds. Both items must exist.

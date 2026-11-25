@@ -3,7 +3,10 @@ package backlogstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ShippedFilePaths returns the paths in an item's ShippedFileStats JSON ([]{Path,...}).
@@ -66,6 +69,9 @@ func (b *Backlog) SiblingShippedFiles(ctx context.Context, siblingIDs []string) 
 	out := make(map[string][]string, len(siblingIDs))
 	for _, id := range siblingIDs {
 		item, err := b.GetBacklogItem(ctx, id)
+		if errors.Is(err, domain.ErrNotFound) {
+			continue // a hard-deleted sibling contributes no files
+		}
 		if err != nil {
 			return nil, err
 		}

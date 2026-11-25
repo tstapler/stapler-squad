@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/backlogstore"
@@ -30,10 +32,7 @@ type IntegrationOutcome struct {
 // siblings arrive as an argument. No-op when the flag is off, the epic defines no e2e command
 // (warns), or an integration child already exists (idempotent).
 func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID string, siblingIDs []string) (*backlogdto.BacklogItemData, error) {
-	s.cfgMu.RLock()
-	enabled := s.flags != nil && s.flags.Enabled(s.cfg, featureflags.EpicIntegrationChildFlagName)
-	s.cfgMu.RUnlock()
-	if !enabled {
+	if !s.epicIntegrationEnabled() {
 		return nil, nil
 	}
 	epic, err := s.storage.GetBacklogItem(ctx, epicID)
@@ -52,6 +51,15 @@ func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID stri
 	// idea -> ready flow promotes it, and its sibling dependencies hold the dequeue until they resolve.
 	child, _, err := s.storage.Repo.CreateIntegrationChild(ctx, epic.ID, siblingIDs, cmd)
 	return child, err
+}
+
+// epicIntegrationEnabled reads the flag from a fresh config: flag writes persist to disk and s.cfg
+// is a startup snapshot, so reading it would never see a runtime flip (same as crossHostClaimDedupEnabled).
+func (s *BacklogService) epicIntegrationEnabled() bool {
+	if s.epicIntegrationFlag != nil {
+		return s.epicIntegrationFlag()
+	}
+	return config.LoadConfig().GetFeatureFlag(featureflags.EpicIntegrationChildFlagName)
 }
 
 func (s *BacklogService) doneCommandTemplate(ctx context.Context, slug string) string {
@@ -91,14 +99,19 @@ func (s *BacklogService) OnIntegrationChildFailed(ctx context.Context, integrati
 	if err != nil {
 		return nil, err
 	}
-	siblingIDs, err := s.integrationSiblingIDs(ctx, child.ID)
+	siblingIDs, openFixID, err := s.integrationSiblingIDs(ctx, child.ID)
 	if err != nil {
 		return nil, err
+	}
+	if openFixID != "" {
+		// A fix child for an earlier failure is still open; a retried failure must not spawn another.
+		return &IntegrationOutcome{FixChildID: openFixID}, nil
 	}
 	files, err := s.storage.Repo.SiblingShippedFiles(ctx, siblingIDs)
 	if err != nil {
 		return nil, err
 	}
+	failingFiles = sanitizeFailingFiles(failingFiles)
 	sibling, confidence := backlogstore.AttributeByFileOverlap(failingFiles, files)
 	out := &IntegrationOutcome{AttributedTo: sibling, Confidence: confidence}
 
@@ -132,23 +145,24 @@ func (s *BacklogService) OnIntegrationChildFailed(ctx context.Context, integrati
 }
 
 // integrationSiblingIDs returns the integration child's blockers that are original siblings
-// (not fix children it later gained).
-func (s *BacklogService) integrationSiblingIDs(ctx context.Context, childID string) ([]string, error) {
+// (not fix children it later gained) and the ID of a still-open fix child, if any.
+func (s *BacklogService) integrationSiblingIDs(ctx context.Context, childID string) (ids []string, openFixID string, err error) {
 	blockedBy, _, err := s.storage.ListBacklogItemDependencies(ctx, childID)
 	if err != nil {
-		return nil, fmt.Errorf("list integration child dependencies: %w", err)
+		return nil, "", fmt.Errorf("list integration child dependencies: %w", err)
 	}
-	var ids []string
 	for _, ref := range blockedBy {
 		item, err := s.storage.GetBacklogItem(ctx, ref.ItemID)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if !slices.Contains(item.Labels, integrationFixLabel) {
 			ids = append(ids, ref.ItemID)
+		} else if !slices.Contains(domain.TerminalStatusStrings(), item.Status) {
+			openFixID = ref.ItemID
 		}
 	}
-	return ids, nil
+	return ids, openFixID, nil
 }
 
 func (s *BacklogService) createIntegrationFixChild(ctx context.Context, epic, child *backlogdto.BacklogItemData, siblingID string, failingFiles []string) (*backlogdto.BacklogItemData, error) {
@@ -177,6 +191,10 @@ func (s *BacklogService) createIntegrationFixChild(ctx context.Context, epic, ch
 		{BlockerID: fix.ID, BlockedID: child.ID},
 	} {
 		if err := s.storage.AddBacklogItemDependency(ctx, edge); err != nil {
+			// Remove the half-linked fix child so it cannot auto-spawn unattached.
+			if delErr := s.storage.DeleteBacklogItem(ctx, fix.ID); delErr != nil {
+				log.Warn("[EpicIntegration] could not remove half-linked fix child", "fix", fix.ID, "error", delErr)
+			}
 			return nil, fmt.Errorf("link integration fix child: %w", err)
 		}
 	}
@@ -199,4 +217,25 @@ func (s *BacklogService) escalateIntegrationFailure(ctx context.Context, epic, c
 		return "", fmt.Errorf("escalate integration failure: %w", err)
 	}
 	return row.ID, nil
+}
+
+const (
+	maxFailingFiles   = 50
+	maxFailingPathLen = 300
+)
+
+// sanitizeFailingFiles keeps at most maxFailingFiles printable single-line paths: they reach an
+// agent prompt and a guidance question.
+func sanitizeFailingFiles(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" || len(p) > maxFailingPathLen || strings.IndexFunc(p, unicode.IsControl) >= 0 {
+			continue
+		}
+		out = append(out, p)
+		if len(out) == maxFailingFiles {
+			break
+		}
+	}
+	return out
 }

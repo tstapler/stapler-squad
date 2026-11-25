@@ -153,6 +153,8 @@ type BacklogService struct {
 	// live feature-flag read (tests only).
 	claimWiring    atomic.Pointer[claimWiring]
 	claimDedupFlag func() bool
+	// epicIntegrationFlag overrides the epic_integration_child_enabled read; tests only.
+	epicIntegrationFlag func() bool
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/

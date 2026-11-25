@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -183,6 +184,8 @@ func TestExtractE2ECommand(t *testing.T) {
 	assert.Equal(t, "fallback", backlogstore.ExtractE2ECommand(`[{"index":0,"text":"x","status":"pending"}]`, " fallback "))
 	assert.Equal(t, "", backlogstore.ExtractE2ECommand("", ""))
 	assert.Equal(t, "fb", backlogstore.ExtractE2ECommand(`[{"index":0,"text":"e2e:  ","status":"pending"}]`, "fb"))
+	assert.Equal(t, "", backlogstore.ExtractE2ECommand(`[{"index":0,"text":"e2e: a\nb","status":"pending"}]`, ""), "newline rejected")
+	assert.Equal(t, "", backlogstore.ExtractE2ECommand("", strings.Repeat("x", 501)), "over-long rejected")
 }
 
 func TestAttributeByFileOverlap(t *testing.T) {

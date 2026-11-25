@@ -44,6 +44,13 @@ describe("IntegrationCheckSection", () => {
     await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Failed"));
   });
 
+  it("stays on Awaiting when the child cannot be loaded", async () => {
+    mockGetBacklogItem.mockResolvedValue(null);
+    render(<IntegrationCheckSection item={{ status: "review", integrationChildId: "child-1" }} />);
+    await waitFor(() => expect(mockGetBacklogItem).toHaveBeenCalled());
+    expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Awaiting Integration Check");
+  });
+
   it("links to the integration child", async () => {
     mockGetBacklogItem.mockResolvedValue(child("in_progress"));
     const onItemClick = jest.fn();
