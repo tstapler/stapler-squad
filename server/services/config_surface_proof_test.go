@@ -359,7 +359,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
 	},
 	"flag:history_search_streaming": {
-		exempt: "client-only: no Go reader; the web client gates the streaming history search on it (web-app/src/lib/hooks/useHistoryFullTextSearch.ts via useFeatureFlag), and the server only persists and echoes the value through GetFeatureFlags; the streaming RPC itself is always mounted and covered by search_service_streaming_test.go",
+		exempt: "client-only: no Go reader; the web client gates the streaming history search on it (web-app/src/lib/hooks/useHistoryFullTextSearch.ts via useFeatureFlag), and the server only persists and echoes the value through GetFeatureFlags; the streaming RPC itself is always mounted and covered by server/services/searchrpc/search_service_streaming_test.go",
 	},
 	"flag:diagnose-session-panel": {
 		exempt: "client-only: no Go reader; the web client gates DiagnoseSessionPanel and WorkflowSuggestionsSection on it (web-app/src/components/backlog/detail via useFeatureFlag), and the server only persists and echoes the value through GetFeatureFlags",
