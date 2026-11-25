@@ -187,6 +187,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
 		entrypoint: "BacklogService.UpdateTransitionGate",
 	},
+	"flag:epic_integration_child_enabled": {
+		testName:   "TestConfigSurfaceProof_EpicIntegrationChild_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:session_multi_pr": {
 		testName:   "TestConfigSurfaceProof_SessionMultiPR_ChangesReader",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
