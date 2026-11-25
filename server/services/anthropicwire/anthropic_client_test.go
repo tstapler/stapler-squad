@@ -3,6 +3,7 @@ package anthropicwire
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,35 +21,33 @@ import (
 // T-UNIT-GO-011
 func TestAnthropicAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
 	t.Parallel()
-	blocker := make(chan struct{})
+	// The select timeouts below only keep a regression from hanging the suite;
+	// no assertion depends on elapsed wall-clock time.
+	const hangGuard = 30 * time.Second
+	arrived := make(chan struct{})
+	disconnected := make(chan struct{})
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case blocker <- struct{}{}:
-		default:
-		}
+		// net/http only watches for client disconnect (r.Context) once the body is read.
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(arrived)
 		select {
 		case <-r.Context().Done():
-		// Safety net only: the test's own 100ms ctx timeout drives r.Context().Done()
-		// well before this fires. Capped at 2s (not sub-second) so it stays a true
-		// safety margin under CI scheduler jitter, not a tight race against it, and
-		// so srv.Close() finishes well under net/http/httptest's 5s hang-detector
-		// window if this branch were ever hit.
-		case <-time.After(2 * time.Second):
+			close(disconnected)
+		case <-release:
 		}
 	}))
-	defer func() {
-		srv.CloseClientConnections()
-		srv.Close()
-	}()
+	defer srv.Close()
+	defer close(release)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	client := &AnthropicAIClient{
 		cred:  credkit.Credential{Provider: "anthropic", APIKey: "test-key", Source: "test"},
 		model: anthropicModel,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: hangGuard,
 			Transport: &singleURLTransport{
 				target: srv.URL,
 				inner:  http.DefaultTransport,
@@ -56,12 +55,31 @@ func TestAnthropicAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
 		},
 	}
 
-	start := time.Now()
-	_, err := client.Complete(ctx, "system", "user")
-	elapsed := time.Since(start)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.Complete(ctx, "system", "user")
+		errCh <- err
+	}()
 
-	assert.Less(t, elapsed, 500*time.Millisecond, "Complete should return within 500ms of ctx cancel")
-	assert.Error(t, err, "Complete should return an error when context is cancelled")
+	select {
+	case <-arrived:
+	case <-time.After(hangGuard):
+		t.Fatal("request never reached the server")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err, "Complete should return an error when context is cancelled")
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(hangGuard):
+		t.Fatal("Complete did not return after ctx cancel")
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(hangGuard):
+		t.Fatal("server never observed the client disconnect")
+	}
 }
 
 // singleURLTransport redirects all requests to a fixed host (for testing).
