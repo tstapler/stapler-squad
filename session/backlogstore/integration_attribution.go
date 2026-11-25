@@ -6,11 +6,6 @@ import (
 	"sort"
 )
 
-// DefaultIntegrationAttributionThreshold is the confidence at or above which an integration
-// failure is attributed to one sibling (config.Config.IntegrationAttributionThresholdOrDefault
-// mirrors it; the config package cannot be imported here).
-const DefaultIntegrationAttributionThreshold = 0.6
-
 // ShippedFilePaths returns the paths in an item's ShippedFileStats JSON ([]{Path,...}).
 func ShippedFilePaths(shippedFileStatsJSON string) []string {
 	var stats []struct {

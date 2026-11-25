@@ -65,6 +65,19 @@ func (b *Backlog) CreateIntegrationChild(ctx context.Context, epicID string, sib
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: invalid epic id %q: %v", domain.ErrNotFound, epicID, err)
 	}
+	// Resolve before opening the transaction: a public-ID lookup uses a second connection.
+	siblings := make([]uuid.UUID, 0, len(siblingIDs))
+	seen := map[uuid.UUID]bool{parsedEpic: true}
+	for _, sid := range siblingIDs {
+		parsed, perr := b.ResolveBacklogItemLookup(ctx, sid)
+		if perr != nil {
+			return nil, false, fmt.Errorf("%w: invalid sibling id %q: %v", domain.ErrNotFound, sid, perr)
+		}
+		if !seen[parsed] {
+			seen[parsed] = true
+			siblings = append(siblings, parsed)
+		}
+	}
 	tx, err := b.client.Tx(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("create integration child: begin transaction: %w", err)
@@ -87,17 +100,6 @@ func (b *Backlog) CreateIntegrationChild(ctx context.Context, epicID string, sib
 		return &data, false, nil
 	}
 
-	siblings := make([]uuid.UUID, 0, len(siblingIDs))
-	for _, sid := range siblingIDs {
-		parsed, perr := b.ResolveBacklogItemLookup(ctx, sid)
-		if perr != nil {
-			return nil, false, fmt.Errorf("%w: invalid sibling id %q: %v", domain.ErrNotFound, sid, perr)
-		}
-		if parsed != parsedEpic {
-			siblings = append(siblings, parsed)
-		}
-	}
-
 	publicID, err := backlogdto.NewBacklogItemID()
 	if err != nil {
 		return nil, false, fmt.Errorf("generate integration child public id: %w", err)
@@ -109,7 +111,6 @@ func (b *Backlog) CreateIntegrationChild(ctx context.Context, epicID string, sib
 		SetDescription(integrationChildPrompt(epic.Title, e2eCommand)).
 		SetAcceptanceCriteria(string(acs)).
 		SetPriority(epic.Priority).
-		SetStatus(string(domain.BacklogStatusReady)).
 		SetRepoPath(epic.RepoPath).
 		SetBaseBranch(epic.BaseBranch).
 		SetPipelineMode(epic.PipelineMode).

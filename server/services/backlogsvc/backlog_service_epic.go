@@ -45,6 +45,8 @@ func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID stri
 		log.Warn("[EpicIntegration] epic has no e2e: acceptance criterion or done_command_template; integration child not created", "epic", epic.ID)
 		return nil, nil
 	}
+	// Created at idea (ADR-007: only workflow-engine paths may move status); the normal
+	// idea -> ready flow promotes it, and its sibling dependencies hold the dequeue until they resolve.
 	child, _, err := s.storage.Repo.CreateIntegrationChild(ctx, epic.ID, siblingIDs, cmd)
 	return child, err
 }
@@ -147,7 +149,6 @@ func (s *BacklogService) createIntegrationFixChild(ctx context.Context, epic, ch
 			"Fix the failure so the integration check can pass.", epic.Title, sibling.Title, strings.Join(failingFiles, ", ")),
 		AcceptanceCriteria: `[{"index":0,"text":"The epic's end-to-end check passes after this fix","status":"pending"}]`,
 		Priority:           epic.Priority,
-		Status:             string(domain.BacklogStatusReady),
 		RepoPath:           epic.RepoPath,
 		BaseBranch:         epic.BaseBranch,
 		PipelineMode:       epic.PipelineMode,
