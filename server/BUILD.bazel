@@ -118,6 +118,7 @@ go_library(
         "//server/services/fsops",
         "//server/services/importsvc",
         "//server/services/insights",
+        "//server/services/remote",
         "//server/services/sessionbundle",
         "//server/services/sessionretention",
         "//server/services/unfinishedwork",

@@ -183,7 +183,7 @@ func (s *KnownHostsStore) checkHostKey(host string, key ssh.PublicKey) error {
 // surfaces the raw *knownhosts.KeyError rather than ErrHostKeyMismatch, see
 // its doc comment -- can classify a dial failure identically, without a
 // second, independently-maintained copy of this check. (A prior version of
-// server/services/remote_service.go had exactly that second copy, checking
+// server/services/remote/remote_service.go had exactly that second copy, checking
 // for *ErrHostKeyMismatch on an error that could only ever be the raw
 // *knownhosts.KeyError -- always false, so the MITM-specific error message
 // was dead code. This helper exists so there is exactly one place that
