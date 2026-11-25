@@ -227,7 +227,7 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 	}
 	quotaGate := services.NewQuotaGate(
 		// config.LoadConfig() re-reads config.json from disk on every call
-		// (same pattern as feature_flag_service.go's GetFeatureFlags) — cfg
+		// (same pattern as flagsvc/feature_flag_service.go's GetFeatureFlags) — cfg
 		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
 		// never refreshed, so closing over cfg.Quota directly would freeze
 		// every Quota field at boot, contradicting this closure's whole

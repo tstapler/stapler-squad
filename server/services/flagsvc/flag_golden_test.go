@@ -67,7 +67,8 @@ func dumpFlagBehaviour(t *testing.T) string {
 	svctest.WithIsolatedStateDir(t)
 	reg := FlagRegistry()
 	dumpRegistry(&b, reg)
-	dumpMutations(t, &b, reg)
+	dumpMutations(t, &b, reg, false)
+	dumpMutations(t, &b, reg, true)
 	dumpControllerScenario(t, &b)
 	dumpAuditScenario(t, &b)
 	dumpReaderMatrix(&b, reg)
@@ -145,12 +146,22 @@ func flagRequests(name string, scopes []string) []*sessionv1.UpdateFeatureFlagRe
 	return append(reqs, mk(m, "", true), mk(reset, "", false))
 }
 
-func dumpMutations(t *testing.T, b *strings.Builder, reg *featureflags.Registry) {
+// dumpMutations runs every request shape per flag; with controllers each known flag also gets a recorder, so the
+// Enable/Disable/ApplyScope calls (and the value each carries) are part of the golden.
+func dumpMutations(t *testing.T, b *strings.Builder, reg *featureflags.Registry, withCtrl bool) {
+	label := "mut"
+	if withCtrl {
+		label = "mutc"
+	}
 	svc := NewFeatureFlagService()
 	names := append([]string{"", "no-such-flag"}, reg.Names()...)
 	for _, name := range names {
 		resetFlagConfig(t)
-		spec, _ := reg.Lookup(name)
+		spec, known := reg.Lookup(name)
+		ctrl := &recordingController{}
+		if withCtrl && known {
+			svc.SetFeatureController(name, ctrl)
+		}
 		for i, req := range flagRequests(name, spec.Scopes) {
 			resp, err := svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(req))
 			var out string
@@ -159,7 +170,7 @@ func dumpMutations(t *testing.T, b *strings.Builder, reg *featureflags.Registry)
 			} else {
 				out = "ok " + hashMsg(resp.Msg)
 			}
-			fmt.Fprintf(b, "mut %q #%d mut=%d scope=%q en=%v -> %s | %s\n", name, i, req.Mutation, req.Scope, req.Enabled, out, flagEntry(svc, name))
+			fmt.Fprintf(b, "%s %q #%d mut=%d scope=%q en=%v -> %s | %s calls=%q\n", label, name, i, req.Mutation, req.Scope, req.Enabled, out, flagEntry(svc, name), ctrl.calls)
 		}
 	}
 	resetFlagConfig(t)
@@ -316,6 +327,7 @@ func dumpReaderMatrix(b *strings.Builder, reg *featureflags.Registry) {
 			fmt.Fprintf(b, "enabled %q g=%s -> %v detail=%q\n", s.Name, triName(g), r.Enabled(cfg, s.Name), r.GlobalOffStatusDetail(cfg))
 		}
 	}
+	dumpFlippedGateDefault(b, reg)
 	for _, name := range []string{BackgroundActivityFeedFlagName, NotificationInlineActionsFlagName, AskUserQuestionStructuredFlagName, AgentWakeTriggersFlagName} {
 		for _, dp := range dps {
 			for _, g := range tristates() {
@@ -392,4 +404,22 @@ func dumpAttentionAndEngine(b *strings.Builder, reg *featureflags.Registry) {
 		fmt.Fprintf(b, "kinds g=%s -> %v detail=%q\n", triName(g), ExplicitOffKinds(cfg), KindOffStatusDetail(cfg))
 	}
 	fmt.Fprintf(b, "program probe -> %v\n", ProgramCLIFlagProbeEnabled(reg))
+}
+
+// dumpFlippedGateDefault pins GlobalOffStatusDetail for a registry whose gate defaults off, where the shadow text applies.
+func dumpFlippedGateDefault(b *strings.Builder, reg *featureflags.Registry) {
+	specs := reg.Specs()
+	for i := range specs {
+		if specs[i].Name == config.HiddenSessionGateFeatureFlag {
+			specs[i].Default = !specs[i].Default
+		}
+	}
+	flipped := FlagReader{featureflags.NewRegistry(specs)}
+	for _, g := range tristates() {
+		cfg := &config.Config{}
+		if g != nil {
+			cfg.FeatureFlags = map[string]bool{config.HiddenSessionGateFeatureFlag: *g}
+		}
+		fmt.Fprintf(b, "flipped-gate g=%s -> %q\n", triName(g), flipped.GlobalOffStatusDetail(cfg))
+	}
 }

@@ -279,3 +279,8 @@ func TestFeatureFlagAuditPolicies_ShouldMergeIntoAnUnsetPolicyMap(t *testing.T) 
 	assert.Contains(t, svc.auditPolicies, config.SessionMultiPRFlag)
 	assert.Contains(t, svc.auditPolicies, AgentWakeTriggersFlagName)
 }
+
+func TestFlagReader_ShouldPanic_WhenNoRegistryWasInjected(t *testing.T) {
+	assert.Panics(t, func() { FlagReader{}.Enabled(&config.Config{}, "x") })
+	assert.NotPanics(t, func() { FlagReader{Reg: testFlagRegistry()}.Enabled(&config.Config{}, "x") })
+}
