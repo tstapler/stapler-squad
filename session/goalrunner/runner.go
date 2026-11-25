@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -150,124 +152,158 @@ func reasonFromResult(l streamLine, maxTurns int) EndReason {
 	}
 }
 
-// Run launches claude, parses its stream-json stdout and returns the outcome.
-// The ceiling kills the process on its own, independent of /goal's exit.
-func Run(ctx context.Context, cfg Config) Outcome {
-	start := time.Now()
-	log := cfg.Logger
-	if log == nil {
-		log = slog.Default()
+// withDefaults fills the zero values of cfg.
+func (c Config) withDefaults() Config {
+	if c.Logger == nil {
+		c.Logger = slog.Default()
 	}
-	bin := cfg.Binary
-	if bin == "" {
-		bin = "claude"
+	if c.Binary == "" {
+		c.Binary = "claude"
 	}
-	ceiling := cfg.CostCeilingUSD
-	if ceiling <= 0 {
-		ceiling = DefaultCostCeilingUSD
+	if c.CostCeilingUSD <= 0 {
+		c.CostCeilingUSD = DefaultCostCeilingUSD
 	}
-	hb := cfg.Heartbeat
-	if hb <= 0 {
-		hb = DefaultHeartbeat
+	if c.Heartbeat <= 0 {
+		c.Heartbeat = DefaultHeartbeat
 	}
-	newTicker := cfg.NewTicker
-	if newTicker == nil {
-		newTicker = func(d time.Duration) (<-chan time.Time, func()) {
+	if c.NewTicker == nil {
+		c.NewTicker = func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, t.Stop
 		}
 	}
+	return c
+}
 
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, bin, cfg.Args()...)
-	cmd.Dir = cfg.Dir
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return Outcome{EndReason: EndError, Err: err}
-	}
-	cmd.Stderr = nil // discarded; stream-json carries errors on stdout
-	if err := cmd.Start(); err != nil {
-		return Outcome{EndReason: EndError, Err: err, WallTime: time.Since(start)}
-	}
+// tracker folds stream lines into spend, turns and the final result.
+type tracker struct {
+	sp     *spend
+	turns  int
+	result *streamLine
+}
 
-	var (
-		sp       = &spend{pricing: tokens.DefaultPricingTable(), msgs: map[string]*msgUsage{}}
-		turns    int
-		result   *streamLine
-		exceeded bool
-		lines    = make(chan string)
-		done     = make(chan struct{})
-		scanErr  error
-	)
+// observe records one line and reports whether spend now exceeds the ceiling.
+// Malformed lines are skipped.
+func (t *tracker) observe(line string, ceiling float64) bool {
+	var l streamLine
+	if json.Unmarshal([]byte(line), &l) != nil {
+		return false
+	}
+	t.sp.add(l)
+	if l.Type == "assistant" {
+		t.turns++
+	}
+	if l.Type == "result" {
+		t.result = &l
+		return false
+	}
+	return t.sp.usd() > ceiling
+}
+
+// lineReader scans stdout on its own goroutine so the main loop can select on it.
+type lineReader struct {
+	lines   chan string
+	done    chan struct{}
+	scanErr error // valid after done is closed
+}
+
+func startLineReader(ctx context.Context, cancel context.CancelFunc, stdout io.Reader) *lineReader {
+	r := &lineReader{lines: make(chan string), done: make(chan struct{})}
 	go func() {
-		defer close(done)
-		defer close(lines)
+		defer close(r.done)
+		defer close(r.lines)
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 		for sc.Scan() {
 			select {
-			case lines <- sc.Text():
-			case <-runCtx.Done():
+			case r.lines <- sc.Text():
+			case <-ctx.Done():
 				return
 			}
 		}
-		if scanErr = sc.Err(); scanErr != nil {
+		if r.scanErr = sc.Err(); r.scanErr != nil {
 			cancel() // an unreadable (oversized) line would stall the pipe and the ceiling
 		}
 	}()
+	return r
+}
 
-	tick, stopTick := newTicker(hb)
-	defer stopTick()
-loop:
-	for {
-		select {
-		case <-tick:
-			log.Info("goal run heartbeat", "elapsed", time.Since(start).Round(time.Second),
-				"turns", turns, "est_cost_usd", sp.usd(), "ceiling_usd", ceiling)
-		case line, ok := <-lines:
-			if !ok {
-				break loop
-			}
-			var l streamLine
-			if json.Unmarshal([]byte(line), &l) != nil {
-				continue // malformed line: skip
-			}
-			sp.add(l)
-			if l.Type == "assistant" {
-				turns++
-			}
-			if l.Type == "result" {
-				r := l
-				result = &r
-				continue
-			}
-			if sp.usd() > ceiling {
-				exceeded = true
-				cancel()
-				break loop
-			}
-		}
-	}
-	waitErr := cmd.Wait()
-	<-done
-
-	out := Outcome{Turns: turns, WallTime: time.Since(start), CostUSD: sp.usd()}
+func (t *tracker) outcome(cfg Config, exceeded bool, wall time.Duration, waitErr, scanErr error) Outcome {
+	out := Outcome{Turns: t.turns, WallTime: wall, CostUSD: t.sp.usd()}
 	switch {
 	case exceeded:
 		out.EndReason = EndCostExceeded
-	case result != nil:
-		out.EndReason = reasonFromResult(*result, cfg.maxTurns())
-		out.CostUSD = result.CostUSD
+	case t.result != nil:
+		out.EndReason = reasonFromResult(*t.result, cfg.maxTurns())
+		out.CostUSD = t.result.CostUSD
 		if out.CostUSD == 0 {
-			out.CostUSD = result.TotalCostUSD
+			out.CostUSD = t.result.TotalCostUSD
 		}
-		if result.NumTurns > 0 {
-			out.Turns = result.NumTurns
+		if t.result.NumTurns > 0 {
+			out.Turns = t.result.NumTurns
+		}
+		if waitErr != nil && out.EndReason != EndError {
+			// A non-zero exit after a result line is not a clean finish.
+			out.EndReason, out.Err = EndError, waitErr
 		}
 	default:
 		out.EndReason = EndError
 		out.Err = errors.Join(errors.New("no result line in stream"), scanErr, waitErr)
 	}
 	return out
+}
+
+// Run launches claude, parses its stream-json stdout and returns the outcome.
+// The ceiling kills the process on its own, independent of /goal's exit.
+func Run(ctx context.Context, cfg Config) Outcome {
+	start := time.Now()
+	cfg = cfg.withDefaults()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, cfg.Binary, cfg.Args()...)
+	cmd.Dir = cfg.Dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return Outcome{EndReason: EndError, Err: err}
+	}
+	cmd.Stderr = nil // discarded; stream-json carries errors on stdout
+	if err := startRetryingTextBusy(cmd); err != nil {
+		return Outcome{EndReason: EndError, Err: err, WallTime: time.Since(start)}
+	}
+
+	tr := &tracker{sp: &spend{pricing: tokens.DefaultPricingTable(), msgs: map[string]*msgUsage{}}}
+	rd := startLineReader(runCtx, cancel, stdout)
+	tick, stopTick := cfg.NewTicker(cfg.Heartbeat)
+	defer stopTick()
+	exceeded := false
+	for !exceeded {
+		select {
+		case <-tick:
+			cfg.Logger.Info("goal run heartbeat", "elapsed", time.Since(start).Round(time.Second),
+				"turns", tr.turns, "est_cost_usd", tr.sp.usd(), "ceiling_usd", cfg.CostCeilingUSD)
+		case line, ok := <-rd.lines:
+			if !ok {
+				goto finished
+			}
+			exceeded = tr.observe(line, cfg.CostCeilingUSD)
+		}
+	}
+	cancel()
+finished:
+	waitErr := cmd.Wait()
+	<-rd.done
+	return tr.outcome(cfg, exceeded, time.Since(start), waitErr, rd.scanErr)
+}
+
+// startRetryingTextBusy retries Start on ETXTBSY: a freshly written executable
+// can be briefly held open for writing by a concurrent fork (golang/go#22315).
+func startRetryingTextBusy(cmd *exec.Cmd) error {
+	var err error
+	for range 5 {
+		if err = cmd.Start(); !errors.Is(err, syscall.ETXTBSY) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return err
 }

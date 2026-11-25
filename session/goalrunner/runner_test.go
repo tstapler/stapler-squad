@@ -163,3 +163,17 @@ func TestRun_should_FailFast_When_LineExceedsScannerBuffer(t *testing.T) {
 		t.Fatalf("got %+v after %v", got, time.Since(start))
 	}
 }
+
+func TestRun_should_ReportError_When_ProcessExitsNonZeroAfterResult(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\necho '{\"type\":\"result\",\"subtype\":\"success\",\"num_turns\":1,\"total_cost_usd\":0.1}'\nexit 3\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got := Run(context.Background(), Config{Binary: bin, Criteria: "x", Logger: slog.New(slog.DiscardHandler)})
+	if got.EndReason != EndError || got.Err == nil || got.CostUSD != 0.1 {
+		t.Fatalf("got %+v", got)
+	}
+}
