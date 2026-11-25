@@ -90,8 +90,8 @@ func (s *BacklogService) handleIntegrationCheckFailure(ctx context.Context, chil
 		if errors.Is(err, domain.ErrNotFound) {
 			return false // not owned by an epic: rework it like any other item
 		}
-		log.Warn("[EpicIntegration] failure hand-off failed; leaving the integration child parked", "item", child.ID, "error", err)
-		return true
+		log.Warn("[EpicIntegration] failure hand-off failed; falling back to the normal rework path", "item", child.ID, "error", err)
+		return false
 	}
 	return out.FixChildID != "" || out.GuidanceRequestID != ""
 }
