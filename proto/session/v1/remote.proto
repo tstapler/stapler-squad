@@ -52,7 +52,7 @@ service RemoteService {
   // never successfully tested. NOTE: this precondition is enforced only by
   // caller/frontend flow discipline -- CreateRemote itself does not verify
   // the host is already trusted in known_hosts (see the handler's doc
-  // comment in server/services/remote_service.go for why, and why this is
+  // comment in server/services/remote/remote_service.go for why, and why this is
   // safe: an untrusted host still fails at actual dial time).
   rpc CreateRemote(CreateRemoteRequest) returns (CreateRemoteResponse) {}
 

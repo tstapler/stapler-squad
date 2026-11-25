@@ -491,7 +491,7 @@ message PrHold {
   google.protobuf.Timestamp last_activity_at = 5;
 }
 
-// PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
+// PiExtensionHealth mirrors server/services/piextension.PiExtensionHealth: whether a pi
 // session's globally-installed ssq-approval.ts extension has confirmed it
 // loaded and is enforcing approval rules. Three states, not a bool -- see
 // project_plans/pi-support/implementation/plan.md's Domain Glossary entry:

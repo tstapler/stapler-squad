@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/forwardsync"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -28,7 +29,7 @@ func TestPerFeatureReaders_ShouldUseInjectedRegistryDefault(t *testing.T) {
 		{"changelog", featureflags.ChangelogFlagName, func(r *featureflags.Registry) bool { return ChangelogEnabled(cfg, r) }},
 		{"update-check", featureflags.UpdateCheckFlagName, func(r *featureflags.Registry) bool { return UpdateCheckFlagEnabled(cfg, r) }},
 		{"sdd-default-pipeline", featureflags.SddDefaultPipelineFlagName, SddDefaultPipelineEnabled},
-		{"github-progress-comments", featureflags.GithubIssueProgressCommentsFlagName, GitHubIssueProgressCommentsEnabled},
+		{"github-progress-comments", featureflags.GithubIssueProgressCommentsFlagName, forwardsync.GitHubIssueProgressCommentsEnabled},
 		{"program-cli-probe", flagsvc.ProgramCLIFlagProbeFlagName, flagsvc.ProgramCLIFlagProbeEnabled},
 	}
 	for _, c := range cases {

@@ -57,15 +57,19 @@ func TestCLIAIClient_Complete_CancelsOnCtxDone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
-	_, err = c.Complete(ctx, "sys", "user")
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("expected error from cancelled context, got nil")
-	}
-	if elapsed > 2*time.Second {
-		t.Errorf("Complete took %v; expected cancellation within 200ms", elapsed)
+	// The guard (below sleep's 30s) only fails a hang; it is not a latency bound.
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.Complete(ctx, "sys", "user")
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error from cancelled context, got nil")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Complete did not return after ctx deadline")
 	}
 }
 

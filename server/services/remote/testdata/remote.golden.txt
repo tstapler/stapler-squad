@@ -1,0 +1,57 @@
+RemoteAddr: "example.com" -> "example.com:22"
+RemoteAddr: "example.com:2222" -> "example.com:2222"
+RemoteAddr: "10.0.0.5" -> "10.0.0.5:22"
+RemoteAddr: "[::1]:2200" -> "[::1]:2200"
+RemoteAddr: "::1" -> "[::1]:22"
+RemoteAddr: "" -> ":22"
+tc/empty: code=invalid_argument msg=invalid_argument: one of remote_name or draft is required
+tc/both: code=invalid_argument msg=invalid_argument: remote_name and draft are mutually exclusive
+tc/unknown: code=not_found msg=not_found: no remote configured named "nope"
+tc/draft-incomplete-0: code=invalid_argument msg=invalid_argument: draft.name, draft.host, and draft.user are required
+tc/draft-incomplete-1: code=invalid_argument msg=invalid_argument: draft.name, draft.host, and draft.user are required
+tc/draft-incomplete-2: code=invalid_argument msg=invalid_argument: draft.name, draft.host, and draft.user are required
+tc/dead: OK
+tc/dead: success=false unknown=false fp="" err="ssh: dial dead (127.0.0.1:1): ssh: tcp dial 127.0.0.1:1: dial tcp 127.0.0.1:1: connect: connection refused"
+tc/live-first: OK
+tc/live-first: success=false unknown=true fp="FINGERPRINT" err=""
+trust/no-fp: code=invalid_argument msg=invalid_argument: fingerprint is required
+trust/unknown: code=not_found msg=not_found: no remote configured named "nope"
+trust/both: code=invalid_argument msg=invalid_argument: remote_name and draft are mutually exclusive
+trust/dead: OK
+trust/dead: success=false err="could not reach 127.0.0.1:1 to verify its host key: dial tcp 127.0.0.1:1: connect: connection refused"
+trust/mismatch: OK
+trust/mismatch: success=false err="fingerprint mismatch: ADDR is currently presenting FINGERPRINT, not the FINGERPRINT you were shown -- refusing to trust; the key may have changed"
+trusted-after-mismatch: false
+trust/ok: OK
+trust/ok: success=true err=""
+trusted-after-trust: true
+gen/empty: code=invalid_argument msg=invalid_argument: name is required
+gen/live: OK
+gen/live-again: OK
+gen/pub: "ssh-ed25519 KEY"
+gen/auth: "command=\"/path/to/stapler-squad-ssh-wrapper.sh\",restrict,pty ssh-ed25519 KEY"
+gen/stable: true
+tc/live-after-trust: OK
+tc/live-after-trust: success=true unknown=false fp="" err=""
+tc/draft-live: OK
+tc/draft-live: success=false unknown=false fp="" err="ssh: dial live (127.0.0.1:1): ssh: tcp dial 127.0.0.1:1: dial tcp 127.0.0.1:1: connect: connection refused"
+list: OK
+list/item: name=live host=127.0.0.1 user=tester port=EPHEMERAL base= identity=true
+list/item: name=dead host=127.0.0.1 user=tester port=1 base= identity=false
+list/item: name=portful host=box.example user=u port=2200 base=/srv identity=true
+list/item: name=plain host=box.example user=u port=0 base=/srv identity=false
+list/item: name=badport host=box.example:99999 user=u port=0 base= identity=false
+create/empty: code=invalid_argument msg=invalid_argument: name is required
+create/no-host: code=invalid_argument msg=invalid_argument: host, user, and base_path are required
+create/no-user: code=invalid_argument msg=invalid_argument: host, user, and base_path are required
+create/no-base: code=invalid_argument msg=invalid_argument: host, user, and base_path are required
+create/dup: code=already_exists msg=already_exists: a remote named "live" is already configured
+create/untrusted: code=failed_precondition msg=failed_precondition: host key for "untrusted.example" has not been verified yet -- call TestRemoteConnection and TrustRemoteHostKey first
+create/trusted-port: OK
+create/trusted-port: name=fresh host=trusted.example user=u port=2201 base=/b identity=true
+create/identity-generated: true
+del/empty: code=invalid_argument msg=invalid_argument: name is required
+del/nothing: code=not_found msg=not_found: no remote or stored identity found for "ghost"
+del/orphan: OK
+del/orphan: 
+del/orphan-again: code=not_found msg=not_found: no remote or stored identity found for "orphan"

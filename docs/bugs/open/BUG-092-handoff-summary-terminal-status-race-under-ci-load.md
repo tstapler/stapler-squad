@@ -17,7 +17,7 @@ The test's own doc comment already names the exact contract being checked: `Trig
 
 ## Confirmed unrelated to PR #647
 
-PR #647's diff is a pure documentation/comment migration (moved `.claude/docs/*.md` files, converted `.claude/rules/*.md` to skills, repointed doc-comment references) — zero files under `session/handoff_summary*.go` or `server/services/handoff_summary_service*.go` were touched. Local verification on the same tree:
+PR #647's diff is a pure documentation/comment migration (moved `.claude/docs/*.md` files, converted `.claude/rules/*.md` to skills, repointed doc-comment references) — zero files under `session/handoff_summary*.go` or `server/services/summaryrpc/handoff_summary_service*.go` were touched. Local verification on the same tree:
 - `go test ./server/services/... -run TestTriggerHandoffSummary_SynthesizesPendingResponse_When_NoRowExistsYet -v -count=5` — 5/5 pass.
 - `go test ./server/services/... -run TestTriggerHandoffSummary -v -count=10 -race` — 10/10 pass (all 3 subtests).
 
@@ -25,12 +25,12 @@ PR #647's diff is a pure documentation/comment migration (moved `.claude/docs/*.
 
 Not yet root-caused at the implementation level. The test's own doc comment states the intended invariant ("does not wait for the interim GENERATING upsert to land before its own read"), which implies the synchronous path is supposed to structurally win this race (e.g., the read-back happens before the dispatched goroutine is even scheduled, or there's an ordering guarantee elsewhere). If a real CI run can observe the dispatched goroutine already at a terminal status, either:
 1. The "synchronous read wins" assumption is timing-dependent rather than structurally guaranteed (e.g., no synchronization point actually prevents the dispatched goroutine's fast failure path from completing and persisting before the caller's read), and only holds under low scheduling contention (a bare `go test -run` locally), not CI's heavier load; or
-2. There's a genuine ordering bug in `TriggerHandoffSummary` (likely `server/services/handoff_summary_service.go` or `session/handoff_summary_generator.go` — not yet located precisely) where the dispatch-then-read ordering isn't actually enforced by anything.
+2. There's a genuine ordering bug in `TriggerHandoffSummary` (likely `server/services/summaryrpc/handoff_summary_service.go` or `session/handoff_summary_generator.go` — not yet located precisely) where the dispatch-then-read ordering isn't actually enforced by anything.
 
 ## Files Likely Affected
 
-- `server/services/handoff_summary_service_test.go:240-265` — the test itself.
-- `server/services/handoff_summary_service.go` (`TriggerHandoffSummary`) and/or `session/handoff_summary_generator.go` (`GenerateAndPersist`) — wherever the dispatch-then-read ordering is (or isn't) actually enforced.
+- `server/services/summaryrpc/handoff_summary_service_test.go:240-265` — the test itself.
+- `server/services/summaryrpc/handoff_summary_service.go` (`TriggerHandoffSummary`) and/or `session/handoff_summary_generator.go` (`GenerateAndPersist`) — wherever the dispatch-then-read ordering is (or isn't) actually enforced.
 
 ## Fix Approach
 
