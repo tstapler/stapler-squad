@@ -1,4 +1,4 @@
-package services
+package remote
 
 import (
 	"context"
@@ -23,18 +23,18 @@ var _ sessionv1connect.RemoteServiceHandler = (*RemoteService)(nil)
 // defaultRemotePort is the SSH port dialed when remote.Host doesn't already
 // specify one. config.RemoteConfig.Host is documented to normally carry no
 // port suffix (see its doc comment) -- production remotes always resolve to
-// this default -- but remoteAddr still honors an explicit "host:port" value
+// this default -- but RemoteAddr still honors an explicit "host:port" value
 // if given, so this isn't a hard restriction, just the common case.
 const defaultRemotePort = "22"
 
-// remoteAddr returns host as a dialable "host:port" address, defaulting to
+// RemoteAddr returns host as a dialable "host:port" address, defaulting to
 // defaultRemotePort when host doesn't already specify one. Mirrors
 // session/sshremote's normalizeHostPort helper (kept as a separate,
 // intentionally-duplicated few lines rather than an import: that helper is
 // unexported, and this package's callers -- ordinary config.RemoteConfig
 // values -- have a different default-behavior story worth documenting
 // separately, see defaultRemotePort above).
-func remoteAddr(host string) string {
+func RemoteAddr(host string) string {
 	if _, _, err := net.SplitHostPort(host); err == nil {
 		return host
 	}
@@ -86,7 +86,7 @@ func (s *RemoteService) TestRemoteConnection(
 	sshTarget := tmux.SSHTarget{Name: target.name, Addr: target.addr}
 	clientConfig := ssh.ClientConfig{
 		User:            target.user,
-		Auth:            resolveIdentityAuthMethods(ctx, s.keyStore, target.identityRef),
+		Auth:            ResolveIdentityAuthMethods(ctx, s.keyStore, target.identityRef),
 		HostKeyCallback: s.knownHosts.HostKeyCallback(),
 	}
 
@@ -125,7 +125,7 @@ type resolvedRemoteTarget struct {
 	// (see hostWithPort's doc comment).
 	hostForTrust string
 	// addr is the dialable "host:port" form (default port folded in),
-	// matching remoteAddr's contract.
+	// matching RemoteAddr's contract.
 	addr string
 	user string
 	// identityRef is the sshremote.KeyStore key for this target's SSH
@@ -152,7 +152,7 @@ func (s *RemoteService) resolveRemoteTarget(remoteName string, draft *sessionv1.
 		return &resolvedRemoteTarget{
 			name:         remote.Name,
 			hostForTrust: remote.Host,
-			addr:         remoteAddr(remote.Host),
+			addr:         RemoteAddr(remote.Host),
 			user:         remote.User,
 			identityRef:  remote.IdentityRef,
 		}, nil
@@ -164,7 +164,7 @@ func (s *RemoteService) resolveRemoteTarget(remoteName string, draft *sessionv1.
 		return &resolvedRemoteTarget{
 			name:         draft.Name,
 			hostForTrust: hostForTrust,
-			addr:         remoteAddr(hostForTrust),
+			addr:         RemoteAddr(hostForTrust),
 			user:         draft.User,
 			identityRef:  draft.Name,
 		}, nil
@@ -432,7 +432,7 @@ func splitHostPort(host string) (string, int32) {
 	return h, int32(portNum)
 }
 
-// resolveIdentityAuthMethods builds SSH auth methods from identityRef's
+// ResolveIdentityAuthMethods builds SSH auth methods from identityRef's
 // stored identity (sshremote.KeyStore, Epic 3.2), if one is registered.
 // Returns nil when identityRef is empty, no identity is registered for it,
 // or it can't be parsed -- Dial then fails at the authentication step, which
@@ -442,7 +442,7 @@ func splitHostPort(host string) (string, int32) {
 // here can never masquerade as a host-key problem. Shared by RemoteService
 // (TestRemoteConnection) and SessionService (CreateSession's remote-target
 // mode-specific block, Epic 4.2) rather than duplicated per call site.
-func resolveIdentityAuthMethods(ctx context.Context, keyStore *sshremote.KeyStore, identityRef string) []ssh.AuthMethod {
+func ResolveIdentityAuthMethods(ctx context.Context, keyStore *sshremote.KeyStore, identityRef string) []ssh.AuthMethod {
 	if identityRef == "" {
 		return nil
 	}
@@ -530,10 +530,10 @@ func probeHostKey(ctx context.Context, addr, user string) (ssh.PublicKey, error)
 // BuildRemoteHealthProber constructs a sshremote.RemoteHealthProber for
 // remote, wiring its liveness-check tmux.SSHRunner the exact same way
 // TestRemoteConnection (above) and SessionService.CreateSession's
-// remote-target block (session_service.go) already build one: remoteAddr
-// for the dialable address and resolveIdentityAuthMethods for the stored
-// identity, kept here rather than duplicated since both helpers are
-// unexported to this package.
+// remote-target block (session_service.go) already build one: RemoteAddr
+// for the dialable address and ResolveIdentityAuthMethods for the stored
+// identity, reused rather than duplicated (both are exported for
+// SessionService).
 //
 // pool MUST be the same SSHClientPool a session's own SSHRunner/
 // RemoteApprovalRelay for this remote shares (tmux.DefaultSSHClientPool()
@@ -550,10 +550,10 @@ func BuildRemoteHealthProber(
 	keyStore *sshremote.KeyStore,
 	publisher sshremote.HealthEventPublisher,
 ) (*sshremote.RemoteHealthProber, error) {
-	target := tmux.SSHTarget{Name: remote.Name, Addr: remoteAddr(remote.Host)}
+	target := tmux.SSHTarget{Name: remote.Name, Addr: RemoteAddr(remote.Host)}
 	clientConfig := ssh.ClientConfig{
 		User:            remote.User,
-		Auth:            resolveIdentityAuthMethods(ctx, keyStore, remote.IdentityRef),
+		Auth:            ResolveIdentityAuthMethods(ctx, keyStore, remote.IdentityRef),
 		HostKeyCallback: knownHosts.HostKeyCallback(),
 	}
 	runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(pool))

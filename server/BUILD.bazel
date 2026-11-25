@@ -119,6 +119,7 @@ go_library(
         "//server/services/importsvc",
         "//server/services/insights",
         "//server/services/questionkit",
+        "//server/services/remote",
         "//server/services/sessionbundle",
         "//server/services/sessionretention",
         "//server/services/unfinishedwork",

@@ -14,7 +14,7 @@ package services
 // session/git/remote_worktree_test.go and session/tmux/ssh_test_server_test.go's
 // own real-exec test servers -- duplicated here (not imported) since _test.go
 // files aren't importable across package boundaries, same as
-// remote_service_test.go's startRemoteTestSSHServer already documents.
+// remote/remote_service_test.go's startRemoteTestSSHServer already documents.
 
 import (
 	"context"
@@ -52,7 +52,7 @@ import (
 )
 
 // remoteSessionTestSSHServer is this file's own minimal in-process SSH server,
-// separate from remote_service_test.go's startRemoteTestSSHServer (whose
+// separate from remote/remote_service_test.go's startRemoteTestSSHServer (whose
 // handler just exits(0) -- fine for TOFU-flow tests, useless here since these
 // tests need real git/tmux command execution).
 type remoteSessionTestSSHServer struct {
