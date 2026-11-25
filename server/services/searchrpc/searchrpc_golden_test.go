@@ -22,7 +22,6 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vc"
-	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -370,9 +369,8 @@ func goldenLocalFiles(t *testing.T, g *goldenRec, root string) {
 	require.NoError(t, os.Symlink(filepath.Join(tree, "dir1"), filepath.Join(tree, "linkdir")))
 	require.NoError(t, os.Symlink(filepath.Join(tree, "a.txt"), filepath.Join(tree, "linkfile")))
 	require.NoError(t, os.Symlink(filepath.Join(tree, "gone"), filepath.Join(tree, "dangling")))
-	ts := unix.NsecToTimespec(mt.UnixNano())
 	for _, l := range []string{"linkdir", "linkfile", "dangling"} {
-		require.NoError(t, unix.UtimesNanoAt(unix.AT_FDCWD, filepath.Join(tree, l), []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW))
+		setLinkMtime(t, filepath.Join(tree, l), mt)
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(tree, "empty"), 0o755))
 	// The listing cap is 2000 entries: cover below, at and above it.
