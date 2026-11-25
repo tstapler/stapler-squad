@@ -91,3 +91,75 @@ func TestHeartbeat_NoWriteWhenAdvanceUnderThresholdOrNotLive(t *testing.T) {
 	l.refreshWorkSessionHeartbeat(context.Background())
 	assert.True(t, workSessionOf(t, l, item.ID).LastProgressAt.Equal(before), "not-live session must not write")
 }
+
+func TestHeartbeat_ThresholdBoundary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		advance time.Duration
+		written bool
+	}{
+		{"exactly_threshold_writes", heartbeatMinAdvance, true},
+		{"just_under_threshold_skips", heartbeatMinAdvance - time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			t.Cleanup(cleanup)
+			item := newStaleWorkTestItem(t, storage, storage.Repo)
+			l := NewBacklogLifecycleListener(storage)
+			sess := workSessionOf(t, l, item.ID)
+			before := *sess.LastProgressAt
+			out := before.Add(tc.advance)
+			l.SetHeartbeatSource(fakeSnapshotSource{sess.SessionUUID: out})
+
+			l.refreshWorkSessionHeartbeat(context.Background())
+
+			got := *workSessionOf(t, l, item.ID).LastProgressAt
+			if tc.written {
+				assert.WithinDuration(t, out, got, time.Second)
+			} else {
+				assert.True(t, got.Equal(before))
+			}
+		})
+	}
+}
+
+func TestHeartbeat_NeverMovesBackwardsOrIntoFuture(t *testing.T) {
+	t.Parallel()
+	for name, offset := range map[string]time.Duration{"older_than_clock": -4 * time.Hour, "future_output": time.Hour} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			t.Cleanup(cleanup)
+			item := newStaleWorkTestItem(t, storage, storage.Repo)
+			l := NewBacklogLifecycleListener(storage)
+			sess := workSessionOf(t, l, item.ID)
+			before := *sess.LastProgressAt
+			l.SetHeartbeatSource(fakeSnapshotSource{sess.SessionUUID: time.Now().Add(offset)})
+
+			l.refreshWorkSessionHeartbeat(context.Background())
+
+			assert.True(t, workSessionOf(t, l, item.ID).LastProgressAt.Equal(before))
+		})
+	}
+}
+
+func TestHeartbeat_NilSourceAndEndedSessionDoNotWrite(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	t.Cleanup(cleanup)
+	item := newStaleWorkTestItem(t, storage, storage.Repo)
+	l := NewBacklogLifecycleListener(storage)
+	sess := workSessionOf(t, l, item.ID)
+	before := *sess.LastProgressAt
+
+	l.refreshWorkSessionHeartbeat(context.Background()) // no source wired
+	assert.True(t, workSessionOf(t, l, item.ID).LastProgressAt.Equal(before), "nil source must not write")
+
+	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sess.ID, time.Now()))
+	l.SetHeartbeatSource(fakeSnapshotSource{sess.SessionUUID: time.Now()})
+	l.refreshWorkSessionHeartbeat(context.Background())
+	assert.True(t, workSessionOf(t, l, item.ID).LastProgressAt.Equal(before), "ended session must not write")
+}
