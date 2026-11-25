@@ -236,3 +236,8 @@ export function planLeafMove(
   else if (step === -1 && focusedIndex < from && focusedIndex >= to) focusIndex = focusedIndex + 1;
   return { swaps, focusIndex };
 }
+
+/** First non-empty line of a session title, so a pasted paragraph doesn't dominate compact UI. */
+export function titleFirstLine(title: string): string {
+  return title.split("\n").map((l) => l.trim()).find(Boolean) ?? title;
+}
