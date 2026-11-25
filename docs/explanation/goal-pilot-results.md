@@ -23,6 +23,18 @@ Status: **runner and operator command built, hook coexistence checked live once,
 - Verified statically (`settings_test.go`): the generated settings file holds Stapler Squad's Stop and PermissionRequest hooks and no `/goal` hook, because `/goal` registers its own session-scoped Stop hook at runtime. The two live in different sources, so they cannot overwrite each other in the file.
 - **Verified at runtime (one live run, `claude -p '/goal the file hello.txt exists ... or stop after 3 turns' --output-format stream-json --verbose --settings s.json --max-budget-usd 0.30 --model haiku`):** `s.json` held only a Stop hook that appends a line to a marker file. Outcome: exit 0, result `subtype=success`, 4 turns, `total_cost_usd` 0.0145, goal met (`hello.txt` created), and the marker file had exactly one line, so the settings-file Stop hook fired once and the `/goal` run still completed without error (I did not separately observe `/goal`'s own hook firing). Single run, one condition; it does not show behaviour when the goal is not met.
 
+## Acceptance criteria 4 and 5: pending
+
+- **AC4** (10 pilot items, results table) and **AC5** (verdict against a 10-item driver baseline) are **pending**. They need about 10 live runs (up to $2 each) and were deliberately not run or estimated.
+- To run one pilot item (enable `goal_mode` first; criteria are truncated to 500 characters):
+
+```sh
+go run ./cmd/goal-pilot --criteria "<item description>" --dir <item worktree> \
+  --max-turns 20 --ceiling-usd 2.00 [--settings <settings.json>]
+```
+
+It prints one JSON line (`end_reason`, `cost_usd`, `turns`, `wall_seconds`) and exits 0 only on `goal_met`. Copy each line into the table below and assess rework by hand.
+
 ## Comparison plan
 
 Run the pilot on at least 10 chore/docs items with machine-checkable criteria. Baseline: the last 10 chore/docs items finished by the autonomous driver. Same metrics for both.
