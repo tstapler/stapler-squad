@@ -51,7 +51,6 @@ var reviewedConsumers = map[finding]string{
 	"consumer: " + svcPkgPath + ".StartBacklogGitHubForwardSyncSubscriber":  "subscribes for backlog item changes only; ignores notifications",
 	"consumer: " + svcPkgPath + ".StartBacklogGitHubProgressSyncSubscriber": "subscribes for backlog item changes only; ignores notifications",
 	"consumer: " + svcPkgPath + ".watchWorkflows":                           "workflow stream; ignores notifications",
-	"consumer: " + svcPkgPath + ".start":                                    "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
 	"consumer: " + svcPkgPath + ".Run":                                      "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
 }
 
