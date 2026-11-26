@@ -63,3 +63,28 @@ func TestUpdateSession_Title_RejectsCollisionWithExistingSession(t *testing.T) {
 	assert.Equal(t, string(ErrInvalidArgument), m["error"].(map[string]interface{})["code"].(string))
 	assert.Equal(t, titleA, occupantA.Title, "rejected rename must not mutate the title")
 }
+
+// A rename used to upsert by the new title, creating a second row without the
+// workflow link; retention then never archived the run.
+func TestUpdateSession_Title_RenamesTheExistingRow(t *testing.T) {
+	const before, after = "rename-row-before", "rename-row-after"
+	occupant := newLiveOccupant(t, before, t.TempDir())
+	lh := newWorktreeGuardHandlers(t, occupant)
+	occupant.Program = "claude"
+	require.NoError(t, lh.store.AddInstance(occupant))
+	rows, err := lh.store.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "precondition: the session is persisted")
+
+	res, err := lh.updateSession(context.Background(), makeToolReq(map[string]interface{}{
+		"session_id": before,
+		"title":      after,
+	}))
+	require.NoError(t, err)
+	require.True(t, parseResult(t, res)["success"].(bool))
+
+	rows, err = lh.store.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "a rename must not create a second row")
+	assert.Equal(t, after, rows[0].Title)
+}

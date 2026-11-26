@@ -17,7 +17,7 @@ session/shellstore files=2 loc=111 imports=5
 session/projectstore files=2 loc=136 imports=5
 session/rulestore files=2 loc=233 imports=6
 session/analyticsstore files=1 loc=271 imports=5
-session/instancestore files=8 loc=1596 imports=11
+session/instancestore files=8 loc=1623 imports=11
 session/domain files=49 loc=6008 imports=0
 session/sessionpr files=6 loc=1900 imports=14
 session/backlogstore files=33 loc=6358 imports=21
@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=174 loc=49095 imports=97
+server/services files=164 loc=46733 imports=98
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -77,7 +77,7 @@ session/tagpoller files=1 loc=415 imports=5
 session/paneactivity files=1 loc=222 imports=3
 session/registry files=1 loc=344 imports=3
 session/pipelinemode files=3 loc=768 imports=4
-session/claudehistory files=1 loc=408 imports=1
+session/claudehistory files=2 loc=500 imports=1
 session/steertext files=1 loc=146 imports=0
 session/conflictretry files=1 loc=171 imports=0
 session/nudgeoutcomes files=1 loc=224 imports=3
@@ -89,7 +89,7 @@ session/terminalstate files=4 loc=115 imports=2
 session/jsonmigrate files=1 loc=272 imports=2
 session/workspacepeers files=1 loc=315 imports=7
 session/backlogaux files=6 loc=308 imports=3
-server/services/fsops files=15 loc=1715 imports=6
+server/services/fsops files=15 loc=1727 imports=6
 server/services/fsops/fsopstest files=1 loc=90 imports=1
 server/services/access files=8 loc=1190 imports=8
 server/services/fsops/memfs files=1 loc=208 imports=1
@@ -108,6 +108,8 @@ server/services/searchrpc files=8 loc=1877 imports=11
 server/services/adminmisc files=4 loc=521 imports=6
 server/services/escapecode files=1 loc=208 imports=2
 server/services/triggerlimit files=1 loc=65 imports=0
+server/services/webhooks files=7 loc=1573 imports=12
 server/services/gatestats files=6 loc=568 imports=5
 server/services/backlogmisc files=4 loc=599 imports=10
+server/services/quota files=3 loc=811 imports=9
 server/services/taggingrules files=2 loc=554 imports=5

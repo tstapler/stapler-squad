@@ -179,3 +179,4 @@ docs-coverage-trend.json
 !server/services/flagsvc/testdata/*.gz
 !server/services/claudesettings/testdata/*.gz
 !server/services/searchrpc/testdata/*.gz
+!server/services/quota/testdata/*.gz

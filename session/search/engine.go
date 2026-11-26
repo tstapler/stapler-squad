@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/claudehistory"
@@ -18,6 +19,12 @@ type SearchEngine struct {
 	indexStore   *IndexStore
 	syncMetadata *IndexSyncMetadata
 	mu           sync.RWMutex
+	// syncMu serialises sync passes, which release mu between sessions.
+	syncMu sync.Mutex
+	// dirty records index changes not yet saved, so idle passes skip rewriting the index.
+	dirty atomic.Bool
+	// lastSave throttles full index saves (guarded by syncMu).
+	lastSave time.Time
 
 	// lazyLoad defers the persisted-index decode (hundreds of MB of gob) from
 	// startup to the first method that touches the index. Every method that
@@ -125,56 +132,21 @@ func (e *SearchEngine) markLoaded() {
 // This replaces any existing index.
 func (e *SearchEngine) BuildIndex(history *claudehistory.ClaudeSessionHistory) error {
 	e.ensureLoaded()
+	transcripts, err := claudehistory.ScanTranscripts(context.Background(), "")
+	if err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// Clear existing index
 	e.index.Clear()
 	e.docStore.Clear()
+	e.dirty.Store(true)
 
-	// Get all history entries
-	entries := history.GetAll()
-
-	for _, entry := range entries {
-		// Load messages for this conversation
-		messages, err := history.GetMessagesFromConversationFile(entry.ID, 0)
-		if err != nil {
-			// Log and continue - don't fail entire index build
-			continue
-		}
-
-		// Index each message
-		for msgIdx, msg := range messages {
-			// Tokenize content
-			tokens := e.tokenizer.Tokenize(msg.Content)
-			if len(tokens) == 0 {
-				continue
-			}
-
-			// Create document
-			doc := &Document{
-				SessionID:    entry.ID,
-				MessageIndex: msgIdx,
-				MessageRole:  msg.Role,
-				Content:      msg.Content,
-				WordCount:    len(tokens),
-				Timestamp:    msg.Timestamp,
-			}
-
-			// Add to document store
-			docID := e.docStore.Add(doc)
-
-			// Get positions for index
-			tokenPositions := e.tokenizer.TokenizeWithPositions(msg.Content)
-			positions := make(map[string][]int32)
-			for _, tp := range tokenPositions {
-				// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
-				positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
-			}
-
-			// Add to inverted index
-			e.index.AddDocument(docID, tokens, positions)
-		}
+	for _, entry := range history.GetAll() {
+		// A session that can't be read is skipped rather than failing the build.
+		_, _ = e.indexSessionLocked(transcripts, entry)
 	}
 
 	// Update scorer with new average document length
@@ -226,6 +198,7 @@ func (e *SearchEngine) IndexMessage(sessionID string, msgIdx int, role, content 
 
 	// Add to inverted index
 	e.index.AddDocument(docID, tokens, positions)
+	e.dirty.Store(true)
 
 	// Update scorer
 	e.scorer.UpdateAvgDocLength()
@@ -394,6 +367,7 @@ func (e *SearchEngine) Clear() {
 
 	e.index.Clear()
 	e.docStore.Clear()
+	e.dirty.Store(true)
 	e.scorer = NewBM25Scorer(e.index)
 }
 
@@ -403,16 +377,7 @@ func (e *SearchEngine) RemoveSession(sessionID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Get all doc IDs for this session
-	docIDs := e.docStore.GetDocIDsBySession(sessionID)
-
-	// Remove from index
-	for _, docID := range docIDs {
-		e.index.RemoveDocument(docID)
-	}
-
-	// Remove from document store
-	e.docStore.RemoveBySession(sessionID)
+	e.removeSessionsLocked(sessionID)
 
 	// Update scorer
 	e.scorer.UpdateAvgDocLength()
@@ -467,107 +432,154 @@ func (e *SearchEngine) IncrementalSync(history *claudehistory.ClaudeSessionHisto
 // the remainder.
 func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *claudehistory.ClaudeSessionHistory) (*SyncResult, error) {
 	e.ensureLoaded()
+	// One sync at a time: e.mu is released between sessions so searches keep running.
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+
 	startTime := time.Now()
 	result := &SyncResult{}
 
+	// Scanned once per pass, before taking any lock. Not cancellable: the checks below own
+	// what a cancelled pass must still record, and the scan takes well under a second.
+	transcripts, err := claudehistory.ScanTranscripts(context.WithoutCancel(ctx), "")
+	if err != nil {
+		return nil, err
+	}
+
+	changed, rebuilt, err := e.beginSync(ctx, history, transcripts, result)
+	if err != nil {
+		return nil, err
+	}
+	if rebuilt {
+		result.SyncDuration = time.Since(startTime)
+		return result, nil
+	}
+
+	for i, entry := range changed.entries {
+		if err := ctx.Err(); err != nil {
+			e.mu.Lock()
+			e.finalizeCancelledIncrementalLocked()
+			e.mu.Unlock()
+			return nil, err
+		}
+		e.syncSession(transcripts, entry, i < changed.added, result)
+	}
+
+	e.mu.Lock()
+	e.refreshAggregatesLocked()
+	e.syncMetadata.LastIncrementalSync = time.Now()
+	e.mu.Unlock()
+
+	if err := e.persist(); err != nil {
+		return result, err
+	}
+	result.SyncDuration = time.Since(startTime)
+	return result, nil
+}
+
+// pendingSessions lists the sessions to (re)index; the first `added` of entries are new.
+type pendingSessions struct {
+	entries []claudehistory.ClaudeHistoryEntry
+	added   int
+}
+
+// beginSync does the work that needs the write lock up front: a full rebuild when
+// required, otherwise diffing history against the index and dropping removed sessions.
+func (e *SearchEngine) beginSync(ctx context.Context, history *claudehistory.ClaudeSessionHistory, transcripts *claudehistory.Transcripts, result *SyncResult) (pendingSessions, bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// If no sync metadata, need full rebuild
 	if e.syncMetadata == nil || e.ShouldRebuildLocked() {
-		if err := e.buildIndexLocked(ctx, history); err != nil {
-			return nil, err
+		if err := e.buildIndexLocked(ctx, history, transcripts); err != nil {
+			return pendingSessions{}, false, err
 		}
 		result.WasFullRebuild = true
 		result.SessionsAdded = e.syncMetadata.TotalSessions
 		result.DocumentsAdded = e.syncMetadata.TotalDocuments
-		result.SyncDuration = time.Since(startTime)
-		return result, nil
+		return pendingSessions{}, true, nil
 	}
 
 	// After the rebuild branch: a cancelled rebuild must clear the metadata (see
 	// buildIndexLocked), so only the incremental path may return early.
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return pendingSessions{}, false, err
 	}
 
-	// Compute what changed
 	added, updated, removed := e.computeChangesLocked(history)
 
-	// Process removals first
+	var doomed []string
 	for _, sessionID := range removed {
 		if meta, ok := e.syncMetadata.Sessions[sessionID]; ok {
 			result.DocumentsRemoved += meta.DocCount
 		}
-		e.removeSessionLocked(sessionID)
+		doomed = append(doomed, sessionID)
 		delete(e.syncMetadata.Sessions, sessionID)
 		result.SessionsRemoved++
 	}
+	e.removeSessionsLocked(doomed...)
 
-	// Process additions
-	for _, entry := range added {
-		if err := ctx.Err(); err != nil {
-			e.finalizeCancelledIncrementalLocked()
-			return nil, err
-		}
-		docCount, err := e.indexSessionLocked(history, entry)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
-			continue
-		}
-		e.syncMetadata.Sessions[entry.ID] = &SessionIndexMetadata{
-			SessionID:     entry.ID,
-			UpdatedAt:     entry.UpdatedAt,
-			MessageCount:  entry.MessageCount,
-			LastIndexedAt: time.Now(),
-			DocCount:      docCount,
-		}
+	return pendingSessions{entries: append(added, updated...), added: len(added)}, false, nil
+}
+
+// syncSession (re)indexes one session. Reading and tokenizing happen without the
+// lock; only the swap of old documents for new ones blocks searches.
+func (e *SearchEngine) syncSession(transcripts *claudehistory.Transcripts, entry claudehistory.ClaudeHistoryEntry, isNew bool, result *SyncResult) {
+	docs, err := e.prepareSession(transcripts, entry)
+	if err != nil {
+		// The previously indexed copy (if any) stays searchable; the next pass retries.
+		result.Errors = append(result.Errors, err)
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
+		result.DocumentsRemoved += meta.DocCount
+	}
+	e.removeSessionsLocked(entry.ID)
+	e.addPreparedLocked(docs)
+	e.syncMetadata.Sessions[entry.ID] = &SessionIndexMetadata{
+		SessionID:     entry.ID,
+		UpdatedAt:     entry.UpdatedAt,
+		MessageCount:  entry.MessageCount,
+		LastIndexedAt: time.Now(),
+		DocCount:      len(docs),
+	}
+	if isNew {
 		result.SessionsAdded++
-		result.DocumentsAdded += docCount
-	}
-
-	// Process updates (re-index modified sessions)
-	for _, entry := range updated {
-		if err := ctx.Err(); err != nil {
-			e.finalizeCancelledIncrementalLocked()
-			return nil, err
-		}
-		if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
-			result.DocumentsRemoved += meta.DocCount
-		}
-		e.removeSessionLocked(entry.ID)
-
-		docCount, err := e.indexSessionLocked(history, entry)
-		if err != nil {
-			result.Errors = append(result.Errors, err)
-			continue
-		}
-		e.syncMetadata.Sessions[entry.ID] = &SessionIndexMetadata{
-			SessionID:     entry.ID,
-			UpdatedAt:     entry.UpdatedAt,
-			MessageCount:  entry.MessageCount,
-			LastIndexedAt: time.Now(),
-			DocCount:      docCount,
-		}
+	} else {
 		result.SessionsUpdated++
-		result.DocumentsAdded += docCount
 	}
+	result.DocumentsAdded += len(docs)
+}
 
-	e.refreshAggregatesLocked()
-	e.syncMetadata.LastIncrementalSync = time.Now()
+// minIndexSaveInterval bounds disk writes: the index is hundreds of MB and an active
+// session changes it on every pass.
+const minIndexSaveInterval = 10 * time.Minute
 
-	// Persist index and metadata
-	if e.indexStore != nil {
+// persist writes the index and its metadata. Both are skipped while a changed index is
+// throttled, so the files on disk stay consistent and a restart just re-indexes the gap.
+// A read lock is enough, so searches continue while it encodes.
+func (e *SearchEngine) persist() error {
+	if e.indexStore == nil {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.dirty.Load() {
+		if time.Since(e.lastSave) < minIndexSaveInterval {
+			return nil
+		}
 		if err := e.indexStore.Save(e.index, e.docStore); err != nil {
-			return result, err
+			return err
 		}
-		if err := e.indexStore.SaveSyncMetadata(e.syncMetadata); err != nil {
-			return result, err
-		}
+		e.dirty.Store(false)
+		e.lastSave = time.Now()
 	}
-
-	result.SyncDuration = time.Since(startTime)
-	return result, nil
+	return e.indexStore.SaveSyncMetadata(e.syncMetadata)
 }
 
 // finalizeCancelledIncrementalLocked keeps the totals true to the partial index
@@ -629,54 +641,84 @@ func (e *SearchEngine) computeChangesLocked(history *claudehistory.ClaudeSession
 	return added, updated, removed
 }
 
-// indexSessionLocked indexes all messages from a single session.
-// Must be called with lock held.
-func (e *SearchEngine) indexSessionLocked(history *claudehistory.ClaudeSessionHistory, entry claudehistory.ClaudeHistoryEntry) (int, error) {
-	messages, err := history.GetMessagesFromConversationFile(entry.ID, 0)
+// preparedDoc is a tokenized message waiting to be added to the index.
+type preparedDoc struct {
+	doc       *Document
+	tokens    []string
+	positions map[string][]int32
+}
+
+// prepareSession reads and tokenizes a session's messages. Needs no lock.
+func (e *SearchEngine) prepareSession(transcripts *claudehistory.Transcripts, entry claudehistory.ClaudeHistoryEntry) ([]preparedDoc, error) {
+	messages, err := transcripts.Messages(entry.ID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	docCount := 0
+	docs := make([]preparedDoc, 0, len(messages))
 	for msgIdx, msg := range messages {
 		tokens := e.tokenizer.Tokenize(msg.Content)
 		if len(tokens) == 0 {
 			continue
 		}
 
-		doc := &Document{
-			SessionID:    entry.ID,
-			MessageIndex: msgIdx,
-			MessageRole:  msg.Role,
-			Content:      msg.Content,
-			WordCount:    len(tokens),
-			Timestamp:    msg.Timestamp,
-		}
-
-		docID := e.docStore.Add(doc)
-
-		tokenPositions := e.tokenizer.TokenizeWithPositions(msg.Content)
 		positions := make(map[string][]int32)
-		for _, tp := range tokenPositions {
+		for _, tp := range e.tokenizer.TokenizeWithPositions(msg.Content) {
 			// #nosec G115 -- tp.Start is a byte offset into a single chat/scrollback message string; reaching 2^31 would require a single message over 2GB, far beyond any realistic message size
 			positions[tp.Token] = append(positions[tp.Token], int32(tp.Start))
 		}
 
-		e.index.AddDocument(docID, tokens, positions)
-		docCount++
+		docs = append(docs, preparedDoc{
+			doc: &Document{
+				SessionID:    entry.ID,
+				MessageIndex: msgIdx,
+				MessageRole:  msg.Role,
+				Content:      msg.Content,
+				WordCount:    len(tokens),
+				Timestamp:    msg.Timestamp,
+			},
+			tokens:    tokens,
+			positions: positions,
+		})
 	}
-
-	return docCount, nil
+	return docs, nil
 }
 
-// removeSessionLocked removes all documents from a session.
-// Must be called with lock held.
-func (e *SearchEngine) removeSessionLocked(sessionID string) {
-	docIDs := e.docStore.GetDocIDsBySession(sessionID)
-	for _, docID := range docIDs {
-		e.index.RemoveDocument(docID)
+// addPreparedLocked adds tokenized documents. Must be called with lock held.
+func (e *SearchEngine) addPreparedLocked(docs []preparedDoc) {
+	for _, d := range docs {
+		e.index.AddDocument(e.docStore.Add(d.doc), d.tokens, d.positions)
 	}
-	e.docStore.RemoveBySession(sessionID)
+	if len(docs) > 0 {
+		e.dirty.Store(true)
+	}
+}
+
+// indexSessionLocked indexes all messages from a single session.
+// Must be called with lock held.
+func (e *SearchEngine) indexSessionLocked(transcripts *claudehistory.Transcripts, entry claudehistory.ClaudeHistoryEntry) (int, error) {
+	docs, err := e.prepareSession(transcripts, entry)
+	if err != nil {
+		return 0, err
+	}
+	e.addPreparedLocked(docs)
+	return len(docs), nil
+}
+
+// removeSessionsLocked removes all documents of the given sessions in one index pass.
+// Must be called with lock held.
+func (e *SearchEngine) removeSessionsLocked(sessionIDs ...string) {
+	docIDs := make([]int32, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		docIDs = append(docIDs, e.docStore.GetDocIDsBySession(sessionID)...)
+	}
+	if len(docIDs) > 0 {
+		e.index.RemoveDocuments(docIDs)
+		e.dirty.Store(true)
+	}
+	for _, sessionID := range sessionIDs {
+		e.docStore.RemoveBySession(sessionID)
+	}
 }
 
 // ShouldRebuild returns true if a full rebuild is recommended.
@@ -703,7 +745,7 @@ func (e *SearchEngine) ShouldRebuildLocked() bool {
 
 // buildIndexLocked performs a full index build and initializes sync metadata.
 // Must be called with lock held.
-func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehistory.ClaudeSessionHistory) error {
+func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehistory.ClaudeSessionHistory, transcripts *claudehistory.Transcripts) error {
 	// Clear existing index
 	e.index.Clear()
 	e.docStore.Clear()
@@ -720,7 +762,7 @@ func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehist
 			e.syncMetadata = nil // partial index: force a full rebuild next time
 			return err
 		}
-		docCount, err := e.indexSessionLocked(history, entry)
+		docCount, err := e.indexSessionLocked(transcripts, entry)
 		if err != nil {
 			// Log and continue - don't fail entire index build
 			continue
@@ -742,6 +784,7 @@ func (e *SearchEngine) buildIndexLocked(ctx context.Context, history *claudehist
 		if err := e.indexStore.Save(e.index, e.docStore); err != nil {
 			return err
 		}
+		e.dirty.Store(false)
 		if err := e.indexStore.SaveSyncMetadata(e.syncMetadata); err != nil {
 			return err
 		}

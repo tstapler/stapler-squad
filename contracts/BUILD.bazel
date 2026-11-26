@@ -4,6 +4,6 @@ filegroup(
     srcs = glob(["webhook-management/**"]),
     visibility = [
         "//server/integrations/contractarchive:__pkg__",
-        "//server/services:__pkg__",
+        "//server/services/webhooks:__pkg__",
     ],
 )
