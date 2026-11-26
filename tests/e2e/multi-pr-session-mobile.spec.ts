@@ -71,8 +71,7 @@ test.describe("multi-pr-session-mobile", () => {
     const title = `e2e-multipr-m-chip-${Date.now()}`;
     await seedSession(page, title, threePrs());
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-    // On a phone only one pane shows; the list is the "Sessions" pane tab beside the empty detail pane.
-    await page.getByRole("tab", { name: "Sessions", exact: true }).or(page.getByRole("button", { name: "Sessions", exact: true })).first().tap();
+    await new SessionsPage(page).showSessionListPaneOnPhone();
     const detail = new SessionDetailPage(page);
     const row = new SessionsPage(page).getSessionCard(title);
     await expect(row).toBeVisible();
