@@ -145,9 +145,16 @@ func (h *backlogHandlers) createEpicIntegrationChild(ctx context.Context, req mc
 	if err != nil {
 		return connectErrResult("create_epic_integration_child", err), nil
 	}
-	return mcpgo.NewToolResultText(fmt.Sprintf(
-		"Integration child %s is in place for epic %s, blocked on %d sibling(s). The epic cannot be marked done until it is done.",
-		resp.Msg.Item.Id, epicID, len(siblings))), nil
+	return mcpgo.NewToolResultText(integrationChildResultText(resp.Msg.Item, epicID, len(siblings))), nil
+}
+
+func integrationChildResultText(child *sessionv1.BacklogItem, epicID string, siblings int) string {
+	// The service only returns an archived child when it had passed; others are replaced.
+	if st := child.Status; st == string(domain.BacklogStatusDone) || st == string(domain.BacklogStatusArchived) {
+		return fmt.Sprintf("Integration child %s for epic %s has already passed; it no longer blocks the epic.", child.Id, epicID)
+	}
+	return fmt.Sprintf("Integration child %s is in place for epic %s, blocked on %d sibling(s). The epic cannot be marked done until it is done.",
+		child.Id, epicID, siblings)
 }
 
 // --- trigger_triage ---

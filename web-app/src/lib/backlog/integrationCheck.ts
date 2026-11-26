@@ -9,10 +9,10 @@ export function integrationCheckState(child: IntegrationChild | undefined): Inte
   if (!child) return "awaiting";
   if (child.status === "done") return "passed";
   if (child.status === "archived") {
-    const archival = [...(child.statusEvents ?? [])]
+    const last = [...(child.statusEvents ?? [])]
       .reverse()
-      .find((e) => e.toStatus === "archived" && e.fromStatus !== "archived");
-    return archival?.fromStatus === "done" ? "passed" : "archived";
+      .find((e) => !(e.fromStatus === "archived" && e.toStatus === "archived"));
+    return last?.toStatus === "archived" && last.fromStatus === "done" ? "passed" : "archived";
   }
   if ((child.acCriteria ?? []).some((ac) => (ac.status as string) === "fail")) return "failed";
   return "awaiting";

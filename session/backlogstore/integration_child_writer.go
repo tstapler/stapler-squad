@@ -82,16 +82,17 @@ func (b *Backlog) integrationGate(ctx context.Context, epic *ent.BacklogItem) er
 }
 
 // integrationChildPassed reports whether child is done, or was archived out of done (the
-// auto_archive_done sweep archives passed checks too). A lost audit event reads as not passed.
+// auto_archive_done sweep archives passed checks too). Its latest status event, ignoring
+// re-archives, must be that archival, so a missing audit row does not revive an older pass.
 func integrationChildPassed(ctx context.Context, events *ent.BacklogStatusEventClient, child *ent.BacklogItem) (bool, error) {
 	if child.Status != string(domain.BacklogStatusArchived) {
 		return child.Status == string(domain.BacklogStatusDone), nil
 	}
-	archival, err := events.Query().
+	archived := string(domain.BacklogStatusArchived)
+	last, err := events.Query().
 		Where(
 			backlogstatusevent.ItemID(child.ID),
-			backlogstatusevent.ToStatus(string(domain.BacklogStatusArchived)),
-			backlogstatusevent.FromStatusNEQ(string(domain.BacklogStatusArchived)),
+			backlogstatusevent.Or(backlogstatusevent.FromStatusNEQ(archived), backlogstatusevent.ToStatusNEQ(archived)),
 		).
 		Order(ent.Desc(backlogstatusevent.FieldCreatedAt)).
 		First(ctx)
@@ -101,7 +102,7 @@ func integrationChildPassed(ctx context.Context, events *ent.BacklogStatusEventC
 	if err != nil {
 		return false, fmt.Errorf("load archival event of %s: %w", child.ID, err)
 	}
-	return archival.FromStatus == string(domain.BacklogStatusDone), nil
+	return last.ToStatus == archived && last.FromStatus == string(domain.BacklogStatusDone), nil
 }
 
 // CreateIntegrationChild creates the epic's integration child, blocked on every sibling, and
