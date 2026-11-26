@@ -24,6 +24,11 @@ describe("integrationCheckState", () => {
     child.statusEvents.push({ id: "u", fromStatus: "archived", toStatus: "idea", triggeredBy: "user" });
     expect(integrationCheckState(child)).toBe("archived");
   });
+  it("does not count leaving done as an archival when the archival event is missing", () => {
+    const child = archivals();
+    child.statusEvents.push({ id: "r", fromStatus: "done", toStatus: "review", triggeredBy: "user" });
+    expect(integrationCheckState(child)).toBe("archived");
+  });
   it("is passed when the child was archived out of done, even if archived again", () => {
     expect(integrationCheckState(archivals("done"))).toBe("passed");
     expect(integrationCheckState(archivals("done", "archived"))).toBe("passed");
