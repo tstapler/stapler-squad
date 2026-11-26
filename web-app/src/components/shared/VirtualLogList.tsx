@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import type { LogEntry } from "@/lib/hooks/useLogViewer";
+import type { LogEntry, LogLevel } from "@/lib/hooks/useLogViewer";
 import { LogRow } from "./LogRow";
 import { ExpandedLogDetail } from "./ExpandedLogDetail";
 import * as styles from "./VirtualLogList.css";
@@ -15,6 +15,7 @@ interface VirtualLogListProps {
   searchQuery: string;
   onAtBottomStateChange: (atBottom: boolean) => void;
   onToggleRow: (index: number) => void;
+  onFilterByLevel?: (level: LogLevel) => void;
   virtuosoRef?: React.RefObject<VirtuosoHandle | null>;
 }
 
@@ -31,6 +32,7 @@ export function VirtualLogList({
   searchQuery,
   onAtBottomStateChange,
   onToggleRow,
+  onFilterByLevel,
   virtuosoRef,
 }: VirtualLogListProps) {
   // Internal ref used when caller doesn't provide one
@@ -101,6 +103,7 @@ export function VirtualLogList({
               isSelected={selectedRowIndex === index}
               onToggle={() => onToggleRow(index)}
               searchQuery={searchQuery}
+              onFilterByLevel={onFilterByLevel}
             />
             {expandedRowIndex === index && <ExpandedLogDetail entry={entry} />}
           </React.Fragment>
