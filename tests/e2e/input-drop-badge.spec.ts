@@ -7,8 +7,8 @@
  * server-side connection teardown against a client keystroke — impractical
  * to do reliably in an e2e harness. Per this plan's fallback convention
  * (matching Tasks 1.2.4/1.2.5), this spec instead drives the badge via a
- * test-only trigger (`window.__e2eTriggerInputDropped`, wired in
- * TerminalOutput.tsx) that forwards to the exact same `onInputDropped`
+ * test-only trigger (`window.__e2eTriggerInputDropped`, installed by
+ * useE2eInputDropTrigger.ts only on the e2e server) that forwards to the exact same `onInputDropped`
  * handler a real drop would invoke — the drop-detection mechanism itself
  * (MessageQueue.close()'s drop semantics, the connection-generation guard)
  * already has direct Jest coverage (Stories 2.1/2.2); this spec covers what
@@ -72,13 +72,6 @@ async function triggerDrop(page: import('@playwright/test').Page, count: number)
 }
 
 test.describe('input-drop-badge', () => {
-  // The e2e binary is a production web build, where the test trigger needs this opt-in.
-  test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => {
-      (window as unknown as { __E2E_HOOKS__?: boolean }).__E2E_HOOKS__ = true;
-    });
-  });
-
   test('badge becomes visible with the correct singular/plural count text', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
     const session = await createActiveSession(client, `e2e-input-drop-${Date.now()}`);
@@ -203,6 +196,33 @@ test.describe('input-drop-badge', () => {
       await expect(page.getByTestId('input-drop-badge')).toBeVisible({ timeout: BADGE_TIMEOUT_MS });
 
       await expect(terminalInput).toBeFocused();
+    } finally {
+      await client.deleteSession(session.id, true).catch(() => {});
+    }
+  });
+
+  test('trigger is not installed when the server is a production one', async ({ page }) => {
+    // The same production bundle, answered as a production server would, with a page-set global too.
+    await page.route('**/api/server-info', async (route) => {
+      const response = await route.fetch();
+      const info = await response.json();
+      delete info.e2e_hooks;
+      await route.fulfill({ response, json: info });
+    });
+    await page.addInitScript(() => {
+      (window as unknown as { __E2E_HOOKS__?: boolean }).__E2E_HOOKS__ = true;
+    });
+    const client = new SessionClient(BASE_URL);
+    const session = await createActiveSession(client, `e2e-input-drop-prod-${Date.now()}`);
+
+    try {
+      const answered = page.waitForResponse('**/api/server-info');
+      await openTerminalView(page, session.id);
+      await answered;
+      // A connected terminal has long since run the effect that would install the trigger.
+      await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+
+      expect(await page.evaluate(() => '__e2eTriggerInputDropped' in window)).toBe(false);
     } finally {
       await client.deleteSession(session.id, true).catch(() => {});
     }

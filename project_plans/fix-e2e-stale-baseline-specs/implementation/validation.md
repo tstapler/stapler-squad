@@ -30,7 +30,7 @@ Chromium projects with `--retries=0`.
 |---|---|---|
 | A row flipped to `pass` fails on a slower CI runner and reds main (comparator is main-only) | P2 | Condition-based waits only; check the PR shard report for the changed specs before merge |
 | `skipped` baseline rows treated as a gap by the comparator | P2 | Run the comparator and its unit tests against the edited baseline |
-| Hook enabled in production by accident | P3 | Requires a script to set `window.__E2E_HOOKS__`; it only shows a badge |
+| Hook enabled in production by accident | P3 | Requires the server to run as `e2e-local`; Go, Jest and e2e tests assert a production answer installs nothing |
 
 No P1 items.
 
@@ -57,3 +57,7 @@ UX — no user-visible change; engineering — product edits limited to a test h
 - Rerun on `44d638b9a`: `make ci` and `lint:duplicates` exit 0; changed specs (`CI=1`,
   `--retries=0`, both Chromium projects) 57 passed, 15 skipped; other `terminal-stress` specs and
   `terminal-hub-path` 26 passed, 12 skipped; `bun test tests/e2e/scripts tests/e2e/baseline` 103 pass.
+- Criterion 9 is **not met as written**: the baseline was edited by hand from verified runs, not
+  re-recorded (the Next build it was captured from is gone).
+- Hook gate moved server-side: `input-drop-badge.spec.ts` 12/12; its production-server case fails
+  on a bundle that ignores `e2e_hooks` (mutation check, also in Jest).

@@ -13,7 +13,7 @@ added. Product code changes only where the test cannot be fixed without one.
 | 2 | `test.skip(!!process.env.CI, PERF_FLOOR_REASON)` on the three ascii tests that assert frame floors (30 FPS, 60 FPS, bouncing ball). Comment names the follow-on benchmark workflow | `terminal-stress/ascii-video.spec.ts` | 2 |
 | 3 | Page: publish final progress counters when a run completes. Spec: 100KB test keeps correctness assertions everywhere and runs the frame-time ceilings only off CI, with `avgFrameTime` bound derived from the 1 fps preset; reset test stops mid-run, restarts, and requires the second run to last its full duration | `TerminalStressTest.tsx`, `large-payload.spec.ts` | 2 |
 | 4 | `beforeAll` seeds a session and waits for it active by title; helper opens `/?session=<id>` and expands the toolbar, failing loudly. Update assertions to the current toolbar: keyboard toggle is primary, Paste is in the overflow row. `afterAll` deletes the session | `terminal-mobile-overflow.spec.ts` | 3 |
-| 5 | Opt-in test hook: install `__e2eTriggerInputDropped` outside production **or** when `window.__E2E_HOOKS__ === true`. Spec sets it with `addInitScript` and also calls `waitForSessionsActive([title])` | `TerminalOutput.tsx`, `input-drop-badge.spec.ts` | 4 |
+| 5 | Server-gated test hook: `/api/server-info` sends `e2e_hooks` only on the `e2e-local` instance, and `useE2eInputDropTrigger` installs `__e2eTriggerInputDropped` only then (replaces the earlier page-set window flag). Spec also calls `waitForSessionsActive([title])` | `server.go`, `useE2eInputDropTrigger.ts`, `input-drop-badge.spec.ts` | 4 |
 | 6 | Exclude closed drawers (translated down by at least their own height) from the fixed-overflow assertion. No session seeding: BottomNav already renders | `android-url-bar.spec.ts` | 5 |
 | 7 | Test 5: `waitForSessionsActive([title])` before navigation; click "Redraw terminal"; same name for tests 1-4, which share the stale locator | `terminal-resize.spec.ts` | 6 |
 | 8 | `waitForFlagRow` returns the rendered row; locate `role=switch`, assert `aria-checked`; failure test asserts `feature-flag-row-error` and an unchanged switch | `terminal-resync-feature-flags.spec.ts` | 7 |
@@ -48,9 +48,9 @@ added. Product code changes only where the test cannot be fixed without one.
 
 ## Design notes
 
-- **Why a runtime flag for the hook (5):** the e2e binary is the production web build, so a
-  build-time gate can never be true there. The hook only calls the badge's own handler; a script able
-  to set the flag can already manipulate the DOM.
+- **Why a server-reported flag for the hook (5):** the e2e binary is the production web build, so a
+  build-time gate would need a separate web build in every e2e job, and `make` does not rebuild when
+  an environment variable changes. The server already gates its debug endpoints on `e2e-local`.
 - **Why `skipped` is per test, not per file (2, 3):** a file-level skip would drop passing
   correctness tests (flow control, 1MB payload, start/stop cycles).
 - **Baseline edits (9):** the Next build no longer exists, so rows are edited as in #1459.

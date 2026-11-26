@@ -1346,7 +1346,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// BacklogStuckState rows and queued backlog items directly, bypassing the
 	// reconciler's real thresholds and the real WIP-cap spawn flow. Never
 	// registered outside that instance.
-	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
+	if isE2EInstance() && deps.Storage != nil {
 		backlogSeedHandler := debugseed.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
 		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
@@ -2053,6 +2053,12 @@ func (s *Server) GetOrigins() []string {
 	return s.origins
 }
 
+// isE2EInstance reports whether this is the Playwright suite's server; it gates
+// every test-only surface (debug seed handlers, the UI's e2e hooks).
+func isE2EInstance() bool {
+	return os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local"
+}
+
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
@@ -2092,6 +2098,8 @@ func (s *Server) registerServerInfoHandler() {
 			// instance layout for why more than one of these can be running
 			// on the same machine at once).
 			BinaryPath string `json:"binary_path,omitempty"`
+			// E2EHooks lets the UI install its test-only triggers; absent in production.
+			E2EHooks bool `json:"e2e_hooks,omitempty"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -2115,6 +2123,7 @@ func (s *Server) registerServerInfoHandler() {
 			Commit:     buildinfo.Commit,
 			Worktree:   buildinfo.Worktree == "true",
 			BinaryPath: binaryPath,
+			E2EHooks:   isE2EInstance(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
