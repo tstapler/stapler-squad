@@ -262,7 +262,7 @@ accumulator's last tick: an event within a minute of an hour boundary may land
 in the previous bucket.
 
 `<config dir>/delivery-gate-stats.json` (mode 0600; the test-mode directory when
-`STAPLER_SQUAD_TEST_DIR` is set) is written by `services.FileStatsStore`:
+`STAPLER_SQUAD_TEST_DIR` is set) is written by `gatestats.FileStatsStore`:
 pid-named temp file, `fsync`, rename, at most once a minute plus a final flush
 registered with `defer` at the top of `Server.Shutdown` and bounded by
 `StatsFlushTimeout` (5s). A crash loses at most the last minute. The schema has

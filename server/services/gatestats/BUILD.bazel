@@ -1,0 +1,72 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gatestats",
+    srcs = [
+        "gatestats_liveness.go",
+        "gatestats_liveness_darwin.go",
+        "gatestats_liveness_linux.go",
+        "gatestats_liveness_other.go",
+        "gatestats_liveness_unix.go",
+        "gatestats_liveness_windows.go",
+        "gatestats_response.go",
+        "gatestats_store.go",
+        "gatestats_writer.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/gatestats",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//server/deliverygate",
+        "//server/services/flagsvc",
+        "//server/services/fsops",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gatestats",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gatestats_test",
+    srcs = [
+        "gatestats_golden_test.go",
+        "gatestats_response_test.go",
+        "gatestats_store_test.go",
+        "gatestats_writer_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":gatestats"],
+    deps = [
+        "//config",
+        "//server/deliverygate",
+        "//server/services/fsops",
+        "//server/services/fsops/memfs",
+        "//server/services/internal/svctest",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

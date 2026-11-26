@@ -1,6 +1,6 @@
 //go:build darwin
 
-package services
+package gatestats
 
 import (
 	"time"

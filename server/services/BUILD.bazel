@@ -57,15 +57,6 @@ go_library(
         "file_write.go",
         "file_writer.go",
         "files_delegates.go",
-        "gatestats_liveness.go",
-        "gatestats_liveness_darwin.go",
-        "gatestats_liveness_linux.go",
-        "gatestats_liveness_other.go",
-        "gatestats_liveness_unix.go",
-        "gatestats_liveness_windows.go",
-        "gatestats_response.go",
-        "gatestats_store.go",
-        "gatestats_writer.go",
         "github_service.go",
         "github_user_actions.go",
         "github_user_nudge.go",
@@ -230,6 +221,7 @@ go_library(
         "//server/services/federation",
         "//server/services/flagsvc",
         "//server/services/fsops",
+        "//server/services/gatestats",
         "//server/services/internal/streammetrics",
         "//server/services/piextension",
         "//server/services/questionkit",
@@ -310,15 +302,7 @@ go_library(
         "@org_golang_x_sync//singleflight",
         "@org_golang_x_time//rate",
         "@org_modernc_sqlite//:sqlite",
-    ] + select({
-        "@rules_go//go/platform:darwin": [
-            "@org_golang_x_sys//unix",
-        ],
-        "@rules_go//go/platform:ios": [
-            "@org_golang_x_sys//unix",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 alias(
@@ -436,8 +420,8 @@ go_test(
         "flag_registry_test_helper_test.go",
         "flag_test_helpers_test.go",
         "fsops_test.go",
+        "gate_test_helpers_test.go",
         "gatestats_rpc_test.go",
-        "gatestats_store_test.go",
         "git_fixture_test.go",
         "github_service_merge_method_test.go",
         "github_service_pr_target_test.go",
@@ -841,6 +825,7 @@ go_test(
         "//server/services/fsops",
         "//server/services/fsops/fsopstest",
         "//server/services/fsops/memfs",
+        "//server/services/gatestats",
         "//server/services/internal/svctest",
         "//server/services/piextension",
         "//server/services/questionkit",
