@@ -2,6 +2,7 @@ package goalrunner
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -41,5 +42,15 @@ func TestWriteSettings_should_WriteOwnerOnlyFile_When_DirGiven(t *testing.T) {
 	}
 	if !strings.HasSuffix(path, "goal-settings.json") {
 		t.Fatal(path)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", fi.Mode().Perm())
+	}
+	if raw, err := os.ReadFile(path); err != nil || strings.Contains(string(raw), "PermissionRequest") {
+		t.Fatalf("empty permissionHook must be omitted: err=%v raw=%s", err, raw)
 	}
 }

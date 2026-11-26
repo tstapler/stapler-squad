@@ -108,8 +108,15 @@ func TestRun_should_LogHeartbeat_When_TickerFires(t *testing.T) {
 	}
 	res := make(chan Outcome, 1)
 	go func() { res <- Run(context.Background(), cfg) }()
-	tickCh <- time.Now() // unbuffered: returns only once the loop received it
-	tickCh <- time.Now() // second receive guarantees the first heartbeat was logged
+	for range 2 { // unbuffered: the second receive guarantees the first heartbeat was logged
+		select {
+		case tickCh <- time.Now():
+		case got := <-res:
+			t.Fatalf("Run returned before heartbeat: %+v", got)
+		case <-time.After(10 * time.Second):
+			t.Fatal("heartbeat tick not received")
+		}
+	}
 	if err := os.WriteFile(gate, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -175,5 +182,26 @@ func TestRun_should_ReportError_When_ProcessExitsNonZeroAfterResult(t *testing.T
 	got := Run(context.Background(), Config{Binary: bin, Criteria: "x", Logger: slog.New(slog.DiscardHandler)})
 	if got.EndReason != EndError || got.Err == nil || got.CostUSD != 0.1 {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestRun_should_ReportStartError_When_BinaryMissing(t *testing.T) {
+	t.Parallel()
+	got := Run(context.Background(), Config{Binary: filepath.Join(t.TempDir(), "nope"), Criteria: "x"})
+	if got.EndReason != EndError || got.Err == nil {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestRun_should_AttachStderrTail_When_NoResultLine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'auth failed' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got := Run(context.Background(), Config{Binary: bin, Criteria: "x"})
+	if got.EndReason != EndError || got.Err == nil || !strings.Contains(got.Err.Error(), "auth failed") {
+		t.Fatalf("stderr tail missing from error: %+v", got)
 	}
 }

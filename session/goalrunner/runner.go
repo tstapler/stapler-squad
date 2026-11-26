@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,6 +23,7 @@ const (
 	DefaultCostCeilingUSD = 2.00
 	DefaultHeartbeat      = 60 * time.Second
 	maxLineBytes          = 4 << 20
+	stderrTailBytes       = 4 << 10
 )
 
 // Config describes one run. Zero values take the defaults above.
@@ -261,16 +264,8 @@ func Run(ctx context.Context, cfg Config) Outcome {
 	cfg = cfg.withDefaults()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := safeexec.CommandContextPG(runCtx, cfg.Binary, cfg.Args()...)
-	cmd.Dir = cfg.Dir
-	// CommandContextPG kills claude's whole process group and sets WaitDelay, so a
-	// grandchild (Bash tool, hook) cannot hold the stdout pipe open after the kill.
-	stdout, err := cmd.StdoutPipe()
+	cmd, stdout, stderr, err := startRetryingTextBusy(runCtx, cfg)
 	if err != nil {
-		return Outcome{EndReason: EndError, Err: fmt.Errorf("goalrunner: stdout pipe: %w", err)}
-	}
-	cmd.Stderr = nil // discarded; stream-json carries errors on stdout
-	if err := startRetryingTextBusy(cmd); err != nil {
 		return Outcome{EndReason: EndError, Err: fmt.Errorf("goalrunner: start %s: %w", cfg.Binary, err), WallTime: time.Since(start)}
 	}
 
@@ -296,21 +291,64 @@ finished:
 	waitErr := cmd.Wait()
 	<-rd.done
 	out := tr.outcome(cfg, exceeded, time.Since(start), waitErr, rd.scanErr)
+	if out.Err != nil && out.EndReason == EndError {
+		if tail := stderr.String(); tail != "" {
+			out.Err = errors.Join(out.Err, fmt.Errorf("stderr: %s", tail))
+		}
+	}
 	if ctx.Err() != nil && out.EndReason == EndError {
 		out.Err = errors.Join(out.Err, ctx.Err())
 	}
 	return out
 }
 
-// startRetryingTextBusy retries Start on ETXTBSY: a freshly written executable
-// can be briefly held open for writing by a concurrent fork (golang/go#22315).
-func startRetryingTextBusy(cmd *exec.Cmd) error {
+// startRetryingTextBusy launches claude, retrying on ETXTBSY: a freshly written
+// executable can be briefly held open for writing by a concurrent fork
+// (golang/go#22315). Each attempt builds a new Cmd and pipe because a failed
+// Start closes both.
+func startRetryingTextBusy(ctx context.Context, cfg Config) (*exec.Cmd, io.ReadCloser, *tailBuffer, error) {
 	var err error
 	for range 5 {
-		if err = cmd.Start(); !errors.Is(err, syscall.ETXTBSY) {
-			return err
+		// CommandContextPG kills claude's whole process group and sets WaitDelay, so a
+		// grandchild (Bash tool, hook) cannot hold the stdout pipe open after the kill.
+		cmd := safeexec.CommandContextPG(ctx, cfg.Binary, cfg.Args()...)
+		cmd.Dir = cfg.Dir
+		stderr := &tailBuffer{max: stderrTailBytes}
+		cmd.Stderr = stderr
+		var stdout io.ReadCloser
+		if stdout, err = cmd.StdoutPipe(); err != nil {
+			return nil, nil, nil, fmt.Errorf("stdout pipe: %w", err)
+		}
+		if err = cmd.Start(); err == nil {
+			return cmd, stdout, stderr, nil
+		}
+		if !errors.Is(err, syscall.ETXTBSY) {
+			return nil, nil, nil, err
 		}
 		time.Sleep(20 * time.Millisecond) // bounded: 5 x 20ms
 	}
-	return err
+	return nil, nil, nil, err
+}
+
+// tailBuffer keeps the last max bytes written, for diagnosing a run with no result line.
+type tailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.max {
+		b.buf = b.buf[len(b.buf)-b.max:]
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.TrimSpace(string(b.buf))
 }
