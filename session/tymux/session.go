@@ -367,7 +367,6 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.restartIsPending = false
 	s.closed = false
-	s.resetPaneActivityAsync()
 	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
 	// a reused session object (e.g. Start() after an earlier Close(), or
 	// a second RestoreWithWorkDir()) doesn't carry a stale closing flag,
@@ -377,6 +376,8 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.backendRestartedAt = time.Time{}
 	s.abortReconnect = make(chan struct{})
 	s.mu.Unlock()
+	// After Unlock: it takes activity.mu, and SetPaneActivity holds that while taking s.mu.RLock.
+	s.resetPaneActivityAsync()
 	s.closing.Store(false)
 
 	log.Info("tymux: session ready", logKeySessionID, sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())

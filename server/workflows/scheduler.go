@@ -49,8 +49,8 @@ type triggerFireEventRecorder interface {
 }
 
 // triggerRateLimiterGate is the narrow interface Scheduler needs for per-Workflow rate
-// limiting (webhook-triggers Epic 2.4.2) — satisfied by *services.TriggerRateLimiter's
-// Allow method. Defined here (consumer-defined), not in server/services, to avoid a
+// limiting (webhook-triggers Epic 2.4.2) — satisfied by *triggerlimit.TriggerRateLimiter's
+// Allow method. Defined here (consumer-defined), not in server/services/triggerlimit, to avoid a
 // server/workflows -> server/services import — per the `interface-pollution-checklist`
 // skill.
 type triggerRateLimiterGate interface {

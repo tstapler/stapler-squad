@@ -5,10 +5,10 @@
   "method": "GetTymuxRolloutStatus",
   "protoFile": "proto/session/v1/tymux_rollout.proto",
   "markerFound": true,
-  "handlerFile": "server/services/tymux_rollout_service.go",
+  "handlerFile": "server/services/adminmisc/tymux_rollout_service.go",
   "tested": true,
   "testIds": [
     "TestGetTymuxRolloutStatus_ReportsRehearsalState"
   ],
-  "lastModified": "2026-08-25T14:21:24.626536551-07:00"
+  "lastModified": "2026-11-25T08:36:00.476975747-08:00"
 }
