@@ -27,7 +27,7 @@ type goldenRDAP struct {
 }
 
 func (g *goldenRDAP) RoundTrip(r *http.Request) (*http.Response, error) {
-	var headers []string
+	headers := make([]string, 0, len(r.Header))
 	for k, v := range r.Header {
 		headers = append(headers, k+"="+strings.Join(v, ","))
 	}
