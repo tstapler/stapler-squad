@@ -26,7 +26,10 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SELF")" && pwd)"
 BEFORE_FILE="$SCRIPT_DIR/../../../session/instance/testdata/scroll_forward_claude_before.txt"
 AFTER_FILE="$SCRIPT_DIR/../../../session/instance/testdata/scroll_forward_claude_after.txt"
 # A moved golden file would otherwise only show up as an empty pane in the browser.
-[ -r "$BEFORE_FILE" ] && [ -r "$AFTER_FILE" ] || { echo "alt-screen fixture: golden files not found under $SCRIPT_DIR"; exit 1; }
+if [ ! -r "$BEFORE_FILE" ] || [ ! -r "$AFTER_FILE" ]; then
+  echo "alt-screen fixture: golden files not found under $SCRIPT_DIR"
+  exit 1
+fi
 
 redraw() {
   # Clear screen + home cursor, then print the given fixture file verbatim --
