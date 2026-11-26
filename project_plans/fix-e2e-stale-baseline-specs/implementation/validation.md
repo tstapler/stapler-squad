@@ -61,3 +61,22 @@ UX — no user-visible change; engineering — product edits limited to a test h
   re-recorded (the Next build it was captured from is gone).
 - Hook gate moved server-side: `input-drop-badge.spec.ts` 12/12; its production-server case fails
   on a bundle that ignores `e2e_hooks` (mutation check, also in Jest).
+
+## Addendum 2026-11-26: re-record (criterion index 8)
+
+| Requirement | Check |
+|---|---|
+| Rows come from CI reports, none typed | `rerecord-baseline.mjs` regenerates the committed file byte-for-byte from `origin/main`'s copy and the three downloaded reports |
+| Three runs of one commit | `gh run view` per run: same `headSha`, event `workflow_dispatch`; reports have empty `errors` |
+| All 47 rows corrected | Script's expected-class assertions (plan addendum, review finding 1) |
+| No `pass` row on `main` becomes `fail` | Script refuses to write |
+| Other files' rows unchanged | Script compares them with `main`'s |
+| Gate agrees | `e2e-baseline-compare.ts` with all three reports: no `fail` finding in the eight files |
+| Consumers still work | `bun test tests/e2e/scripts tests/e2e/baseline` |
+
+## Readiness gate for the addendum: PASS
+
+Criteria 1, 4, 7: each requirement has a check, the adversarial verdict is CONCERNS (no blocker),
+no pre-mortem at complexity 1. No schema change, no new package, no ADR.
+
+Finding 4: `git grep` finds the `e2e_test` macro (`tools/bzl/e2e/e2e.bzl`) but no target that instantiates it, so no tolerance change is needed.

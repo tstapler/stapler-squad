@@ -60,3 +60,48 @@ added. Product code changes only where the test cannot be fixed without one.
 1. Eight specs, both Chromium projects, `--retries=0`, with and without `CI=1`.
 2. `bun test` for baseline-skip/compare unit tests; Jest for `TerminalOutput` and the stress page area.
 3. `make ci`; `bun run lint:duplicates` in `web-app/`.
+
+## Addendum 2026-11-26: re-record the baseline rows (criterion index 8)
+
+Complexity 1: no new types, no product code, no migration.
+
+1. Write `project_plans/fix-e2e-stale-baseline-specs/rerecord-baseline.mjs`. It imports
+   `buildBaseline` from `../web-app-bun-build/spikes/s0/classify-e2e.mjs`. Inputs: the baseline from
+   `origin/main` (not this branch's hand-edited copy), three `report.json` files, their run URLs and
+   the captured commit.
+   - Replaces every row of the eight spec files with rows built from the reports. A (spec, project,
+     title) in no report gets no row (deleted or renamed tests).
+   - Carries `routesVisited` over from the `main` row with the same key (null for new keys).
+   - Leaves every other row as it is; recomputes `meta.specCount` and `meta.counts`; records
+     `meta.rerecorded = {commit, specFiles, runDates}`. The original `meta` fields stay.
+   - Refuses to write when: fewer than three reports; a report has no rows for one of the seven
+     surviving files; a report was cut off (a row of those files with zero attempts).
+2. Push the branch, then `gh workflow run build.yml --ref <branch>` three times, one after another
+   (same concurrency group). Download each `e2e-bun-report`. All three must run the same commit.
+3. Run the script. Check:
+   - no row that is `pass` on `main` is `fail` in the result (a `flaky` one is listed in the PR);
+   - the comparator, per report, has no `fail` finding in the eight spec files;
+   - `bun test tests/e2e/scripts tests/e2e/baseline` passes;
+   - rows outside the eight files are identical to `origin/main`.
+   A listed row that records `fail` in the three runs is investigated and fixed (then recaptured),
+   not edited.
+4. If CI cannot produce three usable reports, restore `origin/main`'s baseline rows for these files
+   only on the owner's say; mark index 8 `fail` with the reason.
+
+Risks: a CI run takes about 30 minutes; shards that exhaust their budget leave tests unreached
+(caught by the refusal above); `main` may move the baseline file before merge (re-run the script on
+the new `main` copy with the same reports).
+
+### Adversarial review of the addendum: CONCERNS, all six findings adopted
+
+1. The script asserts classes for each row that is `fail` on `main` (55 rows in the eight files; the
+   item's 47 excludes 4 resync and 4 stress rows): flickering absent; input-drop 10, mobile 8,
+   resync 6, android 2, resize 1 and large-payload `should handle 100KB output` /
+   `should show frame generation timing` `pass`; ascii frame floors 6 `skipped`; the 4
+   `visible flickering` / `corrupt terminal state` rows are recorded as observed.
+2. The comparator gets all three reports in one invocation.
+3. Reports with non-empty `errors` are refused; each run's `headSha` and `event` are checked.
+4. `tools/bzl/e2erun/main.go` tolerance of `skipped` rows is checked before commit.
+5. A new key inherits its file's `routesVisited`.
+6. A dispatch ending red from the comparator is acceptable if it uploaded a report. The hand-edited
+   baseline is replaced by `origin/main`'s copy before the first run.

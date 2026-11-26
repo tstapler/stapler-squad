@@ -32,3 +32,19 @@ Precedent (#1459, `c6f8c1464`): flip the `class` of rows verified by a run, and 
 - `waitForSessionsActive` matches **titles**, not IDs.
 - `terminal-resize` tests 1-4 skip for the same session-card reason. They are `skipped` rows, outside this item.
 - The closed "More navigation" sheet is not `visibility: hidden`, so it stays in the accessibility tree. Out of scope; report it.
+
+## 2026-11-26: the baseline can be re-recorded (corrects "cannot be re-recorded" above)
+
+Done inline (no research agents): the question is narrow and the sources are in the tree.
+
+- Only the *Next* build is gone. The gate scores the Bun build against the file, so a capture from
+  Bun-build CI runs is the current ground truth for the repaired specs.
+- The original capture rules are in `project_plans/web-app-bun-build/spikes/s0/classify-e2e.mjs`:
+  three reports; `pass` = attempt-0 pass in every run, `fail` = final failure in every run,
+  `skipped` = skipped in every run, else `flaky`.
+- `.github/workflows/build.yml` has `workflow_dispatch`. A dispatch runs the full suite (no
+  baseline-fail skipping, which is PR-only) and uploads `e2e-bun-report` (7-day retention).
+- Concurrency group is `build-<ref>` with cancel-in-progress off `main`, so the three dispatches
+  on one ref must run one after another.
+- `routesVisited` is not in the CI report. The rows keep their previous value, which
+  `scripts/route-coverage-manifest.ts` may read.
