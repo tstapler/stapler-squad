@@ -201,6 +201,7 @@ go_test(
         "//server/services",
         "//server/services/access",
         "//server/services/approvalkit",
+        "//server/services/backlogmisc",
         "//server/services/featureflags",
         "//server/services/flagsvc",
         "//server/services/internal/svctest",

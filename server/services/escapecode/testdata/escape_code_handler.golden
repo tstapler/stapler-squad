@@ -1,0 +1,37 @@
+GET /api/debug/escape-codes  -> OK;Content-Type=application/json body=[]\n
+GET /api/debug/escape-codes/status  -> OK;Content-Type=application/json body={"enabled":false}\n
+POST /api/debug/escape-codes/toggle {"enabled":true} -> OK;Content-Type=application/json body={"enabled":true}\n
+POST /api/debug/escape-codes/toggle {bad -> Bad Request;Content-Type=text/plain; charset=utf-8 body=Invalid JSON body\n
+GET /api/debug/escape-codes/toggle  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+GET /api/debug/escape-codes/status  -> OK;Content-Type=application/json body={"enabled":true}\n
+GET /api/debug/escape-codes  -> OK;Content-Type=application/json body=[{"code":"1b5b306d","humanReadable":"reset","category":"SGR","count":3,"firstSeen":"T","lastSeen":"T","sessionIds":["s1","s2"]},{"code":"1b5b324a","humanReadable":"clear","category":"Erase","count":1,"firstSeen":"T","lastSeen":"T","sessionIds":["s2"]}]\n
+GET /api/debug/escape-codes/  -> OK;Content-Type=application/json body=[{"code":"1b5b306d","humanReadable":"reset","category":"SGR","count":3,"firstSeen":"T","lastSeen":"T","sessionIds":["s1","s2"]},{"code":"1b5b324a","humanReadable":"clear","category":"Erase","count":1,"firstSeen":"T","lastSeen":"T","sessionIds":["s2"]}]\n
+GET /api/debug/escape-codes/stats  -> OK;Content-Type=application/json body={"enabled":true,"totalCodes":4,"uniqueCodes":2,"categoryCounts":{"Erase":1,"SGR":3},"topCodes":[{"code":"1b5b324a","humanReadable":"clear","category":"Erase","count":1,"firstSeen":"T","lastSeen":"T","sessionIds":["s2"]},{"code":"1b5b306d","humanReadable":"reset","category":"SGR","count":3,"firstSeen":"T","lastSeen":"T","sessionIds":["s1","s2"]}],"recentCodes":[{"code":"1b5b324a","humanReadable":"clear","category":"Erase","count":1,"firstSeen":"T","lastSeen":"T","sessionIds":["s2"]},{"code":"1b5b306d","humanReadable":"reset","category":"SGR","count":3,"firstSeen":"T","lastSeen":"T","sessionIds":["s1","s2"]}]}\n
+GET /api/debug/escape-codes/session/s1  -> OK;Content-Type=application/json body=[{"code":"1b5b306d","humanReadable":"reset","category":"SGR","count":3,"firstSeen":"T","lastSeen":"T","sessionIds":["s1","s2"]}]\n
+GET /api/debug/escape-codes/session/s1/  -> OK;Content-Type=application/json body=[{"code":"1b5b306d","humanReadable":"reset","category":"SGR","count":3,"firstSeen":"T","lastSeen":"T","sessionIds":["s1","s2"]}]\n
+GET /api/debug/escape-codes/session/nope  -> OK;Content-Type=application/json body=null\n
+GET /api/debug/escape-codes/session/  -> Bad Request;Content-Type=text/plain; charset=utf-8 body=Session ID required\n
+GET /api/debug/escape-codes/category/Erase  -> OK;Content-Type=application/json body=[{"code":"1b5b324a","humanReadable":"clear","category":"Erase","count":1,"firstSeen":"T","lastSeen":"T","sessionIds":["s2"]}]\n
+GET /api/debug/escape-codes/category/Erase/  -> OK;Content-Type=application/json body=[{"code":"1b5b324a","humanReadable":"clear","category":"Erase","count":1,"firstSeen":"T","lastSeen":"T","sessionIds":["s2"]}]\n
+GET /api/debug/escape-codes/category/  -> Bad Request;Content-Type=text/plain; charset=utf-8 body=Category required\n
+GET /api/debug/escape-codes/category/Bogus  -> OK;Content-Type=application/json body=null\n
+GET /api/debug/escape-codes/export  -> OK;Content-Type=application/json;Content-Disposition=attachment; filename=escape-codes.json body={\n  "enabled": true,\n  "totalCount": 4,\n  "entries": [\n    {\n      "code": "1b5b306d",\n      "humanReadable": "reset",\n      "category": "SGR",\n      "count": 3,\n      "firstSeen":"T",\n      "lastSeen":"T",\n      "sessionIds": [\n        "s1",\n        "s2"\n      ]\n    },\n    {\n      "code": "1b5b324a",\n      "humanReadable": "clear",\n      "category": "Erase",\n      "count": 1,\n      "firstSeen":"T",\n      "lastSeen":"T",\n      "sessionIds": [\n        "s2"\n      ]\n    }\n  ],\n  "exportedAt":"T"\n}
+GET /api/debug/escape-codes/unknown  -> Not Found;Content-Type=text/plain; charset=utf-8 body=Not found\n
+GET /api/debug/escape-codes/status  -> OK;Content-Type=application/json body={"enabled":true}\n
+PUT /api/debug/escape-codes  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+POST /api/debug/escape-codes/stats  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+POST /api/debug/escape-codes/export  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+POST /api/debug/escape-codes/status  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+POST /api/debug/escape-codes/session/s1  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+POST /api/debug/escape-codes/category/CSI  -> Method Not Allowed;Content-Type=text/plain; charset=utf-8 body=Method not allowed\n
+DELETE /api/debug/escape-codes  -> OK;Content-Type=application/json body={"status":"cleared"}\n
+DELETE /api/debug/escape-codes/  -> OK;Content-Type=application/json body={"status":"cleared"}\n
+GET /api/debug/escape-codes  -> OK;Content-Type=application/json body=[]\n
+GET /api/debug/escape-codes/stats  -> OK;Content-Type=application/json body={"enabled":true,"totalCodes":0,"uniqueCodes":0,"categoryCounts":{},"topCodes":[],"recentCodes":[]}\n
+POST /api/debug/escape-codes/toggle {"enabled":false} -> OK;Content-Type=application/json body={"enabled":false}\n
+GET /api/debug/escape-codes/status  -> OK;Content-Type=application/json body={"enabled":false}\n
+logs:
+level=INFO msg="escape code tracking toggled" enabled=true
+level=INFO msg="escape code store cleared"
+level=INFO msg="escape code store cleared"
+level=INFO msg="escape code tracking toggled" enabled=false

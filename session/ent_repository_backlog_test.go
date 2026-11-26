@@ -793,7 +793,7 @@ func TestGetBacklogItem_should_ReturnActivityNotes_When_ItemHasThem(t *testing.T
 // in session/ent_repository_backlog_events_test.go, which mirror this
 // repo's established precedent for this exact kind of assertion
 // (TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionStatusChanges,
-// same file) by wiring the real server/services.BacklogItemEventPublisher
+// same file) by wiring the real server/services/backlogmisc.BacklogItemEventPublisher
 // adapter rather than a package-internal recording double — an internal
 // session-package test file cannot import server/services without an
 // import cycle, since server/services itself imports session.

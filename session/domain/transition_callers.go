@@ -107,7 +107,7 @@ const (
 	fileTriggerTri   = "server/services/backlogsvc/backlog_service_trigger_triage.go"
 	fileSync         = "server/services/backlogsvc/backlog_service_sync.go"
 	fileAutonomous   = "server/services/autonomous_orchestration_service.go"
-	fileDebugMutate  = "server/services/backlog_debug_mutate_handler.go"
+	fileDebugMutate  = "server/services/backlogmisc/backlog_debug_mutate_handler.go"
 	fileJulesDisp    = "server/services/jules_dispatch_service.go"
 	fileMCPBacklog   = "server/mcp/tools_backlog.go"
 	fileMCPBacklogPR = "server/mcp/tools_backlog_pr.go"

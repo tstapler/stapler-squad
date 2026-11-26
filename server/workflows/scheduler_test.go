@@ -342,8 +342,8 @@ func TestScheduler_Start_RegistersValidCronTrigger(t *testing.T) {
 // fakeRateLimiter is a test double for triggerRateLimiterGate backed by a single
 // shared golang.org/x/time/rate.Limiter (ignoring workflowID) — sufficient for a
 // single-workflow rate-limit test (Task 2.4.2b). Defined locally rather than importing
-// *services.TriggerRateLimiter: server/services already imports server/workflows, so
-// importing it back from this file (same `package workflows`) would be a cycle.
+// *triggerlimit.TriggerRateLimiter: a real limiter needs a 10-fire burst and a minute-scale
+// refill, so this fake keeps the rate-limit test deterministic.
 type fakeRateLimiter struct {
 	lim *rate.Limiter
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/triggerlimit"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -178,7 +179,7 @@ func buildWorkflows(svc *ServiceDeps, cfg *config.Config, backlogSvc *backlogsvc
 		// manual fires (FireNow) and the inbound webhook handlers (github_push/generic),
 		// both of which route through the shared Scheduler.FireTrigger (FireNow is a
 		// thin wrapper around it — see server/workflows/scheduler.go).
-		workflowScheduler.SetRateLimiter(services.NewTriggerRateLimiter())
+		workflowScheduler.SetRateLimiter(triggerlimit.NewTriggerRateLimiter())
 		if entClient := storage.GetEntClient(); entClient != nil {
 			fireEventRepo := session.NewEntTriggerFireEventRepository(entClient)
 			workflowScheduler.SetTriggerFireEventRepo(fireEventRepo)
