@@ -4,6 +4,8 @@ description: >
   step saves only on a primary-key miss); every other ref only restores (actions/cache/restore),
   so PR refs never write their own copy of a big shared cache. A PR can read caches from its own
   ref and the base branch, never from sibling PR refs, so main must be the one that writes.
+  Saving works only when a workflow step calls this action directly: called from another composite,
+  the post step gets the wrong inputs and saves nothing (actions/runner#2030).
 
 inputs:
   path:

@@ -82,6 +82,7 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
+        id: go
         uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
@@ -348,6 +349,16 @@ jobs:
           node_modules/.bin/tsc --noEmit --project tsconfig.node.json
           # 2. Runtime catalog validation — catches features with empty testIds
           bun run validate-catalog
+
+      - name: Save Go cache
+        if: ${{ steps.go.outputs.save == 'true' }}
+        continue-on-error: true  # a cache problem is not a lint failure
+        uses: ./.github/actions/save-go-cache
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
+          # Non-race archives for ./... alone are 3974 MB (docs/reference/ci-job-budget.md, "Size").
+          max-build-cache-mb: '5120'
 
       - name: Runner utilization report
         if: always()
