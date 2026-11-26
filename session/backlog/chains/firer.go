@@ -48,7 +48,7 @@ const maxChainWaitDuration = time.Hour
 const chainReconcileScanLimit = 100_000
 
 // maxInFlightChainFires bounds concurrent ChainFirer.Dispatch goroutines —
-// same shape/rationale as server/services/callback_dispatcher.go's
+// same shape/rationale as server/services/webhooks/callback_dispatcher.go's
 // maxInFlightCallbacks (Task 5.2.1a): a burst of simultaneous "done"
 // transitions (or a single TriggerChainReconciler tick re-dispatching many
 // pending chains) must not fan out an unbounded number of goroutines, each of
@@ -101,7 +101,7 @@ type ChainFirer struct {
 	// cfg is nil-safe (config.Config.GetFeatureFlag tolerates a nil receiver) —
 	// gates every Dispatch/ReconcileChains call on the webhook_triggers feature
 	// flag, defense in depth beyond route-registration gating, mirroring
-	// server/services/callback_dispatcher.go's CallbackDispatcher.Dispatch.
+	// server/services/webhooks/callback_dispatcher.go's CallbackDispatcher.Dispatch.
 	cfg *config.Config
 
 	inFlight chan struct{}
@@ -126,7 +126,7 @@ func NewChainFirer(repo *session.EntRepository, workflows stagecfg.WorkflowRepos
 
 // Dispatch reserves a semaphore slot and fires item's chain in a new
 // goroutine — same non-blocking shape as
-// server/services/callback_dispatcher.go's CallbackDispatcher.Dispatch
+// server/services/webhooks/callback_dispatcher.go's CallbackDispatcher.Dispatch
 // (Task 5.2.1a): a non-blocking select on a semaphore-sized channel either
 // reserves a slot immediately or drops the dispatch and logs a warning. A
 // dropped dispatch loses no work — ChainFired stays false, so

@@ -16,7 +16,7 @@ func useNeverReassigned() string {
 	return neverReassigned
 }
 
-// resolver/lookupFn mirror server/services/webhook_ssrf.go's real lookupIPAddr pattern: a
+// resolver/lookupFn mirror server/services/webhooks/webhook_ssrf.go's real lookupIPAddr pattern: a
 // method value off a composite literal, only ever reassigned in a _test.go file to swap in a
 // fake. Must not be flagged — a method value can never be a const, so this is a legitimate
 // var-as-DI-seam, not the anti-pattern this analyzer targets.

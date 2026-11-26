@@ -60,6 +60,7 @@ go_test(
         "kernel_test.go",
         "path_resolver_test.go",
         "resolver_golden_test.go",
+        "target_directory_test.go",
     ],
     data = glob(["testdata/**"]),
     embed = [":fsops"],
