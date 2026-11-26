@@ -1,4 +1,4 @@
-package services
+package guidance
 
 // guidance_debug_seed_handler.go: test-only endpoint that raises a durable
 // question for a live session without a real AskUserQuestion hook, so the e2e
@@ -15,15 +15,23 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// GuidanceDebugSeedHandler seeds question rows for the e2e suite.
-type GuidanceDebugSeedHandler struct {
-	svc     *SessionService
-	storage *session.Storage
+// SeedPorts is what the seed handler reads from the live session service.
+type SeedPorts struct {
+	// SessionID resolves a title or UUID to a live session's stable id.
+	SessionID func(titleOrUUID string) (string, bool)
+	// Mirror returns the installed hook mirror, nil before it is wired.
+	Mirror func() *questionkit.GuidanceHookMirror
 }
 
-// NewGuidanceDebugSeedHandler constructs the handler over the live service and its storage.
-func NewGuidanceDebugSeedHandler(svc *SessionService, storage *session.Storage) *GuidanceDebugSeedHandler {
-	return &GuidanceDebugSeedHandler{svc: svc, storage: storage}
+// GuidanceDebugSeedHandler seeds question rows for the e2e suite.
+type GuidanceDebugSeedHandler struct {
+	sessions SeedPorts
+	storage  *session.Storage
+}
+
+// NewGuidanceDebugSeedHandler constructs the handler over the live sessions and their storage.
+func NewGuidanceDebugSeedHandler(sessions SeedPorts, storage *session.Storage) *GuidanceDebugSeedHandler {
+	return &GuidanceDebugSeedHandler{sessions: sessions, storage: storage}
 }
 
 // RegisterRoutes mounts the endpoint on mux.
@@ -68,11 +76,11 @@ func (h *GuidanceDebugSeedHandler) seedQuestion(w http.ResponseWriter, r *http.R
 		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	inst := h.svc.findInstance(req.SessionID)
+	sessionUUID, found := h.sessions.SessionID(req.SessionID)
 	payload, perr := req.payload()
-	mirror := h.svc.guidanceMirror.Load()
+	mirror := h.sessions.Mirror()
 	switch {
-	case inst == nil:
+	case !found:
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	case perr != nil:
@@ -82,13 +90,13 @@ func (h *GuidanceDebugSeedHandler) seedQuestion(w http.ResponseWriter, r *http.R
 		http.Error(w, "guidance mirror not wired", http.StatusServiceUnavailable)
 		return
 	}
-	id, err := h.create(r, req, inst.GetStableID(), payload, mirror)
+	id, err := h.create(r, req, sessionUUID, payload, mirror)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "sessionUuid": inst.GetStableID()})
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "sessionUuid": sessionUUID})
 }
 
 func (h *GuidanceDebugSeedHandler) create(r *http.Request, req seedQuestionRequest, sessionUUID string, payload domain.QuestionPayload, mirror *questionkit.GuidanceHookMirror) (string, error) {

@@ -1,4 +1,6 @@
-package services
+// Package guidance holds durable guidance requests: the RPC service and answer rules, the
+// keystroke acknowledgement detector, the session reaper and the e2e seed route.
+package guidance
 
 import (
 	"context"
@@ -12,7 +14,6 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -32,11 +33,16 @@ import (
 // follow.
 type GuidanceRequestService struct {
 	storage         *session.Storage
-	notifier        *EventBusNotifier
+	notifier        Notifier
 	triageRespawner TriageRespawner
 	answerListener  atomic.Pointer[questionkit.AnswerListener]
 	waiverResumer   atomic.Pointer[WaiverResumer]
 	probes          atomic.Pointer[DeliveryProbes]
+}
+
+// Notifier records the durable "your request was answered" notification.
+type Notifier interface {
+	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // DeliveryProbes answer the questions the delivery-state line needs that no
@@ -117,16 +123,15 @@ type TriageRespawner interface {
 }
 
 // NewGuidanceRequestService creates a GuidanceRequestService backed by
-// storage. bus may be nil (e.g. stdio fallback path) — answer notifications
-// are then skipped rather than panicking, matching EventBusNotifier.Notify's
-// own nil-safety. triageRespawner may also be nil (e.g. in tests exercising
+// storage. notifier may be nil — answer notifications are then skipped rather
+// than panicking. triageRespawner may also be nil (e.g. in tests exercising
 // only AC0/AC1/AC5/AC6) — the resume step is then skipped rather than
 // panicking.
-func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, triageRespawner TriageRespawner) *GuidanceRequestService {
-	return &GuidanceRequestService{storage: storage, notifier: &EventBusNotifier{Bus: bus}, triageRespawner: triageRespawner}
+func NewGuidanceRequestService(storage *session.Storage, notifier Notifier, triageRespawner TriageRespawner) *GuidanceRequestService {
+	return &GuidanceRequestService{storage: storage, notifier: notifier, triageRespawner: triageRespawner}
 }
 
-// notifyAnswered durably records (via EventBusNotifier -> NotificationHistoryStore,
+// notifyAnswered durably records (via Notifier -> NotificationHistoryStore,
 // NOT just the in-memory EventBus) that data's question was answered, addressed to
 // its originating scope: the backlog item (coalescing key = item_id, matching every
 // other item-scoped notification) for scope=backlog-item, or the session itself for
@@ -139,7 +144,7 @@ func NewGuidanceRequestService(storage *session.Storage, bus *events.EventBus, t
 func (s *GuidanceRequestService) notifyAnswered(data *domain.GuidanceRequestData) {
 	// The operator already acted on the pane card; a second toast would duplicate it (ADR-003 rule 3a).
 	// A peer answer reaches the asker through its guidance_answered wake instead.
-	if data.Source == domain.QuestionSourceHook || data.Source == domain.QuestionSourcePeer {
+	if data.Source == domain.QuestionSourceHook || data.Source == domain.QuestionSourcePeer || s.notifier == nil {
 		return
 	}
 	title := "Your guidance request was answered"
@@ -213,7 +218,7 @@ func truncateForNotification(s string) string {
 // ownership failure — the identical (code, remediation) pair
 // server/mcp's resolveItemLink already produces for every other mutating
 // backlog MCP tool (AC6). See
-// server/services/guidance_request_ownership_parity_test.go for the
+// server/services/inttest/guidance_request_ownership_parity_test.go for the
 // regression test guarding this against drifting from the MCP adapter.
 func connectErrorForItemLink(linkErr *itemlink.ItemLinkError) error {
 	msg := linkErr.Message
@@ -245,9 +250,9 @@ func encodeGuidanceOptions(opts []string) string {
 	return string(b)
 }
 
-// decodeGuidanceOptions is encodeGuidanceOptions' inverse, tolerant of an
+// DecodeGuidanceOptions is encodeGuidanceOptions' inverse, tolerant of an
 // empty or malformed column (never fails the read).
-func decodeGuidanceOptions(raw string) []string {
+func DecodeGuidanceOptions(raw string) []string {
 	if raw == "" {
 		return nil
 	}
@@ -267,7 +272,7 @@ func guidanceRequestToProto(d *domain.GuidanceRequestData) *sessionv1.GuidanceRe
 		SessionUuid:  d.SessionUUID,
 		QuestionText: d.QuestionText,
 		QuestionType: string(d.QuestionType),
-		Options:      decodeGuidanceOptions(d.Options),
+		Options:      DecodeGuidanceOptions(d.Options),
 		Answer:       d.Answer,
 		CreatedAt:    timestamppb.New(d.CreatedAt),
 		Status:       string(d.Status()),

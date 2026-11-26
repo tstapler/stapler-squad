@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
@@ -290,7 +291,7 @@ func TestObservePostToolUse_should_ClearTheMirroredRowsOfAnAnsweredQuestion(t *t
 	qid := e.hookRow(inst, colorDialog)
 	e.fix.svc.SetGuidanceMirror(questionkit.NewGuidanceHookMirror(e.fix.storage, e.fix.svc.PendingQuestions(), nil, nil, AskUserQuestionRenderGate(testFlagRegistry())))
 
-	e.fix.svc.ObservePostToolUse(context.Background(), inst.UUID, askUserQuestion)
+	e.fix.svc.ObservePostToolUse(context.Background(), inst.UUID, guidance.AskUserQuestionTool)
 
 	row := e.row(qid)
 	require.NotNil(t, row.CancelledAt)

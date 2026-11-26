@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -68,10 +69,12 @@ func (a approvalServiceAdapter) decision(approvalID string) string {
 }
 
 // guidanceServiceAdapter answers through GuidanceRequestService.
-type guidanceServiceAdapter struct{ svc *GuidanceRequestService }
+type guidanceServiceAdapter struct {
+	svc *guidance.GuidanceRequestService
+}
 
 // NewGuidanceAnswerer adapts GuidanceRequestService to GuidanceAnswerer.
-func NewGuidanceAnswerer(svc *GuidanceRequestService) GuidanceAnswerer {
+func NewGuidanceAnswerer(svc *guidance.GuidanceRequestService) GuidanceAnswerer {
 	return guidanceServiceAdapter{svc}
 }
 

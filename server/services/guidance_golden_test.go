@@ -25,6 +25,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
@@ -317,9 +318,9 @@ func (g *guidanceTranscript) authorize() {
 	peer := goldenPeerRow(t, storage, "peer one?")
 	whos := []struct {
 		name string
-		who  Answerer
-	}{{"zero", Answerer{}}, {"empty session", SessionAnswerer("")}, {"other", SessionAnswerer(goldenOther)},
-		{"asker", SessionAnswerer(goldenAsker)}, {"peer", SessionAnswerer(goldenPeer)}}
+		who  guidance.Answerer
+	}{{"zero", guidance.Answerer{}}, {"empty session", guidance.SessionAnswerer("")}, {"other", guidance.SessionAnswerer(goldenOther)},
+		{"asker", guidance.SessionAnswerer(goldenAsker)}, {"peer", guidance.SessionAnswerer(goldenPeer)}}
 	for _, id := range []string{agent, peer, "bad", "7c1e0000-0000-4000-8000-00000000ffff"} {
 		for _, w := range whos {
 			data, applied, err := svc.AnswerAs(ctx, id, "by "+w.name, w.who)
@@ -331,7 +332,7 @@ func (g *guidanceTranscript) authorize() {
 	_, applied, err := svc.AnswerAsSession(ctx, goldenPeerRow(t, storage, "peer two?"), "yes", goldenPeer)
 	g.logf("answerAsSession applied=%t %s", applied, g.errText(err))
 	human := goldenPeerRow(t, storage, "peer three?")
-	data, applied, err := svc.AnswerAs(ctx, human, "stand in", HumanAnswerer())
+	data, applied, err := svc.AnswerAs(ctx, human, "stand in", guidance.HumanAnswerer())
 	g.logf("human on peer applied=%t answer=%q %s", applied, data.Answer, g.errText(err))
 	g.row("human on peer", storage, human)
 }
@@ -346,9 +347,9 @@ func (g *guidanceTranscript) savedAndDerived() {
 	for _, probes := range []string{"none", "empty", "set"} {
 		switch probes {
 		case "empty":
-			svc.SetDeliveryProbes(DeliveryProbes{})
+			svc.SetDeliveryProbes(guidance.DeliveryProbes{})
 		case "set":
-			svc.SetDeliveryProbes(DeliveryProbes{
+			svc.SetDeliveryProbes(guidance.DeliveryProbes{
 				Unconfirmed:     func(string) bool { return unconfirmed },
 				SessionEnded:    func(id string) bool { return ended && id == goldenAsker },
 				SessionArchived: func(string) bool { return archived },
@@ -359,7 +360,7 @@ func (g *guidanceTranscript) savedAndDerived() {
 				n++
 				ended, archived = life.ended, life.archived
 				id := mk[src](t, storage, fmt.Sprintf("%s %s %d", src, probes, n))
-				_, applied, err := svc.AnswerAs(ctx, id, "a", HumanAnswerer())
+				_, applied, err := svc.AnswerAs(ctx, id, "a", guidance.HumanAnswerer())
 				g.logf("saved probes=%s src=%s ended=%t archived=%t applied=%t %s", probes, src, ended, archived, applied, g.errText(err))
 				g.row("saved", storage, id)
 				_, err = storage.CancelGuidanceRequest(ctx, uuid.MustParse(id), "cleanup")
@@ -425,7 +426,7 @@ func (g *guidanceTranscript) waiverAndPeerCancel() {
 			QuestionText: domain.OwnerActionQuestionPrefix + domain.FormatOwnerActionWaiver(c.idx) + fmt.Sprintf("AC %d", i), Options: `["Waive criterion","Keep"]`,
 		})
 		require.NoError(t, err)
-		_, applied, err := svc.AnswerAs(ctx, row.ID, c.answer, HumanAnswerer())
+		_, applied, err := svc.AnswerAs(ctx, row.ID, c.answer, guidance.HumanAnswerer())
 		got, gerr := storage.GetBacklogItem(ctx, item.ID)
 		require.NoError(t, gerr)
 		cs, gerr := domain.ParseAcCriteria(got.AcceptanceCriteria)
@@ -445,7 +446,7 @@ func (g *guidanceTranscript) waiverAndPeerCancel() {
 	heard = nil
 	open := goldenPeerRow(t, storage, "open peer?")
 	answered := goldenPeerRow(t, storage, "answered peer?")
-	_, _, err = svc.AnswerAs(ctx, answered, "done", SessionAnswerer(goldenPeer))
+	_, _, err = svc.AnswerAs(ctx, answered, "done", guidance.SessionAnswerer(goldenPeer))
 	require.NoError(t, err)
 	heard = nil
 	for _, id := range []string{"bad", "7c1e0000-0000-4000-8000-00000000ffff", goldenAgentRow(t, storage, "not peer?"), goldenHookRow(t, storage, "nothook"), open, open, answered} {
@@ -454,7 +455,7 @@ func (g *guidanceTranscript) waiverAndPeerCancel() {
 		if data != nil {
 			status = string(data.Status()) + " reason=" + data.CancelReason.String()
 		}
-		g.logf("cancelPeer %s applied=%t notPeer=%t status=%s heard=%v %s", id, applied, errors.Is(err, ErrNotPeerHelp), status, heard, g.errText(err))
+		g.logf("cancelPeer %s applied=%t notPeer=%t status=%s heard=%v %s", id, applied, errors.Is(err, guidance.ErrNotPeerHelp), status, heard, g.errText(err))
 		heard = nil
 	}
 }
@@ -474,12 +475,12 @@ func (e goldenEnds) Ended(id string) bool { return e.ended[id] }
 
 func (g *guidanceTranscript) reaper() {
 	t, ctx := g.t, context.Background()
-	run := func(label string, ended map[string]bool, act func(*GuidanceSessionReaper)) {
+	run := func(label string, ended map[string]bool, act func(*guidance.GuidanceSessionReaper)) {
 		storage := svctest.CreateTestStorage(t)
 		counts := &mirrorCounts{}
 		mirror := newRealStoreMirror(storage, questionkit.NewPendingQuestionStore(nil), counts)
 		ids := []string{goldenHookRow(t, storage, "r-hook "+label), goldenPeerRow(t, storage, "r-peer "+label), goldenAgentRow(t, storage, "r-agent "+label)}
-		reaper := NewGuidanceSessionReaper(storage, goldenEnds{ended: ended}, mirror, counts.onCleared)
+		reaper := guidance.NewGuidanceSessionReaper(storage, goldenEnds{ended: ended}, mirror, counts.onCleared)
 		act(reaper)
 		for i, id := range ids {
 			g.row(fmt.Sprintf("reaper %s %d", label, i), storage, id)
@@ -487,15 +488,15 @@ func (g *guidanceTranscript) reaper() {
 		g.logf("reaper %s cleared=%v", label, counts.cleared)
 	}
 	for _, id := range []string{goldenAsker, goldenPeer, goldenOther, "asker-title", "unknown"} {
-		run("deleted "+id, nil, func(r *GuidanceSessionReaper) { r.HandleEvent(ctx, pkgevents.NewSessionDeletedEvent(id)) })
-		run("archived "+id, nil, func(r *GuidanceSessionReaper) { r.HandleEvent(ctx, pkgevents.NewSessionArchivedEvent(id)) })
+		run("deleted "+id, nil, func(r *guidance.GuidanceSessionReaper) { r.HandleEvent(ctx, pkgevents.NewSessionDeletedEvent(id)) })
+		run("archived "+id, nil, func(r *guidance.GuidanceSessionReaper) { r.HandleEvent(ctx, pkgevents.NewSessionArchivedEvent(id)) })
 	}
-	run("other event", nil, func(r *GuidanceSessionReaper) {
+	run("other event", nil, func(r *guidance.GuidanceSessionReaper) {
 		r.HandleEvent(ctx, pkgevents.NewUserInteractionEvent(goldenAsker, "x", "y"))
 		r.HandleEvent(ctx, nil)
 	})
 	for _, ended := range []string{"", goldenAsker, goldenPeer, goldenOther} {
-		run("startup "+ended, map[string]bool{ended: ended != ""}, func(r *GuidanceSessionReaper) { r.StartupPass(ctx) })
+		run("startup "+ended, map[string]bool{ended: ended != ""}, func(r *guidance.GuidanceSessionReaper) { r.StartupPass(ctx) })
 	}
 }
 
@@ -552,7 +553,7 @@ func (g *guidanceTranscript) ackDetector() {
 			clock := newManualClock()
 			capture, ended, leased := up, false, []bool{}
 			var capErr error
-			det := NewGuidanceAckDetector(store, func(_ context.Context, _ string, underLease bool) (string, error) {
+			det := guidance.NewGuidanceAckDetector(store, func(_ context.Context, _ string, underLease bool) (string, error) {
 				leased = append(leased, underLease)
 				return capture, capErr
 			}, func(string) bool { return ended }, clock.Now)
@@ -597,7 +598,7 @@ func (g *guidanceTranscript) ackDetector() {
 		store := &goldenAckStore{applied: true, listErr: listErr, rows: []*domain.GuidanceRequestData{
 			{ID: rowID, AskerSessionUUID: "s1", DeliveryRoute: domain.DeliveryRouteLiveKeystroke, DeliveryState: domain.DeliveryStateSent},
 		}}
-		det := NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) { return up, nil }, nil, nil)
+		det := guidance.NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) { return up, nil }, nil, nil)
 		det.Restore(ctx)
 		det.Receipt(ctx, "s1", goldenAckTool)
 		g.logf("restore err=%v effects=%v", listErr, store.lines)
@@ -688,7 +689,7 @@ func TestGuidanceRace_should_ApplyExactlyOneAnswer_When_ManyAnswerAtOnce(t *test
 		go func() {
 			defer wg.Done()
 			text := fmt.Sprintf("answer %d", i)
-			_, applied, err := svc.AnswerAs(ctx, id, text, HumanAnswerer())
+			_, applied, err := svc.AnswerAs(ctx, id, text, guidance.HumanAnswerer())
 			assert.NoError(t, err)
 			if applied {
 				mu.Lock()
@@ -719,13 +720,13 @@ func TestGuidanceRace_should_LetOneSideWin_When_AnswerCancelAndReapCollide(t *te
 	for i := range 12 {
 		id := goldenPeerRow(t, storage, fmt.Sprintf("race %d?", i))
 		var cleared []string
-		reaper := NewGuidanceSessionReaper(storage, goldenEnds{}, nil, func(r string) { mu.Lock(); cleared = append(cleared, r); mu.Unlock() })
+		reaper := guidance.NewGuidanceSessionReaper(storage, goldenEnds{}, nil, func(r string) { mu.Lock(); cleared = append(cleared, r); mu.Unlock() })
 		var wg sync.WaitGroup
 		var answered, cancelled bool
 		wg.Add(3)
 		go func() {
 			defer wg.Done()
-			_, applied, err := svc.AnswerAs(ctx, id, "a", SessionAnswerer(goldenPeer))
+			_, applied, err := svc.AnswerAs(ctx, id, "a", guidance.SessionAnswerer(goldenPeer))
 			assert.NoError(t, err)
 			answered = applied
 		}()
@@ -762,15 +763,19 @@ func TestGuidanceRace_should_NotFinishTwice_When_AReceiptArrivesDuringASample(t 
 	ctx := context.Background()
 	store := &goldenAckStore{applied: true}
 	clock := newManualClock()
-	var det *GuidanceAckDetector
-	det = NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) {
-		det.Receipt(ctx, "s1", goldenAckTool) // the hook lands while the capture is in flight
-		return "", nil
+	idle, err := os.ReadFile("../../session/testdata/dialog_presence/idle_composer.txt")
+	require.NoError(t, err)
+	var det *guidance.GuidanceAckDetector
+	det = guidance.NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) {
+		det.Receipt(ctx, "s1", "AskUserQuestion") // the hook lands while the capture is in flight
+		return string(idle), nil
 	}, nil, clock.Now)
 	det.Sent(questionkit.SentDelivery{RowID: "7c1e0000-0000-4000-8000-00000000b002", SessionUUID: "s1", Dialog: colorDialog, Route: domain.DeliveryRouteLiveKeystroke})
 
-	clock.Advance(3 * time.Second)
-	det.Tick(ctx)
+	for range 2 { // two clean samples would acknowledge on their own
+		clock.Advance(3 * time.Second)
+		det.Tick(ctx)
+	}
 
 	assert.Len(t, store.lines, 1, "only the receipt records a state")
 }
@@ -784,8 +789,8 @@ func TestGuidanceRace_should_StillWriteTheDecision_When_AReceiptArrivesDuringThe
 	store := &goldenAckStore{applied: true}
 	clock := newManualClock()
 	own := strings.ReplaceAll(replyDialogFixture(t, "question_single_select_3opts.txt"), "2. Green", "2. "+replyColorLabel)
-	var det *GuidanceAckDetector
-	det = NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) {
+	var det *guidance.GuidanceAckDetector
+	det = guidance.NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) {
 		det.Receipt(ctx, "s1", goldenAckTool)
 		return own, nil
 	}, nil, clock.Now)
@@ -804,7 +809,7 @@ func TestGuidanceRace_should_BeRaceFree_When_SentReceiptAndTickRunTogether(t *te
 	ctx := context.Background()
 	store := &goldenAckStore{applied: true}
 	clock := newManualClock()
-	det := NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) { return "junk", nil }, nil, clock.Now)
+	det := guidance.NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) { return "junk", nil }, nil, clock.Now)
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Add(3)

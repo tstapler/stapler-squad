@@ -66,7 +66,7 @@ Notes:
 |---|---|---|---|
 | `guidance_answer_delivery_total` | counter | `route`: `hook_reply`, `live_keystroke`, `resume`, `read_only`. `state`: `pending`, `sent`, `acknowledged`, `delivery_failed`, `saved_for_later`, `stale`, `aborted_partial`. | `session/guidancestore/metrics.go` (counted in `SetDelivery`, `session/guidancestore/mirror.go`) |
 | `guidance_question_answer_latency_seconds` | histogram, seconds (default buckets) | `source`: `agent_mcp`, `ask_user_question_hook`, `peer`. `route`: as above. | `session/guidancestore/metrics.go` |
-| `guidance_answer_unconfirmed_total` | counter | none | `server/services/questionkit/notification_quality_metrics.go`, incremented in `server/services/guidance_ack_detector.go` |
+| `guidance_answer_unconfirmed_total` | counter | none | `server/services/questionkit/notification_quality_metrics.go`, incremented in `server/services/guidance/guidance_ack_detector.go` |
 | `guidance_mirror_cleared_total` | counter | `reason`: `session_ended`, `answered_in_terminal`, `dialog_gone`, `dialog_replaced` | `server/deliverygate/metrics.go` |
 | `guidance_mirror_failed_total` | counter | `reason`: `timeout`, `error`, `cap_exceeded`, `no_payload`, `invalid_payload` | same |
 | `question_dialog_match_total` | counter | `result`: `match`, `mismatch`. `claude_version`: always `unknown` today. | same |

@@ -1,4 +1,4 @@
-package services
+package guidance
 
 import (
 	"context"
@@ -67,7 +67,7 @@ type ackEnv struct {
 
 func newAckEnv(t *testing.T) *ackEnv {
 	t.Helper()
-	idle, err := os.ReadFile(filepath.Join("..", "..", "session", "testdata", "dialog_presence", "idle_composer.txt"))
+	idle, err := os.ReadFile(filepath.Join("..", "..", "..", "session", "testdata", "dialog_presence", "idle_composer.txt"))
 	require.NoError(t, err)
 	e := &ackEnv{
 		clock: newManualClock(), store: &fakeAckStore{}, rowID: uuid.NewString(), idle: string(idle),
@@ -99,10 +99,10 @@ func TestAckDetector_ShouldAcknowledge_WhenPostToolUseReceiptArrivesForAskUserQu
 	e.det.Receipt(context.Background(), "s1", "Bash")
 	assert.Empty(t, e.store.states(), "another tool's receipt is not an acknowledgement")
 
-	e.det.Receipt(context.Background(), "s2", askUserQuestion)
+	e.det.Receipt(context.Background(), "s2", AskUserQuestionTool)
 	assert.Empty(t, e.store.states(), "another session's receipt is not either")
 
-	e.det.Receipt(context.Background(), "s1", askUserQuestion)
+	e.det.Receipt(context.Background(), "s1", AskUserQuestionTool)
 	assert.Equal(t, []domain.DeliveryState{domain.DeliveryStateAcknowledged}, e.store.states())
 	assert.Equal(t, domain.DeliveryRouteLiveKeystroke, e.store.moves[0].route)
 	assert.False(t, e.det.Unconfirmed(e.rowID), "no longer tracked")
@@ -181,7 +181,7 @@ func TestAckDetector_ShouldStayUnconfirmedThenClear_WhenCaptureFailsAt60SecondsA
 	assert.Empty(t, e.store.states(), "the row stays sent")
 	assert.True(t, e.det.Unconfirmed(e.rowID), "and carries the Unconfirmed flag")
 
-	e.det.Receipt(context.Background(), "s1", askUserQuestion)
+	e.det.Receipt(context.Background(), "s1", AskUserQuestionTool)
 
 	assert.Equal(t, []domain.DeliveryState{domain.DeliveryStateAcknowledged}, e.store.states())
 	assert.False(t, e.det.Unconfirmed(e.rowID))
@@ -208,7 +208,7 @@ func TestAckDetector_ShouldResumeTrackingSentRows_WhenRestored(t *testing.T) {
 	}}
 
 	e.det.Restore(context.Background())
-	e.det.Receipt(context.Background(), "s1", askUserQuestion)
+	e.det.Receipt(context.Background(), "s1", AskUserQuestionTool)
 
 	assert.Equal(t, []domain.DeliveryState{domain.DeliveryStateAcknowledged}, e.store.states())
 }
@@ -231,7 +231,7 @@ func TestAckDetector_ShouldKeepTheCardInNeedsYou_WhileUnconfirmedAndRetireItOnAL
 	assert.Equal(t, []string{e.rowID}, cards.reopened, "Unconfirmed puts the card back in Needs you")
 	assert.Empty(t, cards.resolved)
 
-	e.det.Receipt(context.Background(), "s1", askUserQuestion)
+	e.det.Receipt(context.Background(), "s1", AskUserQuestionTool)
 
 	assert.Equal(t, []string{e.rowID}, cards.resolved, "the late acknowledgement retires it")
 }
@@ -258,4 +258,15 @@ func TestAckDetector_ShouldRetireTheCard_WhenTheSessionEndsOnASentAnswer(t *test
 
 	assert.Equal(t, []string{e.rowID}, cards.resolved, "row 17 moves to Recent activity and leaves the badge")
 	assert.Empty(t, cards.reopened)
+}
+
+// The hub forwards the hook's tool name verbatim, so the constant must be the wire name.
+func TestAckDetector_ShouldAcknowledge_WhenTheReceiptNamesTheHookToolLiterally(t *testing.T) {
+	t.Parallel()
+	e := newAckEnv(t)
+	e.sent(false)
+
+	e.det.Receipt(context.Background(), "s1", "AskUserQuestion")
+
+	assert.Equal(t, []domain.DeliveryState{domain.DeliveryStateAcknowledged}, e.store.states())
 }
