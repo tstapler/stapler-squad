@@ -49,7 +49,6 @@ var reviewedConsumers = map[finding]string{
 	// so every Subscribe there is listed; only WatchSessions forwards it.
 	"consumer: " + svcPkgPath + ".WatchSessions":  "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
 	"consumer: " + svcPkgPath + ".watchWorkflows": "workflow stream; ignores notifications",
-	"consumer: " + svcPkgPath + ".Run":            "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -9,7 +10,7 @@ import (
 // SessionService itself. Nil members leave their action kinds unavailable.
 type NotificationActionWiring struct {
 	Storage  *session.Storage
-	Guidance *GuidanceRequestService
+	Guidance *guidance.GuidanceRequestService
 	// Backlog is the TransitionBacklogItemStatus delegate; leave it a nil interface (not a boxed nil
 	// pointer) to disable backlog actions.
 	Backlog BacklogTransitioner

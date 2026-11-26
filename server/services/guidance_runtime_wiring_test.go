@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -17,10 +18,10 @@ import (
 func TestGetGuidanceRequest_should_DeriveUnacknowledgedSessionEndedAndCancelReason(t *testing.T) {
 	t.Parallel()
 	m, storage, _, _ := newTestMirror(t)
-	svc := NewGuidanceRequestService(storage, nil, nil)
+	svc := guidance.NewGuidanceRequestService(storage, nil, nil)
 	ended := false
 	unconfirmed := true
-	svc.SetDeliveryProbes(DeliveryProbes{
+	svc.SetDeliveryProbes(guidance.DeliveryProbes{
 		Unconfirmed:     func(string) bool { return unconfirmed },
 		SessionEnded:    func(string) bool { return ended },
 		SessionArchived: func(string) bool { return ended },
@@ -59,7 +60,7 @@ func TestGetGuidanceRequest_should_DeriveUnacknowledgedSessionEndedAndCancelReas
 func TestListSavedGuidanceAnswers_should_ReturnOnlyAgentCreatedSavedRows(t *testing.T) {
 	t.Parallel()
 	m, storage, _, _ := newTestMirror(t)
-	svc := NewGuidanceRequestService(storage, nil, nil)
+	svc := guidance.NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 	save := func(id string, route domain.DeliveryRoute) {
 		_, err := storage.AnswerGuidanceRequest(ctx, uuid.MustParse(id), "Redis")
@@ -88,9 +89,9 @@ func TestListSavedGuidanceAnswers_should_ReturnOnlyAgentCreatedSavedRows(t *test
 func TestAnswerAs_should_SaveAnAgentAnswerForLater_WhenItsSessionIsStoppedOrArchived_AndNeverRevive(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
-	svc := NewGuidanceRequestService(storage, nil, nil)
+	svc := guidance.NewGuidanceRequestService(storage, nil, nil)
 	ended, archived := false, false
-	svc.SetDeliveryProbes(DeliveryProbes{
+	svc.SetDeliveryProbes(guidance.DeliveryProbes{
 		SessionEnded:    func(string) bool { return ended },
 		SessionArchived: func(string) bool { return archived },
 	})
@@ -104,7 +105,7 @@ func TestAnswerAs_should_SaveAnAgentAnswerForLater_WhenItsSessionIsStoppedOrArch
 		return row.ID
 	}
 	answer := func(id string) *domain.GuidanceRequestData {
-		_, applied, err := svc.AnswerAs(ctx, id, "Redis", HumanAnswerer())
+		_, applied, err := svc.AnswerAs(ctx, id, "Redis", guidance.HumanAnswerer())
 		require.NoError(t, err)
 		require.True(t, applied)
 		row, err := storage.GetGuidanceRequest(ctx, uuid.MustParse(id))

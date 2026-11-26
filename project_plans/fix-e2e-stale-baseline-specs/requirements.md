@@ -80,3 +80,17 @@ covers the second wave of structural failures identified in `baseline-fail-triag
 - Visual-regression snapshot regeneration (tracked in a separate item).
 - The 146-row "stale-baseline-passes-on-next-without-changes" category (addressed by baseline
   re-record, tracked in issue #1186).
+
+## Addendum 2026-11-26: re-record the baseline (criterion 9, index 8)
+
+Review failed criterion 9 because `next-e2e-baseline.json` was edited by hand. The owner's
+direction: re-record it from verified test runs, or fail the criterion with the reason.
+
+- Rows for the eight listed spec files come from Playwright JSON reports of full CI runs on this
+  branch, classified by the original rules
+  (`project_plans/web-app-bun-build/spikes/s0/classify-e2e.mjs`). No row is typed or edited by hand.
+- Three runs, as for the original capture.
+- Rows of every other spec file stay byte-identical to `origin/main`.
+- Rows of the deleted `terminal-flickering.spec.ts` are absent because no report contains them.
+- A row that was `pass` on `main` and records `fail` is a regression to fix, not to commit.
+- Not in scope: re-recording the whole file. It would absorb unrelated failures on `main`.

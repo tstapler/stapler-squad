@@ -1,11 +1,12 @@
-package services
+package guidance
 
 import (
 	"context"
-	"github.com/tstapler/stapler-squad/server/services/questionkit"
-	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 
 	"github.com/google/uuid"
 
@@ -26,7 +27,8 @@ const (
 	ackSampleEvery  = 3 * time.Second
 	ackDecideAfter  = 60 * time.Second
 	ackCleanSamples = 2
-	askUserQuestion = "AskUserQuestion"
+	// AskUserQuestionTool is the tool whose PostToolUse receipt acknowledges an answer.
+	AskUserQuestionTool = "AskUserQuestion"
 )
 
 type ackStore interface {
@@ -106,7 +108,7 @@ func (a *GuidanceAckDetector) Unconfirmed(rowID string) bool {
 
 // Receipt is signal (a): a PostToolUse hook ran for toolName in the session.
 func (a *GuidanceAckDetector) Receipt(ctx context.Context, sessionUUID, toolName string) {
-	if toolName != askUserQuestion {
+	if toolName != AskUserQuestionTool {
 		return
 	}
 	for _, e := range a.snapshot() {

@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -19,10 +20,10 @@ import (
 // registerWakeTriggerService builds the operator-facing wake service and
 // registers its RPC handler. The dispatcher joins it later (startWakes calls
 // SetBackend), so listing and cancelling work while the kill switch is off.
-func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidance *services.GuidanceRequestService) *services.WakeTriggerService {
+func registerWakeTriggerService(srv *Server, deps *ServerDependencies, guidanceSvc *guidance.GuidanceRequestService) *services.WakeTriggerService {
 	titles := sessionTitles{svc: deps.SessionService, storage: deps.Storage}
 	svcDeps := services.WakeTriggerDeps{
-		Store: deps.Storage, Guidance: guidance, Titles: titles.Title,
+		Store: deps.Storage, Guidance: guidanceSvc, Titles: titles.Title,
 		Enabled: func() bool { return wakeDispatcherEnabled(config.LoadConfig()) },
 	}
 	deps.sharedWakeMetrics()

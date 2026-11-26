@@ -21,7 +21,7 @@ type WakeBackend interface {
 
 // HelpAnswerer answers a guidance request on behalf of a named answerer, so the
 // answer listener (and with it the asker's wake) runs exactly as for a human
-// answer; *services.GuidanceRequestService satisfies it.
+// answer; *guidance.GuidanceRequestService satisfies it.
 type HelpAnswerer interface {
 	AnswerAsSession(ctx context.Context, id, answer, sessionUUID string) (*domain.GuidanceRequestData, bool, error)
 }

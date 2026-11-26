@@ -1,4 +1,4 @@
-package services
+package guidance
 
 import (
 	"context"
@@ -76,7 +76,7 @@ func TestAnswerAs_should_SkipTheHumanNotification_When_RowIsAPeerRequest(t *test
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
-	svc := NewGuidanceRequestService(storage, bus, nil)
+	svc := NewGuidanceRequestService(storage, &busNotifier{bus}, nil)
 	ctx := context.Background()
 	peer := createPeerRequest(t, storage, "asker-a", "peer-b")
 	var heard []string

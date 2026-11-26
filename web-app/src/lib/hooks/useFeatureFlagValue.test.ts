@@ -24,10 +24,13 @@ describe("useFeatureFlagValue", () => {
     mockGetFeatureFlags.mockResolvedValue(flags(true, [{ scope: "action:DENY", enabled: false }]));
     const deny = renderHook(() => useFeatureFlagValue(INLINE, "action:DENY"));
     const approve = renderHook(() => useFeatureFlagValue(INLINE, "action:APPROVE"));
-    await waitFor(() => expect(approve.result.current).toBe(true));
+    // act, not waitFor: waitFor's 1 s wall-clock budget can expire on a starved runner before React renders.
+    await act(async () => {});
+    expect(approve.result.current).toBe(true);
     expect(deny.result.current).toBe(false);
     const again = renderHook(() => useFeatureFlagValue(INLINE));
-    await waitFor(() => expect(again.result.current).toBe(true));
+    await act(async () => {});
+    expect(again.result.current).toBe(true);
     expect(mockGetFeatureFlags).toHaveBeenCalledTimes(1);
   });
 

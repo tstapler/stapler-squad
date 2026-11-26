@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/taggingrules"
@@ -143,7 +144,7 @@ type SessionService struct {
 	// actionDispatcher serves InvokeNotificationAction; nil reports FLAG_OFF.
 	actionDispatcher *NotificationActionDispatcher
 	// guidanceAcks tracks sent keystroke answers; ackCancel/ackDone stop its loop.
-	guidanceAcks *GuidanceAckDetector
+	guidanceAcks *guidance.GuidanceAckDetector
 	hookReply    atomic.Pointer[hookReplyResolver]
 	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
 	dialogCanary   atomic.Pointer[questionkit.DialogMatchCanary]
