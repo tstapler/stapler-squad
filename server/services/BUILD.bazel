@@ -410,6 +410,7 @@ go_test(
         "guidance_runtime_wiring_test.go",
         "hermetic_lookup_test.go",
         "hidden_event_sites_gate_test.go",
+        "hidden_question_reply_archived_test.go",
         "hidden_question_reply_test.go",
         "hidden_review_steer_test.go",
         "hidden_steer_callers_test.go",
