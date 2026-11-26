@@ -154,6 +154,10 @@ func (s *SessionService) ReplyToPendingQuestion(
 		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING), nil
 	}
 	in.sessionUUID = inst.GetStableID()
+	// The same check the answer router uses: a retired session takes no keystroke.
+	if inst.IsArchived() {
+		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING), nil
+	}
 	if access.AccessFor(inst) != access.TerminalReadOnly {
 		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_HIDDEN), nil
 	}

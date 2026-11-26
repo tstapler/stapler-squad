@@ -34,6 +34,7 @@ go_test(
     name = "panereply_test",
     srcs = [
         "pane_reply_exited_test.go",
+        "pane_reply_sequence_before_write_test.go",
         "pane_reply_sequence_test.go",
         "pane_reply_test.go",
         "question_profile_test.go",

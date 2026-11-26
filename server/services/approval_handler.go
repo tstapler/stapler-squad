@@ -101,6 +101,7 @@ type ApprovalHandler struct {
 	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 	autoApprovedGate    AutoApprovedGate                      // optional: drops hidden-session auto-allow history rows (nil = append all)
 	questions           questionWiring                        // optional: Reply's pending-question registry and hook-proof verification
+	newApprovalID       func() string                         // test seam; nil means uuid.NewString
 }
 
 // AutoApprovedGate decides whether an auto-approved history row is recorded for
@@ -207,7 +208,7 @@ func (h *ApprovalHandler) SetAutoApprovalLogger(l autoApprovalLogger) {
 
 // SetHeadlessPool injects a headless LLM pool for autonomous session approval.
 // When set and autonomousChecker returns true for a session, risky tool calls are sent to the
-// LLM for approval instead of the human review queue.
+// LLM for approval instead of the human review queue, except human-only escalations.
 func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 	h.headlessPool = pool
 }
@@ -332,9 +333,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// Parse the hook payload from request body
 	var payload classifier.PermissionRequestPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		log.Warn("[ApprovalHandler] failed to parse hook payload", "err", err)
-		// Don't block Claude on parse errors - let the terminal handle it
-		h.writeDecision(w, "allow", "")
+		log.Warn("[ApprovalHandler] failed to parse hook payload, deferring to the permission prompt", "err", err)
+		// The source is unknown here; an empty body also makes the pi extension block.
+		h.writeDeferDecision(w)
 		return
 	}
 
@@ -548,9 +549,15 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 createApproval:
 
+	humanOnly := classifier.CategorizeEscalationRuleID(escalation.RuleID).HumanOnly()
+	autonomous := h.autonomousChecker != nil && h.autonomousChecker(sessionID)
+	// Deny rather than defer when no person is sure to see a prompt: pi has none, and an
+	// autonomous session may be unattended when a human-only escalation goes undecided.
+	denyIfUndecided := source == "pi" || (humanOnly && autonomous)
+
 	// Autonomous LLM approval: if the session is autonomous and a headless pool is configured,
-	// ask the LLM to approve or deny instead of queuing for human review.
-	if h.headlessPool != nil && h.autonomousChecker != nil && h.autonomousChecker(sessionID) {
+	// ask the LLM to approve or deny instead of queuing, unless the escalation is human-only.
+	if h.headlessPool != nil && autonomous && !humanOnly {
 		var sessionTail string
 		if h.queueChecker != nil && sessionID != "unknown" {
 			if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
@@ -589,7 +596,11 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	}
 
 	// Create a pending approval record
-	approvalID := uuid.New().String()
+	newID := uuid.NewString
+	if h.newApprovalID != nil {
+		newID = h.newApprovalID
+	}
+	approvalID := newID()
 	riskLevel := ""
 	if classified {
 		riskLevel = escalation.RiskLevel.Label()
@@ -611,8 +622,8 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	}
 
 	if err := h.store.Create(approval); err != nil {
-		log.Error("[ApprovalHandler] failed to store approval", "err", err)
-		h.writeDecision(w, "allow", "")
+		log.Error("[ApprovalHandler] failed to store approval", "err", err, "denied", denyIfUndecided)
+		h.writeUndecided(w, denyIfUndecided, "stapler-squad could not queue the approval request")
 		return
 	}
 
@@ -642,21 +653,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 		h.store.Remove(approvalID)
 		h.stampResolved(approvalID, sessionID, "timeout")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out", "approval_id", approvalID, "source", source)
-		if source == "pi" {
-			// Fail closed, deliberately (pi-support MAJOR 3): unlike Claude's
-			// curl hook, pi's ssq-approval.ts extension has no native terminal
-			// permission dialog to fall back to, so an empty 200 here would
-			// leave the tool call in limbo at the mercy of the extension's own
-			// fetch()-throws-on-empty-body behavior — an accident of the
-			// client, not a contract. Deny explicitly instead.
-			h.writeDecision(w, "deny", "stapler-squad approval timed out")
-			return
-		}
-		// Claude: return an empty HTTP response so the hook script gets no
-		// hookSpecificOutput and Claude Code falls back to its native terminal
-		// permission dialog. This lets the user still approve/deny in the
-		// terminal rather than being silently allowed or denied.
-		w.WriteHeader(http.StatusOK)
+		h.writeUndecided(w, denyIfUndecided, "stapler-squad approval timed out")
 		return
 	case <-r.Context().Done():
 		// Claude Code disconnected (e.g., stapler-squad restarted, network issue).
@@ -891,6 +888,16 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 // and falls back to its native terminal permission dialog.
 func (h *ApprovalHandler) writeDeferDecision(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
+}
+
+// writeUndecided answers a request nobody decided: a deny when there is no prompt a
+// person is sure to see, otherwise no decision, so Claude Code asks in the terminal.
+func (h *ApprovalHandler) writeUndecided(w http.ResponseWriter, deny bool, denyMessage string) {
+	if deny {
+		h.writeDecision(w, "deny", denyMessage)
+		return
+	}
+	h.writeDeferDecision(w)
 }
 
 // writeDecision writes the hookSpecificOutput JSON response to the HTTP response.

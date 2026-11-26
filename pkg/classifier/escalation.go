@@ -29,6 +29,12 @@ const (
 	EscalationUnexpected EscalationCategory = "unexpected"
 )
 
+// HumanOnly reports whether an escalation of this category may be approved only by a
+// person: no automated reviewer or rule re-evaluation may allow it.
+func (c EscalationCategory) HumanOnly() bool {
+	return c == EscalationDomainAge || c == EscalationUnexpected
+}
+
 // Shared sentinel RuleID constants. These are the single source of truth for
 // the RuleID literals emitted at the escalation/auto-deny call sites in
 // approval_handler.go and classifier.go, so a future rename is a single edit

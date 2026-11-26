@@ -652,7 +652,8 @@ func (rs *RulesService) reconcilePendingApprovalsSafe() {
 
 // reconcilePendingApprovals re-runs Classify() against every currently
 // pending, Escalate-sourced approval using the just-rebuilt rule set, and
-// resolves any that now decide via ApprovalService.ResolveApprovalReconciled.
+// resolves any that now decide via ApprovalService.ResolveApprovalReconciled,
+// except that a human-only category is never allowed.
 // counts is owned by the caller (reconcilePendingApprovalsSafe) and
 // incremented in place so its summary log survives a panic here. Called
 // after rebuildMu releases — Classify() is a pure read, so this needs no
@@ -692,6 +693,11 @@ func (rs *RulesService) reconcilePendingApprovals(counts *reconcileCounts) {
 		ctx := classifier.ClassificationContext{Cwd: a.Cwd}
 		result := rs.classifier.Classify(payload, ctx)
 		if result.Decision == classifier.Escalate {
+			continue
+		}
+		// A rule may still deny a human-only item, but not allow it: Classify does not
+		// repeat the check that queued it.
+		if result.Decision == classifier.AutoAllow && classifier.EscalationCategory(a.EscalationCategory).HumanOnly() {
 			continue
 		}
 		if counts.resolved >= maxReconcileAutoResolvesPerPass {

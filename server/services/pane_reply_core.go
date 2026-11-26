@@ -50,6 +50,7 @@ const (
 	replyStageNotHidden       = "not_hidden"
 	replyStageTargetMismatch  = "target_mismatch"
 	replyStageClaimDeleted    = "claim_deleted"
+	replyStageArchived        = "archived"
 	replyStageLeaseBusy       = "lease_busy"
 	replyStageNotSent         = "not_sent"
 	replyStageIndeterminate   = "write_indeterminate"
@@ -331,7 +332,7 @@ func mapReplyStage(rs panereply.ReplyStage, err error) (questionkit.ReplyOutcome
 // still the target kind with the claim's UUID and not claimed-deleted; a status
 // controller is active (its value is never read: it is blank for 6-9 s after any
 // key and cannot tell a question from a permission dialog); and the structural
-// match of a fresh live capture, which is authoritative.
+// match of a fresh live capture, which is authoritative; then not archived.
 func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim questionkit.PendingQuestionClaim, inst *instance.Instance) func() error {
 	return func() error {
 		if !target.admits(access.AccessFor(inst)) {
@@ -353,7 +354,8 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim questio
 		if !matched {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT, replyStageStalePrompt}
 		}
-		return nil
+		// Last, so an archive during the slower checks above is still seen.
+		return refuseArchived(inst)()
 	}
 }
 
