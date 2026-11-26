@@ -466,9 +466,11 @@ const WindowTabStripInner = forwardRef<
       <div
         ref={containerRef}
         className={windowTabStrip}
-        // Mouse only: a touch tap synthesizes mouseenter, which would pop the preview
-        // open on every tap. Touch users get the overview button instead.
-        onPointerEnter={(e) => e.pointerType === "mouse" && scheduleHover(true)}
+        // Mouse only, on hover-capable devices: taps synthesize mouseenter, and an emulated touch
+        // browser reports a "mouse" parked at (0,0), on this strip. Touch users get the overview button.
+        onPointerEnter={(e) =>
+          e.pointerType === "mouse" && !window.matchMedia("(hover: none)").matches && scheduleHover(true)
+        }
         onPointerLeave={(e) => e.pointerType === "mouse" && scheduleHover(false)}
         onKeyDown={(e) => {
           if (e.key === "Escape") setPreviewWindows(null);

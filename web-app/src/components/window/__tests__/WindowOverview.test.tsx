@@ -86,4 +86,20 @@ describe("WindowTabStrip hover preview", () => {
     expect(screen.getByTestId("window-hover-preview")).toBeInTheDocument();
     expect(screen.getAllByText("Fix login bug")).toHaveLength(2);
   });
+
+  it("stays closed on a device without hover, even for a mouse pointer event", () => {
+    const matchMedia = jest.spyOn(window, "matchMedia").mockImplementation(
+      (query) => ({ matches: query === "(hover: none)" }) as MediaQueryList,
+    );
+    render(
+      <WindowTabStrip windows={windows} currentWindowId="w1" onSwitch={jest.fn()} onCreate={jest.fn()}
+        onClose={jest.fn()} onRename={jest.fn()} getWindows={() => windows} getSessionTitle={getSessionTitle} />,
+    );
+
+    fireEvent.pointerEnter(screen.getByRole("tablist").parentElement as HTMLElement, { pointerType: "mouse" });
+    act(() => { jest.advanceTimersByTime(400); });
+
+    expect(screen.queryByTestId("window-hover-preview")).toBeNull();
+    matchMedia.mockRestore();
+  });
 });
