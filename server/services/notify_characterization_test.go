@@ -25,8 +25,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -117,6 +120,13 @@ func TestSlackInteractiveHandler_ShouldAnswerWithFixedStatusAndBody_WhenRequestI
 		return httptest.NewRequest(http.MethodPost, "/api/hooks/slack-interactive", strings.NewReader(body))
 	}
 
+	// A forger who knows no secret can only sign with the empty one.
+	signedWithEmptySecret := func(body string) *http.Request {
+		r := signed(body)
+		r.Header.Set("X-Slack-Signature", computeTestSlackSignature("", r.Header.Get("X-Slack-Request-Timestamp"), body))
+		return r
+	}
+
 	const unauthorized, badRequest = "unauthorized\n", "bad request\n"
 	cases := []struct {
 		name     string
@@ -127,7 +137,7 @@ func TestSlackInteractiveHandler_ShouldAnswerWithFixedStatusAndBody_WhenRequestI
 		response string
 		resolved []string
 	}{
-		{"no signing secret configured", "", click("id:allow"), signed, 401, unauthorized, nil},
+		{"no signing secret configured", "", click("id:allow"), signedWithEmptySecret, 401, unauthorized, nil},
 		{"no timestamp header", slackInteractiveTestSecret, click("id:allow"), without("X-Slack-Request-Timestamp"), 401, unauthorized, nil},
 		{"no signature header", slackInteractiveTestSecret, click("id:allow"), without("X-Slack-Signature"), 401, unauthorized, nil},
 		{"replayed request", slackInteractiveTestSecret, click("id:allow"), stale, 401, unauthorized, nil},
@@ -167,14 +177,17 @@ func TestSendNotification_ShouldRateLimitByRequestedIDAndPublishNothing_WhenBurs
 	published, _ := bus.Subscribe(ctx)
 	// A zero refill rate makes the single burst token the whole budget.
 	ns := NewNotificationService(NewNotificationRateLimiter(0, 1), bus)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
+	poller.SetInstances([]*instance.Instance{{Title: "noisy", UUID: "uuid-noisy"}})
+	ns.SetReviewQueuePoller(poller)
 
+	const path = "/session.v1.SessionService/SendNotification"
+	mux := http.NewServeMux()
+	mux.Handle(path, connect.NewUnaryHandler(path, ns.SendNotification))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	client := connect.NewClient[sessionv1.SendNotificationRequest, sessionv1.SendNotificationResponse](srv.Client(), srv.URL+path)
 	send := func(sessionID string) error {
-		path := "/session.v1.SessionService/SendNotification"
-		mux := http.NewServeMux()
-		mux.Handle(path, connect.NewUnaryHandler(path, ns.SendNotification))
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-		client := connect.NewClient[sessionv1.SendNotificationRequest, sessionv1.SendNotificationResponse](srv.Client(), srv.URL+path)
 		_, err := client.CallUnary(ctx, connect.NewRequest(&sessionv1.SendNotificationRequest{SessionId: sessionID, Title: "t"}))
 		return err
 	}
@@ -184,13 +197,13 @@ func TestSendNotification_ShouldRateLimitByRequestedIDAndPublishNothing_WhenBurs
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "rate limit exceeded for session: noisy")
-	require.NoError(t, send("quiet"), "another session has its own budget")
+	require.NoError(t, send("uuid-noisy"), "the budget is keyed by the ID the caller sent, not the resolved one")
 
 	var got []string
 	for len(published) > 0 {
 		got = append(got, (<-published).SessionID)
 	}
-	assert.Equal(t, []string{"noisy", "quiet"}, got)
+	assert.Equal(t, []string{"uuid-noisy", "uuid-noisy"}, got)
 }
 
 // The golden pins the exact bytes POSTed to the webhook, including the escaping
@@ -265,6 +278,7 @@ func TestApprovalAndSessionIDText_ShouldKeepItsShape_WhenBuiltForNotifications(t
 	assert.False(t, matchesIDData(domain.InstanceData{Title: "t"}, "other"))
 
 	assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), DerivePriority(true, true))
+	assert.Equal(t, "peer_title", questionkit.MetaPeerTitle, "stored metadata key")
 }
 
 // Every request fact the prune audit line records, as the client sent it.
