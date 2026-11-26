@@ -46,7 +46,13 @@ async function openTerminalView(page: import('@playwright/test').Page, sessionId
 /** Creates a bash session and waits until the server reports it active. */
 async function createActiveSession(client: SessionClient, title: string) {
   const session = await client.createIdleSession(title, '/tmp');
-  await client.waitForSessionsActive([title]);
+  try {
+    // Shorter than the 30s test timeout, so a slow start reports which session and status.
+    await client.waitForSessionsActive([title], 20000);
+  } catch (err) {
+    await client.deleteSession(session.id, true).catch(() => {});
+    throw err;
+  }
   return session;
 }
 
@@ -156,6 +162,7 @@ test.describe('input-drop-badge', () => {
   });
 
   test('badge auto-dismisses within the configured timeout', async ({ page }) => {
+    test.slow(); // waits out the ~8s toast on top of session setup
     const client = new SessionClient(BASE_URL);
     const session = await createActiveSession(client, `e2e-input-drop-dismiss-${Date.now()}`);
 
@@ -188,7 +195,7 @@ test.describe('input-drop-badge', () => {
 
       // Focus the terminal input once it is connected, so its own autofocus can't move focus mid-test.
       await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
-      const terminalInput = page.locator('.xterm-helper-textarea').first();
+      const terminalInput = page.getByRole('textbox', { name: 'Terminal input' });
       await terminalInput.focus();
       await expect(terminalInput).toBeFocused();
 

@@ -92,7 +92,7 @@ test.describe('terminal resize', () => {
    *
    * The bug: after a resize, the post-resize snapshot was written on top of
    * existing content without clearing the visible screen first (double display).
-   * We detect this by checking that each non-blank row appears exactly once.
+   * We detect this by checking that each printed marker row appears exactly once.
    */
   test('no duplicate lines in terminal after resize (dom renderer)', async ({ page, browserName }, testInfo) => {
     // This assertion requires the DOM renderer; skip in other projects.
@@ -104,51 +104,44 @@ test.describe('terminal resize', () => {
     const client = new SessionClient(BASE_URL);
     const title = `e2e-resize-${Date.now()}`;
     const session = await client.createIdleSession(title, '/tmp');
-    await client.waitForSessionsActive([title]);
+    try {
+      await client.waitForSessionsActive([title], 20000);
 
-    await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
-    // Ensure toolbar is expanded
-    await expect(page.locator('[data-testid="toolbar-toggle"]')).toBeVisible({ timeout: 8000 });
-    const toggle = page.locator('[data-testid="toolbar-toggle"]');
-    const expanded = await toggle.getAttribute('aria-expanded');
-    if (expanded === 'false') await toggle.click();
+      // Ensure toolbar is expanded
+      const toggle = page.locator('[data-testid="toolbar-toggle"]');
+      await expect(toggle).toBeVisible({ timeout: 8000 });
+      if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
 
-    await expect(page.getByText('Connected')).toBeVisible({ timeout: 20000 });
+      await expect(page.getByText('Connected')).toBeVisible({ timeout: 20000 });
 
-    // The duplicate check is meaningless on an empty terminal: wait for the shell prompt.
-    const renderedRows = async () =>
-      (await page.locator('.xterm-rows > div').allInnerTexts()).filter((r) => r.trim() !== '').length;
-    await expect.poll(renderedRows, { timeout: 10000 }).toBeGreaterThan(0);
+      // Print two marker rows, so there is known content the redraw has to bring back.
+      const markers = ['ssq-a', 'ssq-b'];
+      const markerCounts = async () => {
+        const rows = (await page.locator('.xterm-rows > div').allInnerTexts()).map((r) => r.trim());
+        return markers.map((m) => rows.filter((r) => r === m).length);
+      };
+      await page.getByRole('textbox', { name: 'Terminal input' }).focus();
+      await page.keyboard.type("printf 'ssq-a\\nssq-b\\n'\n");
+      await expect.poll(markerCounts, { timeout: 10000 }).toEqual([1, 1]);
 
-    // Capture terminal rows before resize
-    const rowsBefore = await page.locator('.xterm-rows > div').allInnerTexts();
-    const nonBlankBefore = rowsBefore.filter(r => r.trim() !== '');
+      // Redraw clears the local buffer, then asks the server to repaint.
+      const forced = page.waitForEvent('console', {
+        predicate: (m) => m.text().includes('Forcing resize message to backend'),
+        timeout: 10000,
+      });
+      await page.getByRole('button', { name: REDRAW_BUTTON }).click();
+      await forced;
+      // Two frames, so the DOM reflects the clear before we look for the repainted rows.
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
-    // Trigger resize
-    await page.getByRole('button', { name: REDRAW_BUTTON }).click();
-    await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached({ timeout: 10000 });
-
-    await expect.poll(renderedRows, { timeout: 10000 }).toBeGreaterThan(0);
-
-    // Capture terminal rows after resize
-    const rowsAfter = await page.locator('.xterm-rows > div').allInnerTexts();
-    const nonBlankAfter = rowsAfter.filter(r => r.trim() !== '');
-
-    // Each distinct non-blank row text should appear at most once.
-    // Duplicates mean the snapshot was written on top of existing content.
-    const counts = new Map<string, number>();
-    for (const row of nonBlankAfter) {
-      counts.set(row, (counts.get(row) ?? 0) + 1);
+      await expect.poll(markerCounts, { timeout: 10000 }).toEqual([1, 1]);
+      await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached({ timeout: 10000 });
+      // A second copy means the snapshot was written on top of existing content (double display).
+      expect(await markerCounts()).toEqual([1, 1]);
+    } finally {
+      await client.deleteSession(session.id, true).catch(() => {});
     }
-    const duplicates = [...counts.entries()].filter(([, n]) => n > 1).map(([text]) => text);
-
-    expect(
-      duplicates,
-      `Duplicate terminal rows found after resize (double-display bug): ${JSON.stringify(duplicates)}. ` +
-      `Before resize: ${nonBlankBefore.length} rows, after: ${nonBlankAfter.length} rows`,
-    ).toHaveLength(0);
-
-    await client.deleteSession(session.id, true).catch(() => {});
   });
 });

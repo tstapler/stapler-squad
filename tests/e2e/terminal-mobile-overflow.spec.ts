@@ -28,7 +28,7 @@ test.describe('mobile toolbar overflow', () => {
   test.beforeAll(async () => {
     const title = `e2e-mobile-overflow-${Date.now()}`;
     sessionId = (await client.createIdleSession(title, '/tmp')).id;
-    await client.waitForSessionsActive([title]);
+    await client.waitForSessionsActive([title], 20000);
   });
 
   test.afterAll(async () => {

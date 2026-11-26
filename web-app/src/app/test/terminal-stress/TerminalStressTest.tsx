@@ -63,6 +63,7 @@ export function TerminalStressTest() {
 
   // Refs for test control
   const abortControllerRef = useRef<AbortController | null>(null);
+  const flushProgressRef = useRef<(() => void) | null>(null);
   const frameTimesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef<number>(0);
   const metricsRef = useRef(renderMetrics);
@@ -258,6 +259,8 @@ export function TerminalStressTest() {
         bytesGenerated: totalBytesGenerated,
       });
 
+    flushProgressRef.current = () => publishProgress(performance.now() - startTime);
+
     // Use requestAnimationFrame for proper vsync and frame timing
     const runLoop = (currentTime: number) => {
       // stopTest/resetTest already set status and metrics.
@@ -268,6 +271,7 @@ export function TerminalStressTest() {
         setStatus('completed');
         updateMetrics();
         publishProgress(elapsed);
+        flushProgressRef.current = null;
         return;
       }
 
@@ -301,6 +305,8 @@ export function TerminalStressTest() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    flushProgressRef.current?.();
+    flushProgressRef.current = null;
     setStatus('completed');
     updateMetrics();
   }, [updateMetrics]);
