@@ -1,4 +1,4 @@
-package services
+package healthnotify
 
 import (
 	"context"
@@ -24,7 +24,7 @@ func TestMemoryPressureNotifier_checkOnce_should_FireOnce_When_RatioCrossesWarnT
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewMemoryPressureNotifier(poller, bus)
+	notifier := NewMemoryPressureNotifier(poller, bus, testPorts())
 	notifier.ratioFunc = fakeRatio(0.95)
 
 	notifier.checkOnce()
@@ -46,7 +46,7 @@ func TestMemoryPressureNotifier_checkOnce_should_NotNotify_When_RatioStaysBelowW
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewMemoryPressureNotifier(poller, bus)
+	notifier := NewMemoryPressureNotifier(poller, bus, testPorts())
 	notifier.ratioFunc = fakeRatio(0.5)
 
 	notifier.checkOnce()
@@ -60,7 +60,7 @@ func TestMemoryPressureNotifier_checkOnce_should_NotNotify_When_RatioFuncReports
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewMemoryPressureNotifier(poller, bus)
+	notifier := NewMemoryPressureNotifier(poller, bus, testPorts())
 	notifier.ratioFunc = func() (float64, bool) { return 0, false }
 
 	notifier.checkOnce()
@@ -86,7 +86,7 @@ func TestMemoryPressureNotifier_checkOnce_should_ReArm_When_RatioDropsBelowClear
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewMemoryPressureNotifier(poller, bus)
+	notifier := NewMemoryPressureNotifier(poller, bus, testPorts())
 
 	notifier.ratioFunc = fakeRatio(0.95)
 	notifier.checkOnce()
@@ -119,7 +119,7 @@ func TestMemoryPressureNotifier_reclaimOptionsText_should_ListOnlyIdleActiveSess
 	pausedSession := newStaleTestInstance("paused-sess", "uuid-4", domain.Paused, time.Now().Add(-60*time.Minute))
 	poller := newTestNotifierPoller(shortIdle, longIdle, busySession, pausedSession)
 
-	notifier := NewMemoryPressureNotifier(poller, nil)
+	notifier := NewMemoryPressureNotifier(poller, nil, testPorts())
 	text := notifier.reclaimOptionsText()
 
 	longIdx := strings.Index(text, "long-idle-sess")

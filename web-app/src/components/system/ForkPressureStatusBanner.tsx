@@ -8,7 +8,7 @@ import { SystemBannerStack, type SystemBannerProps, type SystemBannerSeverity } 
 
 /** SessionID fork-pressure notifications are published under (server/server.go's buildForkPressureNotification). */
 const FORK_PRESSURE_SESSION_ID = "fork-pressure";
-/** metadata.reason value memory-pressure notifications carry (server/services/memory_pressure_notifier.go). */
+/** metadata.reason value memory-pressure notifications carry (server/services/healthnotify/memory_pressure_notifier.go). */
 const MEMORY_PRESSURE_REASON = "memory_pressure";
 
 type MonitorLevel = "ok" | "warning" | "critical";
@@ -91,7 +91,7 @@ function toBannerSeverity(level: "warning" | "critical"): SystemBannerSeverity {
  * NotificationContext history rather than adding a second poll loop: each
  * monitor publishes to one stable notification ID
  * (server/server.go's forkPressureNotificationID,
- * server/services/memory_pressure_notifier.go's memoryPressureNotificationID)
+ * server/services/healthnotify/memory_pressure_notifier.go's memoryPressureNotificationID)
  * that updates in place -- including an explicit clear signal on episode
  * end -- so its latest entry here always reflects current state.
  *

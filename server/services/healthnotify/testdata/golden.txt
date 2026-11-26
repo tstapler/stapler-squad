@@ -1,0 +1,37 @@
+== stale: notify disabled
+== stale: Start with cancelled context
+["session.notification","uuid-a","alpha","\u003cuuid\u003e",8,1,"Session went stale","alpha has produced no output for 40m0s.",{"reason":"stale","session_id":"uuid-a"}]
+["session.notification","delta-no-uuid","delta-no-uuid","\u003cuuid\u003e",8,1,"Session went stale","delta-no-uuid has produced no output for 100h0m0s.",{"reason":"stale","session_id":"delta-no-uuid"}]
+== stale: same episode
+== stale: alpha recovered
+== stale: alpha stale again
+["session.notification","uuid-a","alpha","\u003cuuid\u003e",8,1,"Session went stale","alpha has produced no output for 31m0s.",{"reason":"stale","session_id":"uuid-a"}]
+== stale: delta paused then resumed
+["session.notification","delta-no-uuid","delta-no-uuid","\u003cuuid\u003e",8,1,"Session went stale","delta-no-uuid has produced no output for 100h0m0s.",{"reason":"stale","session_id":"delta-no-uuid"}]
+== stale: threshold lowered to 10
+["session.notification","uuid-b","bravo","\u003cuuid\u003e",8,1,"Session went stale","bravo has produced no output for 11m0s.",{"reason":"stale","session_id":"uuid-b"}]
+== stale: nil bus
+== memory: ratio 0.5
+== memory: ratio 0.8999
+== memory: ratio 0.9
+["session.notification","system","System","memory-pressure-status",8,4,"Memory usage near limit","Process memory is at 90% of its configured limit. 3 idle session(s) could be paused to free memory: delta-no-uuid (idle 100h0m0s), alpha (idle 30m0s), bravo (idle 11m0s). Dashboard: http://localhost:3000",{"memory_pressure_level":"warning","reason":"memory_pressure"}]
+== memory: ratio 0.95
+== memory: ratio 0.8
+== memory: ratio 0.75
+== memory: ratio 0.7499
+["session.notification","system","System","memory-pressure-status",8,1,"Memory usage cleared","Process memory has dropped back below 75% of its configured limit.",{"memory_pressure_level":"ok","reason":"memory_pressure"}]
+== memory: ratio 0.5
+== memory: ratio 0.91
+["session.notification","system","System","memory-pressure-status",8,4,"Memory usage near limit","Process memory is at 91% of its configured limit. 3 idle session(s) could be paused to free memory: delta-no-uuid (idle 100h0m0s), alpha (idle 30m0s), bravo (idle 11m0s). Dashboard: http://localhost:3000",{"memory_pressure_level":"warning","reason":"memory_pressure"}]
+== memory: unavailable
+== memory: Start with cancelled context clears
+["session.notification","system","System","memory-pressure-status",8,1,"Memory usage cleared","Process memory has dropped back below 75% of its configured limit.",{"memory_pressure_level":"ok","reason":"memory_pressure"}]
+== memory: no idle candidates
+["session.notification","system","System","memory-pressure-status",8,4,"Memory usage near limit","Process memory is at 99% of its configured limit. No idle sessions found to suggest pausing. Dashboard: http://localhost:3000",{"memory_pressure_level":"warning","reason":"memory_pressure"}]
+no instances: "No idle sessions found to suggest pausing."
+== memory: nil bus
+== logs
+level=INFO msg="stale session notifier started" check_interval=1m0s
+level=INFO msg="stale session notifier stopped"
+level=INFO msg="memory pressure notifier started" check_interval=1m0s warn_ratio=0.9 clear_ratio=0.75
+level=INFO msg="memory pressure notifier stopped"

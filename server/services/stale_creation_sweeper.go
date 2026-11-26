@@ -13,7 +13,7 @@ import (
 )
 
 // staleCreationSweeperCheckInterval is how often the sweeper re-evaluates every live
-// Creating instance for staleness. Mirrors StaleSessionNotifier's cadence (60s is
+// Creating instance for staleness. Mirrors healthnotify.StaleSessionNotifier's cadence (60s is
 // fine-grained enough relative to the (minutes-scale) configured threshold, without
 // meaningful I/O overhead beyond the occasional flip's terminal write).
 const staleCreationSweeperCheckInterval = 60 * time.Second
@@ -50,7 +50,7 @@ type StaleCreationSweeper struct {
 // instances to scan (via GetInstances()); storage is where the terminal write lands
 // (via commitTerminalStatus); eventBus publishes the resulting SessionUpdatedEvent. A
 // nil eventBus is tolerated (publish becomes a no-op), matching
-// StaleSessionNotifier's construction-time tolerance.
+// healthnotify.StaleSessionNotifier's construction-time tolerance.
 func NewStaleCreationSweeper(poller *session.ReviewQueuePoller, storage terminalStatusStore, eventBus *events.EventBus) *StaleCreationSweeper {
 	return &StaleCreationSweeper{
 		poller:   poller,
@@ -60,7 +60,7 @@ func NewStaleCreationSweeper(poller *session.ReviewQueuePoller, storage terminal
 }
 
 // Start runs the periodic sweep loop. Blocks until ctx is cancelled. Mirrors
-// StaleSessionNotifier.Start's shape: run once immediately, then on every tick.
+// healthnotify.StaleSessionNotifier.Start's shape: run once immediately, then on every tick.
 func (s *StaleCreationSweeper) Start(ctx context.Context) {
 	ticker := time.NewTicker(staleCreationSweeperCheckInterval)
 	defer ticker.Stop()
@@ -82,7 +82,7 @@ func (s *StaleCreationSweeper) Start(ctx context.Context) {
 
 // sweep evaluates every live Creating instance against the current configured
 // threshold. config.LoadConfig() is called fresh on every invocation, mirroring
-// StaleSessionNotifier.checkAll, so a threshold change made via the Settings UI takes
+// healthnotify.StaleSessionNotifier.checkAll, so a threshold change made via the Settings UI takes
 // effect on the very next tick with no server restart required.
 func (s *StaleCreationSweeper) sweep(ctx context.Context) {
 	cfg := config.LoadConfig()

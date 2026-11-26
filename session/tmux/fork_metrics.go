@@ -286,7 +286,7 @@ type forkPressureTransition struct {
 }
 
 // nextForkPressureTransition is the pure decision function behind checkPressure's
-// hysteresis, mirroring server/services/memory_pressure_notifier.go's
+// hysteresis, mirroring server/services/healthnotify/memory_pressure_notifier.go's
 // notified-flag shape: fire once entering an elevated state, fire again only
 // on a genuine escalation (Warning -> Critical) within the same episode, fire
 // an explicit ForkPressureOK clear once every metric drops below its separate,

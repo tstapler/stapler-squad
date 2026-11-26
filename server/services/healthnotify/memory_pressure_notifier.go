@@ -1,4 +1,4 @@
-package services
+package healthnotify
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -55,8 +54,9 @@ const memoryPressureNotificationID = "memory-pressure-status"
 // frees whatever it was holding) rather than just raising an alarm with
 // nothing actionable attached.
 type MemoryPressureNotifier struct {
-	poller    *session.ReviewQueuePoller
+	poller    InstancePoller
 	eventBus  *events.EventBus
+	ports     Ports
 	ratioFunc func() (ratio float64, ok bool)
 
 	mu       sync.Mutex
@@ -66,10 +66,11 @@ type MemoryPressureNotifier struct {
 // NewMemoryPressureNotifier constructs a notifier using the real cgroup
 // reader (telemetry.CgroupMemoryUsageRatio). A nil eventBus is tolerated
 // (notify becomes a no-op), matching StaleSessionNotifier.
-func NewMemoryPressureNotifier(poller *session.ReviewQueuePoller, eventBus *events.EventBus) *MemoryPressureNotifier {
+func NewMemoryPressureNotifier(poller InstancePoller, eventBus *events.EventBus, ports Ports) *MemoryPressureNotifier {
 	return &MemoryPressureNotifier{
 		poller:    poller,
 		eventBus:  eventBus,
+		ports:     ports.orUnspecified(),
 		ratioFunc: telemetry.CgroupMemoryUsageRatio,
 	}
 }
@@ -140,7 +141,7 @@ func (n *MemoryPressureNotifier) notify(ratio float64) {
 	n.eventBus.Publish(events.NewNotificationEvent(
 		"system", "System", memoryPressureNotificationID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		DerivePriority(true, true), // urgent, important — approaching the memory limit risks an OOM kill right now
+		n.ports.DerivePriority(true, true), // urgent, important — approaching the memory limit risks an OOM kill right now
 		"Memory usage near limit",
 		fmt.Sprintf("Process memory is at %.0f%% of its configured limit. %s Dashboard: http://localhost:3000",
 			ratio*100, n.reclaimOptionsText()),
@@ -159,7 +160,7 @@ func (n *MemoryPressureNotifier) notifyCleared(ratio float64) {
 	n.eventBus.Publish(events.NewNotificationEvent(
 		"system", "System", memoryPressureNotificationID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		DerivePriority(false, false), // cleared -- no longer urgent or important
+		n.ports.DerivePriority(false, false), // cleared -- no longer urgent or important
 		"Memory usage cleared",
 		fmt.Sprintf("Process memory has dropped back below %.0f%% of its configured limit.", memoryPressureClearRatio*100),
 		map[string]string{"reason": "memory_pressure", "memory_pressure_level": "ok"},
