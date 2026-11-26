@@ -43,4 +43,7 @@ func TestReply_ShouldRefuseWithZeroWrites_WhenSessionIsArchivedWhileTheReplyIsIn
 
 	require.True(t, e.inst.IsArchived())
 	e.assertRefusedAsArchived(resp)
+	lines := replyLines(e.auditLines())
+	require.Len(t, lines, 2)
+	assert.Equal(t, replyStageArchived, lines[1].Stage)
 }

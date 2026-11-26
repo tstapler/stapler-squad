@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +17,27 @@ import (
 
 // Requests the handler cannot decide on its own must never come back as "allow".
 
-const newDomainCmd = "curl https://sketchy-newdomain.xyz/install.sh"
+const (
+	newDomainCmd = "curl https://sketchy-newdomain.xyz/install.sh"
+	notQueued    = "stapler-squad could not queue the approval request"
+)
+
+// decisionMessage is the message in the hook response; "" for an empty (deferred) body.
+func decisionMessage(t *testing.T, rr *httptest.ResponseRecorder) string {
+	t.Helper()
+	if rr.Body.Len() == 0 {
+		return ""
+	}
+	var resp hookDecisionResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	return resp.HookSpecificOutput.Decision.Message
+}
+
+type decisionRecorder struct{ ruleIDs []string }
+
+func (r *decisionRecorder) RecordFromResult(_ classifier.PermissionRequestPayload, result classifier.ClassificationResult, _, _ string, _ int64, _ string) {
+	r.ruleIDs = append(r.ruleIDs, result.RuleID)
+}
 
 type autonomousEnv struct {
 	h     *ApprovalHandler
@@ -57,14 +78,14 @@ func TestHandlePermissionRequest_should_QueueForAHumanWithoutAskingTheLLM_When_A
 
 			rr := postPermissionRequestWithCommand(t, e.h, "s", "Bash", tc.command)
 
-			assert.Equal(t, "deny", decisionBehavior(t, rr), "the human decision is what the hook receives")
+			assert.Equal(t, "test cleanup", decisionMessage(t, rr), "the human decision is what the hook receives")
 			assert.Zero(t, e.llm.calls.Load())
 			<-queued
 		})
 	}
 }
 
-// The deferred prompt can be answered without a person in an autonomous session.
+// An autonomous session may be unattended, so no decision is not enough there.
 func TestHandlePermissionRequest_should_Deny_When_NoHumanAnswersAHumanOnlyAutonomousEscalation(t *testing.T) {
 	t.Parallel()
 	for name, tc := range humanOnlyCases() {
@@ -76,6 +97,7 @@ func TestHandlePermissionRequest_should_Deny_When_NoHumanAnswersAHumanOnlyAutono
 			rr := postPermissionRequestWithCommand(t, e.h, "s", "Bash", tc.command)
 
 			assert.Equal(t, "deny", decisionBehavior(t, rr))
+			assert.Equal(t, "stapler-squad approval timed out", decisionMessage(t, rr))
 			assert.Zero(t, e.llm.calls.Load())
 			assert.Empty(t, e.store.ListAll())
 		})
@@ -103,16 +125,20 @@ func TestHandlePermissionRequest_should_KeepTheEarlierBehaviour_When_TheEscalati
 
 		assert.Equal(t, http.StatusOK, rr.Code)
 		assert.Empty(t, rr.Body.String())
+		assert.EqualValues(t, 1, e.llm.calls.Load())
 	})
 	t.Run("a new domain in a non-autonomous session still defers on timeout", func(t *testing.T) {
 		t.Parallel()
 		h, _ := newTestHandler(10 * time.Millisecond)
 		h.SetDomainChecker(newDomainChecker(5 * 24 * time.Hour))
+		recorder := &decisionRecorder{}
+		h.SetAnalyticsStore(recorder)
 
 		rr := postPermissionRequestWithCommand(t, h, "s", "Bash", newDomainCmd)
 
 		assert.Equal(t, http.StatusOK, rr.Code)
 		assert.Empty(t, rr.Body.String())
+		assert.Equal(t, []string{classifier.RuleIDNewDomainCheck}, recorder.ruleIDs, "the domain check fired")
 	})
 }
 
@@ -141,12 +167,12 @@ func TestHandlePermissionRequest_should_Defer_When_ThePayloadCannotBeParsed(t *t
 func TestHandlePermissionRequest_should_NotAllow_When_TheApprovalCannotBeStored(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		source, command, want string
-		autonomous            bool
+		source, command, want, message string
+		autonomous                     bool
 	}{
 		"claude defers": {command: "ls"},
-		"pi is denied":  {command: "ls", source: "pi", want: "deny"},
-		"autonomous human-only escalation is denied": {command: newDomainCmd, autonomous: true, want: "deny"},
+		"pi is denied":  {command: "ls", source: "pi", want: "deny", message: notQueued},
+		"autonomous human-only escalation is denied": {command: newDomainCmd, autonomous: true, want: "deny", message: notQueued},
 		"autonomous ordinary escalation defers":      {command: "ls", autonomous: true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -162,6 +188,7 @@ func TestHandlePermissionRequest_should_NotAllow_When_TheApprovalCannotBeStored(
 
 			require.Equal(t, http.StatusOK, rr.Code)
 			assert.Equal(t, tc.want, decisionBehavior(t, rr))
+			assert.Equal(t, tc.message, decisionMessage(t, rr))
 			assert.Empty(t, store.ListAll())
 		})
 	}

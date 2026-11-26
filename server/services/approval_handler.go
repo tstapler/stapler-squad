@@ -555,9 +555,8 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 createApproval:
 
 	autonomous := h.autonomousChecker != nil && h.autonomousChecker(sessionID)
-	// An autonomous session's own prompt can be answered by the session driver, so a
-	// human-only escalation there is denied, not deferred, when nobody decides it.
-	// pi has no prompt to defer to at all.
+	// Deny rather than defer when no person is sure to see a prompt: pi has none, and an
+	// autonomous session may be unattended when a human-only escalation goes undecided.
 	denyIfUndecided := source == "pi" || (humanOnly && autonomous)
 
 	// Autonomous LLM approval: if the session is autonomous and a headless pool is configured,
