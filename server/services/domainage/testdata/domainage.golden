@@ -1,0 +1,70 @@
+extract "" = []string(nil)
+extract "ls -la" = []string(nil)
+extract "curl https://example.com/a" = []string{"example.com"}
+extract "curl HTTP://upper.example.org" = []string(nil)
+extract "curl https://a.b.Sketchy.XYZ:8443/x https://sketchy.xyz/y" = []string{"sketchy.xyz"}
+extract "wget http://sub.domain.co.uk/file && curl https://other.io" = []string{"domain.co.uk", "other.io"}
+extract "curl http://127.0.0.1:8080/ http://[::1]:9/ http://10.0.0.1/" = []string(nil)
+extract "curl http://localhost:3000/ http://intranet/" = []string{"localhost", "intranet"}
+extract "echo 'https://quoted.dev' \"https://dq.app\\n\"" = []string{"quoted.dev", "dq.app"}
+extract "curl ftp://nope.com https://user@auth.net/p" = []string{"user@auth.net"}
+extract "curl https://github.io/x https://foo.github.io/y" = []string{"github.io", "foo.github.io"}
+defaults timeout=3s ttl=24h0m0s thresh=720h0m0s enabled=true getter=720h0m0s transportNil=true
+safe=[127.0.0.1 amazonaws.com azure.com cloudfront.net crates.io example.com files.pythonhosted.org github.com golang.org google.com googleapis.com hub.docker.com localhost microsoft.com npmjs.com pkg.go.dev pypi.org raw.githubusercontent.com registry-1.docker.io registry.npmjs.org s3.amazonaws.com stackoverflow.com static.crates.io storage.googleapis.com]
+new #0: new=true err=<nil> calls=1
+new #1: new=true err=<nil> calls=1
+  cached=true notFound=false zero=false
+  expired: new=true err=<nil> calls=2
+  request GET https://rdap.org/domain/new.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+just inside #0: new=true err=<nil> calls=1
+just inside #1: new=true err=<nil> calls=1
+  cached=true notFound=false zero=false
+  expired: new=true err=<nil> calls=2
+  request GET https://rdap.org/domain/in.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+just outside #0: new=false err=<nil> calls=1
+just outside #1: new=false err=<nil> calls=1
+  cached=true notFound=false zero=false
+  expired: new=false err=<nil> calls=2
+  request GET https://rdap.org/domain/out.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+alt format upper action #0: new=true err=<nil> calls=1
+alt format upper action #1: new=true err=<nil> calls=1
+  cached=true notFound=false zero=false
+  expired: new=true err=<nil> calls=2
+  request GET https://rdap.org/domain/alt.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+bad date #0: new=false err=<nil> calls=1
+bad date #1: new=false err=<nil> calls=1
+  cached=true notFound=true zero=true
+  expired: new=false err=<nil> calls=2
+  request GET https://rdap.org/domain/bad.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+no registration event #0: new=false err=<nil> calls=1
+no registration event #1: new=false err=<nil> calls=1
+  cached=true notFound=true zero=true
+  expired: new=false err=<nil> calls=2
+  request GET https://rdap.org/domain/none.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+404 #0: new=false err=<nil> calls=1
+404 #1: new=false err=<nil> calls=1
+  cached=true notFound=true zero=true
+  expired: new=false err=<nil> calls=2
+  request GET https://rdap.org/domain/gone.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+500 #0: new=false err=<nil> calls=1
+500 #1: new=false err=<nil> calls=2
+  cached=false notFound=false zero=true
+  request GET https://rdap.org/domain/err.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+429 #0: new=false err=<nil> calls=1
+429 #1: new=false err=<nil> calls=2
+  cached=false notFound=false zero=true
+  request GET https://rdap.org/domain/limit.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+bad json #0: new=false err=<nil> calls=1
+bad json #1: new=false err=<nil> calls=2
+  cached=false notFound=false zero=true
+  request GET https://rdap.org/domain/json.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+transport error #0: new=false err=<nil> calls=1
+transport error #1: new=false err=<nil> calls=2
+  cached=false notFound=false zero=true
+  request GET https://rdap.org/domain/down.xyz [Accept=application/json User-Agent=claude-squad-domain-checker/1.0]
+disabled #0: new=false err=<nil> calls=0
+disabled #1: new=false err=<nil> calls=0
+  cached=false notFound=false zero=true
+safe host #0: new=false err=<nil> calls=0
+safe host #1: new=false err=<nil> calls=0
+  cached=false notFound=false zero=true

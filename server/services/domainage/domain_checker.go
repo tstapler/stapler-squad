@@ -1,4 +1,5 @@
-package services
+// Package domainage checks how recently the domains in a shell command were registered (RDAP).
+package domainage
 
 import (
 	"context"
@@ -68,6 +69,11 @@ func NewDomainAgeChecker(enabled bool) *DomainAgeChecker {
 		newThresh: 30 * 24 * time.Hour, // 30 days
 		enabled:   enabled,
 	}
+}
+
+// SetTransport replaces the RDAP client's transport; tests use it to fake RDAP.
+func (d *DomainAgeChecker) SetTransport(rt http.RoundTripper) {
+	d.httpClient.Transport = rt
 }
 
 // ExtractDomainsFromCommand parses network-relevant Bash commands and returns the
