@@ -88,9 +88,9 @@ jobs:
             -benchmem \
             -count=8 \
             -timeout=10m \
-            ./server/events ./server/terminal ./session/scrollback \
+            ./pkg/events ./server/terminal ./session/scrollback ./session/ptyio \
             ./session ./session/detection/ratelimit ./session/tmux \
-            ./session/unfinished ./session/queue ./session/tokens ./session/git | tee tier1-bench.txt
+            ./session/unfinished ./session/queue ./session/tokens ./session/git ./session/git/native | tee tier1-bench.txt
 
       - name: Restore benchmark baseline (PR only)
         if: github.event_name == 'pull_request'

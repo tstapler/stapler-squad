@@ -900,7 +900,7 @@ coverage-integration: ensure-tools proto-gen ## Run integration tests, emit inte
 test-ux-polish: ## Run tests registered in docs/registry/features/ (no server/tmux required)
 	@RUN=$$(python3 -c "import json,glob; ids=[t for p in glob.glob('docs/registry/features/backend/**/*.json',recursive=True) for t in json.load(open(p)).get('testIds',[])]; print('|'.join(sorted(set(ids))))"); \
 	echo "Running: $$RUN"; \
-	go test ./server/services/ ./server/services/webhooks/ -run "$$RUN" -v -timeout 120s
+	go test ./server/services/... -run "$$RUN" -v -timeout 120s
 	go test ./session/prompts/... -v -timeout 30s
 
 test-with-pinned-tmux: ensure-tools proto-gen $(BIN_TMUX) ## Run tests using the pinned tmux binary (reproducible)

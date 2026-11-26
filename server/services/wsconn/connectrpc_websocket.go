@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -1239,7 +1240,7 @@ func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebS
 		// sticky for that session's lifetime (Epic 3.1) — see ADR-003 for why a
 		// per-connection re-read would let a flag flip mid-rollout split one
 		// session across two owners.
-		if streamhub.AcquireOwnershipLock(services.TmuxSessionNameForStreamPath(instance)).Resolve(useStreamHub()) == streamhub.PathHubOwned {
+		if streamhub.AcquireOwnershipLock(streamhubrollout.TmuxSessionNameForStreamPath(instance)).Resolve(useStreamHub()) == streamhub.PathHubOwned {
 			log.Info("[WebSocket] routing managed session to hub-owned streaming", "session", sessionID)
 			return h.streamViaHub(stream, instance)
 		}
@@ -2436,7 +2437,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 
 	snap := instance.Snapshot()
 	sessionID := snap.Title
-	tmuxSessionName := services.StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
+	tmuxSessionName := streamhubrollout.StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
 
 	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName, "backend", snap.Backend)
 
@@ -3731,7 +3732,7 @@ func resolveCapturePaneTarget(instance *instance.Instance, snap *domain.Instance
 	default:
 		// Always via the canonical sanitizer (see #162 — raw concatenation targets
 		// a session name that was never actually created whenever the title has spaces).
-		tmuxSessionName = services.StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
+		tmuxSessionName = streamhubrollout.StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
 	}
 
 	// target is where pane capture/resize/dimension calls are actually sent: the

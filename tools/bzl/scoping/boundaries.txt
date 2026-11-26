@@ -118,3 +118,5 @@ session/workspacepeers !server
 session/backlogaux !server
 server/services/taggingrules !server/web
 server/services/healthnotify !server/web
+server/services/streamhubrollout !server/web
+server/services/domainage !server/web

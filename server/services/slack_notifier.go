@@ -53,7 +53,7 @@ type SlackNotifier struct {
 }
 
 // NewSlackNotifier constructs a SlackNotifier with a 5-second-timeout HTTP
-// client, mirroring domain_checker.go's http.Client{Timeout: 3 * time.Second}
+// client, mirroring domainage/domain_checker.go's http.Client{Timeout: 3 * time.Second}
 // shape.
 func NewSlackNotifier() *SlackNotifier {
 	return &SlackNotifier{
