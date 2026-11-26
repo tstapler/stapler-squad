@@ -1,4 +1,4 @@
-package services
+package gatestats
 
 import (
 	"fmt"
@@ -14,18 +14,18 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
-// gateStatsView is everything GetDeliveryGateStats reports, gathered once.
-type gateStatsView struct {
+// StatsView is everything GetDeliveryGateStats reports, gathered once.
+type StatsView struct {
 	Snapshot    deliverygate.StatsSnapshot
 	Series      []deliverygate.Series
 	File        deliverygate.StatsFileStatus
 	ExplicitOff []string
 }
 
-// explicitOffScopes lists the scopes with a persisted explicit false for the
+// ExplicitOffScopes lists the scopes with a persisted explicit false for the
 // gate flag ("global" first, then "kind:<name>" in registry order): Stage 3
 // prerequisite 1.
-func explicitOffScopes() []string {
+func ExplicitOffScopes() []string {
 	cfg := config.LoadConfig()
 	var out []string
 	if v, ok := cfg.GetFeatureFlagOverride(config.HiddenSessionGateFeatureFlag); ok && !v {
@@ -68,7 +68,7 @@ func gateMutationProto(name string) sessionv1.FlagMutation {
 	return sessionv1.FlagMutation(sessionv1.FlagMutation_value["FLAG_MUTATION_"+name])
 }
 
-func buildGateStatsResponse(v gateStatsView) *sessionv1.GetDeliveryGateStatsResponse {
+func BuildResponse(v StatsView) *sessionv1.GetDeliveryGateStatsResponse {
 	snap := v.Snapshot
 	resp := &sessionv1.GetDeliveryGateStatsResponse{
 		ProcessStart:     timestamppb.New(snap.ProcessStart),

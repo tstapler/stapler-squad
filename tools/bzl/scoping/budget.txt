@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=175 loc=48625 imports=95
+server/services files=169 loc=48058 imports=96
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -109,4 +109,5 @@ server/services/adminmisc files=4 loc=521 imports=6
 server/services/escapecode files=1 loc=208 imports=2
 server/services/triggerlimit files=1 loc=65 imports=0
 server/services/webhooks files=7 loc=1573 imports=12
+server/services/gatestats files=6 loc=568 imports=5
 server/services/backlogmisc files=4 loc=599 imports=10

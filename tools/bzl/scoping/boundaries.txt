@@ -44,6 +44,7 @@ server/services/escapecode !server/web
 server/services/triggerlimit !server/web
 server/services/webhooks !server/web
 server/services/questionkit !server/web
+server/services/gatestats !server/web
 session/ptyio !server
 session/ptydiscovery !server
 session/hostclaim !server

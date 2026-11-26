@@ -1,8 +1,9 @@
-package services
+package gatestats
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -71,6 +72,8 @@ func (h gateMsgCapture) Handle(_ context.Context, r slog.Record) error {
 }
 func (h gateMsgCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h gateMsgCapture) WithGroup(string) slog.Handler      { return h }
+
+var errDiskFull = errors.New("no space left on device")
 
 const testStatsDir = "/cfg"
 
