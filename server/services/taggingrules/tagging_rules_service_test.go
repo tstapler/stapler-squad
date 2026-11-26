@@ -1,4 +1,4 @@
-package services
+package taggingrules
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // production behavior — rebuildEngine preserves seed rules on every CRUD call (see
 // TestTaggingRulesService_rebuildEngine_should_PreserveSeedRules_When_CRUDMutatesUserRules for
 // that regression coverage against a real, seeded engine).
-func newTestTaggingRulesService(t *testing.T, analyticsStore *AnalyticsStore) (*TaggingRulesService, *classifier.TaggingEngine) {
+func newTestTaggingRulesService(t *testing.T, analyticsStore FireCounter) (*TaggingRulesService, *classifier.TaggingEngine) {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
@@ -164,8 +164,7 @@ func TestTaggingRulesService_ListTaggingRules_should_SurfaceFireCount_When_Analy
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules(nil)
 
-	analyticsStore := NewAnalyticsStore(storage)
-	svc := NewTaggingRulesService(rulesStore, engine, analyticsStore)
+	svc := NewTaggingRulesService(rulesStore, engine, storage)
 
 	_, err = svc.UpsertTaggingRule(context.Background(), TaggingRuleSpec{
 		ID:            "seed-bugfix",
