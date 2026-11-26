@@ -281,6 +281,7 @@ func TestSummaryRPC_Golden(t *testing.T) {
 		g.line("first final: status=%s title=%q task=%q text=%q stage=%q msg=%q", row.Status, row.SessionTitle, row.ActiveTask, row.SummaryText, row.ErrorStage, row.ErrorMessage)
 		g.line("first prompt:\n%s", goldenNormalizeHandoffPrompt(pool.lastUserPrompt()))
 
+		goldenAwaitReleased(t, gen, "hs-trig")
 		// Existing row title is reused on the second trigger.
 		_, uerr := entClient.HandoffSummary.Update().Where(handoffsummary.SessionID("hs-trig")).SetSessionTitle("persisted handoff title").Save(ctx)
 		require.NoError(t, uerr)
@@ -332,6 +333,19 @@ func TestSummaryRPC_Golden(t *testing.T) {
 	want, err := os.ReadFile(goldenPath)
 	require.NoError(t, err)
 	require.Equal(t, string(want), got)
+}
+
+// goldenAwaitReleased waits for the generator's dedup guard: the row turns ready before the
+// deferred release runs, and a trigger in that gap is deduplicated and re-reads the old row.
+func goldenAwaitReleased(t *testing.T, gen *summaries.HandoffSummaryGenerator, sessionID string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		release, _, started, err := gen.BeginGeneration(context.Background(), sessionID, sessionID)
+		if started {
+			release()
+		}
+		return err == nil && started
+	}, 5*time.Second, time.Millisecond)
 }
 
 func goldenAwaitHandoff(t *testing.T, client *ent.Client, sessionID string) {

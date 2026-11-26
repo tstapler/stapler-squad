@@ -79,6 +79,13 @@ func (r *activityRig) pendingTimers(t *testing.T, n int) {
 	require.Eventually(t, func() bool { return r.clock.Pending() == n }, 5*time.Second, time.Millisecond)
 }
 
+// retryArmed waits for the 2s retry timer itself. A count of all timers is not enough: the 1-minute
+// refresh of the previous hint stays armed until the pump replaces it.
+func (r *activityRig) retryArmed(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool { return r.clock.PendingWithin(2*time.Second) == 1 }, 5*time.Second, time.Millisecond)
+}
+
 func (r *activityRig) none(t *testing.T) {
 	t.Helper()
 	select {
@@ -270,7 +277,6 @@ func TestHub_should_StillRetryTheFinalNormal_After_ManyFailuresWhileOpen(t *test
 	t.Parallel()
 	rig := newActivityRig()
 	hub := rig.startedHub(t, "a")
-	base := rig.clock.Pending()
 	hub.NoteInteractive("viewer")
 	require.Equal(t, qos.ActivityInteractive, rig.next(t))
 	rig.fails.Store(1000)
@@ -278,12 +284,12 @@ func TestHub_should_StillRetryTheFinalNormal_After_ManyFailuresWhileOpen(t *test
 	rig.clock.Advance(qos.InteractiveWindow) // typing stops; every Normal send now fails
 	require.Equal(t, qos.ActivityNormal, rig.next(t))
 	for i := 0; i < 8; i++ { // well past the closed-hub cap
-		rig.pendingTimers(t, base+1)
+		rig.retryArmed(t)
 		rig.clock.Advance(2 * time.Second)
 		require.Equal(t, qos.ActivityNormal, rig.next(t))
 	}
 
-	rig.pendingTimers(t, base+1) // the pump is idle again, so teardown's kick is not coalesced away
+	rig.retryArmed(t) // the pump is idle again, so teardown's kick is not coalesced away
 	rig.fails.Store(0)
 	hub.ForceTeardown()
 	assert.Equal(t, qos.ActivityNormal, rig.next(t), "failures before close must not consume the final Normal's retries")

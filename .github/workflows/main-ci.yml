@@ -128,13 +128,21 @@ jobs:
           # Fixed by leaving the real 30s default delay in place; validated with a
           # clean -race run of all three packages together sans -p 1.
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
+          # On failure only the failed packages rerun, verbosely, for diagnostics: a second full pass
+          # did not fit the budget and reported a test failure as CI-BUDGET-EXCEEDED.
           run_test_suite() {
-            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=20m -coverprofile=coverage.tmux.out \
-              -covermode=atomic ./session ./session/mux ./session/tmux \
-              || (TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=20m ./session ./session/mux ./session/tmux; exit 1)
+            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions --jsonfile "$RUNNER_TEMP/go-test.json" -- -race -timeout=20m -coverprofile=coverage.tmux.out \
+              -covermode=atomic ./session ./session/mux ./session/tmux && return 0
+            touch "$RUNNER_TEMP/tests-failed"
+            FAILED_PKGS="$(jq -r 'select(.Action == "fail" and .Test == null) | .Package' "$RUNNER_TEMP/go-test.json" | sort -u)"
+            # shellcheck disable=SC2086
+            [ -z "$FAILED_PKGS" ] || TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=20m $FAILED_PKGS
+            return 1
           }
           export -f run_test_suite
-          timeout 17m bash -c run_test_suite || { echo "::error::CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget"; echo "CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          timeout 17m bash -c run_test_suite || {
+            if [ -e "$RUNNER_TEMP/tests-failed" ]; then echo "::error::'test-tmux' tests failed (see the first pass above)"; exit 1; fi
+            echo "::error::CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget"; echo "CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: Upload tmux-group coverage
         uses: actions/upload-artifact@v4
@@ -150,12 +158,7 @@ jobs:
           label: main-test-tmux
 
   # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
-  # (PR #697): the retry-on-any-failure fallback below re-runs the entire
-  # -race suite a second time in verbose mode, so a single flaky test hit
-  # (BUG-098/BUG-100's documented classes) roughly doubles wall-clock time
-  # against the same budget -- 5 consecutive CI-BUDGET-EXCEEDED failures on
-  # #697 traced to exactly this, not a code regression (every individual
-  # test passed; isolated reruns of the flaky tests passed 100%).
+  # (PR #697), when any failure re-ran the entire suite against the same budget.
   test-rest:
     name: Test (server/session/config packages)
     runs-on: ubuntu-latest
@@ -219,12 +222,19 @@ jobs:
             # newline/space-separated list of package paths that must
             # word-split into separate `go test` arguments.
             # shellcheck disable=SC2086
-            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions -- -race -timeout=28m -coverprofile=coverage.rest.out \
-              -covermode=atomic $REST_TEST_PKGS \
-              || (TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=28m $REST_TEST_PKGS; exit 1)
+            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions --jsonfile "$RUNNER_TEMP/go-test.json" -- -race -timeout=28m -coverprofile=coverage.rest.out \
+              -covermode=atomic $REST_TEST_PKGS && return 0
+            touch "$RUNNER_TEMP/tests-failed"
+            # As in test-tmux: rerun only what failed, for diagnostics; the job fails either way.
+            FAILED_PKGS="$(jq -r 'select(.Action == "fail" and .Test == null) | .Package' "$RUNNER_TEMP/go-test.json" | sort -u)"
+            # shellcheck disable=SC2086
+            [ -z "$FAILED_PKGS" ] || TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=28m $FAILED_PKGS
+            return 1
           }
           export -f run_test_suite
-          timeout 30m bash -c run_test_suite || { echo "::error::CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget"; echo "CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+          timeout 30m bash -c run_test_suite || {
+            if [ -e "$RUNNER_TEMP/tests-failed" ]; then echo "::error::'test-rest' tests failed (see the first pass above)"; exit 1; fi
+            echo "::error::CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget"; echo "CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: Upload rest-group coverage
         uses: actions/upload-artifact@v4
