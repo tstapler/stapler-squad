@@ -133,8 +133,7 @@ func TestAnswerRouter_ShouldTypeOneDigit_WhenLiveAnswersRace(t *testing.T) {
 	assert.Equal(t, replyColorLabel, e.row(qid).Answer)
 }
 
-// The frozen clock lets the rate limiter reject racers before they meet the claim,
-// so this one holds the first write open and moves past the per-session interval.
+// A question whose write is in flight is no longer offered by the pending store.
 func TestAnswerRouter_ShouldReportTheDialogGone_WhenASecondAnswerArrivesDuringTheWrite(t *testing.T) {
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("live-inflight")
@@ -170,7 +169,6 @@ func TestAnswerRouter_ShouldReportTheDialogGone_WhenASecondAnswerArrivesDuringTh
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first answer never reached the write")
 	}
-	e.clock.Advance(10 * time.Second)
 	second := wait(answer())
 	release()
 
@@ -180,6 +178,8 @@ func TestAnswerRouter_ShouldReportTheDialogGone_WhenASecondAnswerArrivesDuringTh
 	assert.Equal(t, []string{"2"}, pm.writes())
 }
 
+// The frozen clock lets the rate limiter reject racers before they meet the claim,
+// so this one holds the first write open and moves past the per-session interval.
 func TestReply_ShouldFindNothingToClaim_WhenAnotherReplyIDArrivesDuringTheWrite(t *testing.T) {
 	e := newReplyEnv(t)
 	e.pm.gate, e.pm.entered = make(chan struct{}), make(chan struct{}, 2)
@@ -213,7 +213,7 @@ func TestReply_ShouldFindNothingToClaim_WhenAnotherReplyIDArrivesDuringTheWrite(
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first reply never reached the write")
 	}
-	e.clock.Advance(10 * time.Second) // past the per-session interval, so the claim is what refuses
+	e.clock.Advance(10 * time.Second)
 	second := wait(reply("r-second"))
 	release()
 
