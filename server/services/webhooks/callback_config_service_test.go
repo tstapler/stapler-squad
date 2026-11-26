@@ -50,6 +50,30 @@ func TestUpdateCallbackConfig_RejectsSSRFTarget(t *testing.T) {
 	assert.False(t, getResp.Msg.Config.OnSessionCompleteConfigured, "rejected URL must not be persisted")
 }
 
+// Each of the three URL fields has its own SSRF check; the test above covers only on_session_complete_url.
+func TestUpdateCallbackConfig_RejectsSSRFTargetOnStaleAndQueueItemURLs(t *testing.T) {
+	const target = "http://169.254.169.254/"
+	cases := map[string]*sessionv1.UpdateCallbackConfigRequest{
+		"on_session_stale_url":      {OnSessionStaleUrl: callbackURLPtr(target)},
+		"on_queue_item_created_url": {OnQueueItemCreatedUrl: callbackURLPtr(target)},
+	}
+	for field, msg := range cases {
+		t.Run(field, func(t *testing.T) {
+			c := newIsolatedCallbackConfigService(t)
+
+			_, err := c.UpdateCallbackConfig(context.Background(), connect.NewRequest(msg))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+			assert.Contains(t, err.Error(), field)
+
+			resp, err := c.GetCallbackConfig(context.Background(), connect.NewRequest(&sessionv1.GetCallbackConfigRequest{}))
+			require.NoError(t, err)
+			assert.False(t, resp.Msg.Config.OnSessionStaleConfigured, "rejected URL must not be persisted")
+			assert.False(t, resp.Msg.Config.OnQueueItemCreatedConfigured, "rejected URL must not be persisted")
+		})
+	}
+}
+
 // TestUpdateCallbackConfig_PersistsValidURL_MaskedOnRead covers AC4 (partial,
 // config side): a valid URL is accepted and persisted, but never echoed back in
 // plaintext — GetCallbackConfig reports only a boolean.

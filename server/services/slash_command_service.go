@@ -58,7 +58,7 @@ func (s *SlashCommandService) ListSlashCommands(
 
 	// Project commands take highest precedence. target_directory is an RPC-supplied field
 	// with no other upstream containment, so it goes through the same
-	// validateTargetDirectory check CreateWorkflow/UpdateWorkflow apply to the identical
+	// fsops.ValidateTargetDirectory check CreateWorkflow/UpdateWorkflow apply to the identical
 	// field (workflow_service.go) before it's ever joined into a filesystem path.
 	if targetDir != "" {
 		expanded, err := expandTilde(targetDir)
@@ -145,7 +145,7 @@ func relPathToCommandName(rel string) string {
 func parseCommandFrontmatter(path string) (title, description string) {
 	// #nosec G304 -- path is enumerated by filepath.WalkDir in walkCommandDir over a
 	// directory that's either the trusted ~/.claude/commands, or target_directory after
-	// ListSlashCommands validated it with validateTargetDirectory (absolute, no
+	// ListSlashCommands validated it with fsops.ValidateTargetDirectory (absolute, no
 	// traversal components); never opened from a raw, unvalidated RPC string.
 	f, err := os.Open(path)
 	if err != nil {
