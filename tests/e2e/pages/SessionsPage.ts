@@ -26,6 +26,12 @@ export class SessionsPage {
     await this.page.waitForSelector('[data-testid="session-list"], .session-list', { timeout: 10000 });
   }
 
+  /** On a phone only one pane shows: pick the "Sessions" pane in the pane switcher sheet. */
+  async showSessionListPaneOnPhone() {
+    await this.page.getByRole('button', { name: /^Switch pane/ }).tap();
+    await this.page.getByRole('dialog', { name: 'Switch pane' }).getByRole('option', { name: 'Sessions', exact: true }).tap();
+  }
+
   // Matches both densities: SessionCard.tsx (grid view, "session-card") and
   // SessionRow.tsx (the default list view, "session-row" — see ci-status-badge.spec.ts
   // for the same pattern). A title-only selector would previously silently match

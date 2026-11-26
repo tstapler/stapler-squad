@@ -96,6 +96,7 @@ test.describe('terminal-resync-stagger', () => {
   test('staggerCoordinator_should_FireResyncImmediatelyWithNoJitter_When_StaggerFlagOff', async ({ page }) => {
     const consoleMessages: string[] = [];
     page.on('console', (msg) => consoleMessages.push(msg.text()));
+    await page.clock.install();
 
     const shellTabs = await openSessionDetailView(page);
     await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 8000 });
@@ -117,7 +118,19 @@ test.describe('terminal-resync-stagger', () => {
       expect(connected).toBe(true);
     }).toPass({ timeout: 15000, intervals: [200] });
 
+    // The delayed post-connection resize asks for fresh pane content and so stamps "synced now";
+    // wait for it, or it can land after the clock jump below and make the resync look unnecessary.
+    await expect(async () => {
+      const resized = consoleMessages.findIndex((m) => m.includes('Post-connection resize sync'));
+      expect(resized).toBeGreaterThanOrEqual(0);
+      expect(consoleMessages.slice(resized).some((m) => m.includes('Requesting fresh pane content'))).toBe(true);
+    }).toPass({ timeout: 10000, intervals: [200] });
+
     const messagesBeforeTrigger = consoleMessages.length;
+
+    // A focus resync is skipped while the last sync is under VISIBILITY_RESYNC_FRESH_MS (60s) old or output
+    // arrived in the last 5s (resyncPolicy.ts, useVisibilityResync.ts): move the wall clock past both.
+    await page.clock.setSystemTime(Date.now() + 90_000);
 
     await page.evaluate(() => {
       Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });

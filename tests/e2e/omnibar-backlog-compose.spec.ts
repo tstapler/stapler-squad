@@ -79,7 +79,11 @@ for (const profile of [V1_DESKTOP, V2_PORTRAIT]) {
     test('submit button is reachable by keyboard', async ({ page }) => {
       const textarea = await openCompose(page, 'keyboard path');
       await textarea.focus();
-      // Tab order inside the widget: Attach image -> Cancel -> Create.
+      // Tab order inside the widget: Repository -> Explore with AI -> Attach image -> Cancel -> Create.
+      await page.keyboard.press('Tab');
+      await expect(page.getByTestId('backlog-compose-repo')).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(page.getByTestId('backlog-compose-explore')).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(page.getByTestId('backlog-compose-attach')).toBeFocused();
       await page.keyboard.press('Tab');
