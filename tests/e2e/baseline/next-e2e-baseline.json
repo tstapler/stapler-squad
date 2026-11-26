@@ -9,11 +9,11 @@
   ],
   "nextVersion": "15.3.2",
   "playwrightVersion": "1.56.1",
-  "specCount": 2693,
+  "specCount": 2677,
   "counts": {
-   "fail": 319,
-   "pass": 2142,
-   "skipped": 166,
+   "fail": 246,
+   "pass": 2193,
+   "skipped": 172,
    "flaky": 66
   }
  },
@@ -11980,7 +11980,7 @@
    "spec": "android-url-bar.spec.ts",
    "project": "chromium",
    "title": "android-url-bar-overflow > no fixed-position element overflows viewport bottom on Android",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -12132,7 +12132,7 @@
    "spec": "android-url-bar.spec.ts",
    "project": "chromium-dom",
    "title": "android-url-bar-overflow > no fixed-position element overflows viewport bottom on Android",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44647,7 +44647,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium",
    "title": "input-drop-badge > badge appearing does not steal focus (design/ux.md §3.1)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44694,7 +44694,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium",
    "title": "input-drop-badge > badge auto-dismisses within the configured timeout",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44741,7 +44741,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium",
    "title": "input-drop-badge > badge becomes visible with the correct singular/plural count text",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44788,7 +44788,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium",
    "title": "input-drop-badge > badge does not overlap the terminal cursor region (design/ux.md UX-AC-2)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44835,7 +44835,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium",
    "title": "input-drop-badge > coalesces a burst of drops into a single badge with the summed count",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44882,7 +44882,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium-dom",
    "title": "input-drop-badge > badge appearing does not steal focus (design/ux.md §3.1)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44929,7 +44929,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium-dom",
    "title": "input-drop-badge > badge auto-dismisses within the configured timeout",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -44976,7 +44976,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium-dom",
    "title": "input-drop-badge > badge becomes visible with the correct singular/plural count text",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -45023,7 +45023,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium-dom",
    "title": "input-drop-badge > badge does not overlap the terminal cursor region (design/ux.md UX-AC-2)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -45070,7 +45070,7 @@
    "spec": "input-drop-badge.spec.ts",
    "project": "chromium-dom",
    "title": "input-drop-badge > coalesces a burst of drops into a single badge with the summed count",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -106486,636 +106486,6 @@
    ]
   },
   {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should batch rapid updates with RAF",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should complete full test cycle automatically",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should expose test API for external verification",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should maintain 60fps with incremental rendering",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should not show visible flickering during rapid updates",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should render test page correctly",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium",
-   "title": "Terminal Flickering Fix > should reset state correctly",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should batch rapid updates with RAF",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should complete full test cycle automatically",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should expose test API for external verification",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should maintain 60fps with incremental rendering",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should not show visible flickering during rapid updates",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should render test page correctly",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
-   "spec": "terminal-flickering.spec.ts",
-   "project": "chromium-dom",
-   "title": "Terminal Flickering Fix > should reset state correctly",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": null
-  },
-  {
    "spec": "terminal-hub-path.spec.ts",
    "project": "chromium",
    "title": "terminal hub-owned path (PathHubOwned) > resize settles to one final size without an intermediate flicker frame",
@@ -107251,7 +106621,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium",
    "title": "mobile toolbar overflow > More button is visible on mobile viewport",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107298,7 +106668,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium",
    "title": "mobile toolbar overflow > clicking Less hides the overflow row",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107345,7 +106715,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium",
    "title": "mobile toolbar overflow > clicking More reveals overflow row with secondary buttons",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107427,7 +106797,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium",
    "title": "mobile toolbar overflow > primary buttons are visible without opening overflow",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107509,7 +106879,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium-dom",
    "title": "mobile toolbar overflow > More button is visible on mobile viewport",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107556,7 +106926,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium-dom",
    "title": "mobile toolbar overflow > clicking Less hides the overflow row",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107603,7 +106973,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium-dom",
    "title": "mobile toolbar overflow > clicking More reveals overflow row with secondary buttons",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107685,7 +107055,7 @@
    "spec": "terminal-mobile-overflow.spec.ts",
    "project": "chromium-dom",
    "title": "mobile toolbar overflow > primary buttons are visible without opening overflow",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -107977,7 +107347,7 @@
    "spec": "terminal-resize.spec.ts",
    "project": "chromium-dom",
    "title": "terminal resize > no duplicate lines in terminal after resize (dom renderer)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108347,7 +107717,7 @@
    "spec": "terminal-resync-feature-flags.spec.ts",
    "project": "chromium",
    "title": "terminal-resync-feature-flags > featureFlagsPage_should_ReflectToggleOrShowError_When_FlagToggled",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108394,7 +107764,7 @@
    "spec": "terminal-resync-feature-flags.spec.ts",
    "project": "chromium",
    "title": "terminal-resync-feature-flags > featureFlagsPage_should_ShowActionableAlertAndAllowRefresh_When_SetFlagRpcFails",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108441,7 +107811,7 @@
    "spec": "terminal-resync-feature-flags.spec.ts",
    "project": "chromium",
    "title": "terminal-resync-feature-flags > featureFlagsPage_should_ToggleResyncFlagInTwoStepsWithReadableLabel_When_OperatorNavigatesAndClicks",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108488,7 +107858,7 @@
    "spec": "terminal-resync-feature-flags.spec.ts",
    "project": "chromium-dom",
    "title": "terminal-resync-feature-flags > featureFlagsPage_should_ReflectToggleOrShowError_When_FlagToggled",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108535,7 +107905,7 @@
    "spec": "terminal-resync-feature-flags.spec.ts",
    "project": "chromium-dom",
    "title": "terminal-resync-feature-flags > featureFlagsPage_should_ShowActionableAlertAndAllowRefresh_When_SetFlagRpcFails",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108582,7 +107952,7 @@
    "spec": "terminal-resync-feature-flags.spec.ts",
    "project": "chromium-dom",
    "title": "terminal-resync-feature-flags > featureFlagsPage_should_ToggleResyncFlagInTwoStepsWithReadableLabel_When_OperatorNavigatesAndClicks",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -108699,7 +108069,7 @@
    "spec": "terminal-stress/ascii-video.spec.ts",
    "project": "chromium",
    "title": "ASCII Video Playback Tests > should handle bouncing ball animation pattern",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
@@ -108863,7 +108233,7 @@
    "spec": "terminal-stress/ascii-video.spec.ts",
    "project": "chromium",
    "title": "ASCII Video Playback Tests > should render ASCII video at 30 FPS without dropping frames",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
@@ -108910,7 +108280,7 @@
    "spec": "terminal-stress/ascii-video.spec.ts",
    "project": "chromium",
    "title": "ASCII Video Playback Tests > should render ASCII video at 60 FPS (Matrix Rain)",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
@@ -108957,7 +108327,7 @@
    "spec": "terminal-stress/ascii-video.spec.ts",
    "project": "chromium-dom",
    "title": "ASCII Video Playback Tests > should handle bouncing ball animation pattern",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
@@ -109121,7 +108491,7 @@
    "spec": "terminal-stress/ascii-video.spec.ts",
    "project": "chromium-dom",
    "title": "ASCII Video Playback Tests > should render ASCII video at 30 FPS without dropping frames",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
@@ -109168,7 +108538,7 @@
    "spec": "terminal-stress/ascii-video.spec.ts",
    "project": "chromium-dom",
    "title": "ASCII Video Playback Tests > should render ASCII video at 60 FPS (Matrix Rain)",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
@@ -109215,7 +108585,7 @@
    "spec": "terminal-stress/large-payload.spec.ts",
    "project": "chromium",
    "title": "Large Payload Tests > should handle 100KB payload without freezing",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -109414,7 +108784,7 @@
    "spec": "terminal-stress/large-payload.spec.ts",
    "project": "chromium",
    "title": "Large Payload Tests > should successfully reset after large payload test",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -109461,7 +108831,7 @@
    "spec": "terminal-stress/large-payload.spec.ts",
    "project": "chromium-dom",
    "title": "Large Payload Tests > should handle 100KB payload without freezing",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -109660,7 +109030,7 @@
    "spec": "terminal-stress/large-payload.spec.ts",
    "project": "chromium-dom",
    "title": "Large Payload Tests > should successfully reset after large payload test",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
