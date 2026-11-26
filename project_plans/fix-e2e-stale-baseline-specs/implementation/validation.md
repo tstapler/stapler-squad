@@ -54,3 +54,6 @@ UX — no user-visible change; engineering — product edits limited to a test h
 - **Limit:** with the server resize call removed, the redraw e2e still passed in some runs because
   another in-flight snapshot restored the rows. The forced resize is asserted by
   `TerminalOutput.refit.test.tsx` (13 `TerminalOutput` suites, 209 tests pass).
+- Rerun on `44d638b9a`: `make ci` and `lint:duplicates` exit 0; changed specs (`CI=1`,
+  `--retries=0`, both Chromium projects) 57 passed, 15 skipped; other `terminal-stress` specs and
+  `terminal-hub-path` 26 passed, 12 skipped; `bun test tests/e2e/scripts tests/e2e/baseline` 103 pass.
