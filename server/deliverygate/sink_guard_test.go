@@ -30,6 +30,11 @@ const (
 	fixturePkgSuffix = "/server/deliverygate/testdata/sinkfixture"
 )
 
+// notificationPackages publish notifications without naming
+// events.EventNotification (split out of server/services), so every Subscribe in
+// them is listed all the same.
+var notificationPackages = map[string]bool{svcPkgPath + "/notify": true}
+
 // finding is one scan hit, keyed "<kind>: <package path>.<identifier>".
 type finding string
 
@@ -177,7 +182,7 @@ func scanFuncs(p *packages.Package, res scanResult, onlyServer bool) {
 	// events.EventNotification anywhere (the switch may sit in a helper or
 	// another file). Broad on purpose: a new Subscribe in such a package must be
 	// reviewed, even when it only wants other event types.
-	refsNotification := false
+	refsNotification := notificationPackages[p.PkgPath]
 	for _, f := range p.Syntax {
 		refsNotification = refsNotification || fileReferences(p, f, "EventNotification", eventsPkgPath, serverEventsPath)
 	}
@@ -287,6 +292,15 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 	for _, p := range pkgs {
 		if !strings.HasSuffix(p.PkgPath, fixturePkgSuffix) {
 			product = append(product, p)
+		}
+	}
+	loaded := map[string]bool{}
+	for _, p := range product {
+		loaded[p.PkgPath] = true
+	}
+	for path := range notificationPackages {
+		if !loaded[path] {
+			t.Errorf("notificationPackages entry is stale (package not found): %s", path)
 		}
 	}
 	res := scan(t, product, false)
