@@ -6,7 +6,8 @@ export const pageWrapper = style({
   display: "flex",
   flexDirection: "column",
   height: "100%",
-  overflow: "hidden",
+  overflowX: "hidden",
+  overflowY: "auto",
   background: vars.color.background,
 });
 
@@ -76,6 +77,9 @@ export const contentArea = style({
   display: "flex",
   flex: 1,
   overflow: "hidden",
+  // On short screens the header and filters fill the page: it scrolls rather than squeezing the
+  // list until the sticky table head covers every row.
+  minHeight: "min(20rem, 100%)",
 });
 
 export const listPane = style({
