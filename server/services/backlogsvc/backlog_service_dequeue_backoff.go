@@ -11,7 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -287,7 +287,7 @@ func (s *BacklogService) notifyDequeueSpawnParked(ctx context.Context, item back
 	s.eventBus.Publish(events.NewNotificationEvent(
 		item.ID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		services.DerivePriority(true, true),
+		notify.DerivePriority(true, true),
 		"Backlog spawn keeps failing",
 		fmt.Sprintf("%s — spawning a work session failed repeatedly (last error: %v). %s", item.Title, spawnErr, next),
 		map[string]string{"item_id": item.ID},
@@ -303,7 +303,7 @@ func (s *BacklogService) notifyDequeueSpawnSystemic(itemID string, spawnErr erro
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		services.DerivePriority(true, true),
+		notify.DerivePriority(true, true),
 		"Backlog spawns failing across items",
 		fmt.Sprintf("Spawning work sessions failed for %d different items in a row (last error: %v). This looks like a problem with the spawn path, not the items; retries are spaced %v apart and each item is excused from its own backoff for at most %d such holds.", dequeueSystemicItems, spawnErr, dequeueSystemicHold, dequeueSystemicMaxHolds),
 		map[string]string{"item_id": itemID},

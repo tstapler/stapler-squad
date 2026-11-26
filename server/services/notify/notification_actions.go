@@ -1,0 +1,523 @@
+package notify
+
+import (
+	"context"
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
+)
+
+// notification_actions.go computes the inline-action descriptors of a
+// notification history page (ADR-002) and holds the one tier/availability
+// table the builder and the dispatcher share (ADR-004, Story 2.8).
+
+// ListenerClass is which listener served the request.
+type ListenerClass string
+
+const (
+	ListenerClassLocal  ListenerClass = access.ListenerLocal
+	ListenerClassRemote ListenerClass = access.ListenerRemote
+)
+
+// ListenerClassFrom derives the class from the request record stamped by the
+// listener chain. A request nobody stamped is treated as remote (fail closed).
+func ListenerClassFrom(ctx context.Context) ListenerClass {
+	if rec, ok := access.RequestRecordFrom(ctx); ok && rec.Listener == access.ListenerLocal {
+		return ListenerClassLocal
+	}
+	return ListenerClassRemote
+}
+
+// UnavailableDesktopOnly is the descriptor reason for a Tier B action on the remote listener.
+const UnavailableDesktopOnly = "desktop_only"
+
+// unavailableReadOnly is the descriptor reason for a hook-mirrored question
+// whose answer control is withdrawn while the layout-drift canary is tripped.
+const unavailableReadOnly = "read_only"
+
+// Notification metadata keys read by the builder.
+const (
+	metaApprovalID         = "approval_id"
+	MetaItemID             = "item_id"
+	MetaDecisionSchema     = "decision_schema"
+	BoolTrue               = "true"
+	BacklogStatusReview    = "review"
+	BacklogStatusPRPending = "pr_pending"
+)
+
+// Backlog decision choice values (the stable part of decision_schema).
+const (
+	ChoiceAccept = "accept"
+	ChoiceRework = "rework"
+	ChoiceMerge  = "merge"
+)
+
+// actionPolicy is the single tier and remote-availability row of an action.
+type actionPolicy struct {
+	Tier            sessionv1.ActionTier
+	RemoteAvailable bool
+}
+
+var (
+	policyTierA = actionPolicy{Tier: sessionv1.ActionTier_ACTION_TIER_A, RemoteAvailable: true}
+	policyTierB = actionPolicy{Tier: sessionv1.ActionTier_ACTION_TIER_B, RemoteAvailable: false}
+)
+
+// ActionPolicies has exactly one row per ActionKind. ANSWER_QUESTION is listed
+// at its live_keystroke tier; a durable-record answer is Tier A (AnswerTier).
+var ActionPolicies = map[sessionv1.ActionKind]actionPolicy{
+	sessionv1.ActionKind_ACTION_KIND_OPEN:             policyTierA,
+	sessionv1.ActionKind_ACTION_KIND_APPROVE:          policyTierA,
+	sessionv1.ActionKind_ACTION_KIND_DENY:             policyTierA,
+	sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION:  policyTierB,
+	sessionv1.ActionKind_ACTION_KIND_BACKLOG_DECISION: policyTierA,
+	sessionv1.ActionKind_ACTION_KIND_ANSWER_GUIDANCE:  policyTierA,
+	sessionv1.ActionKind_ACTION_KIND_CANCEL_WAKE:      policyTierA,
+	sessionv1.ActionKind_ACTION_KIND_CANCEL_PEER_HELP: policyTierA,
+}
+
+// Control names the pane controls that are not an ActionKind but share the table.
+type Control string
+
+const (
+	ControlRemindMe        Control = "remind_me"
+	ControlResumeScheduled Control = "resume_scheduled_prompts"
+)
+
+// controlPolicies: Remind me creates a wake row (data only); Resume scheduled
+// prompts flips agent_wake_triggers, a flag write allowed on the local listener
+// only ("Resume from desktop" on the remote one).
+var controlPolicies = map[Control]actionPolicy{
+	ControlRemindMe:        policyTierA,
+	ControlResumeScheduled: {Tier: sessionv1.ActionTier_ACTION_TIER_A, RemoteAvailable: false},
+}
+
+// AnswerTier is the tier of an ANSWER_QUESTION on route: only a live keystroke
+// writes into a pane.
+func AnswerTier(route flagsvc.AnswerRoute) sessionv1.ActionTier {
+	switch route {
+	case flagsvc.RouteLiveKeystrokeHidden, flagsvc.RouteLiveKeystrokeVisible:
+		return sessionv1.ActionTier_ACTION_TIER_B
+	default:
+		return sessionv1.ActionTier_ACTION_TIER_A
+	}
+}
+
+// DescriptorSources are the per-page lookups of the builder. Each is called at
+// most once per page, and only when some unresolved record needs it.
+type DescriptorSources struct {
+	Approvals ApprovalLookup
+	Questions QuestionLookup
+	Backlog   BacklogDecisionLookup
+	Guidance  GuidanceLookup
+	// Canary degrades hook-mirrored answers to read_only when the layout drifts (optional).
+	Canary *questionkit.DialogMatchCanary
+	// Routes tells where an answer would go, so a stored answer (stopped or
+	// archived session, Tier A, no keystroke) stays available remotely (optional;
+	// nil keeps every answer desktop-only on the remote listener).
+	Routes answerRouteLookup
+}
+
+// answerRouteLookup is the slice of AnswerRouter the descriptor builder reads.
+type answerRouteLookup interface {
+	RouteFor(sessionID string) (route flagsvc.AnswerRoute, known bool)
+}
+
+// ApprovalLookup returns the ids of approvals still waiting for a decision.
+type ApprovalLookup interface {
+	PendingApprovalIDs() map[string]bool
+}
+
+// QuestionLookup returns the live registered questions among keys.
+type QuestionLookup interface {
+	PeekQuestions(keys []questionkit.QuestionKey) map[questionkit.QuestionKey]questionkit.PendingQuestion
+}
+
+// BacklogDecisionState is what the builder needs to know about an item.
+type BacklogDecisionState struct {
+	Status string
+}
+
+// BacklogDecisionLookup returns the state of the given backlog items.
+type BacklogDecisionLookup interface {
+	DecisionStates(ctx context.Context, itemIDs []string) (map[string]BacklogDecisionState, error)
+}
+
+// OpenGuidance is an unanswered guidance request.
+type OpenGuidance struct {
+	Options []string
+	// Source is who raised it. A hook-mirrored question is answered by ANSWER_QUESTION (the pane
+	// route) and a peer request may also be answered by the operator on the peer's behalf, so only hook rows are excluded from ANSWER_GUIDANCE.
+	Source domain.QuestionSource
+	// PeerHelp marks an agent-to-agent request: the operator may also withdraw it.
+	PeerHelp bool
+	// Tabbed holds the questions of a hook row in the measured multi-question shape.
+	Tabbed []panereply.TabbedQuestion
+}
+
+// GuidanceLookup returns the open guidance requests among ids.
+type GuidanceLookup interface {
+	OpenGuidance(ctx context.Context, ids []string) (map[string]OpenGuidance, error)
+}
+
+// DescriptorBuilder assembles descriptors for a history page.
+type DescriptorBuilder struct {
+	sources DescriptorSources
+	// flag resolves a notification_inline_actions decision point; tests inject it.
+	flag func(decisionPoint string) bool
+	// hookReplyOn reports whether the keystroke-free hook_reply route answers; tests inject it.
+	hookReplyOn func() bool
+}
+
+// NewDescriptorBuilder builds a builder reading the live flags.
+// reg must be non-nil.
+func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *DescriptorBuilder {
+	fr := flagsvc.FlagReader{Reg: reg}
+	return &DescriptorBuilder{sources: src, flag: func(dp string) bool {
+		return fr.EffectiveFlag(flagsvc.NotificationInlineActionsFlagName, dp)
+	}, hookReplyOn: func() bool { return fr.EffectiveAnswerQuestion(flagsvc.RouteHookReply) }}
+}
+
+// InlineActionEnabledForTest reports the wired builder's flag decision. Exported
+// only for the SessionService wiring test in server/services.
+func (ns *NotificationService) InlineActionEnabledForTest(decisionPoint string) bool {
+	return ns.descriptors.flag(decisionPoint)
+}
+
+// pageKeys are the entity keys of the unresolved records of one page.
+type pageKeys struct {
+	needApprovals bool
+	questions     []questionkit.QuestionKey
+	itemIDs       []string
+	guidanceIDs   []string
+}
+
+func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
+	var k pageKeys
+	seenQ, seenItem, seenG := map[questionkit.QuestionKey]bool{}, map[string]bool{}, map[string]bool{}
+	for _, r := range records {
+		if r.GetIsRead() {
+			continue
+		}
+		md := r.GetMetadata()
+		if md[metaApprovalID] != "" {
+			k.needApprovals = true
+		}
+		if qk, ok := questionKeyOf(r); ok && !seenQ[qk] {
+			seenQ[qk] = true
+			k.questions = append(k.questions, qk)
+		}
+		if id := md[MetaItemID]; id != "" && md[MetaDecisionSchema] != "" && !seenItem[id] {
+			seenItem[id] = true
+			k.itemIDs = append(k.itemIDs, id)
+		}
+		if id := md[questionkit.MetaGuidanceRequestID]; id != "" && !seenG[id] {
+			seenG[id] = true
+			k.guidanceIDs = append(k.guidanceIDs, id)
+		}
+	}
+	return k
+}
+
+func questionKeyOf(r *sessionv1.NotificationHistoryRecord) (questionkit.QuestionKey, bool) {
+	md := r.GetMetadata()
+	if md[questionkit.MetaQuestionID] == "" || md[questionkit.MetaReplyUnavailable] == BoolTrue || r.GetSessionId() == "" {
+		return questionkit.QuestionKey{}, false
+	}
+	return questionkit.QuestionKey{SessionUUID: r.GetSessionId(), QuestionID: md[questionkit.MetaQuestionID]}, true
+}
+
+// pageState is the result of the per-page lookups.
+type pageState struct {
+	approvals map[string]bool
+	questions map[questionkit.QuestionKey]questionkit.PendingQuestion
+	backlog   map[string]BacklogDecisionState
+	guidance  map[string]OpenGuidance
+}
+
+func (b *DescriptorBuilder) lookup(ctx context.Context, k pageKeys) pageState {
+	var st pageState
+	if k.needApprovals && b.sources.Approvals != nil {
+		st.approvals = b.sources.Approvals.PendingApprovalIDs()
+	}
+	if len(k.questions) > 0 && b.sources.Questions != nil {
+		st.questions = b.sources.Questions.PeekQuestions(k.questions)
+	}
+	if len(k.itemIDs) > 0 && b.sources.Backlog != nil {
+		m, err := b.sources.Backlog.DecisionStates(ctx, k.itemIDs)
+		if err != nil {
+			log.Warn("[NotificationActions] backlog decision lookup failed; decisions reduce to open", "err", err)
+		}
+		st.backlog = m
+	}
+	if len(k.guidanceIDs) > 0 && b.sources.Guidance != nil {
+		m, err := b.sources.Guidance.OpenGuidance(ctx, k.guidanceIDs)
+		if err != nil {
+			log.Warn("[NotificationActions] guidance lookup failed; answers reduce to open", "err", err)
+		}
+		st.guidance = m
+	}
+	return st
+}
+
+// Annotate sets Actions on every record of one history page. Resolved records
+// get only OPEN. Lookups are batched: one call per store per page.
+func (b *DescriptorBuilder) Annotate(ctx context.Context, records []*sessionv1.NotificationHistoryRecord, lc ListenerClass) {
+	st := b.lookup(ctx, collectPageKeys(records))
+	for _, r := range records {
+		r.Actions = b.describe(r, st, lc)
+	}
+}
+
+func (b *DescriptorBuilder) describe(r *sessionv1.NotificationHistoryRecord, st pageState, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
+	open := openDescriptor(r)
+	if r.GetIsRead() {
+		return []*sessionv1.NotificationActionDescriptor{open}
+	}
+	var out []*sessionv1.NotificationActionDescriptor
+	out = append(out, b.approvalDescriptors(r, st)...)
+	out = append(out, b.questionDescriptors(r, st, lc)...)
+	out = append(out, b.guidanceDescriptors(r, st)...)
+	out = append(out, b.decisionDescriptors(r, st)...)
+	out = b.gate(out, lc)
+	return append(out, open)
+}
+
+// gate drops descriptors whose action flag (or the remote channel flag) is off,
+// so a flag-off page reduces to OPEN.
+func (b *DescriptorBuilder) gate(in []*sessionv1.NotificationActionDescriptor, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
+	out := in[:0:0]
+	for _, d := range in {
+		if !b.flag(flagsvc.ScopePrefixAction + KindName(d.GetKind())) {
+			continue
+		}
+		if lc == ListenerClassRemote && !b.flag(flagsvc.ScopeChannelRemote) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// KindName is the scope name of a kind: APPROVE for ACTION_KIND_APPROVE.
+func KindName(k sessionv1.ActionKind) string {
+	return strings.TrimPrefix(k.String(), "ACTION_KIND_")
+}
+
+func openDescriptor(r *sessionv1.NotificationHistoryRecord) *sessionv1.NotificationActionDescriptor {
+	d := &sessionv1.NotificationActionDescriptor{
+		Kind: sessionv1.ActionKind_ACTION_KIND_OPEN, Label: "Open",
+		Tier: sessionv1.ActionTier_ACTION_TIER_A, Available: true, SessionId: r.GetSessionId(),
+	}
+	if id := r.GetMetadata()[MetaItemID]; id != "" {
+		d.TargetKeyType, d.TargetKey = sessionv1.ActionTargetKey_ACTION_TARGET_KEY_ITEM_ID, id
+	}
+	return d
+}
+
+func tierADescriptor(kind sessionv1.ActionKind, label string, kt sessionv1.ActionTargetKey, key string) *sessionv1.NotificationActionDescriptor {
+	return &sessionv1.NotificationActionDescriptor{
+		Kind: kind, Label: label, Tier: sessionv1.ActionTier_ACTION_TIER_A,
+		Available: true, TargetKeyType: kt, TargetKey: key,
+	}
+}
+
+func (b *DescriptorBuilder) approvalDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
+	id := r.GetMetadata()[metaApprovalID]
+	if id == "" || !st.approvals[id] {
+		return nil
+	}
+	kt := sessionv1.ActionTargetKey_ACTION_TARGET_KEY_APPROVAL_ID
+	return []*sessionv1.NotificationActionDescriptor{
+		tierADescriptor(sessionv1.ActionKind_ACTION_KIND_APPROVE, "Approve", kt, id),
+		tierADescriptor(sessionv1.ActionKind_ACTION_KIND_DENY, "Deny", kt, id),
+	}
+}
+
+func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
+	key, ok := questionKeyOf(r)
+	if !ok {
+		return nil
+	}
+	q, live := st.questions[key]
+	if !live {
+		return b.tabbedQuestionDescriptor(r, st, lc)
+	}
+	tier := AnswerTier(flagsvc.RouteLiveKeystrokeHidden)
+	d := &sessionv1.NotificationActionDescriptor{
+		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: tier, Available: true,
+		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: key.QuestionID,
+		SessionId: key.SessionUUID,
+	}
+	for _, l := range q.Dialog.Labels {
+		d.Options = append(d.Options, &sessionv1.ActionOption{Label: l})
+	}
+	return b.limitAnswer(d, lc)
+}
+
+// limitAnswer degrades an ANSWER_QUESTION descriptor the layout canary or the
+// remote channel does not allow, and wraps it as the builder's result.
+func (b *DescriptorBuilder) limitAnswer(d *sessionv1.NotificationActionDescriptor, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
+	if b.sources.Canary.Tripped() && !b.hookReplyOn() {
+		d.Available, d.UnavailableReason = false, unavailableReadOnly
+	}
+	if lc == ListenerClassRemote && !b.remoteAnswerAllowed(d) {
+		d.Available, d.UnavailableReason = false, UnavailableDesktopOnly
+	}
+	return []*sessionv1.NotificationActionDescriptor{d}
+}
+
+// remoteAnswerAllowed reports whether d may be answered on the remote listener:
+// the policy row allows it, the session's answer is a durable record (no
+// keystroke, Tier A), or it is a live keystroke and Tier B is enabled remotely.
+func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionDescriptor) bool {
+	if ActionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
+		return true
+	}
+	if b.sources.Routes == nil {
+		return false
+	}
+	route, known := b.sources.Routes.RouteFor(d.GetSessionId())
+	if !known {
+		return false
+	}
+	d.Tier = AnswerTier(route)
+	// A live keystroke is Tier B: offered remotely only when channel:remote:tierB is effective,
+	// the same check the dispatcher's tierGate makes.
+	return route == flagsvc.RouteDurableRecord || b.flag(flagsvc.ScopeChannelTierB)
+}
+
+// tabbedQuestionDescriptor is ANSWER_QUESTION for an open hook row in the
+// measured multi-question shape. Its options carry the question index in
+// ActionOption.value, so a client can group them without a proto change; the
+// answer travels as EncodeSequencePicks in params.answer.
+func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHistoryRecord, st pageState, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
+	id := r.GetMetadata()[questionkit.MetaGuidanceRequestID]
+	g, open := st.guidance[id]
+	if id == "" || !open || len(g.Tabbed) == 0 || r.GetSessionId() == "" {
+		return nil
+	}
+	d := &sessionv1.NotificationActionDescriptor{
+		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: AnswerTier(flagsvc.RouteLiveKeystrokeHidden), Available: true,
+		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: id, SessionId: r.GetSessionId(),
+	}
+	for i, q := range g.Tabbed {
+		for _, l := range q.Labels {
+			d.Options = append(d.Options, &sessionv1.ActionOption{Label: l, Value: strconv.Itoa(i)})
+		}
+	}
+	return b.limitAnswer(d, lc)
+}
+
+func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
+	id := r.GetMetadata()[questionkit.MetaGuidanceRequestID]
+	g, open := st.guidance[id]
+	if id == "" || !open || g.Source == domain.QuestionSourceHook {
+		return nil
+	}
+	d := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_ANSWER_GUIDANCE, "Answer",
+		sessionv1.ActionTargetKey_ACTION_TARGET_KEY_GUIDANCE_REQUEST_ID, id)
+	for _, o := range g.Options {
+		d.Options = append(d.Options, &sessionv1.ActionOption{Label: o})
+	}
+	if !g.PeerHelp {
+		return []*sessionv1.NotificationActionDescriptor{d}
+	}
+	if peer := r.GetMetadata()[questionkit.MetaPeerTitle]; peer != "" {
+		d.Label = "Answer for " + peer
+	}
+	cancel := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_CANCEL_PEER_HELP, "Cancel request",
+		sessionv1.ActionTargetKey_ACTION_TARGET_KEY_GUIDANCE_REQUEST_ID, id)
+	cancel.RequiresConfirm = true
+	return []*sessionv1.NotificationActionDescriptor{d, cancel}
+}
+
+// DecisionSchema is the stable shape of the decision_schema metadata.
+type DecisionSchema struct {
+	Choices []DecisionChoice `json:"choices"`
+}
+
+// DecisionChoice is one choice with the existing RPC it maps to.
+type DecisionChoice struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	RPC   string `json:"rpc"`
+}
+
+// backlogChoices maps each decision choice to the existing RPC that performs it
+// (confirmed against proto/session/v1/backlog.proto and session.proto). A choice
+// with no row here has no RPC and is emitted as OPEN only.
+var backlogChoices = map[string]DecisionChoice{
+	ChoiceAccept: {Value: ChoiceAccept, Label: "Mark done", RPC: "TransitionBacklogItemStatus"},
+	ChoiceRework: {Value: ChoiceRework, Label: "Send back", RPC: "TransitionBacklogItemStatus"},
+	ChoiceMerge:  {Value: ChoiceMerge, Label: "Merge", RPC: "MergePR"},
+}
+
+// DefaultDecisionSchema is the schema of an item awaiting accept, rework or merge.
+func DefaultDecisionSchema() DecisionSchema {
+	return DecisionSchema{Choices: []DecisionChoice{backlogChoices[ChoiceAccept], backlogChoices[ChoiceRework], backlogChoices[ChoiceMerge]}}
+}
+
+// EncodeDecisionSchema is the metadata value of decision_schema.
+func EncodeDecisionSchema(s DecisionSchema) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// choicesFor lists the schema choices valid for the item's current status.
+func choicesFor(status string, schema DecisionSchema) []DecisionChoice {
+	allowed := allowedChoices(status)
+	var out []DecisionChoice
+	for _, c := range schema.Choices {
+		if known, ok := backlogChoices[c.Value]; ok && allowed[c.Value] {
+			out = append(out, known)
+		}
+	}
+	return out
+}
+
+func allowedChoices(status string) map[string]bool {
+	switch status {
+	case BacklogStatusReview:
+		return map[string]bool{ChoiceAccept: true, ChoiceRework: true, ChoiceMerge: true}
+	case BacklogStatusPRPending:
+		return map[string]bool{ChoiceMerge: true}
+	default:
+		return nil
+	}
+}
+
+func (b *DescriptorBuilder) decisionDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
+	md := r.GetMetadata()
+	id, raw := md[MetaItemID], md[MetaDecisionSchema]
+	state, known := st.backlog[id]
+	if id == "" || raw == "" || !known {
+		return nil
+	}
+	var schema DecisionSchema
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		return nil
+	}
+	choices := choicesFor(state.Status, schema)
+	if len(choices) == 0 {
+		return nil
+	}
+	d := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_BACKLOG_DECISION, "Decide",
+		sessionv1.ActionTargetKey_ACTION_TARGET_KEY_ITEM_ID, id)
+	for _, c := range choices {
+		d.Options = append(d.Options, &sessionv1.ActionOption{Value: c.Value, Label: c.Label})
+	}
+	return []*sessionv1.NotificationActionDescriptor{d}
+}

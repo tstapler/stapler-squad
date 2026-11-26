@@ -22,7 +22,7 @@ import (
 )
 
 // computeTestSlackInteractiveSignature independently reimplements Slack's v0
-// signing scheme (the same algorithm server/services/slack_signature.go's
+// signing scheme (the same algorithm server/services/notify/slack_signature.go's
 // verifySlackSignature checks, deliberately re-derived here rather than
 // exported from that unexported-by-design package function) so this
 // end-to-end test can build a validly-signed request without going through

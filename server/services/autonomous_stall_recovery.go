@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -333,7 +334,7 @@ func (a *AutonomousOrchestrationService) publishNudged(sessionUUID, title, itemI
 	a.bus.Publish(events.NewNotificationEvent(
 		sessionUUID, title, "autonomous-nudged-"+sessionUUID,
 		int32(10), // NotificationType_INFO
-		DerivePriority(false, false),
+		notify.DerivePriority(false, false),
 		stopTitle(rec.Recovery),
 		fmt.Sprintf("Session '%s': %s", title, plainSummary(rec.reason(), rec.State, rec.Recovery)),
 		events.SessionScopedMetadata(nil, itemID),

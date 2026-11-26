@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -50,7 +51,7 @@ func TestWedgedLease_ShouldRaiseExactlyOneTrayWarningPerEpisodeNotPushedAndDeliv
 	n := got[0]
 	assert.Equal(t, leaseWedgeTitle, n.NotificationTitle)
 	assert.Equal(t, inst.UUID, n.SessionID)
-	assert.Equal(t, DerivePriority(true, false), n.NotificationPriority, "medium: below the urgent push threshold")
+	assert.Equal(t, notify.DerivePriority(true, false), n.NotificationPriority, "medium: below the urgent push threshold")
 	assert.Equal(t, pkgevents.DeliveryClassFailure, n.NotificationMetadata[pkgevents.MetadataKeyDeliveryClass])
 	assert.Equal(t, "true", n.NotificationMetadata[pkgevents.MetadataKeySessionScoped])
 	assert.NotEqual(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), n.NotificationPriority)

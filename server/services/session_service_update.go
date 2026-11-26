@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/domain"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 )
@@ -387,8 +388,8 @@ func (s *SessionService) notifySteerSent(instance *instancepkg.Instance, steerMe
 	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
-		int32(10),                    // NotificationType_INFO
-		DerivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
+		int32(10),                           // NotificationType_INFO
+		notify.DerivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
 		"Steering input sent",
 		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
 		nil,

@@ -13,7 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -85,7 +85,7 @@ func (s *BacklogService) notifyMissingAcceptanceCriteria(itemID, itemTitle strin
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(true, true),
+		notify.DerivePriority(true, true),
 		"Triage needs acceptance criteria",
 		fmt.Sprintf("%s — triage could not derive a verifiable acceptance criterion from the description. Add at least one criterion, then re-trigger triage.", itemTitle),
 		map[string]string{"item_id": itemID, "reason": reasonNoAcceptanceCriteria},

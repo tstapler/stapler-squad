@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/triggerlimit"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
@@ -81,7 +82,7 @@ func startHousekeeping(storage *session.Storage, eventBus *events.EventBus) {
 	// against live `git worktree` state, gated by FeatureFlagWorktreeConsistencySweep
 	// (default off). config.LoadConfig is passed directly, not a closure over cfg, so
 	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
-	go wtconsistency.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
+	go wtconsistency.StartWorktreeConsistencySweeper(context.Background(), storage, &notify.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
 
 	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
 	// scaffolding from an old build and shadows the real ones with a wrong item ID.

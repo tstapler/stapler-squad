@@ -5,6 +5,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -29,7 +31,7 @@ func (s *SessionService) wireDialogCanary() *questionkit.DialogMatchCanary {
 		}
 	}
 	notify := func() {
-		(&EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
+		(&notify.EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), false, true)
 	}
 	c := questionkit.NewDialogMatchCanary(nil, count, notify)
@@ -67,11 +69,25 @@ func (s *SessionService) ensureRegistered(explicit *questionkit.GuidanceHookMirr
 	}
 }
 
+// GuidanceSeedPorts binds the e2e question seed route to this service's live sessions.
+func (s *SessionService) GuidanceSeedPorts() guidance.SeedPorts {
+	return guidance.SeedPorts{
+		SessionID: func(id string) (string, bool) {
+			inst := s.findInstance(id)
+			if inst == nil {
+				return "", false
+			}
+			return inst.GetStableID(), true
+		},
+		Mirror: s.GuidanceMirror,
+	}
+}
+
 // deliveryProbes reads unconfirmed answers from the detector and session
 // liveness from the live service. acks may be nil.
-func (s *SessionService) deliveryProbes(acks *GuidanceAckDetector) DeliveryProbes {
+func (s *SessionService) deliveryProbes(acks *guidance.GuidanceAckDetector) guidance.DeliveryProbes {
 	phase := func(sessionUUID string) answerPhase { return s.answerSessions()(sessionUUID).phase }
-	p := DeliveryProbes{
+	p := guidance.DeliveryProbes{
 		SessionEnded:    func(sessionUUID string) bool { return phase(sessionUUID) != phaseLive },
 		SessionArchived: func(sessionUUID string) bool { return phase(sessionUUID) == phaseArchived },
 	}

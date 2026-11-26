@@ -23,6 +23,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
+	"github.com/tstapler/stapler-squad/server/services/notify"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
@@ -100,7 +102,7 @@ type ServerDependencies struct {
 	// SlackNotifier is the single shared Slack notifier instance, wired into
 	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
 	// approvals) so GetDeliveryStatus reflects sends from both trigger points.
-	SlackNotifier *services.SlackNotifier
+	SlackNotifier *notify.SlackNotifier
 
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
@@ -135,7 +137,7 @@ type ServerDependencies struct {
 	BacklogFlowService *backlogflow.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
-	QuotaGate *services.QuotaGate
+	QuotaGate *quota.QuotaGate
 	SyncLoop  *session.SyncLoop
 
 	// WorkflowEngine is the selector/recorder stack behind BacklogService's
@@ -617,7 +619,7 @@ type RuntimeDeps struct {
 
 	// SlackNotifier is the single shared Slack notifier instance (see the
 	// identically-named field on ServerDependencies for its full doc comment).
-	SlackNotifier *services.SlackNotifier
+	SlackNotifier *notify.SlackNotifier
 
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
@@ -646,7 +648,7 @@ type RuntimeDeps struct {
 	BacklogFlowService *backlogflow.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
-	QuotaGate *services.QuotaGate
+	QuotaGate *quota.QuotaGate
 	SyncLoop  *session.SyncLoop
 
 	// WorkflowEngine (see the identically-named field on ServerDependencies).

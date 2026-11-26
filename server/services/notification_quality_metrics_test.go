@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -184,7 +185,7 @@ func TestInjectedPostToolUseGroup_ShouldHaveNoMatcher_SoScheduleWakeupReceiptsAr
 }
 
 func TestScrape_ShouldCountUnconfirmed_WhenWriteIsIndeterminate(t *testing.T) {
-	d := NewGuidanceAckDetector(nil, nil, nil, nil)
+	d := guidance.NewGuidanceAckDetector(nil, nil, nil, nil)
 	before := counterValue(t, questionkit.MetricGuidanceUnconfirmed, nil)
 	d.Sent(questionkit.SentDelivery{RowID: "r1"})
 	d.Sent(questionkit.SentDelivery{RowID: "r2", Indeterminate: true})

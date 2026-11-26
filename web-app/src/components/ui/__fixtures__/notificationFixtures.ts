@@ -14,13 +14,16 @@ import type { NotificationHistoryItem } from "@/lib/types/notification";
 import type { PlainGuidanceRequest } from "@/lib/api/guidanceApi";
 import type { BackgroundRow, BackgroundOutcome, HiddenSessionSummary } from "@/lib/utils/backgroundActivity";
 
+// Shared so default-stamped rows tie and keep input order; a per-call Date.now() reorders them across a millisecond tick.
+const DEFAULT_TIMESTAMP = Date.now();
+
 export function makeNotification(overrides: Partial<NotificationHistoryItem> = {}): NotificationHistoryItem {
   return {
     id: overrides.id ?? "notif-1",
     sessionId: "sess-1",
     sessionName: "my-session",
     message: "Something happened",
-    timestamp: Date.now(),
+    timestamp: DEFAULT_TIMESTAMP,
     isRead: false,
     notificationType: "info",
     ...overrides,

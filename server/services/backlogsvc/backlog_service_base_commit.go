@@ -11,7 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -65,7 +65,7 @@ func (s *BacklogService) reportBaseCommitUnstamped(st baseCommitStamp, step stri
 	s.eventBus.Publish(events.NewNotificationEvent(
 		st.Item.ID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true),
+		notify.DerivePriority(false, true),
 		"Work session has no base commit",
 		fmt.Sprintf("%s: could not %s in %s: %v. PR-ownership checks and review diffs for this session have no base to compare against and will fail closed.",
 			st.Item.Title, step, st.Dir, err),

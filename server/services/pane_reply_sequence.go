@@ -52,7 +52,7 @@ type sequenceOutcome struct {
 
 // RunSequence is the leader's path for a multi-key answer. consumed is true
 // when a key may have reached the pane.
-func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance, facts steerRequestFacts) sequenceOutcome {
+func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance, facts access.SteerRequestFacts) sequenceOutcome {
 	reservation, retryAfter, ok := c.limiters.reserve(in.sessionUUID)
 	if !ok {
 		secs := int32((retryAfter + time.Second - 1) / time.Second)
@@ -77,15 +77,15 @@ func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in
 	return out
 }
 
-func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Instance, facts steerRequestFacts) auditkit.AuditLine {
+func (c *PaneReplyCore) sequenceAuditLine(in sequenceInput, inst *instance.Instance, facts access.SteerRequestFacts) auditkit.AuditLine {
 	return auditkit.AuditLine{
 		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: in.sessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: in.questionID, ReplyID: in.replyID, OptionLabel: truncateRunes(in.summary, 80),
 		QuestionToken: questionkit.QuestionToken(in.question),
-		Listener:      facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
-		UserAgent: facts.userAgent, AuthMode: facts.refusal.AuthMode,
-		PeerLoopback: flagsvc.BoolRef(facts.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.refusal.Proxied),
+		Listener:      facts.Refusal.Listener, PeerAddr: facts.Refusal.Peer, Host: facts.Refusal.Host, Origin: facts.Refusal.Origin,
+		UserAgent: facts.UserAgent, AuthMode: facts.Refusal.AuthMode,
+		PeerLoopback: flagsvc.BoolRef(facts.Refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.Refusal.Proxied),
 	}
 }
 

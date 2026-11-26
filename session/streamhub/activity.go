@@ -238,5 +238,7 @@ func (h *StreamHub) closeQoS() {
 	}
 	h.qos.Forget(h.sessionName)
 	h.activity.desired.Store(int32(qos.ActivityNormal))
+	// A pump still releasing after a failed send coalesces this kick away; force makes it loop again.
+	h.activity.force.Store(true)
 	h.kickActivityPump()
 }

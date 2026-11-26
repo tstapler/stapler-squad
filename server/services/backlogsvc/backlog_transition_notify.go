@@ -9,7 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -47,7 +47,7 @@ func (s *BacklogService) notifyTransitionDenied(ctx context.Context, item *backl
 		s.eventBus.Publish(events.NewNotificationEvent(
 			item.ID, "", uuid.New().String(),
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-			services.DerivePriority(true, false),
+			notify.DerivePriority(true, false),
 			"Automatic transition denied",
 			fmt.Sprintf("%s — %s", item.Title, note),
 			map[string]string{"item_id": item.ID},

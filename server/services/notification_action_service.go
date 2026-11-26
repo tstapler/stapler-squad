@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -210,16 +211,16 @@ func (d *NotificationActionDispatcher) Invoke(ctx context.Context, call ActionCa
 type callerInfo struct {
 	channel  string
 	kind     string
-	listener ListenerClass
+	listener notify.ListenerClass
 }
 
 func callerOf(ctx context.Context, h http.Header) callerInfo {
-	lc := ListenerClassFrom(ctx)
+	lc := notify.ListenerClassFrom(ctx)
 	if h.Get(actionClientHeader) != actionClientWebUI {
 		return callerInfo{channel: channelUnknown, kind: callerUnknown, listener: lc}
 	}
 	ch := channelWebLocal
-	if lc == ListenerClassRemote {
+	if lc == notify.ListenerClassRemote {
 		ch = channelWebRemote
 	}
 	return callerInfo{channel: ch, kind: callerOperatorUI, listener: lc}
@@ -283,7 +284,7 @@ func validateAction(m *sessionv1.InvokeNotificationActionRequest) string {
 	case len(m.GetParams().GetAnswer()) > maxAnswerBytes:
 		return "answer is too long"
 	}
-	if _, known := actionPolicies[m.GetActionKind()]; !known {
+	if _, known := notify.ActionPolicies[m.GetActionKind()]; !known {
 		return errUnknownKind
 	}
 	if m.GetActionKind() != sessionv1.ActionKind_ACTION_KIND_OPEN && m.GetTargetKey() == "" {
@@ -314,9 +315,9 @@ func (d *NotificationActionDispatcher) resolveRoute(m *sessionv1.InvokeNotificat
 // route is a durable record (Tier A).
 func tierOf(kind sessionv1.ActionKind, route flagsvc.AnswerRoute) sessionv1.ActionTier {
 	if kind == sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION {
-		return answerTier(route)
+		return notify.AnswerTier(route)
 	}
-	return actionPolicies[kind].Tier
+	return notify.ActionPolicies[kind].Tier
 }
 
 // tierGate refuses Tier B where it may not run, before any flag or write. The
@@ -327,11 +328,11 @@ func (d *NotificationActionDispatcher) tierGate(ctx context.Context, call Action
 	if tier != sessionv1.ActionTier_ACTION_TIER_B {
 		return questionkit.ActionResult{}, false
 	}
-	if caller.listener == ListenerClassRemote {
+	if caller.listener == notify.ListenerClassRemote {
 		if d.flags.Inline(flagsvc.ScopeChannelTierB) {
 			return questionkit.ActionResult{}, false
 		}
-		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, unavailableDesktopOnly), true
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, notify.UnavailableDesktopOnly), true
 	}
 	if _, err := access.EvaluateLocalWrite(ctx, call.Peer, access.LocalWriteLocalCaller); err != nil {
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, "local caller required"), true
@@ -342,11 +343,11 @@ func (d *NotificationActionDispatcher) tierGate(ctx context.Context, call Action
 // flagGate applies the flag matrix: the action's scope (ANSWER_QUESTION composes
 // its route gate) and, on the remote listener, channel:remote.
 func (d *NotificationActionDispatcher) flagGate(kind sessionv1.ActionKind, route flagsvc.AnswerRoute, caller callerInfo) (questionkit.ActionResult, bool) {
-	on := d.flags.Inline(flagsvc.ScopePrefixAction + kindName(kind))
+	on := d.flags.Inline(flagsvc.ScopePrefixAction + notify.KindName(kind))
 	if kind == sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION {
 		on = d.flags.Answer(route)
 	}
-	if on && caller.listener == ListenerClassRemote {
+	if on && caller.listener == notify.ListenerClassRemote {
 		on = d.flags.Inline(flagsvc.ScopeChannelRemote)
 	}
 	if on {
@@ -453,7 +454,7 @@ func (d *NotificationActionDispatcher) decide(ctx context.Context, m *sessionv1.
 func (d *NotificationActionDispatcher) auditLine(m *sessionv1.InvokeNotificationActionRequest, c callerInfo) auditkit.AuditLine {
 	return auditkit.AuditLine{
 		Kind: auditkit.AuditKindNotificationAction, Channel: c.channel, CallerKind: c.kind, Listener: string(c.listener),
-		ActionKind: kindName(m.GetActionKind()), TargetKey: m.GetTargetKey(), ReplyID: m.GetIdempotencyKey(),
+		ActionKind: notify.KindName(m.GetActionKind()), TargetKey: m.GetTargetKey(), ReplyID: m.GetIdempotencyKey(),
 	}
 }
 
@@ -497,7 +498,7 @@ func (d *NotificationActionDispatcher) record(m *sessionv1.InvokeNotificationAct
 	if err != nil {
 		label = "error"
 	}
-	d.metrics.Record(ActionSample{Kind: strings.ToLower(kindName(m.GetActionKind())), Tier: d.tierLabel(m), Outcome: label, Channel: c.channel, Elapsed: elapsed})
+	d.metrics.Record(ActionSample{Kind: strings.ToLower(notify.KindName(m.GetActionKind())), Tier: d.tierLabel(m), Outcome: label, Channel: c.channel, Elapsed: elapsed})
 	d.reopen.NoteApplied(m, res)
 	if preExecution(res.Outcome) {
 		d.appendResultLine(d.auditLine(m, c), res.Outcome)
@@ -508,7 +509,7 @@ func (d *NotificationActionDispatcher) record(m *sessionv1.InvokeNotificationAct
 // the kind or the answer's route cannot be resolved.
 func (d *NotificationActionDispatcher) tierLabel(m *sessionv1.InvokeNotificationActionRequest) string {
 	kind := m.GetActionKind()
-	pol, known := actionPolicies[kind]
+	pol, known := notify.ActionPolicies[kind]
 	if !known {
 		return "unknown"
 	}
@@ -521,7 +522,7 @@ func (d *NotificationActionDispatcher) tierLabel(m *sessionv1.InvokeNotification
 		if !ok {
 			return "unknown"
 		}
-		tier = answerTier(route)
+		tier = notify.AnswerTier(route)
 	}
 	return strings.ToLower(strings.TrimPrefix(tier.String(), "ACTION_TIER_"))
 }

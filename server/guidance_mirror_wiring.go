@@ -6,10 +6,29 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
+
+// newGuidanceRequestService builds the guidance RPC service. deps.Storage must be non-nil.
+func newGuidanceRequestService(deps *ServerDependencies) *guidance.GuidanceRequestService {
+	// deps.BacklogService is passed only when non-nil: a nil *BacklogService
+	// boxed into the TriageRespawner interface would be a non-nil interface
+	// wrapping a nil pointer, defeating GuidanceRequestService's own
+	// triageRespawner == nil guard and panicking on first use.
+	var triageRespawner guidance.TriageRespawner
+	if deps.BacklogService != nil {
+		triageRespawner = deps.BacklogService
+	}
+	svc := guidance.NewGuidanceRequestService(deps.Storage, &notify.EventBusNotifier{Bus: deps.EventBus}, triageRespawner)
+	if deps.BacklogService != nil {
+		svc.SetWaiverResumer(deps.BacklogService.ResumeAfterOwnerWaiver)
+	}
+	return svc
+}
 
 // wireGuidanceMirror gives the approval handler its durable hook-question mirror
 // and runs the session reaper on the server's background group, so Shutdown
@@ -30,7 +49,7 @@ func wireGuidanceMirror(h *services.ApprovalHandler, deps *ServerDependencies, s
 		count(deliverygate.CounterGuidanceMirrorFailed), cleared, services.AskUserQuestionRenderGate(deps.SessionService.InjectedFlagRegistry()))
 	h.SetGuidanceMirror(mirror)
 	deps.SessionService.SetGuidanceMirror(mirror)
-	reaper := services.NewGuidanceSessionReaper(deps.Storage, storageSessionEnds{storage: deps.Storage}, mirror, cleared)
+	reaper := guidance.NewGuidanceSessionReaper(deps.Storage, storageSessionEnds{storage: deps.Storage}, mirror, cleared)
 	goBackground(func() { reaper.Run(serverCtx, deps.EventBus) })
 	sampler := questionkit.NewDialogGoneSampler(deps.Storage, deps.SessionService.PaneCapture, mirror, nil)
 	goBackground(func() { sampler.Run(serverCtx) })

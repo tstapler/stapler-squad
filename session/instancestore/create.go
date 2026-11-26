@@ -126,6 +126,9 @@ func setSessionCreateActivityFields(sessionCreate *ent.SessionCreate, data domai
 	if data.TmuxPrefix != "" {
 		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
 	}
+	if data.TmuxTitle != "" {
+		sessionCreate.SetTmuxTitle(data.TmuxTitle)
+	}
 	// Backend is write-once per instance today (set at construction via
 	// session.ResolveSessionBackend, never reset to "" afterward) -- this guard
 	// intentionally only ever sets a non-empty value, mirroring TmuxPrefix above,

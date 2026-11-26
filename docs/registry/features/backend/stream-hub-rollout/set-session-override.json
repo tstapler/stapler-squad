@@ -5,10 +5,10 @@
   "method": "SetStreamHubSessionOverride",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
-  "handlerFile": "server/services/stream_hub_rollout_service.go",
+  "handlerFile": "server/services/streamhubrollout/stream_hub_rollout_service.go",
   "tested": true,
   "testIds": [
     "TestSetStreamHubSessionOverride_SetsAndClears"
   ],
-  "lastModified": "2026-08-23T09:53:16.504851981-07:00"
+  "lastModified": "2026-11-26T00:22:38.796408363-08:00"
 }

@@ -67,6 +67,7 @@ func BuildSnapshot(i *Instance) *domain.InstanceSnapshot {
 		Note:                      i.Note,
 		SessionType:               i.SessionType,
 		TmuxPrefix:                i.TmuxPrefix,
+		TmuxTitle:                 i.TmuxTitle,
 		TmuxServerSocket:          i.TmuxServerSocket,
 		Backend:                   i.Backend,
 		Tags:                      append([]string(nil), i.Tags...),

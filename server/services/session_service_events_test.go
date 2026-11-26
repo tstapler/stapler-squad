@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -121,7 +122,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 	assert.Equal(t, "Session crashed", f.NotificationTitle)
 	assert.Contains(t, f.NotificationMessage, "crashy")
 	assert.Contains(t, f.NotificationMessage, "pane exited 137")
-	assert.Equal(t, DerivePriority(true, true), f.NotificationPriority)
+	assert.Equal(t, notify.DerivePriority(true, true), f.NotificationPriority)
 	assert.Equal(t, "true", f.NotificationMetadata["session_scoped"])
 	updated := 0
 	for _, ev := range seen {

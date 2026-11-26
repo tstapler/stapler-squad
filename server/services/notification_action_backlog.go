@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -73,11 +74,11 @@ func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (question
 		return questionkit.ActionResult{}, err
 	}
 	switch d.Choice {
-	case choiceAccept:
-		return b.transition(ctx, d, status, backlogStatusDone, backlogStatusReview)
-	case ChoiceRework:
-		return b.transition(ctx, d, status, backlogStatusReady, backlogStatusReview, backlogStatusPRPending)
-	case choiceMerge:
+	case notify.ChoiceAccept:
+		return b.transition(ctx, d, status, backlogStatusDone, notify.BacklogStatusReview)
+	case notify.ChoiceRework:
+		return b.transition(ctx, d, status, backlogStatusReady, notify.BacklogStatusReview, notify.BacklogStatusPRPending)
+	case notify.ChoiceMerge:
 		return b.merge(ctx, d, status)
 	}
 	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "unknown choice"), nil
@@ -118,7 +119,7 @@ func (b backlogDecider) merge(ctx context.Context, d BacklogDecision, status str
 	switch status {
 	case backlogStatusDone, backlogStatusArchived:
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, status), nil
-	case backlogStatusReview, backlogStatusPRPending:
+	case notify.BacklogStatusReview, notify.BacklogStatusPRPending:
 	default:
 		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
 	}
@@ -206,7 +207,7 @@ func (r historyItemResolver) ResolveItemNotifications(itemID string) {
 		return
 	}
 	_, err := r.store.MarkReadWhere(func(n *notifications.NotificationRecord) bool {
-		return n.Metadata[metaItemID] == itemID && n.Metadata[metaDecisionSchema] != ""
+		return n.Metadata[notify.MetaItemID] == itemID && n.Metadata[notify.MetaDecisionSchema] != ""
 	})
 	if err != nil {
 		log.Warn("[NotificationAction] could not retire decision notifications", "item", itemID, "err", err)

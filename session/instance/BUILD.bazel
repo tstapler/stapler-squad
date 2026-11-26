@@ -224,6 +224,7 @@ go_test(
         "status_mapping_test.go",
         "stop_by_user_test.go",
         "tag_manager_test.go",
+        "tmux_title_pin_test.go",
         "turn_end_test.go",
         "wire_callbacks_concurrency_test.go",
         "worktree_enricher_internal_test.go",

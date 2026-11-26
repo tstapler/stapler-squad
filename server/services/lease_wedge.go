@@ -11,6 +11,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -47,7 +48,7 @@ func (s *SessionService) scanLeaseWedges(now time.Time, include func(*instance.I
 		s.eventBus.Publish(events.NewNotificationEvent(
 			snap.UUID, snap.Title, fmt.Sprintf("lease-wedge-%s-%d", snap.UUID, w.AcquisitionID),
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-			DerivePriority(true, false), // medium: not urgent, so never pushed
+			notify.DerivePriority(true, false), // medium: not urgent, so never pushed
 			leaseWedgeTitle, leaseWedgeBody, meta,
 		))
 		if s.deliveryGate != nil {

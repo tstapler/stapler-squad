@@ -13,7 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 )
 
 const (
@@ -66,7 +66,7 @@ func TestLocalChain_RejectsForeignHostPost_AndLeavesQuotaConfigAndStageTablesUnc
 	envtest.NewIsolatedStateDir(t)
 	srv, _ := newChainTestServer(t, "localhost:8543")
 
-	quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(services.NewQuotaSettingsService())
+	quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(quota.NewQuotaSettingsService())
 	srv.mux.Handle("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
 	stageWrites := 0
 	for _, p := range engineWriteProcedures {
@@ -105,7 +105,7 @@ func TestRemoteChain_Returns401_WithoutCredentials_ForGetQuotaConfigUpdateQuotaC
 	envtest.NewIsolatedStateDir(t)
 	srv, _ := newChainTestServer(t, "localhost:8543")
 
-	quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(services.NewQuotaSettingsService())
+	quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(quota.NewQuotaSettingsService())
 	srv.mux.Handle("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
 	remote := srv.remoteChain(middleware.Auth(&typedNilValidator{}), true) // validator rejects every token
 

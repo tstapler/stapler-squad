@@ -8,7 +8,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
@@ -71,7 +71,7 @@ func TestHubRegistry_should_RecordUnderTitle_When_TapEnabledByTitle(t *testing.T
 	registry := &hubRegistry{hubs: xsync.NewMap[string, *streamhub.StreamHub](), tapRegistry: reg}
 
 	const title = "my session"
-	tmuxName := services.StreamHubSessionKey(title, "")
+	tmuxName := streamhubrollout.StreamHubSessionKey(title, "")
 	if tmuxName == title {
 		t.Fatalf("test needs a tmux name (%q) distinct from the title", tmuxName)
 	}

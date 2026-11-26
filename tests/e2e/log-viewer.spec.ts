@@ -84,7 +84,8 @@ test.describe('log-viewer', () => {
   test('log-viewer_should_filterToErrorOnly_When_errorChipSelected', async ({ page }) => {
     // LevelFilterChips renders a group of buttons with aria-pressed attribute.
     // The ERROR chip is one of them.
-    const errorChip = page.getByRole('button', { name: 'ERROR' });
+    // exact: each ERROR row also carries a "Filter by ERROR" badge button.
+    const errorChip = page.getByRole('button', { name: 'ERROR', exact: true });
     await expect(errorChip).toBeVisible();
 
     // Initially not pressed (no filter active)

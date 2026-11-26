@@ -30,6 +30,11 @@ const (
 	fixturePkgSuffix = "/server/deliverygate/testdata/sinkfixture"
 )
 
+// notificationPackages publish notifications without naming
+// events.EventNotification (split out of server/services), so every Subscribe in
+// them is listed all the same.
+var notificationPackages = map[string]bool{svcPkgPath + "/notify": true}
+
 // finding is one scan hit, keyed "<kind>: <package path>.<identifier>".
 type finding string
 
@@ -49,7 +54,6 @@ var reviewedConsumers = map[finding]string{
 	// so every Subscribe there is listed; only WatchSessions forwards it.
 	"consumer: " + svcPkgPath + ".WatchSessions":  "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
 	"consumer: " + svcPkgPath + ".watchWorkflows": "workflow stream; ignores notifications",
-	"consumer: " + svcPkgPath + ".Run":            "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call
@@ -178,7 +182,7 @@ func scanFuncs(p *packages.Package, res scanResult, onlyServer bool) {
 	// events.EventNotification anywhere (the switch may sit in a helper or
 	// another file). Broad on purpose: a new Subscribe in such a package must be
 	// reviewed, even when it only wants other event types.
-	refsNotification := false
+	refsNotification := notificationPackages[p.PkgPath]
 	for _, f := range p.Syntax {
 		refsNotification = refsNotification || fileReferences(p, f, "EventNotification", eventsPkgPath, serverEventsPath)
 	}
@@ -290,10 +294,38 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 			product = append(product, p)
 		}
 	}
+	loaded := map[string]bool{}
+	for _, p := range product {
+		loaded[p.PkgPath] = true
+	}
+	for path := range notificationPackages {
+		if !loaded[path] {
+			t.Errorf("notificationPackages entry is stale (package not found): %s", path)
+		}
+	}
 	res := scan(t, product, false)
 	assertCovered(t, "notifier implementation", res.notifiers, reviewedNotifiers)
 	assertCovered(t, "EventNotification consumer", res.consumers, reviewedConsumers)
 	assertCovered(t, "NotificationHistoryStore.Append* caller", res.appendCallers, reviewedAppendCallers)
+}
+
+// A package in notificationPackages has every Subscribe listed even though it
+// never names events.EventNotification.
+func TestSinkGuard_ShouldListSubscribe_WhenPackageIsDeclaredNotificationHandling(t *testing.T) {
+	if !notificationPackages[svcPkgPath+"/notify"] {
+		t.Error("server/services/notify must stay in notificationPackages")
+	}
+	quiet := modulePath + "/server/deliverygate/testdata/sinkfixture/quiet"
+	pkgs := loadPackages(t, "./server/deliverygate/testdata/sinkfixture/quiet")
+	want := finding("consumer: " + quiet + ".Listen")
+	if got := scan(t, pkgs, false).consumers; got[want] {
+		t.Fatalf("fixture must not be found by the EventNotification rule alone: %v", sortedKeys(got))
+	}
+	notificationPackages[quiet] = true
+	defer delete(notificationPackages, quiet)
+	if got := scan(t, pkgs, false).consumers; !got[want] {
+		t.Errorf("scan missed %s; found %v", want, sortedKeys(got))
+	}
 }
 
 // T-MX-07: raw session.Instance.Hidden reads in server non-test code are

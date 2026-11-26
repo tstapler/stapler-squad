@@ -5,8 +5,8 @@
   "method": "GetGuidanceRequest",
   "protoFile": "proto/session/v1/guidance_request.proto",
   "markerFound": true,
-  "handlerFile": "server/services/guidance_request_service.go",
+  "handlerFile": "server/services/guidance/guidance_request_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-09-14T13:20:09.108189379-07:00"
+  "lastModified": "2026-11-26T04:55:04.126802453-08:00"
 }

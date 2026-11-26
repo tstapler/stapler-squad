@@ -129,6 +129,7 @@ func (i *Instance) ToInstanceData() domain.InstanceData {
 		SuppressedRuleTags: snap.SuppressedRuleTags,
 		SessionType:        snap.SessionType,
 		TmuxPrefix:         snap.TmuxPrefix,
+		TmuxTitle:          snap.TmuxTitle,
 		TmuxServerSocket:   snap.TmuxServerSocket,
 		TymuxSessionID:     i.tymuxSessionID(),
 		// Backend — see InstanceSnapshot.Backend.
@@ -291,7 +292,7 @@ func migrateCategoryToTags(data domain.InstanceData) []string {
 // resolveRestoredBackend pins a restored instance's backend when none was persisted.
 func resolveRestoredBackend(instance *Instance, data domain.InstanceData) {
 	if instance.Backend == "" {
-		sessionName := tmux.NewSessionName(instance.Title, tmux.TmuxPrefix).String()
+		sessionName := tmux.NewSessionName(data.TmuxNameTitle(), tmux.TmuxPrefix).String()
 		if _, ok := config.LoadConfig().GetTymuxSessionOverride(sessionName); ok {
 			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
 		}
@@ -446,6 +447,7 @@ func instanceFromData(data domain.InstanceData, deferStart bool) (*Instance, err
 		SuppressedRuleTags: data.SuppressedRuleTags,
 		SessionType:        data.SessionType,
 		TmuxPrefix:         data.TmuxPrefix,
+		TmuxTitle:          data.TmuxTitle,
 		TmuxServerSocket:   data.TmuxServerSocket,
 		Backend:            data.Backend,
 		ReviewState: domain.ReviewState{

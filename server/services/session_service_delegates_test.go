@@ -2,12 +2,20 @@ package services
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 )
 
 // T-CT-08: scope and mutation combinations that make no sense are refused
@@ -43,12 +51,40 @@ func TestContractStubs_ShouldReturnUnimplementedOrReject_WhenScopeMutationStatsO
 	// The stats RPC is implemented (PR 2a-2); without a gate it reports
 	// Unavailable rather than an empty answer.
 	t.Run("stats_rpc_without_gate", func(t *testing.T) {
-		svc := &SessionService{notificationSvc: &NotificationService{}}
+		svc := &SessionService{notificationSvc: &notify.NotificationService{}}
 		_, err := svc.GetDeliveryGateStats(context.Background(),
 			connect.NewRequest(&sessionv1.GetDeliveryGateStatsRequest{}))
 		require.Error(t, err)
 		require.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	})
+}
+
+// The delegate must pass on both the context (the audit line's caller facts) and
+// the request (apply).
+func TestPruneDelegate_ShouldForwardContextAndRequestToNotificationService(t *testing.T) {
+	t.Parallel()
+	store, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
+	require.NoError(t, err)
+	require.NoError(t, store.Append(&notifications.NotificationRecord{
+		ID: "routine", SessionID: "h1", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO), CreatedAt: time.Now(),
+	}))
+	gate := deliverygate.NewGate(deliverygate.WithFlagLoader(func() (deliverygate.FlagSettings, error) { return deliverygate.FlagSettings{}, nil }))
+	gate.Index().Replace([]deliverygate.Entry{{UUID: "h1", Title: "title-h1", Hidden: true, Kind: deliverygate.KindReview}})
+	mfs := memfs.New()
+	ns := notify.NewNotificationService(notify.NewNotificationRateLimiter(10, 20), nil)
+	ns.SetNotificationStore(store)
+	ns.SetDeliveryGate(gate)
+	ns.SetAuditSink(auditkit.NewAuditSink(func() (string, error) { return "/cfg", nil }, auditkit.WithAuditFS(mfs)))
+	svc := &SessionService{notificationSvc: ns}
+
+	resp, err := svc.PruneHiddenSessionNotifications(StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil),
+		connect.NewRequest(&sessionv1.PruneHiddenSessionNotificationsRequest{Apply: true}))
+
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Applied)
+	audit, ok := mfs.Get("/cfg/audit/hidden-session-replies.jsonl")
+	require.True(t, ok)
+	require.Contains(t, string(audit), `"listener":"`+access.ListenerRemote+`"`)
 }
 
 // T-FL-10: a request with neither new field behaves exactly as before.

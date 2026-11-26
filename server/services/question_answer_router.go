@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"slices"
+
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -193,7 +195,7 @@ func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance
 	}
 	res, _ := r.visible().Run(ctx, AnswerTargetVisible, replyInput{
 		sessionID: in.SessionID, sessionUUID: inst.GetStableID(), questionID: in.QuestionID, replyID: in.ReplyID, digit: digit,
-	}, inst, steerRequestFacts{refusal: refusal})
+	}, inst, access.SteerRequestFacts{Refusal: refusal})
 	if res.Err != nil {
 		return questionkit.ActionResult{}, res.Err
 	}
@@ -261,7 +263,7 @@ func answerFitsQuestion(row *domain.GuidanceRequestData, answer string) bool {
 		}
 		return true
 	}
-	if opts := decodeGuidanceOptions(row.Options); len(opts) > 0 {
+	if opts := guidance.DecodeGuidanceOptions(row.Options); len(opts) > 0 {
 		return slices.Contains(opts, answer)
 	}
 	return true

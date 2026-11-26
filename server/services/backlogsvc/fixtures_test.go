@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -46,7 +47,7 @@ func newIsolatedDefaultsService(t *testing.T) *services.DefaultsService {
 
 func updateQuota(t testing.TB, s *sessionv1.QuotaSettings) (*sessionv1.UpdateQuotaConfigResponse, error) {
 	t.Helper()
-	resp, err := services.NewQuotaSettingsService().UpdateQuotaConfig(context.Background(),
+	resp, err := quota.NewQuotaSettingsService().UpdateQuotaConfig(context.Background(),
 		connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{Settings: s}))
 	if err != nil {
 		return nil, err

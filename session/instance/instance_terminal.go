@@ -111,6 +111,7 @@ func (i *Instance) Rename(newTitle string) error {
 	// Use mutex for thread safety
 	i.mu.Lock()
 	// Update the title
+	i.pinTmuxTitleLocked()
 	oldTitle := i.Title
 	i.Title = newTitle
 	i.UpdatedAt = time.Now()
@@ -122,6 +123,14 @@ func (i *Instance) Rename(newTitle string) error {
 	i.syncProcessLabel(newTitle)
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
+}
+
+// pinTmuxTitleLocked remembers, before a rename, the title a started session's tmux
+// session was named after. Caller holds i.mu.
+func (i *Instance) pinTmuxTitleLocked() {
+	if i.started.Load() && i.TmuxTitle == "" {
+		i.TmuxTitle = i.Title
+	}
 }
 
 // combineErrors combines multiple errors into a single error.

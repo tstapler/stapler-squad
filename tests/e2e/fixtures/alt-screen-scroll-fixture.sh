@@ -20,11 +20,13 @@ set -u
 # `claude`-named symlink so session/instance_tmux.go's isClaude basename
 # match resolves it) via readlink -f, not just dirname "$0" -- otherwise
 # SCRIPT_DIR would be the symlink's own directory (an ephemeral tmp dir with
-# no session/testdata sibling) instead of this file's real location.
+# no session/instance/testdata sibling) instead of this file's real location.
 REAL_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SELF")" && pwd)"
-BEFORE_FILE="$SCRIPT_DIR/../../../session/testdata/scroll_forward_claude_before.txt"
-AFTER_FILE="$SCRIPT_DIR/../../../session/testdata/scroll_forward_claude_after.txt"
+BEFORE_FILE="$SCRIPT_DIR/../../../session/instance/testdata/scroll_forward_claude_before.txt"
+AFTER_FILE="$SCRIPT_DIR/../../../session/instance/testdata/scroll_forward_claude_after.txt"
+# A moved golden file would otherwise only show up as an empty pane in the browser.
+[ -r "$BEFORE_FILE" ] && [ -r "$AFTER_FILE" ] || { echo "alt-screen fixture: golden files not found under $SCRIPT_DIR"; exit 1; }
 
 redraw() {
   # Clear screen + home cursor, then print the given fixture file verbatim --

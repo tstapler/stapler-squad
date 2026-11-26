@@ -1502,7 +1502,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 
 // fakeSlackNotifierWiring is a test double for SlackNotifierWiring that records
 // every call so OnItemAdded's Slack-wiring behavior can be asserted without a
-// real *services.SlackNotifier or network access.
+// real *notify.SlackNotifier or network access.
 type fakeSlackNotifierWiring struct {
 	mu                                  sync.Mutex
 	notifyReviewQueueItemCalls          int

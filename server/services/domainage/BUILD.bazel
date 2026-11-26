@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "domainage",
+    srcs = ["domain_checker.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/domainage",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@org_golang_x_net//publicsuffix",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":domainage",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "domainage_test",
+    srcs = ["domainage_golden_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":domainage"],
+    deps = ["@com_github_stretchr_testify//require"],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

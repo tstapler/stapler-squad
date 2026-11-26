@@ -17,7 +17,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -290,7 +292,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForHookSourceRows(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
-	svc := NewGuidanceRequestService(storage, bus, nil)
+	svc := guidance.NewGuidanceRequestService(storage, &notify.EventBusNotifier{Bus: bus}, nil)
 	m := newRealStoreMirror(storage, questionkit.NewPendingQuestionStore(nil), &mirrorCounts{})
 	id, ok := m.Mirror(mirrorReq(t, "toolu_1", "Which color?", true))
 	require.True(t, ok)
@@ -320,7 +322,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *te
 	const asker, peer = "asker-uuid", "peer-uuid"
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
-	svc := NewGuidanceRequestService(storage, bus, nil)
+	svc := guidance.NewGuidanceRequestService(storage, &notify.EventBusNotifier{Bus: bus}, nil)
 	ctx := context.Background()
 	ch, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -334,7 +336,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *te
 	row, err := storage.CreateMirroredGuidanceRequest(ctx, peerReq, 0)
 	require.NoError(t, err)
 
-	_, applied, err := svc.AnswerAs(ctx, row.ID, "make lint", SessionAnswerer(peer))
+	_, applied, err := svc.AnswerAs(ctx, row.ID, "make lint", guidance.SessionAnswerer(peer))
 	require.NoError(t, err)
 	require.True(t, applied)
 	select {
@@ -347,7 +349,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *te
 		Scope: domain.RequestScopeSession, SessionUUID: asker, QuestionText: "Ship it?", QuestionType: domain.QuestionTypeYesNo,
 	})
 	require.NoError(t, err)
-	_, applied, err = svc.AnswerAs(ctx, agent.ID, "yes", HumanAnswerer())
+	_, applied, err = svc.AnswerAs(ctx, agent.ID, "yes", guidance.HumanAnswerer())
 	require.NoError(t, err)
 	require.True(t, applied)
 	select {

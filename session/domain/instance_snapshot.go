@@ -87,6 +87,7 @@ type InstanceSnapshot struct {
 	Note                  string
 	SessionType           SessionType
 	TmuxPrefix            string
+	TmuxTitle             string
 	TmuxServerSocket      string
 	Backend               ProcessManagerBackend
 	Tags                  []string // defensive deep copy — see buildSnapshot

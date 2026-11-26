@@ -32,15 +32,19 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/adminmisc"
 	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
-	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/escapecode"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/forwardsync"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/healthnotify"
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -492,6 +496,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 	srv.startLeaseWedgeWatcher(serverCtx, deps)
 	deps.SessionService.StartSearchIndexSync(serverCtx)
+	deps.SessionService.StartArchivedSessionReaper(serverCtx)
 	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.WaitSearchIndexSync)
 
 	// Initialize push notification service.
@@ -742,21 +747,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// TymuxRolloutService's registration). Storage-backed, so it's threaded
 	// through deps.Storage rather than constructed with zero args like the
 	// config-only rollout services above.
-	var guidanceRequestSvc *services.GuidanceRequestService
+	var guidanceRequestSvc *guidance.GuidanceRequestService
 	var wakeTriggerSvc *services.WakeTriggerService
 	if deps.Storage != nil {
-		// deps.BacklogService is passed only when non-nil: a nil *BacklogService
-		// boxed into the TriageRespawner interface would be a non-nil interface
-		// wrapping a nil pointer, defeating GuidanceRequestService's own
-		// triageRespawner == nil guard and panicking on first use.
-		var triageRespawner services.TriageRespawner
-		if deps.BacklogService != nil {
-			triageRespawner = deps.BacklogService
-		}
-		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
-		if deps.BacklogService != nil {
-			guidanceRequestSvc.SetWaiverResumer(deps.BacklogService.ResumeAfterOwnerWaiver)
-		}
+		guidanceRequestSvc = newGuidanceRequestService(deps)
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
 			var backlogTransitions services.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check
@@ -955,7 +949,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// re-reads config.json each reconcile).
 	{
 		quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(
-			services.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
+			quota.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
 		log.Info("Registered QuotaService handler", "path", "/api"+quotaPath)
 	}
@@ -1071,7 +1065,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetClassifier(deps.SessionService.GetClassifier())
 	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
-	approvalHandler.SetDomainChecker(services.NewDomainAgeChecker(true))
+	approvalHandler.SetDomainChecker(domainage.NewDomainAgeChecker(true))
 	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance
 	// deps.SlackNotifier constructed and wired into ReactiveQueueMgr, so
 	// GetDeliveryStatus() reflects sends from both trigger points.
@@ -1185,7 +1179,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// config.LoadConfig() on every request (see its constructor doc comment),
 	// so only the route's presence/absence is decided here at boot.
 	if config.LoadConfig().Slack.ApprovalEnabled {
-		slackInteractiveHandler := services.NewSlackInteractiveHandler(deps.SessionService)
+		slackInteractiveHandler := notify.NewSlackInteractiveHandler(deps.SessionService)
 		srv.mux.HandleFunc("/api/hooks/slack-interactive", slackInteractiveHandler.Handle)
 		log.Info("Registered Slack interactive-approvals handler at /api/hooks/slack-interactive")
 	} else {
@@ -1337,30 +1331,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered deep-link resolver at /api/deep-link/resolve")
 	}
 
-	// Register the backlog debug seed endpoints ONLY for the e2e test server
-	// (STAPLER_SQUAD_INSTANCE=e2e-local) — lets the Playwright suite seed
-	// BacklogStuckState rows and queued backlog items directly, bypassing the
-	// reconciler's real thresholds and the real WIP-cap spawn flow. Never
-	// registered outside that instance.
-	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
-		backlogSeedHandler := debugseed.NewBacklogDebugSeedHandler(deps.Storage)
-		backlogSeedHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
-
-		// Registered for project_plans/backlog-event-driven-updates's Playwright
-		// e2e layer — lets tests mutate a backlog item directly through the
-		// storage layer (create/transition/update/archive/delete), simulating a
-		// second actor (reconciler, another tab) without walking a real
-		// TransitionBacklogItemStatus RPC through its engine/gate checks.
-		backlogMutateHandler := backlogmisc.NewBacklogDebugMutateHandler(deps.Storage)
-		backlogMutateHandler.RegisterRoutes(srv.mux)
-		log.Info("Registered backlog debug mutate handlers at /api/debug/backlog/mutate-* (e2e-local only)")
-
-		if deps.SessionService != nil {
-			services.NewGuidanceDebugSeedHandler(deps.SessionService, deps.Storage).RegisterRoutes(srv.mux)
-			log.Info("Registered guidance debug seed handler at /api/debug/guidance/seed-question (e2e-local only)")
-		}
-	}
+	registerE2EDebugRoutes(srv.mux, os.Getenv, deps)
 
 	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.
 	var analyticsProvider analytics.AnalyticsProvider
@@ -1438,7 +1409,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
 		// flag per event, so it is live-togglable from Settings > Feature Flags.
-		completionReviewDone := completionreview.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, completionreview.NewHeadlessCompletionReviewCall(), completionreview.NewFileMemoryStore(), &services.EventBusNotifier{Bus: deps.EventBus})
+		completionReviewDone := completionreview.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, completionreview.NewHeadlessCompletionReviewCall(), completionreview.NewFileMemoryStore(), &notify.EventBusNotifier{Bus: deps.EventBus})
 		srv.backgroundTasksWG.Go(func() { <-completionReviewDone })
 	}
 
@@ -1577,7 +1548,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// ACTIVE session crosses the configured stale threshold — see StaleSessionNotifier doc
 	// comment).
 	if deps.ReviewQueuePoller != nil {
-		staleNotifier := services.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		staleNotifier := healthnotify.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus,
+			healthnotify.Ports{DerivePriority: notify.DerivePriority})
 		srv.goBackground(func() { staleNotifier.Start(serverCtx) })
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
@@ -1608,7 +1580,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
 	// always reports unavailable there).
 	if deps.ReviewQueuePoller != nil {
-		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		memNotifier := healthnotify.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus,
+			healthnotify.Ports{DerivePriority: notify.DerivePriority})
 		srv.goBackground(func() { memNotifier.Start(serverCtx) })
 		log.Info("Memory pressure notifier started")
 	}

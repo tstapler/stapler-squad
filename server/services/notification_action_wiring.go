@@ -1,6 +1,8 @@
 package services
 
 import (
+	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -9,7 +11,7 @@ import (
 // SessionService itself. Nil members leave their action kinds unavailable.
 type NotificationActionWiring struct {
 	Storage  *session.Storage
-	Guidance *GuidanceRequestService
+	Guidance *guidance.GuidanceRequestService
 	// Backlog is the TransitionBacklogItemStatus delegate; leave it a nil interface (not a boxed nil
 	// pointer) to disable backlog actions.
 	Backlog BacklogTransitioner
@@ -23,7 +25,7 @@ type NotificationActionWiring struct {
 // history and the dispatcher behind InvokeNotificationAction. Call it once the
 // notification store is wired.
 func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
-	src := DescriptorSources{
+	src := notify.DescriptorSources{
 		Approvals: NewApprovalLookup(s.approvalStore),
 		Questions: s.replyState().store,
 		Canary:    s.wireDialogCanary(),
@@ -54,7 +56,7 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 			Merger:      s,
 		})
 	}
-	s.notificationSvc.SetDescriptorBuilder(NewDescriptorBuilder(src, s.InjectedFlagRegistry()))
+	s.notificationSvc.SetDescriptorBuilder(notify.NewDescriptorBuilder(src, s.InjectedFlagRegistry()))
 	s.actionDispatcher = NewNotificationActionDispatcher(delegates, func() actionAudit {
 		if sink := s.auditSink(); sink != nil {
 			return sink

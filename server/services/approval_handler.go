@@ -22,12 +22,13 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -87,7 +88,7 @@ type ApprovalHandler struct {
 	queueChecker        ReviewQueueChecker                    // optional: triggers immediate review queue check on new approval
 	classifier          classifier.Classifier                 // optional: auto-classify before escalating to manual review
 	analyticsStore      *AnalyticsStore                       // optional: record classification decisions
-	domainChecker       *DomainAgeChecker                     // optional: escalate requests to newly-registered domains
+	domainChecker       *domainage.DomainAgeChecker           // optional: escalate requests to newly-registered domains
 	notificationStamper approvalNotificationStamper           // optional: stamps approval outcomes on notification records
 	autoApprovalLog     autoApprovalLogger                    // optional: writes silent records for auto-approved/denied ops
 	timeout             time.Duration                         // default 4m; overridable in tests
@@ -95,7 +96,7 @@ type ApprovalHandler struct {
 	autonomousChecker   func(string) bool                     // optional: returns true if sessionID is an autonomous session
 	pollInterval        time.Duration                         // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
 	liveFinder          LiveInstanceFinder                    // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
-	slackNotifier       *SlackNotifier                        // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	slackNotifier       *notify.SlackNotifier                 // optional: notifies a configured Slack webhook about new pending approvals; concrete type, no interface
 	dashboardBaseURLFn  func() string                         // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 	autoApprovedGate    AutoApprovedGate                      // optional: drops hidden-session auto-allow history rows (nil = append all)
@@ -185,7 +186,7 @@ func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *piextension.PiExtension
 }
 
 // SetDomainChecker injects a DomainAgeChecker for escalating requests to newly-registered domains.
-func (h *ApprovalHandler) SetDomainChecker(d *DomainAgeChecker) {
+func (h *ApprovalHandler) SetDomainChecker(d *domainage.DomainAgeChecker) {
 	h.domainChecker = d
 }
 
@@ -215,7 +216,7 @@ func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 // nil-safe: when never called, h.slackNotifier stays nil and Slack
 // notification is silently skipped — matching every other optional Set*
 // dependency in this file.
-func (h *ApprovalHandler) SetSlackNotifier(n *SlackNotifier) {
+func (h *ApprovalHandler) SetSlackNotifier(n *notify.SlackNotifier) {
 	h.slackNotifier = n
 }
 
@@ -233,7 +234,7 @@ func (h *ApprovalHandler) SetDashboardBaseURLFn(fn func() string) {
 // pointer identity against the other consumers (ReactiveQueueManager,
 // SessionService) without restructuring production code — not intended for
 // any non-test caller.
-func (h *ApprovalHandler) SlackNotifierForTest() *SlackNotifier {
+func (h *ApprovalHandler) SlackNotifierForTest() *notify.SlackNotifier {
 	return h.slackNotifier
 }
 
@@ -407,7 +408,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
 		if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
-			domains := ExtractDomainsFromCommand(cmd)
+			domains := domainage.ExtractDomainsFromCommand(cmd)
 			for _, domain := range domains {
 				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
 				if err != nil {
@@ -503,9 +504,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", notify.ToolCallDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil && (h.autoApprovedGate == nil || h.autoApprovedGate.AllowAutoApprovedRow(sessionID, "allow")) {
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, notify.ToolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -514,11 +515,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", notify.ToolCallDetail(payload.ToolInput))
 			// Never gated: a deny row is the only record that a rule blocked a tool
 			// in a background session.
 			if h.autoApprovalLog != nil {
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, notify.ToolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -762,7 +763,7 @@ func approvalNotificationMetadata(approval *approvalkit.PendingApproval) map[str
 	}
 
 	if toolInputUnrenderable(approval.ToolInput) {
-		metadata[metaToolInputUnrenderable] = boolTrue
+		metadata[metaToolInputUnrenderable] = notify.BoolTrue
 	}
 	return metadata
 }
@@ -773,14 +774,14 @@ func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approv
 	metadata := approvalNotificationMetadata(approval)
 
 	title := approvalNotificationTitle(approval)
-	message := buildApprovalMessage(approval)
+	message := notify.BuildApprovalMessage(approval)
 
 	event := events.NewNotificationEvent(
 		sessionID,
 		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
-		DerivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
+		notify.DerivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
 		title,
 		message,
 		metadata,
@@ -801,10 +802,6 @@ func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approv
 	}
 }
 
-// maxNotificationMessageLen is the maximum number of runes to include in a
-// notification toast message before truncating with "...".
-const maxNotificationMessageLen = 120
-
 // broadcastQuestionNotification fires an INPUT_REQUIRED notification when Claude uses
 // AskUserQuestion. It omits approval_id from metadata so no Approve/Deny buttons are shown.
 // The title and body come from questions[0] (Spike 1.3g: the real payload has no "prompt"
@@ -816,10 +813,10 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 	message := "Check the terminal to respond."
 	switch {
 	case asked.Question != "":
-		message = truncateString(asked.Question, maxNotificationMessageLen)
+		message = notify.TruncateString(asked.Question, notify.MaxNotificationMessageLen)
 	default:
 		if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
-			message = truncateString(prompt, maxNotificationMessageLen)
+			message = notify.TruncateString(prompt, notify.MaxNotificationMessageLen)
 		}
 	}
 	message, _ = secretscan.RedactSecrets(message)
@@ -831,22 +828,12 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 		h.resolveSessionName(sessionID),
 		newQuestionNotificationID(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		DerivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
+		notify.DerivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
 		meta,
 	)
 	h.eventBus.Publish(event)
-}
-
-// truncateString returns s truncated to at most maxRunes Unicode code points,
-// appending "..." when truncation occurs. Safe for any UTF-8 content.
-func truncateString(s string, maxRunes int) string {
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return string(r[:maxRunes]) + "..."
 }
 
 // maxEscalationReasonLen bounds PendingApproval.EscalationReason. An explicit
@@ -859,35 +846,12 @@ const maxEscalationReasonLen = 500
 
 // truncateEscalationReason caps s at maxEscalationReasonLen runes.
 func truncateEscalationReason(s string) string {
-	return truncateString(s, maxEscalationReasonLen)
-}
-
-// approvalDetail extracts the human-meaningful part of a tool call — the full command
-// (including every sub-command of a compound &&/;/pipe chain, since this is the raw
-// string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
-// target path for file-targeting tools. Returns "" if toolInput has neither, letting the
-// caller supply its own fallback.
-func approvalDetail(toolInput map[string]interface{}) string {
-	if cmd, ok := toolInput["command"].(string); ok && cmd != "" {
-		return truncateString(cmd, maxNotificationMessageLen)
-	}
-	if filePath, ok := toolInput["file_path"].(string); ok && filePath != "" {
-		return filePath
-	}
-	return ""
-}
-
-// buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *approvalkit.PendingApproval) string {
-	if detail := approvalDetail(approval.ToolInput); detail != "" {
-		return detail
-	}
-	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
+	return notify.TruncateString(s, maxEscalationReasonLen)
 }
 
 // resolveSessionID returns the stable session ID (UUID) for a given raw header
 // value and cwd. It tries the header first (matching by title or UUID via
-// stableIDForData/matchesIDData), then falls back to cwd prefix matching.
+// notify.StableIDForData/MatchesIDData), then falls back to cwd prefix matching.
 // Uses ListInstanceData to avoid constructing Instance objects and spawning
 // tmux subprocesses for every stopped session.
 func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
@@ -900,8 +864,8 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 	}
 	if headerVal != "" {
 		for _, d := range instances {
-			if matchesIDData(d, headerVal) {
-				return stableIDForData(d)
+			if notify.MatchesIDData(d, headerVal) {
+				return notify.StableIDForData(d)
 			}
 		}
 	}
@@ -910,47 +874,15 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 	bestLen := 0
 	for _, d := range instances {
 		if p := d.Path; p != "" && strings.HasPrefix(cwd, p) && len(p) > bestLen {
-			bestID = stableIDForData(d)
+			bestID = notify.StableIDForData(d)
 			bestLen = len(p)
 		}
 		if wd := d.WorkingDir; wd != "" && strings.HasPrefix(cwd, wd) && len(wd) > bestLen {
-			bestID = stableIDForData(d)
+			bestID = notify.StableIDForData(d)
 			bestLen = len(wd)
 		}
 	}
 	return bestID
-}
-
-// stableIDForData mirrors Instance.GetStableID for raw InstanceData.
-func stableIDForData(d domain.InstanceData) string {
-	if d.UUID != "" {
-		return d.UUID
-	}
-	return d.Title
-}
-
-// matchesIDData mirrors Instance.MatchesID for raw InstanceData without constructing
-// an Instance or spawning any subprocesses. Matches by UUID, title, or computed
-// tmux session name (prefix + sanitized title). The tmux-name branch requires a
-// non-empty TmuxPrefix to avoid a title-only match that would bypass UUID lookup.
-//
-// TODO: move stableIDForData and matchesIDData to session.InstanceData methods so
-// the matching semantics are colocated with the type they operate on.
-func matchesIDData(d domain.InstanceData, id string) bool {
-	if d.UUID != "" && d.UUID == id {
-		return true
-	}
-	if d.Title == id {
-		return true
-	}
-	// Tmux-name match requires a prefix; without it d.TmuxPrefix+title == title
-	// which duplicates the title check above and allows UUID-less resolution.
-	if d.TmuxPrefix == "" {
-		return false
-	}
-	// Derive via the canonical sanitizer rather than re-implementing it here —
-	// a hand-rolled copy silently drifts from tmux.NewSessionName's rules (#162).
-	return tmux.NewSessionName(d.Title, d.TmuxPrefix).String() == id
 }
 
 // writeDeferDecision returns an empty HTTP 200 with no body.

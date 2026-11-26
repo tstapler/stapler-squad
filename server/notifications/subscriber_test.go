@@ -206,7 +206,7 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 // TestCoalescing_DifferentBacklogItemsSurviveWithinWindow reproduces the bug reported
 // 2026-07-19/20 ("I keep getting a PR Creation failed notification, it doesn't show up
 // on the notification page"): every backlog-item notification call site
-// (server/services/backlog_notifier.go's EventBusNotifier.Notify and the three
+// (server/services/notify/backlog_notifier.go's EventBusNotifier.Notify and the three
 // notify* helpers in backlog_service_triage.go) used to publish with an EMPTY
 // sessionID, even though the real backlog item ID was available and only went into
 // metadata["item_id"]. Since coalesceKey is "sessionID:notificationType", two

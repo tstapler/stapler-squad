@@ -55,7 +55,7 @@ func EntryFromSnapshot(s *domain.InstanceSnapshot) Entry {
 		Hidden: s.Hidden,
 	}
 	if s.Title != "" {
-		e.TmuxName = tmux.NewSessionName(s.Title, s.TmuxPrefix).String()
+		e.TmuxName = tmux.NewSessionName(s.TmuxNameTitle(), s.TmuxPrefix).String()
 	}
 	if s.Hidden {
 		e.Kind = KindFromTags(s.Tags)
@@ -313,7 +313,7 @@ func (i *VisibilityIndex) UpsertMany(entries []Entry) {
 func entryFromData(d domain.InstanceData) Entry {
 	e := Entry{UUID: d.UUID, Title: d.Title, Hidden: d.Hidden}
 	if d.Title != "" {
-		e.TmuxName = tmux.NewSessionName(d.Title, d.TmuxPrefix).String()
+		e.TmuxName = tmux.NewSessionName(d.TmuxNameTitle(), d.TmuxPrefix).String()
 	}
 	if d.Hidden {
 		e.Kind = KindFromTags(d.Tags)

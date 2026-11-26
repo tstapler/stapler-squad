@@ -17,10 +17,19 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
+// newTestNotifierPoller builds a never-started ReviewQueuePoller serving instances,
+// for sweeper tests that only need GetInstances().
+func newTestNotifierPoller(instances ...*instance.Instance) *session.ReviewQueuePoller {
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), nil, nil)
+	poller.SetInstances(instances)
+	return poller
+}
+
 // writeCreationStaleConfig writes a minimal config.json with a creation_stale
-// section, mirroring writeStaleSessionConfig's shape (stale_session_notifier_test.go).
+// section, mirroring writeStaleSessionConfig's shape (healthnotify/stale_session_notifier_test.go).
 func writeCreationStaleConfig(t *testing.T, dir string, thresholdMinutes int) {
 	t.Helper()
 	cfg := map[string]any{
