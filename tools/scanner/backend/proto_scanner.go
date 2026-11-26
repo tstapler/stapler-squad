@@ -181,6 +181,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	"CreateEpicIntegrationChild":  "backlog:create-epic-integration-child",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
 	"RemoveBacklogItemDependency": "backlog:remove-item-dependency",
 	"ListBacklogItemDependencies": "backlog:list-item-dependencies",
