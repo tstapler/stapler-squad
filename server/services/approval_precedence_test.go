@@ -97,6 +97,10 @@ func TestHandlePermissionRequest_should_PreferTheEarlierDecisionSource_When_Sour
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			h, store := newTestHandler(5 * time.Second)
+			// The secret command names a domain, so a new-domain checker also pins secret-before-domain.
+			if tt.command == secretCmd {
+				h.SetDomainChecker(newDomainChecker(5 * 24 * time.Hour))
+			}
 			rules := &countingClassifier{decision: tt.rules}
 			h.SetClassifier(rules)
 			h.SetHeadlessPool(tt.llm)
@@ -121,6 +125,13 @@ func TestHandlePermissionRequest_should_PreferTheEarlierDecisionSource_When_Sour
 	}
 }
 
+// newDomainChecker treats every domain as registered age ago; it never reaches the network.
+func newDomainChecker(age time.Duration) *domainage.DomainAgeChecker {
+	checker := domainage.NewDomainAgeChecker(true)
+	checker.SetTransport(&fakeRDAPTransport{registeredAt: time.Now().Add(-age)})
+	return checker
+}
+
 // resolveWhenQueued denies the first queued approval; the channel closes once it has.
 func resolveWhenQueued(t *testing.T, store *approvalkit.ApprovalStore) <-chan struct{} {
 	t.Helper()
@@ -136,9 +147,7 @@ func resolveWhenQueued(t *testing.T, store *approvalkit.ApprovalStore) <-chan st
 func TestHandlePermissionRequest_should_QueueWithoutAskingRules_When_DomainIsNewAndRulesWouldAllow(t *testing.T) {
 	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
-	checker := domainage.NewDomainAgeChecker(true)
-	checker.SetTransport(&fakeRDAPTransport{registeredAt: time.Now().Add(-5 * 24 * time.Hour)})
-	h.SetDomainChecker(checker)
+	h.SetDomainChecker(newDomainChecker(5 * 24 * time.Hour))
 	rules := &countingClassifier{decision: classifier.AutoAllow}
 	h.SetClassifier(rules)
 	queued := resolveWhenQueued(t, store)

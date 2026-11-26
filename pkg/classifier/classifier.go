@@ -17,8 +17,8 @@ import (
 // RiskLevel indicates the severity of a tool use request.
 //
 // WARNING: RiskLevel is persisted as an int column by ApprovalRule.risk_level
-// (session/ent/schema/approvalrule.go) and converted to/from persisted strings elsewhere by
-// Label and parseRiskLevel (server/services) for ClassificationAnalytics.RiskLevel,
+// (session/ent/schema/approvalrule.go) and converted to/from persisted strings by Label (below)
+// and parseRiskLevel (server/services) for ClassificationAnalytics.RiskLevel,
 // PendingApproval.RiskLevel, and PersistedApproval.RiskLevel. New values MUST be appended to
 // the end of this iota block — inserting or reordering values would silently corrupt the
 // int-column data and desync the int↔string mapping for the string-typed surfaces.

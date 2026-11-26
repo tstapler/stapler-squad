@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ import (
 
 var suspendedStatuses = []domain.Status{domain.Paused, domain.Hibernated, domain.Stopped, domain.Crashed, domain.PermanentlyFailed}
 
-func TestAnswerRouter_ShouldNeverTypeOrRevive_WhenSessionIsArchivedWhateverElseIsTrue(t *testing.T) {
+func TestAnswerRouter_ShouldNeverTypeOrRevive_WhenAnArchivedSessionIsActiveOrSuspended(t *testing.T) {
 	statuses := append([]domain.Status{domain.Active}, suspendedStatuses...)
 	for _, status := range statuses {
 		for _, hidden := range []bool{false, true} {
@@ -132,7 +133,97 @@ func TestAnswerRouter_ShouldTypeOneDigit_WhenLiveAnswersRace(t *testing.T) {
 	assert.Equal(t, replyColorLabel, e.row(qid).Answer)
 }
 
+// The frozen clock lets the rate limiter reject racers before they meet the claim,
+// so this one holds the first write open and moves past the per-session interval.
+func TestAnswerRouter_ShouldReportTheDialogGone_WhenASecondAnswerArrivesDuringTheWrite(t *testing.T) {
+	e := newRouterEnv(t)
+	inst, pm := e.addVisible("live-inflight")
+	qid := e.hookRow(inst, colorDialog)
+	pm.gate, pm.entered = make(chan struct{}), make(chan struct{}, 2)
+	release := sync.OnceFunc(func() { close(pm.gate) })
+	t.Cleanup(release)
+	ctx := e.localCtx()
+	answer := func() <-chan questionkit.ActionResult {
+		done := make(chan questionkit.ActionResult, 1)
+		go func() {
+			res, err := e.router.ReplyToQuestion(ctx, QuestionAnswer{
+				SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-" + uuid.NewString(),
+			})
+			assert.NoError(t, err)
+			done <- res
+		}()
+		return done
+	}
+	wait := func(done <-chan questionkit.ActionResult) questionkit.ActionResult {
+		select {
+		case res := <-done:
+			return res
+		case <-time.After(10 * time.Second):
+			t.Fatal("answer did not return")
+			return questionkit.ActionResult{}
+		}
+	}
+
+	first := answer()
+	select {
+	case <-pm.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first answer never reached the write")
+	}
+	e.clock.Advance(10 * time.Second)
+	second := wait(answer())
+	release()
+
+	assert.Equal(t, outStale, second.Outcome)
+	assert.Equal(t, "dialog_gone", second.StaleReason, "the claimed question is not offered to a second writer")
+	assert.Equal(t, outApplied, wait(first).Outcome)
+	assert.Equal(t, []string{"2"}, pm.writes())
+}
+
+func TestReply_ShouldFindNothingToClaim_WhenAnotherReplyIDArrivesDuringTheWrite(t *testing.T) {
+	e := newReplyEnv(t)
+	e.pm.gate, e.pm.entered = make(chan struct{}), make(chan struct{}, 2)
+	release := sync.OnceFunc(func() { close(e.pm.gate) })
+	t.Cleanup(release)
+	ctx := e.localCtx()
+	reply := func(replyID string) <-chan sessionv1.ReplyOutcome {
+		done := make(chan sessionv1.ReplyOutcome, 1)
+		go func() {
+			resp, err := e.fix.svc.ReplyToPendingQuestion(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
+				SessionId: e.inst.UUID, QuestionId: e.qid, ReplyText: "1", ReplyId: replyID,
+			}))
+			assert.NoError(t, err)
+			done <- resp.Msg.GetOutcome()
+		}()
+		return done
+	}
+	wait := func(done <-chan sessionv1.ReplyOutcome) sessionv1.ReplyOutcome {
+		select {
+		case o := <-done:
+			return o
+		case <-time.After(10 * time.Second):
+			t.Fatal("reply did not return")
+			return 0
+		}
+	}
+
+	first := reply("r-first")
+	select {
+	case <-e.pm.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first reply never reached the write")
+	}
+	e.clock.Advance(10 * time.Second) // past the per-session interval, so the claim is what refuses
+	second := wait(reply("r-second"))
+	release()
+
+	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, second)
+	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, wait(first))
+	assert.Equal(t, []string{"1"}, e.pm.writes())
+}
+
 func TestHookReply_ShouldServeOnce_WhenTwoHooksAskAtOnce(t *testing.T) {
+	t.Parallel()
 	e := newHookReplyEnv(t)
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis", "Memcached")
 	stored, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
