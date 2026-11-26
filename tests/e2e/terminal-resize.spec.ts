@@ -126,7 +126,9 @@ test.describe('terminal resize', () => {
       await page.keyboard.type("printf 'ssq-a\\nssq-b\\n'\n");
       await expect.poll(markerCounts, { timeout: 10000 }).toEqual([1, 1]);
 
-      // Redraw clears the local buffer, then asks the server to repaint.
+      // Redraw clears the local buffer and forces a server resize; only this click logs that line. The rows
+      // can also return from another in-flight snapshot, so the forced resize itself is asserted in
+      // TerminalOutput.refit.test.tsx; this test guards the clear-then-repaint result.
       const forced = page.waitForEvent('console', {
         predicate: (m) => m.text().includes('Forcing resize message to backend'),
         timeout: 10000,
