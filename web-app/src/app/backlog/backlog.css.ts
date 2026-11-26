@@ -6,7 +6,8 @@ export const pageWrapper = style({
   display: "flex",
   flexDirection: "column",
   height: "100%",
-  overflow: "hidden",
+  overflowX: "hidden",
+  overflowY: "auto",
   background: vars.color.background,
 });
 
@@ -76,6 +77,14 @@ export const contentArea = style({
   display: "flex",
   flex: 1,
   overflow: "hidden",
+  // On short screens the header and filters fill the page: it scrolls rather than squeezing the
+  // list until the sticky table head covers every row.
+  minHeight: "min(20rem, 100%)",
+  "@media": {
+    // Short phones get one scroller, so a swipe on the list also moves the filters away. Limited to
+    // widths where the detail pane is a fixed overlay (detailPaneBase), not stretched by this.
+    "screen and (max-width: 768px) and (max-height: 700px)": { flex: "1 0 auto" },
+  },
 });
 
 export const listPane = style({

@@ -65,6 +65,8 @@ test.describe("multi-pr-session-mobile", () => {
     expect(facts.coarse).toBe(true);
     expect(facts.touchPoints).toBeGreaterThan(0);
     expect(facts.ua).toMatch(/Mobile|Android/);
+    // The window hover preview relies on this to ignore the emulated mouse parked at (0,0).
+    expect(await page.evaluate(() => matchMedia("(any-hover: none)").matches)).toBe(true);
   });
 
   test("plusN_should_beTappableAt44pxAndOpenTheListFocusingItsHeading", async ({ page }) => {
