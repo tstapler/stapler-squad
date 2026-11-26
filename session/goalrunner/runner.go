@@ -262,13 +262,16 @@ func Run(ctx context.Context, cfg Config) Outcome {
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, cfg.Binary, cfg.Args()...)
 	cmd.Dir = cfg.Dir
+	// Bounds Wait when a grandchild (Bash tool, hook) keeps the stdout pipe open
+	// after claude is killed; the grandchild itself is not killed.
+	cmd.WaitDelay = 5 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return Outcome{EndReason: EndError, Err: err}
+		return Outcome{EndReason: EndError, Err: fmt.Errorf("goalrunner: stdout pipe: %w", err)}
 	}
 	cmd.Stderr = nil // discarded; stream-json carries errors on stdout
 	if err := startRetryingTextBusy(cmd); err != nil {
-		return Outcome{EndReason: EndError, Err: err, WallTime: time.Since(start)}
+		return Outcome{EndReason: EndError, Err: fmt.Errorf("goalrunner: start %s: %w", cfg.Binary, err), WallTime: time.Since(start)}
 	}
 
 	tr := &tracker{sp: &spend{pricing: tokens.DefaultPricingTable(), msgs: map[string]*msgUsage{}}}
@@ -292,7 +295,11 @@ func Run(ctx context.Context, cfg Config) Outcome {
 finished:
 	waitErr := cmd.Wait()
 	<-rd.done
-	return tr.outcome(cfg, exceeded, time.Since(start), waitErr, rd.scanErr)
+	out := tr.outcome(cfg, exceeded, time.Since(start), waitErr, rd.scanErr)
+	if ctx.Err() != nil && out.EndReason == EndError {
+		out.Err = errors.Join(out.Err, ctx.Err())
+	}
+	return out
 }
 
 // startRetryingTextBusy retries Start on ETXTBSY: a freshly written executable
@@ -303,7 +310,7 @@ func startRetryingTextBusy(cmd *exec.Cmd) error {
 		if err = cmd.Start(); !errors.Is(err, syscall.ETXTBSY) {
 			return err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // bounded: 5 x 20ms
 	}
 	return err
 }

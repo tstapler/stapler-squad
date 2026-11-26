@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -19,7 +21,10 @@ import (
 const maxCriteriaChars = 500
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], config.LoadConfig().GetFeatureFlag(config.GoalModeFlag), os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], config.LoadConfig().GetFeatureFlag(config.GoalModeFlag), os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
 func run(ctx context.Context, args []string, flagOn bool, stdout, stderr io.Writer) int {
@@ -39,6 +44,10 @@ func run(ctx context.Context, args []string, flagOn bool, stdout, stderr io.Writ
 	}
 	if *criteria == "" {
 		fmt.Fprintln(stderr, "goal-pilot: --criteria is required")
+		return 2
+	}
+	if fi, err := os.Stat(*dir); *dir == "" || err != nil || !fi.IsDir() {
+		fmt.Fprintln(stderr, "goal-pilot: --dir must be an existing directory")
 		return 2
 	}
 	c := *criteria

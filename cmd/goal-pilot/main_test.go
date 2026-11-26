@@ -24,3 +24,19 @@ func TestRun_should_RequireCriteria_When_FlagOn(t *testing.T) {
 		t.Fatalf("code = %d, want 2", code)
 	}
 }
+
+func TestRun_should_RejectMissingDir_When_FlagOn(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{
+		{"--criteria", "x"},
+		{"--criteria", "x", "--dir", "/nonexistent-goal-pilot-dir"},
+	} {
+		var o, e bytes.Buffer
+		if code := run(context.Background(), args, true, &o, &e); code != 2 {
+			t.Fatalf("args %v: code = %d, want 2", args, code)
+		}
+		if o.Len() != 0 {
+			t.Fatalf("args %v: stdout should be empty: %q", args, o.String())
+		}
+	}
+}
