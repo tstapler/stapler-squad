@@ -46,6 +46,8 @@ func fullCreateData(t *testing.T) domain.InstanceData {
 		LastAddedToQueue: at(6), LastViewed: at(7), LastAcknowledged: at(8),
 		MCPServerURL: "http://mcp", OneShot: true, Hidden: true, ArchivedAt: &archived,
 		CreationProgressUpdatedAt: at(9), ProjectID: "proj",
+		WorkflowID: "wf-1", PauseReason: "paused-why", ExitReason: "exit-why", LastUserResponse: at(12),
+		ProcessingGraceUntil: at(13), LastPromptDetected: at(14), LastPromptSignature: "prompt-sig",
 		Worktree:  domain.GitWorktreeData{RepoPath: "/repo", WorktreePath: "/wt", SessionName: "sn", BranchName: "bn", BaseCommitSHA: "base"},
 		DiffStats: domain.DiffStatsData{Added: 11, Removed: 4, Content: "the diff"},
 		ClaudeSession: domain.ClaudeSessionData{
