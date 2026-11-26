@@ -19,7 +19,7 @@ import (
 // newIsolatedSlackConfigService creates a SlackConfigService backed by a fresh
 // temporary directory, preventing config state from leaking between tests
 // (same isolation pattern as newIsolatedCallbackConfigService,
-// callback_config_service_test.go).
+// webhooks/callback_config_service_test.go).
 func newIsolatedSlackConfigService(t *testing.T) *SlackConfigService {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)

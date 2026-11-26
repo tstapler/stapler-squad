@@ -41,6 +41,7 @@ server/services/searchrpc !server/web
 server/services/adminmisc !server/web
 server/services/escapecode !server/web
 server/services/triggerlimit !server/web
+server/services/webhooks !server/web
 server/services/questionkit !server/web
 session/ptyio !server
 session/ptydiscovery !server

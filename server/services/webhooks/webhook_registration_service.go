@@ -1,4 +1,4 @@
-package services
+package webhooks
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -432,7 +433,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (webhookstore.We
 			return invalid("webhook.prompt_template: " + err.Error())
 		}
 	}
-	if err := validateTargetDirectory(b.TargetDirectory); err != nil {
+	if err := fsops.ValidateTargetDirectory(b.TargetDirectory); err != nil {
 		return invalid("webhook." + err.Error())
 	}
 	if !dirRoot(allowedRoot).contains(b.TargetDirectory) {

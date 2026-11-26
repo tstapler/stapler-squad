@@ -46,7 +46,7 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=186 loc=50802 imports=95
+server/services files=179 loc=49224 imports=95
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
@@ -89,7 +89,7 @@ session/terminalstate files=4 loc=115 imports=2
 session/jsonmigrate files=1 loc=272 imports=2
 session/workspacepeers files=1 loc=315 imports=7
 session/backlogaux files=6 loc=308 imports=3
-server/services/fsops files=15 loc=1715 imports=6
+server/services/fsops files=15 loc=1727 imports=6
 server/services/fsops/fsopstest files=1 loc=90 imports=1
 server/services/access files=8 loc=1190 imports=8
 server/services/fsops/memfs files=1 loc=208 imports=1
@@ -108,3 +108,4 @@ server/services/searchrpc files=8 loc=1877 imports=11
 server/services/adminmisc files=4 loc=521 imports=6
 server/services/escapecode files=1 loc=208 imports=2
 server/services/triggerlimit files=1 loc=65 imports=0
+server/services/webhooks files=7 loc=1573 imports=12

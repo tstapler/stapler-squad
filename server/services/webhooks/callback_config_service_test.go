@@ -1,4 +1,4 @@
-package services
+package webhooks
 
 import (
 	"context"
@@ -109,7 +109,7 @@ func TestUpdateCallbackConfig_EmptyStringClearsURL(t *testing.T) {
 // request's URL and returns a canned 200 response, without ever opening a
 // real network connection. Used instead of an httptest.Server (loopback)
 // target below because UpdateCallbackConfig always runs the request through
-// the REAL ValidateCallbackURL (server/services/webhook_ssrf.go) — unlike
+// the REAL ValidateCallbackURL (server/services/webhooks/webhook_ssrf.go) — unlike
 // CallbackDispatcher's own send-time check, this one isn't swappable for a
 // permissive test stub — and the real check rejects loopback addresses, so an
 // httptest.Server URL could never be saved via UpdateCallbackConfig in the
@@ -156,7 +156,7 @@ func TestUpdateCallbackConfig_TakesEffectOnDispatchWithoutRestart(t *testing.T) 
 
 	// dispatcherCfg is the dispatcher's long-lived config instance — analogous to
 	// the single cfg loaded once at process start in server/dependencies.go and
-	// passed to services.NewCallbackDispatcher. It starts with no callback URL
+	// passed to webhooks.NewCallbackDispatcher. It starts with no callback URL
 	// configured.
 	dispatcherCfg := &config.Config{FeatureFlags: map[string]bool{"webhook_triggers": true}}
 	d := &CallbackDispatcher{

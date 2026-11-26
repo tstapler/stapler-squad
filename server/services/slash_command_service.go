@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // builtinClaudeCommands lists hardcoded Claude Code CLI built-ins that are always shown.
@@ -61,7 +63,7 @@ func (s *SlashCommandService) ListSlashCommands(
 	if targetDir != "" {
 		expanded, err := expandTilde(targetDir)
 		if err == nil {
-			if valErr := validateTargetDirectory(expanded); valErr != nil {
+			if valErr := fsops.ValidateTargetDirectory(expanded); valErr != nil {
 				log.Warn("[ListSlashCommands] rejected target_directory", "target_directory", targetDir, "err", valErr)
 			} else {
 				projectDir := filepath.Join(expanded, ".claude", "commands")
