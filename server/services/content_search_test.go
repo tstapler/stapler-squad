@@ -610,8 +610,8 @@ func peakHeapGrowth(fn func()) uint64 {
 
 // heapCheckpointFS measures heap growth at fixed points inside a search, not on a timer:
 // a timed sample counts everything allocated while its own GC runs, which grows with the
-// process's total heap and CPU load. Every Open and ReadDir takes mu, so while one call
-// measures, the rest of the pipeline parks at its next file.
+// process's total heap and CPU load. Every Open, Read and ReadDir takes mu, so while one
+// call measures (scan buffers live), the others stop at their next fs call.
 type heapCheckpointFS struct {
 	root  fs.FS
 	every int
@@ -645,7 +645,21 @@ func (c *heapCheckpointFS) checkpoint() {
 
 func (c *heapCheckpointFS) Open(name string) (fs.File, error) {
 	c.checkpoint()
-	return c.root.Open(name)
+	f, err := c.root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return heapCheckpointFile{File: f, c: c}, nil
+}
+
+type heapCheckpointFile struct {
+	fs.File
+	c *heapCheckpointFS
+}
+
+func (f heapCheckpointFile) Read(p []byte) (int, error) {
+	f.c.checkpoint()
+	return f.File.Read(p)
 }
 
 func (c *heapCheckpointFS) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -668,7 +682,7 @@ func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t
 		for _, run := range []struct {
 			q     string
 			every int
-		}{{"a ", 10}, {"zzzz-never-matches", 500}} {
+		}{{"a ", 20}, {"zzzz-never-matches", 2000}} {
 			q := run.q
 			measured := &heapCheckpointFS{root: root, every: run.every, base: liveHeap()}
 			_, err := NewWalkSearcher().Search(context.Background(), measured, literalOpts(q), func([]SearchMatch) error { return nil })
@@ -680,7 +694,7 @@ func TestContentSearch_ShouldKeepPeakHeapGrowthUnder64MB_When_EveryFileMatches(t
 		}
 	}
 	if big, ok := peaks[50000]; ok {
-		assert.Less(t, big, 5*max(peaks[5000], 8<<20), "heap must not scale with file count (no retained path list)")
+		assert.Less(t, big, 5*max(peaks[5000], 8<<20), "heap must not scale with file count")
 	}
 }
 

@@ -72,7 +72,10 @@ describe("InsightsDashboard bar-click cross-filter (Story 5.2.2)", () => {
     mockSummary(makeSummary());
     const { container, unmount } = render(<InsightsDashboard />);
     // Throws if no skeleton is present, so this cannot silently become a no-op.
-    await waitForElementToBeRemoved(() => Array.from(container.querySelectorAll(".skeleton")), { timeout: 60000 });
+    // Shorter than the hook's timeout so a hang reports which wait failed.
+    await waitForElementToBeRemoved(() => Array.from(container.querySelectorAll(".skeleton")), { timeout: 50000 });
+    // A rejected chart would also remove every skeleton, by unmounting the tree.
+    expect(screen.getByTestId("stage-cost-legend-work")).toBeInTheDocument();
     unmount();
   }, 60000);
 
