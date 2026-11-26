@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -65,7 +66,7 @@ func (s *SessionService) decideUpdateAccess(ctx context.Context, req *connect.Re
 				fmt.Errorf("%w (also set: %v)", errSteerNotAlone, others))
 		}
 	}
-	if hidden && AccessForUnary(inst, s.guards) == TerminalReadOnly && restartsPane(msg, inst) {
+	if hidden && access.AccessForUnary(inst, s.guards) == access.TerminalReadOnly && restartsPane(msg, inst) {
 		return steerDecision{}, connect.NewError(connect.CodeFailedPrecondition,
 			errors.New("this background session is read-only: program, auto_approve and autonomous_mode changes write to its terminal"))
 	}
@@ -84,7 +85,7 @@ func (s *SessionService) runSteer(ctx context.Context, d steerDecision, inst *in
 	if !d.typed {
 		return s.steerUnderLease(ctx, d.auth, inst, msg)
 	}
-	w, err := AccessForUnary(inst, s.guards).BacklogSteerWriter(d.link, s)
+	w, err := newBacklogSteerWriter(access.AccessForUnary(inst, s.guards), d.link, s)
 	if err != nil {
 		return fmt.Errorf("backlog steer writer: %w", err)
 	}

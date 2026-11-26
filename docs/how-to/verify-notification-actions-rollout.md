@@ -79,7 +79,7 @@ tmux -L ssq-manual-1 kill-server   # touches only the private socket
 
 ## 2. Flip a flag live and roll it back
 
-The four flags are registered in `server/services/feature_flag_service.go` and wired in `server/services/feature_flags_notification_actions.go`. A flip applies at once with no restart (each flag description ends "Applies at once").
+The four flags are registered in `server/services/flagsvc/feature_flag_service.go` and wired in `server/services/flagsvc/feature_flags_notification_actions.go`. A flip applies at once with no restart (each flag description ends "Applies at once").
 
 | Flag | Defaults to | Scopes (closed set) |
 |---|---|---|
@@ -88,17 +88,17 @@ The four flags are registered in `server/services/feature_flag_service.go` and w
 | `askuserquestion_structured` | OFF | `stage:render`, `stage:answer`, `stage:hook_reply` |
 | `agent_wake_triggers` | OFF | `trigger:<at, cron, backlog_event, pr_event, ci_event, session_state, guidance_answered>`, `tool:<schedule_wake, list_wakes, cancel_wake, request_help>` |
 
-Source for the table: `server/services/feature_flags_notification_actions.go` (scope constants and `featureflags.Spec` entries in `server/services/feature_flag_specs.go`). `channel:remote:tierB` and `stage:hook_reply` stay closed regardless of the flag until the Spike S6 and S1 constants in that file (`spikeS6TierBPassed`, `spikeS1HookReplyPassed`) are set to true in code; record their current value in step 2.1.
+Source for the table: `server/services/flagsvc/feature_flags_notification_actions.go` (scope constants and `featureflags.Spec` entries in `server/services/flagsvc/feature_flag_specs.go`). `channel:remote:tierB` and `stage:hook_reply` stay closed regardless of the flag until the Spike S6 and S1 constants in that file (`spikeS6TierBPassed`, `spikeS1HookReplyPassed`) are set to true in code; record their current value in step 2.1.
 
 Precedence: an explicit scoped value wins in either direction, then the explicit global value, then the default (ADR-008, Decision). Dependencies: `stage:answer` needs `stage:render`; `stage:hook_reply` needs `stage:answer` and Spike S1; `channel:remote:tierB` needs `channel:remote` and Spike S6; for `agent_wake_triggers` a `trigger:<type>` or `tool:<name>` scope is effective only while the dispatcher runs.
 
 ### Mechanism A: the Feature Flags page
 
-Open `http://localhost:62871/settings/features` (`web-app/src/app/settings/features/page.tsx`). Each flag shows a global toggle; flags with scopes show per-scope Inherit/On/Off controls. Turning a flag ON is a loosening change: it is audit-fsynced and refused while the audit sink is down (`notificationActionsFlagAuditPolicy` in `server/services/feature_flags_notification_actions.go`).
+Open `http://localhost:62871/settings/features` (`web-app/src/app/settings/features/page.tsx`). Each flag shows a global toggle; flags with scopes show per-scope Inherit/On/Off controls. Turning a flag ON is a loosening change: it is audit-fsynced and refused while the audit sink is down (`notificationActionsFlagAuditPolicy` in `server/services/flagsvc/feature_flags_notification_actions.go`).
 
 ### Mechanism B: the Connect RPC
 
-Handlers are mounted under `/api` (`docs/reference/backlog-dependencies.md`). The service is `session.v1.SessionService`; request fields are in `proto/session/v1/session.proto` (`UpdateFeatureFlagRequest`). A set needs an explicit scope: `global` for the global value (`server/services/feature_flag_mutation.go:112-114`).
+Handlers are mounted under `/api` (`docs/reference/backlog-dependencies.md`). The service is `session.v1.SessionService`; request fields are in `proto/session/v1/session.proto` (`UpdateFeatureFlagRequest`). A set needs an explicit scope: `global` for the global value (`server/services/flagsvc/feature_flag_mutation.go:112-114`).
 
 ```bash
 BASE=http://127.0.0.1:62871/api/session.v1.SessionService
@@ -205,7 +205,7 @@ To repeat the byte check after a Claude Code update:
 
 ## 5. Claude Code layout canary after a Claude Code update (Task 3.3h)
 
-The dialog matcher is pinned to fixtures captured from Claude Code `v2.1.296` (`session/testdata/reply_dialogs/claude_auq_*.txt`; version stated in plan Story 3.3). After any Claude Code update, re-check. A mismatch makes every `DialogMatch` fail closed, and the canary degrades hook-mirrored question rows to `read_only` (`server/services/guidance_dialog_canary.go`: more than half of at least 5 attempts in 1 hour mismatch).
+The dialog matcher is pinned to fixtures captured from Claude Code `v2.1.296` (`session/testdata/reply_dialogs/claude_auq_*.txt`; version stated in plan Story 3.3). After any Claude Code update, re-check. A mismatch makes every `DialogMatch` fail closed, and the canary degrades hook-mirrored question rows to `read_only` (`server/services/questionkit/guidance_dialog_canary.go`: more than half of at least 5 attempts in 1 hour mismatch).
 
 1. Record the new version.
 

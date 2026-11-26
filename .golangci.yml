@@ -113,6 +113,22 @@ linters:
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/internal/procbackendtest"
               desc: "session/internal/procbackendtest holds test doubles; import it from _test.go files only"
+        memfs_test_only:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/server/services/fsops/memfs/**"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server/services/fsops/memfs"
+              desc: "server/services/fsops/memfs holds test doubles; import it from _test.go files only"
+        fsopstest_test_only:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/server/services/fsops/fsopstest/**"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
+              desc: "server/services/fsops/fsopstest holds test fixtures; import it from _test.go files only"
         push_no_services:
           files:
             - "**/server/push/**"
@@ -195,6 +211,52 @@ linters:
             - github.com/google/uuid
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/tstapler/stapler-squad/session/ent
+        # session/jsonmigrate is the one-shot JSON-to-Ent import behind the migrate_data and
+        # migrate_global scripts: it reaches the database through an injected opener and never
+        # imports session, github or server.
+        isolate_jsonmigrate:
+          list-mode: strict
+          files:
+            - "**/session/jsonmigrate/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+        # session/workspacepeers answers list_workspace_peers and the session-start peer nudge over a
+        # consumer-side Store port: it never imports session or server, and no github directly
+        # (session/instance reaches it, so boundaries.txt has no !github row).
+        isolate_workspacepeers:
+          list-mode: strict
+          files:
+            - "**/session/workspacepeers/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/sessiongoal
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/tmux
+        # session/ptydiscovery backs only the `test-pty` debug command (main.go); it never imports
+        # session, github or server.
+        isolate_ptydiscovery:
+          list-mode: strict
+          files:
+            - "**/session/ptydiscovery/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/linkdata/deadlock
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/internal/syncutil
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/session/claudectl
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/tmux
         # session/shellstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_shellstore:
@@ -208,6 +270,18 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent
             - github.com/tstapler/stapler-squad/session/ent/session
             - github.com/tstapler/stapler-squad/session/ent/shell
+        # session/credentialstore is a persistence leaf embedded by session.EntRepository: it never
+        # imports session, github or server.
+        isolate_credentialstore:
+          list-mode: strict
+          files:
+            - "**/session/credentialstore/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/session/ent/integrationcredential
         # session/projectstore is a persistence leaf embedded by session.EntRepository: it never
         # imports session, github or server.
         isolate_projectstore:
@@ -378,6 +452,29 @@ linters:
             - github.com/tstapler/stapler-squad/session/ent
             - github.com/tstapler/stapler-squad/session/hostclaim
             - github.com/tstapler/stapler-squad/session/stagecfg
+        # session/procbackend holds the tmux, tymux and native process backends: it never imports
+        # session or server (session/backend_wiring.go registers it, not the reverse).
+        isolate_procbackend:
+          list-mode: strict
+          files:
+            - "**/session/procbackend/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/creack/pty
+            - go.opentelemetry.io/otel/attribute
+            - go.opentelemetry.io/otel/codes
+            - go.opentelemetry.io/otel/metric
+            - github.com/tstapler/stapler-squad/executor/safeexec
+            - github.com/tstapler/stapler-squad/internal/qos
+            - github.com/tstapler/stapler-squad/log
+            - github.com/tstapler/stapler-squad/telemetry
+            - github.com/tstapler/stapler-squad/session/domain
+            - github.com/tstapler/stapler-squad/session/instance
+            - github.com/tstapler/stapler-squad/session/procinfo
+            - github.com/tstapler/stapler-squad/session/slowops
+            - github.com/tstapler/stapler-squad/session/tmux
+            - github.com/tstapler/stapler-squad/session/tymux
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and flowstore.Reader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.
@@ -457,6 +554,8 @@ linters:
             - github.com/tstapler/stapler-squad/session/instance
             - github.com/tstapler/stapler-squad/session/itemlink
             - github.com/tstapler/stapler-squad/session/nudgeoutcomes
+            - github.com/tstapler/stapler-squad/session/terminalstate
+            - github.com/tstapler/stapler-squad/session/workspacepeers
           # Belt and braces: this row's allow matching is order-dependent (verified, mechanism not read),
           # so the exact import set in server/mcp/import_set_guard_test.go is the dependable control.
           deny:
@@ -635,10 +734,10 @@ linters:
             - "!**/server/services/backlogsvc/backlog_service_pipeline_mode.go"
             - "!**/server/services/backlogsvc/backlog_service_ship.go"
             - "!**/server/services/backlogsvc/backlog_service_ship_status.go"
-            - "!**/server/services/session_summary_service_test.go"
+            - "!**/server/services/summaryrpc/session_summary_service_test.go"
             - "!**/server/services/backlogsvc/backlog_service_sync.go"
             - "!**/server/services/webhooktrigger/github_webhook_handler.go"
-            - "!**/server/services/session_summary_service.go"
+            - "!**/server/services/summaryrpc/session_summary_service.go"
             - "!**/server/services/backlogsvc/backlog_service_pipeline_mode_test.go"
             - "!**/server/services/webhooktrigger/webhook_trigger_common.go"
             - "!**/server/services/webhooktrigger/github_webhook_handler_test.go"
@@ -653,7 +752,10 @@ linters:
             # file (handoff_summary_service.go) does NOT need this exclusion —
             # it was fixed to use session.HandoffSummary (a plain domain DTO)
             # instead of importing session/ent directly.
-            - "!**/server/services/handoff_summary_service_test.go"
+            - "!**/server/services/summaryrpc/handoff_summary_service_test.go"
+            # The summaryrpc golden and mapping tests seed and read ent rows the same way.
+            - "!**/server/services/summaryrpc/summaryrpc_golden_test.go"
+            - "!**/server/services/summaryrpc/summaryrpc_mapping_test.go"
             # github_webhook_pr_fix_test.go's erroringWorkflowRepo wraps the real
             # stagecfg.WorkflowRepository and overrides only ListByTriggerType to
             # simulate an infra failure (e.g. a DB error) — the interface method's

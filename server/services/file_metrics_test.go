@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 func TestFileMetrics_ShouldIncrementCountersAndObserveHistograms_When_RpcsComplete(t *testing.T) {
@@ -19,17 +20,17 @@ func TestFileMetrics_ShouldIncrementCountersAndObserveHistograms_When_RpcsComple
 		counter, histogram, outcome string
 		record                      func()
 	}{
-		{"files.search.total", "files.search.duration_ms", string(SearchOutcomeOK), func() {
-			recordSearchMetrics(context.Background(), SearchOutcomeOK, 12*time.Millisecond, 3*time.Millisecond)
+		{"files.search.total", "files.search.duration_ms", string(fsops.SearchOutcomeOK), func() {
+			fsops.RecordSearchMetrics(context.Background(), fsops.SearchOutcomeOK, 12*time.Millisecond, 3*time.Millisecond)
 		}},
-		{"files.write.total", "files.write.duration_ms", string(WriteOutcomeOK), func() {
-			recordWriteMetrics(context.Background(), WriteOutcomeOK, 7*time.Millisecond)
+		{"files.write.total", "files.write.duration_ms", string(fsops.WriteOutcomeOK), func() {
+			fsops.RecordWriteMetrics(context.Background(), fsops.WriteOutcomeOK, 7*time.Millisecond)
 		}},
 		{"files.range.total", "files.range.duration_ms", "index_pending", func() {
-			recordRangeMetrics(context.Background(), "index_pending", 5*time.Millisecond)
+			fsops.RecordRangeMetrics(context.Background(), "index_pending", 5*time.Millisecond)
 		}},
 		{"files.stat.total", "files.stat.duration_ms", "denied", func() {
-			recordStatMetrics(context.Background(), connect.NewError(connect.CodePermissionDenied, nil), time.Millisecond)
+			fsops.RecordStatMetrics(context.Background(), connect.NewError(connect.CodePermissionDenied, nil), time.Millisecond)
 		}},
 	}
 	for _, c := range cases {

@@ -5,7 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // probeProcedurePath is the full request path of ProbeProgram as seen by the
@@ -134,7 +134,7 @@ func (s *Server) localDispatcherWith(procedures map[string]middleware.GuardProfi
 		})(inner)
 	}
 	inner = middleware.HostGuard(s.hostGuardConfig())(inner)
-	return s.stampRequest(services.ListenerLocal, s.requiresAuth)(inner)
+	return s.stampRequest(access.ListenerLocal, s.requiresAuth)(inner)
 }
 
 // wrapOuterMiddleware adds the HTTP-only outer layers (Logging, CORS, gzip)

@@ -14,7 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 // Request batching over plain HTTP (feature flag batch_unary). One POST carries up
@@ -119,7 +119,7 @@ func (h *UnaryBatchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "application/json required", http.StatusUnsupportedMediaType)
 		return
 	}
-	rec, ok := services.RequestRecordFrom(r.Context())
+	rec, ok := access.RequestRecordFrom(r.Context())
 	if !ok || rec.Listener == "" {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return

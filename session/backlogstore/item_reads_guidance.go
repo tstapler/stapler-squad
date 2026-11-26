@@ -229,6 +229,8 @@ func (b *Backlog) ListBacklogItemSummaries(ctx context.Context, filter backlogdt
 			PlanApproved:        item.PlanApproved,
 			PlanArtifactsPath:   item.PlanArtifactsPath,
 			PlanRejectionReason: item.PlanRejectionReason,
+			IsIntegrationChild:  item.IsIntegrationChild,
+			IntegrationChildID:  uuidPtrString(item.IntegrationChildID),
 		}
 		idIndex[item.ID.String()] = i
 		parsedUUIDs = append(parsedUUIDs, item.ID)

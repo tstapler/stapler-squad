@@ -20,6 +20,7 @@ import (
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	entWorktree "github.com/tstapler/stapler-squad/session/ent/worktree"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // WorktreeConsistencyIssueKind names what's wrong with a session's worktree state
@@ -501,7 +502,7 @@ func notifyLinkageAware(notifier domain.Notifier, backoff *notifyBackoff, req no
 // (server/services/backlog_service_triage.go): a storage error or a status precondition
 // mismatch is logged, never propagated or allowed to block the caller's notification.
 func markStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, itemID string, item *backlogdto.BacklogItemData, detail string) {
-	if itemID == "" || item == nil || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+	if itemID == "" || item == nil || terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return
 	}
 	stuckContext := fmt.Sprintf("worktree consistency sweep: %s", detail)
@@ -522,7 +523,7 @@ func markStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, 
 // BacklogItem visibly "stuck" forever — undermining this sweep's own self-healing premise
 // (BLOCKER). A storage error is logged, never propagated.
 func resolveStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, itemID string, item *backlogdto.BacklogItemData) {
-	if itemID == "" || item == nil || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+	if itemID == "" || item == nil || terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return
 	}
 	if _, err := repo.ResolveStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent); err != nil {

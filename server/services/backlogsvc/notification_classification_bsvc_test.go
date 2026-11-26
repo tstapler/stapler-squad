@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -37,7 +38,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		h := services.NewApprovalHandler(services.NewApprovalStore(""), nil, bus)
+		h := services.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 		h.BroadcastQuestionNotification("sess-1", classifier.PermissionRequestPayload{
 			ToolName:  "AskUserQuestion",
 			ToolInput: map[string]interface{}{"prompt": "Which approach?"},
@@ -55,8 +56,8 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		h := services.NewApprovalHandler(services.NewApprovalStore(""), nil, bus)
-		h.BroadcastApprovalNotification("sess-1", &services.PendingApproval{
+		h := services.NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
+		h.BroadcastApprovalNotification("sess-1", &approvalkit.PendingApproval{
 			ID:        "approval-1",
 			SessionID: "sess-1",
 			ToolName:  "Bash",

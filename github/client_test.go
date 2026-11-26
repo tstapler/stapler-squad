@@ -34,7 +34,7 @@ func setGraphQLMigrationFlagForTest(t *testing.T, value bool) {
 }
 
 // TestGithubGraphQLMigrationFlagName_MatchesServerServicesDuplicate is a
-// code-review MAJOR's cheap safety net: server/services/feature_flag_service.go's
+// code-review MAJOR's cheap safety net: server/services/flagsvc/feature_flag_service.go's
 // the flag Specs registers this same literal under its own
 // githubGraphQLMigrationFlagName constant (github cannot import
 // server/services — a cycle). This test hardcodes that literal so a rename
@@ -42,9 +42,9 @@ func setGraphQLMigrationFlagForTest(t *testing.T, value bool) {
 // diverging; see this package's githubGraphQLMigrationFlagName doc comment
 // above for the full cross-package rationale.
 func TestGithubGraphQLMigrationFlagName_MatchesServerServicesDuplicate(t *testing.T) {
-	const serverServicesFlagName = "github:graphql-pr-info" // server/services/feature_flag_service.go:53
+	const serverServicesFlagName = "github:graphql-pr-info" // server/services/flagsvc/feature_flag_service.go:53
 	if githubGraphQLMigrationFlagName != serverServicesFlagName {
-		t.Fatalf("githubGraphQLMigrationFlagName = %q, want %q to match server/services/feature_flag_service.go's constant", githubGraphQLMigrationFlagName, serverServicesFlagName)
+		t.Fatalf("githubGraphQLMigrationFlagName = %q, want %q to match server/services/flagsvc/feature_flag_service.go's constant", githubGraphQLMigrationFlagName, serverServicesFlagName)
 	}
 }
 

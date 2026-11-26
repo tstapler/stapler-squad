@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -219,7 +219,7 @@ func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcur
 func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGraphWouldDeny(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
-	handler := services.NewBacklogDebugMutateHandler(svc.storage)
+	handler := backlogmisc.NewBacklogDebugMutateHandler(svc.storage)
 	item := systemItemAt(t, svc, domain.BacklogStatusIdea)
 	before := workflowengine.EngineBypassCount(backlogdto.CallerDebug)
 

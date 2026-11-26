@@ -12,29 +12,32 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// recordingAcks is a deliverySink that remembers what was sent.
+// recordingAcks is a questionkit.DeliverySink that remembers what was sent.
 type recordingAcks struct {
 	mu   sync.Mutex
-	sent []SentDelivery
+	sent []questionkit.SentDelivery
 }
 
-func (r *recordingAcks) Sent(d SentDelivery) {
+func (r *recordingAcks) Sent(d questionkit.SentDelivery) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sent = append(r.sent, d)
 }
 
-func (r *recordingAcks) all() []SentDelivery {
+func (r *recordingAcks) all() []questionkit.SentDelivery {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]SentDelivery(nil), r.sent...)
+	return append([]questionkit.SentDelivery(nil), r.sent...)
 }
 
 // routerEnv is a reply env plus a router over real storage, a fake clock for
@@ -43,7 +46,7 @@ type routerEnv struct {
 	*replyEnv
 	router   *AnswerRouter
 	acks     *recordingAcks
-	activity *HumanActivity
+	activity *access.HumanActivity
 	clients  []tmux.ClientActivity
 	flags    *fakeActionFlags
 }
@@ -51,10 +54,10 @@ type routerEnv struct {
 func newRouterEnv(t *testing.T) *routerEnv {
 	t.Helper()
 	e := &routerEnv{replyEnv: newReplyEnv(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
-	e.activity = NewHumanActivity(e.clock.Now)
+	e.activity = access.NewHumanActivity(e.clock.Now)
 	e.router = e.fix.svc.WireAnswerRouter(AnswerRouterDeps{Rows: e.fix.storage, Acks: e.acks})
 	e.router.flags = e.flags
-	e.router.guard = NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
+	e.router.guard = access.NewHumanActiveGuard(e.activity, func(context.Context, string) ([]tmux.ClientActivity, error) {
 		return e.clients, nil
 	})
 	return e
@@ -95,8 +98,8 @@ func (e *routerEnv) hookRow(inst *instance.Instance, d panereply.QuestionDialog)
 	require.NoError(e.t, err)
 	row, err := e.fix.storage.CreateMirroredGuidanceRequest(context.Background(), gr, 0)
 	require.NoError(e.t, err)
-	e.fix.svc.PendingQuestions().Register(PendingQuestion{
-		QuestionID: row.ID, SessionUUID: inst.UUID, Dialog: d, Token: QuestionToken(d.Question),
+	e.fix.svc.PendingQuestions().Register(questionkit.PendingQuestion{
+		QuestionID: row.ID, SessionUUID: inst.UUID, Dialog: d, Token: questionkit.QuestionToken(d.Question),
 	})
 	return row.ID
 }
@@ -119,7 +122,7 @@ func (e *routerEnv) row(id string) *domain.GuidanceRequestData {
 	return row
 }
 
-func (e *routerEnv) answer(inst *instance.Instance, qid, label string) ActionResult {
+func (e *routerEnv) answer(inst *instance.Instance, qid, label string) questionkit.ActionResult {
 	e.t.Helper()
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{SessionID: inst.UUID, QuestionID: qid, OptionLabel: label, ReplyID: "r-" + uuid.NewString()})
 	require.NoError(e.t, err)
@@ -168,7 +171,7 @@ func TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFive
 	qid := e.hookRow(inst, colorDialog)
 	e.activity.Record("ssq_visible-typing")
 	e.clock.Advance(2 * time.Second)
-	refusalsBefore := HumanActiveRefusals()
+	refusalsBefore := access.HumanActiveRefusals()
 
 	res := e.answer(inst, qid, replyColorLabel)
 
@@ -176,7 +179,7 @@ func TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFive
 	assert.Equal(t, "human_active", res.Detail)
 	assert.Empty(t, pm.writes(), "zero bytes written")
 	assert.Empty(t, e.row(qid).DeliveryState, "a refusal before any attempt moves no state")
-	assert.Equal(t, refusalsBefore+1, HumanActiveRefusals(), "human_active_refusal_total counted the refusal once")
+	assert.Equal(t, refusalsBefore+1, access.HumanActiveRefusals(), "human_active_refusal_total counted the refusal once")
 
 	e.clock.Advance(4 * time.Second)
 	assert.Equal(t, outApplied, e.answer(inst, qid, replyColorLabel).Outcome, "6 s after the last input the answer proceeds")
@@ -274,13 +277,13 @@ func TestAnswerRouter_ShouldReportTheRouteOfEachSessionState(t *testing.T) {
 	tests := []struct {
 		name      string
 		sessionID string
-		want      answerRoute
+		want      flagsvc.AnswerRoute
 		known     bool
 	}{
-		{"hidden live", e.inst.UUID, routeLiveKeystrokeHidden, true},
-		{"visible live", visible.UUID, routeLiveKeystrokeVisible, true},
-		{"stopped", stopped.UUID, routeDurableRecord, true},
-		{"archived", archived.UUID, routeDurableRecord, true},
+		{"hidden live", e.inst.UUID, flagsvc.RouteLiveKeystrokeHidden, true},
+		{"visible live", visible.UUID, flagsvc.RouteLiveKeystrokeVisible, true},
+		{"stopped", stopped.UUID, flagsvc.RouteDurableRecord, true},
+		{"archived", archived.UUID, flagsvc.RouteDurableRecord, true},
 		{"unknown", "nope", 0, false},
 	}
 	for _, tt := range tests {
@@ -400,7 +403,7 @@ func TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterT
 	inst, pm := e.addVisible("route-flip")
 	d := panereply.QuestionDialog{Question: "Pick a colour", Labels: []string{"Red", replyColorLabel, "Blue"}}
 	qid := e.hookRow(inst, d)
-	gated := routeDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
+	gated := flagsvc.RouteDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
 
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
 		SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-flip", ExpectedRoute: &gated,

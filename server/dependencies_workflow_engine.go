@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -46,7 +47,7 @@ func newWorkflowEngineWiring(def *workflowengine.DefaultWorkflowEngine, cfgEngin
 		dir = ""
 	}
 	recorder := shadowledger.NewShadowLedgerRecorder(dir)
-	modes := services.NewWorkflowEngineClassModeSource(loadConfig, nil)
+	modes := flagsvc.NewWorkflowEngineClassModeSource(loadConfig, nil)
 	engine := workflowengine.NewSwitchableWorkflowEngine(def, cfgEngine, modes,
 		workflowengine.WithShadowRecorder(recorder),
 		workflowengine.WithConfigLabeler(shadowledger.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
@@ -122,7 +123,7 @@ func transitionGateStartupLine(storage *session.Storage, reporterWired bool, mod
 // RegisterStatusDetail shows the shadow divergence count on the shadow flag's status line.
 func (w *WorkflowEngineWiring) RegisterStatusDetail(svc *services.SessionService) {
 	svc.SetStatusDetailProvider(config.WorkflowEngineShadowFeatureFlag,
-		services.WorkflowEngineShadowStatusDetail(w.Recorder.Snapshot, time.Now))
+		flagsvc.WorkflowEngineShadowStatusDetail(w.Recorder.Snapshot, time.Now))
 }
 
 func stageFingerprintFunc(entClient *ent.Client) func() (string, error) {

@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // PRFixSpawner can reopen a pr_pending item for rework when CI checks fail or
@@ -1081,7 +1082,7 @@ func (l *BacklogLifecycleListener) handlePRPendingTransitionFailed(ctx context.C
 		return
 	}
 	if item.PrNumber <= 0 || item.PrURL == "" ||
-		item.Status == string(domain.BacklogStatusPRPending) || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
+		item.Status == string(domain.BacklogStatusPRPending) || terminalstate.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return // already recovered, or resolved to a terminal state, by the time we got here
 	}
 	l.recoverDriftedPRItem(ctx, item, caller)

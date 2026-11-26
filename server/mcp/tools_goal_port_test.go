@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // recordingGoalStore is the second GoalStore implementation: it records every
@@ -27,7 +27,7 @@ type recordingGoalStore struct {
 	updateRes   *instance.SessionGoalData
 	updateErr   error
 	peerCalls   []peerCall
-	peerRes     []session.WorkspacePeer
+	peerRes     []workspacepeers.WorkspacePeer
 	peerErr     error
 }
 
@@ -55,7 +55,7 @@ func (f *recordingGoalStore) UpdateSessionTaskStatus(_ context.Context, uuid, ta
 	return f.updateRes, f.updateErr
 }
 
-func (f *recordingGoalStore) ListWorkspacePeers(_ context.Context, workspaceKey, exclude string) ([]session.WorkspacePeer, error) {
+func (f *recordingGoalStore) ListWorkspacePeers(_ context.Context, workspaceKey, exclude string) ([]workspacepeers.WorkspacePeer, error) {
 	f.peerCalls = append(f.peerCalls, peerCall{workspaceKey, exclude})
 	return f.peerRes, f.peerErr
 }
@@ -65,6 +65,7 @@ var _ GoalStore = (*recordingGoalStore)(nil)
 func fakeGoalHandlers(inst *instance.Instance, fake *recordingGoalStore) *goalHandlers {
 	return &goalHandlers{
 		storage:  fake,
+		peers:    fake,
 		store:    &stubStore{instances: []*instance.Instance{inst}},
 		eventBus: events.NewEventBus(5),
 	}
@@ -242,7 +243,7 @@ func TestGoalStorePort_should_ScopeToCallersWorkspaceAndMapPeers_When_ListingPee
 	t.Parallel()
 	inst := makeTestInstance("goal-port-peers", "uuid-peers")
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "widgets"
-	fake := &recordingGoalStore{peerRes: []session.WorkspacePeer{
+	fake := &recordingGoalStore{peerRes: []workspacepeers.WorkspacePeer{
 		{SessionUUID: "p1", Title: "peer one", Branch: "b", Path: "/p", Status: domain.Paused, Goal: &instance.SessionGoalData{Goal: "peer goal", Status: "working"}},
 		{SessionUUID: "p2", Title: "peer two"},
 	}}

@@ -391,7 +391,7 @@ message Session {
 
   // True when a UI terminal attached to this session is read-only (server drops input):
   // archived, hidden, or a tymux session that is not ACTIVE. Computed by
-  // session.TerminalInputBlock, the same predicate the terminal stream uses.
+  // terminalstate.TerminalInputBlock, the same predicate the terminal stream uses.
   bool terminal_read_only = 100;
 
   // Every pull request attached to this session; the entry with is_active
@@ -491,7 +491,7 @@ message PrHold {
   google.protobuf.Timestamp last_activity_at = 5;
 }
 
-// PiExtensionHealth mirrors server/services.PiExtensionHealth: whether a pi
+// PiExtensionHealth mirrors server/services/piextension.PiExtensionHealth: whether a pi
 // session's globally-installed ssq-approval.ts extension has confirmed it
 // loaded and is enforcing approval rules. Three states, not a bool -- see
 // project_plans/pi-support/implementation/plan.md's Domain Glossary entry:

@@ -1,0 +1,94 @@
+mode=0 path="" => resolved="." via=false stat=ok
+mode=0 path="." => resolved="." via=false stat=ok
+mode=0 path="./" => resolved="." via=false stat=ok
+mode=0 path="src/a.go" => resolved="src/a.go" via=false stat=ok
+mode=0 path="./src/a.go" => resolved="src/a.go" via=false stat=ok
+mode=0 path="src//a.go" => resolved="src/a.go" via=false stat=ok
+mode=0 path="src/" => resolved="src" via=false stat=ok
+mode=0 path="src/../src/a.go" => resolved="src/a.go" via=false stat=ok
+mode=0 path="src/new.go" => resolved="src/new.go" via=false stat=notexist
+mode=0 path=".." => ERR connect:invalid_argument path traversal detected details=0
+mode=0 path="../" => ERR connect:invalid_argument path traversal detected details=0
+mode=0 path="../outside" => ERR connect:invalid_argument path traversal detected details=0
+mode=0 path="src/../.." => ERR connect:invalid_argument path traversal detected details=0
+mode=0 path="src/../../outside" => ERR connect:invalid_argument path traversal detected details=0
+mode=0 path="/etc/passwd" => ERR connect:invalid_argument absolute paths are not allowed details=0
+mode=0 path="/" => ERR connect:invalid_argument absolute paths are not allowed details=0
+mode=0 path="a\x00b" => ERR connect:invalid_argument path contains NUL details=0
+mode=0 path=".git" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path=".git/config" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path=".git/hooks" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path="x/.git/y" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path="src/.git" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path=".GIT" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path="src/.git/config" => ERR connect:permission_denied .git is not accessible details=0
+mode=0 path="AGENTS.md" => resolved="CLAUDE.md" via=true stat=ok
+mode=0 path="docs/alias.md" => resolved="README.md" via=true stat=ok
+mode=0 path="shared" => resolved="pkg/shared" via=true stat=ok
+mode=0 path="shared/x.txt" => resolved="pkg/shared/x.txt" via=true stat=ok
+mode=0 path="pkg/shared/../shared/x.txt" => resolved="pkg/shared/x.txt" via=false stat=ok
+mode=0 path="chain1" => resolved="CLAUDE.md" via=true stat=ok
+mode=0 path="chain1/" => resolved="CLAUDE.md" via=true stat=ok
+mode=0 path="leak" => ERR connect:permission_denied symlink "leak" points outside the worktree or into .git details=1
+mode=0 path="leak_rel" => ERR connect:permission_denied symlink "leak_rel" points outside the worktree or into .git details=1
+mode=0 path="dir_leak" => ERR connect:permission_denied symlink "dir_leak" points outside the worktree or into .git details=1
+mode=0 path="dir_leak/secret" => ERR connect:permission_denied symlink "dir_leak" points outside the worktree or into .git details=1
+mode=0 path="dangling" => ERR connect:permission_denied symlink "dangling" points outside the worktree or into .git details=1
+mode=0 path="dangling_inside" => resolved="nope.txt" via=true stat=notexist
+mode=0 path="gitlink" => ERR connect:permission_denied symlink "gitlink" points outside the worktree or into .git details=1
+mode=0 path="gitlink/config" => ERR connect:permission_denied symlink "gitlink" points outside the worktree or into .git details=1
+mode=0 path="linkdir" => ERR connect:permission_denied symlink "linkdir" points outside the worktree or into .git details=1
+mode=0 path="linkdir/x" => ERR connect:permission_denied symlink "linkdir" points outside the worktree or into .git details=1
+mode=0 path="loop1" => ERR connect:invalid_argument too many symlinks details=0
+mode=0 path="loop2/x" => ERR connect:invalid_argument too many symlinks details=0
+mode=0 path="missing" => resolved="missing" via=false stat=notexist
+mode=0 path="missing/deeper" => resolved="missing/deeper" via=false stat=notexist
+mode=0 path="CLAUDE.md/extra" => resolved="CLAUDE.md/extra" via=false stat=statat CLAUDE.md/extra: not a directory
+mode=0 path="\\a.txt" => ERR connect:invalid_argument absolute paths are not allowed details=0
+mode=1 path="" => resolved="." via=false stat=ok replace=target is not a regular file: .
+mode=1 path="." => resolved="." via=false stat=ok replace=target is not a regular file: .
+mode=1 path="./" => resolved="." via=false stat=ok replace=target is not a regular file: .
+mode=1 path="src/a.go" => resolved="src/a.go" via=false stat=ok replace=ok
+mode=1 path="./src/a.go" => resolved="src/a.go" via=false stat=ok replace=ok
+mode=1 path="src//a.go" => resolved="src/a.go" via=false stat=ok replace=ok
+mode=1 path="src/" => resolved="src" via=false stat=ok replace=target is not a regular file: src
+mode=1 path="src/../src/a.go" => resolved="src/a.go" via=false stat=ok replace=ok
+mode=1 path="src/new.go" => resolved="src/new.go" via=false stat=notexist replace=ok
+mode=1 path=".." => ERR connect:invalid_argument path traversal detected details=0
+mode=1 path="../" => ERR connect:invalid_argument path traversal detected details=0
+mode=1 path="../outside" => ERR connect:invalid_argument path traversal detected details=0
+mode=1 path="src/../.." => ERR connect:invalid_argument path traversal detected details=0
+mode=1 path="src/../../outside" => ERR connect:invalid_argument path traversal detected details=0
+mode=1 path="/etc/passwd" => ERR connect:invalid_argument absolute paths are not allowed details=0
+mode=1 path="/" => ERR connect:invalid_argument absolute paths are not allowed details=0
+mode=1 path="a\x00b" => ERR connect:invalid_argument path contains NUL details=0
+mode=1 path=".git" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path=".git/config" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path=".git/hooks" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path="x/.git/y" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path="src/.git" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path=".GIT" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path="src/.git/config" => ERR connect:permission_denied .git is not accessible details=0
+mode=1 path="AGENTS.md" => ERR connect:permission_denied symlink "AGENTS.md" points outside the worktree or into .git details=1
+mode=1 path="docs/alias.md" => ERR connect:permission_denied symlink "docs/alias.md" points outside the worktree or into .git details=1
+mode=1 path="shared" => ERR connect:permission_denied symlink "shared" points outside the worktree or into .git details=1
+mode=1 path="shared/x.txt" => ERR connect:permission_denied symlink "shared" points outside the worktree or into .git details=1
+mode=1 path="pkg/shared/../shared/x.txt" => resolved="pkg/shared/x.txt" via=false stat=ok replace=ok
+mode=1 path="chain1" => ERR connect:permission_denied symlink "chain1" points outside the worktree or into .git details=1
+mode=1 path="chain1/" => ERR connect:permission_denied symlink "chain1" points outside the worktree or into .git details=1
+mode=1 path="leak" => ERR connect:permission_denied symlink "leak" points outside the worktree or into .git details=1
+mode=1 path="leak_rel" => ERR connect:permission_denied symlink "leak_rel" points outside the worktree or into .git details=1
+mode=1 path="dir_leak" => ERR connect:permission_denied symlink "dir_leak" points outside the worktree or into .git details=1
+mode=1 path="dir_leak/secret" => ERR connect:permission_denied symlink "dir_leak" points outside the worktree or into .git details=1
+mode=1 path="dangling" => ERR connect:permission_denied symlink "dangling" points outside the worktree or into .git details=1
+mode=1 path="dangling_inside" => ERR connect:permission_denied symlink "dangling_inside" points outside the worktree or into .git details=1
+mode=1 path="gitlink" => ERR connect:permission_denied symlink "gitlink" points outside the worktree or into .git details=1
+mode=1 path="gitlink/config" => ERR connect:permission_denied symlink "gitlink" points outside the worktree or into .git details=1
+mode=1 path="linkdir" => ERR connect:permission_denied symlink "linkdir" points outside the worktree or into .git details=1
+mode=1 path="linkdir/x" => ERR connect:permission_denied symlink "linkdir" points outside the worktree or into .git details=1
+mode=1 path="loop1" => ERR connect:permission_denied symlink "loop1" points outside the worktree or into .git details=1
+mode=1 path="loop2/x" => ERR connect:permission_denied symlink "loop2" points outside the worktree or into .git details=1
+mode=1 path="missing" => resolved="missing" via=false stat=notexist replace=ok
+mode=1 path="missing/deeper" => resolved="missing/deeper" via=false stat=statat missing/deeper: not a directory replace=stat target: statat missing/deeper: not a directory
+mode=1 path="CLAUDE.md/extra" => resolved="CLAUDE.md/extra" via=false stat=statat CLAUDE.md/extra: not a directory replace=stat target: statat CLAUDE.md/extra: not a directory
+mode=1 path="\\a.txt" => ERR connect:invalid_argument absolute paths are not allowed details=0

@@ -740,7 +740,7 @@ func TestSsqApprovalExtensionContent_ReSendsHealthPingPeriodically(t *testing.T)
 	assert.Contains(t, content, "setInterval(sendHealthPing")
 	// The re-ping interval must be well inside the tracker's grace window
 	// (piExtensionHealthGraceWindow = 2x piExtensionRepingInterval, per
-	// server/services/pi_extension_health.go) — sanity-check the literal here
+	// server/services/piextension/pi_extension_health.go) — sanity-check the literal here
 	// so a future edit to one side can't silently desync from the other.
 	assert.Contains(t, content, "healthRepingIntervalMs = 120000")
 }

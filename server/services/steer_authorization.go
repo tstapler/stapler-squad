@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 
 	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -93,8 +94,8 @@ const (
 // requestFactsOf records the request's raw facts without evaluating a verdict.
 func requestFactsOf(ctx context.Context, req connect.AnyRequest) steerRequestFacts {
 	peer := req.Peer().Addr
-	f := LocalWriteRefusal{Peer: peer, PeerLoopback: middleware.PeerIsLoopback(peer)}
-	if rec, ok := RequestRecordFrom(ctx); ok {
+	f := access.LocalWriteRefusal{Peer: peer, PeerLoopback: middleware.PeerIsLoopback(peer)}
+	if rec, ok := access.RequestRecordFrom(ctx); ok {
 		f.Listener, f.AuthMode, f.Host, f.Origin, f.Proxied = rec.Listener, rec.AuthMode, rec.Host, rec.Origin, rec.Proxied
 	}
 	return steerRequestFacts{refusal: f, userAgent: req.Header().Get("User-Agent")}
@@ -114,7 +115,7 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 		return steerDecision{}, connect.NewError(connect.CodeInternal, fmt.Errorf("resolve review link: %w", err))
 	}
 	if ok {
-		refusal, verr := EvaluateLocalWrite(ctx, req.Peer().Addr, LocalWriteRebinding)
+		refusal, verr := access.EvaluateLocalWrite(ctx, req.Peer().Addr, access.LocalWriteRebinding)
 		if verr != nil {
 			s.countBacklogSteer(steerOutcomeRefused)
 			return steerDecision{}, verr
@@ -124,7 +125,7 @@ func (s *SessionService) decideSteerAccess(ctx context.Context, req connect.AnyR
 			facts: steerRequestFacts{refusal: refusal, userAgent: req.Header().Get("User-Agent")},
 		}, nil
 	}
-	if AccessForUnary(inst, s.guards) == TerminalReadWrite {
+	if access.AccessForUnary(inst, s.guards) == access.TerminalReadWrite {
 		// Guards off: allowed as on main, but audited (guard_bypass) before the write.
 		return steerDecision{
 			auth:   steerAuthorization{kind: steerAuthVisible, instanceUUID: inst.LeaseOwnerUUID()},

@@ -3,6 +3,7 @@ package backlogsvc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -67,4 +68,22 @@ func mustParseUUID(t *testing.T, id string) uuid.UUID {
 	parsed, err := uuid.Parse(id)
 	require.NoError(t, err)
 	return parsed
+}
+
+func TestEscalateVerdictToOwner_should_KeepFullEvidence_When_LongerThan300Runes(t *testing.T) {
+	t.Parallel()
+	svc, storage, _ := newTestBacklogServiceWithBus(t)
+	ctx := context.Background()
+	raw, err := domain.SerializeAcCriteria([]domain.AcCriterion{{Index: 0, Text: "c", Status: domain.AcStatusPending}})
+	require.NoError(t, err)
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t", Status: string(domain.BacklogStatusReview), AcceptanceCriteria: raw})
+	require.NoError(t, err)
+	evidence := strings.Repeat("e", 500) + " END"
+	flagged := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewVerdictFail, FailureClass: domain.FailureClassUnattainable, Evidence: evidence}}
+
+	require.True(t, svc.escalateVerdictToOwner(ctx, item, flagged))
+	rows, _, _, err := storage.ListGuidanceRequestsForScope(ctx, domain.RequestScopeBacklogItem, item.ID, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Contains(t, rows[0].QuestionText, evidence, "the page expands long text, so storage must not truncate it")
 }

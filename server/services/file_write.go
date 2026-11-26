@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // The WriteFile validation pipeline (ADR-031). Order: flag, arguments, session guard,
@@ -29,14 +30,14 @@ type roReason = sessionv1.ReadOnlyReason
 // writeCall is the state of one WriteFile call.
 type writeCall struct {
 	req      *sessionv1.WriteFileRequest
-	token    FileVersionToken
+	token    fsops.FileVersionToken
 	badToken bool
-	eol      EOLLabel
-	bom      BOMLabel
+	eol      fsops.EOLLabel
+	bom      fsops.BOMLabel
 }
 
 func newWriteCall(req *sessionv1.WriteFileRequest) *writeCall {
-	return &writeCall{req: req, eol: EOLLF, bom: BOMNo}
+	return &writeCall{req: req, eol: fsops.EOLLF, bom: fsops.BOMNo}
 }
 
 // diskFile is the current state of the target, read under the per-path mutex.
@@ -54,17 +55,17 @@ func (d diskFile) sha256Hex() string {
 
 // body is the content without its BOM.
 func (d diskFile) body() []byte {
-	_, body := detectBOM(d.Raw)
+	_, body := fsops.DetectBOM(d.Raw)
 	return body
 }
 
 // classify is the editability of the bytes on disk (NONE when editable).
 func (d diskFile) classify() roReason {
-	return classifyReadOnly(readFacts{Body: d.body()})
+	return fsops.ClassifyReadOnly(fsops.ReadFacts{Body: d.body()})
 }
 
-func (d diskFile) token() FileVersionToken {
-	return NewFileVersionToken(int64(len(d.Raw)), d.MtimeNs, d.Raw)
+func (d diskFile) token() fsops.FileVersionToken {
+	return fsops.NewFileVersionToken(int64(len(d.Raw)), d.MtimeNs, d.Raw)
 }
 
 // lfText is the body with CRLF folded to LF.
@@ -83,20 +84,20 @@ func (w *FileWriter) write(ctx context.Context, call *writeCall) (*sessionv1.Wri
 	if err := w.checkGuard(call.req.SessionId); err != nil {
 		return nil, err
 	}
-	rr, err := w.ops.resolve(FileRef{SessionID: call.req.SessionId, Path: call.req.Path}, AccessWrite)
+	rr, err := w.ops.resolve(fsops.FileRef{SessionID: call.req.SessionId, Path: call.req.Path}, fsops.AccessWrite)
 	if err != nil {
 		return nil, typeResolveError(err)
 	}
 	defer func() { _ = rr.Root.Close() }()
 
-	tok, perr := ParseFileVersionToken(call.req.ExpectedToken)
+	tok, perr := fsops.ParseFileVersionToken(call.req.ExpectedToken)
 	if perr != nil {
 		call.badToken = true
 		return nil, connect.NewError(connect.CodeInvalidArgument, perr)
 	}
 	call.token = tok
 
-	unlock := w.locks.Lock(pathKey{ActiveDir: rr.Workspace.ActiveDir, Path: rr.Resolved})
+	unlock := w.locks.Lock(fsops.PathKey{ActiveDir: rr.Workspace.ActiveDir, Path: rr.Resolved})
 	defer unlock()
 	return w.writeLocked(call, rr)
 }
@@ -112,9 +113,9 @@ func validateWriteArgs(req *sessionv1.WriteFileRequest) error {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("content contains NUL"))
 	case bytes.IndexByte(req.Content, '\r') >= 0:
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("content must be LF-normalized (found CR)"))
-	case len(req.Content) > truncateSize:
+	case len(req.Content) > fsops.TruncateSize:
 		return reasonRefusal(connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE,
-			fmt.Errorf("content is %d bytes; the editable maximum is %d", len(req.Content), truncateSize))
+			fmt.Errorf("content is %d bytes; the editable maximum is %d", len(req.Content), fsops.TruncateSize))
 	}
 	return nil
 }
@@ -130,10 +131,10 @@ func (w *FileWriter) checkGuard(sessionID string) error {
 // typeResolveError attaches the typed reason to resolver refusals that lack one.
 func typeResolveError(err error) error {
 	switch {
-	case errors.Is(err, errGitInternal):
-		return reasonRefusal(connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_GIT_INTERNAL, errGitInternal)
-	case errors.Is(err, errWorktreeMissing):
-		return reasonRefusal(connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_WORKTREE_MISSING, errWorktreeMissing)
+	case errors.Is(err, fsops.ErrGitInternal):
+		return reasonRefusal(connect.CodePermissionDenied, sessionv1.ReadOnlyReason_READ_ONLY_REASON_GIT_INTERNAL, fsops.ErrGitInternal)
+	case errors.Is(err, fsops.ErrWorktreeMissing):
+		return reasonRefusal(connect.CodeFailedPrecondition, sessionv1.ReadOnlyReason_READ_ONLY_REASON_WORKTREE_MISSING, fsops.ErrWorktreeMissing)
 	}
 	return err
 }
@@ -171,12 +172,12 @@ func readDisk(rr *opsRequest) (diskFile, error) {
 		return diskFile{Missing: true}, nil
 	}
 	if err != nil {
-		return diskFile{}, internalIOError("stat", rr.Resolved, err, "failed to stat file")
+		return diskFile{}, fsops.InternalIOError("stat", rr.Resolved, err, "failed to stat file")
 	}
 	if info.IsDir() {
 		return diskFile{}, connect.NewError(connect.CodeInvalidArgument, errors.New("path is a directory, not a file"))
 	}
-	if info.Size() > truncateSize {
+	if info.Size() > fsops.TruncateSize {
 		return diskFile{TooLarge: true}, nil
 	}
 	f, err := rr.Root.Open(rr.Resolved)
@@ -184,19 +185,19 @@ func readDisk(rr *opsRequest) (diskFile, error) {
 		return diskFile{Missing: true}, nil
 	}
 	if err != nil {
-		return diskFile{}, internalIOError("open", rr.Resolved, err, "failed to open file")
+		return diskFile{}, fsops.InternalIOError("open", rr.Resolved, err, "failed to open file")
 	}
 	defer func() { _ = f.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(f, truncateSize+1))
+	raw, err := io.ReadAll(io.LimitReader(f, fsops.TruncateSize+1))
 	if err != nil {
-		return diskFile{}, internalIOError("read", rr.Resolved, err, "failed to read file")
+		return diskFile{}, fsops.InternalIOError("read", rr.Resolved, err, "failed to read file")
 	}
-	if len(raw) > truncateSize {
+	if len(raw) > fsops.TruncateSize {
 		return diskFile{TooLarge: true}, nil
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		return diskFile{}, internalIOError("fstat", rr.Resolved, err, "failed to stat file")
+		return diskFile{}, fsops.InternalIOError("fstat", rr.Resolved, err, "failed to stat file")
 	}
 	return diskFile{Raw: raw, MtimeNs: fi.ModTime().UnixNano()}, nil
 }
@@ -218,7 +219,7 @@ func refuseNonEditable(disk diskFile) error {
 
 // conflictIfChanged returns the Conflict response when disk is no longer the version
 // token names, or nil when the hash matches (an mtime-only change is not a conflict).
-func conflictIfChanged(disk diskFile, tok FileVersionToken) *sessionv1.WriteFileResponse {
+func conflictIfChanged(disk diskFile, tok fsops.FileVersionToken) *sessionv1.WriteFileResponse {
 	if !disk.Missing && !disk.TooLarge && disk.sha256Hex() == tok.SHA256 {
 		return nil
 	}
@@ -250,7 +251,7 @@ func conflictResponse(disk diskFile) *sessionv1.WriteFileResponse {
 
 // recheck is the pre-rename verification: re-read and re-hash, so a content change
 // aborts the save while an mtime-only change does not. Residual TOCTOU: ADR-031.
-func (w *FileWriter) recheck(rr *opsRequest, tok FileVersionToken) error {
+func (w *FileWriter) recheck(rr *opsRequest, tok fsops.FileVersionToken) error {
 	if w.preRenameHook != nil {
 		w.preRenameHook()
 	}
@@ -276,16 +277,16 @@ func (w *FileWriter) conflictNow(rr *opsRequest) (*sessionv1.WriteFileResponse, 
 // encodeForDisk applies the on-disk file's own BOM and line ending to the LF content,
 // which also records them for telemetry.
 func (c *writeCall) encodeForDisk(disk diskFile) []byte {
-	hasBOM, body := detectBOM(disk.Raw)
-	crlf := detectLineEnding(body) == sessionv1.LineEnding_LINE_ENDING_CRLF
+	hasBOM, body := fsops.DetectBOM(disk.Raw)
+	crlf := fsops.DetectLineEnding(body) == sessionv1.LineEnding_LINE_ENDING_CRLF
 	out := c.req.Content
 	if crlf {
 		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
-		c.eol = EOLCRLF
+		c.eol = fsops.EOLCRLF
 	}
 	if hasBOM {
-		out = append(append(make([]byte, 0, len(utf8BOM)+len(out)), utf8BOM...), out...)
-		c.bom = BOMYes
+		out = append(append(make([]byte, 0, len(fsops.UTF8BOM)+len(out)), fsops.UTF8BOM...), out...)
+		c.bom = fsops.BOMYes
 	}
 	return out
 }
@@ -300,52 +301,52 @@ func (w *FileWriter) saved(call *writeCall, rr *opsRequest, written []byte) (*se
 	if w.invalidator != nil {
 		w.invalidator.InvalidateVCSStatus(rr.Workspace.ActiveDir)
 	}
-	tok := NewFileVersionToken(int64(len(written)), info.ModTime().UnixNano(), written)
+	tok := fsops.NewFileVersionToken(int64(len(written)), info.ModTime().UnixNano(), written)
 	return &sessionv1.WriteFileResponse{Outcome: &sessionv1.WriteFileResponse_Saved{
 		Saved: &sessionv1.WriteFileSaved{Token: tok.String()},
 	}}, nil
 }
 
 // classify maps a finished call to the shared slog and analytics outcome and reason.
-func (c *writeCall) classify(resp *sessionv1.WriteFileResponse, err error) (WriteOutcome, WriteReason) {
+func (c *writeCall) classify(resp *sessionv1.WriteFileResponse, err error) (fsops.WriteOutcome, fsops.WriteReason) {
 	switch {
 	case err == nil && resp.GetConflict() != nil:
-		return WriteOutcomeConflictRejected, WriteReasonNone
+		return fsops.WriteOutcomeConflictRejected, fsops.WriteReasonNone
 	case err == nil:
-		return WriteOutcomeOK, WriteReasonNone
+		return fsops.WriteOutcomeOK, fsops.WriteReasonNone
 	}
-	fallback := WriteReasonBadContent
+	fallback := fsops.WriteReasonBadContent
 	if c.badToken {
-		fallback = WriteReasonBadToken
+		fallback = fsops.WriteReasonBadToken
 	}
 	reason := writeReasonOf(err, fallback)
 	switch {
-	case reason == WriteReasonFlagOff:
-		return WriteOutcomeDisabled, reason
+	case reason == fsops.WriteReasonFlagOff:
+		return fsops.WriteOutcomeDisabled, reason
 	case connect.CodeOf(err) == connect.CodePermissionDenied:
-		return WriteOutcomeDenied, reason
+		return fsops.WriteOutcomeDenied, reason
 	case connect.CodeOf(err) == connect.CodeInternal:
-		return WriteOutcomeError, reason
+		return fsops.WriteOutcomeError, reason
 	}
-	return WriteOutcomeRejected, reason
+	return fsops.WriteOutcomeRejected, reason
 }
 
-var writeReasonByDetail = map[roReason]WriteReason{
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_FLAG_OFF:         WriteReasonFlagOff,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY:           WriteReasonBinary,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_TRUNCATED:        WriteReasonTruncated,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE:        WriteReasonTooLarge,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8:         WriteReasonNonUTF8,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL:        WriteReasonMixedEOL,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK:          WriteReasonSymlink,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_WORKTREE_MISSING: WriteReasonWorktreeMissing,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_HIDDEN_SESSION:   WriteReasonHiddenSession,
-	sessionv1.ReadOnlyReason_READ_ONLY_REASON_GIT_INTERNAL:     WriteReasonGitInternal,
+var writeReasonByDetail = map[roReason]fsops.WriteReason{
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_FLAG_OFF:         fsops.WriteReasonFlagOff,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY:           fsops.WriteReasonBinary,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_TRUNCATED:        fsops.WriteReasonTruncated,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE:        fsops.WriteReasonTooLarge,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_NON_UTF8:         fsops.WriteReasonNonUTF8,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_MIXED_EOL:        fsops.WriteReasonMixedEOL,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_SYMLINK:          fsops.WriteReasonSymlink,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_WORKTREE_MISSING: fsops.WriteReasonWorktreeMissing,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_HIDDEN_SESSION:   fsops.WriteReasonHiddenSession,
+	sessionv1.ReadOnlyReason_READ_ONLY_REASON_GIT_INTERNAL:     fsops.WriteReasonGitInternal,
 }
 
 // detailReason reads the typed ReadOnlyReasonDetail off a refusal; no free-form text
 // ever reaches a label.
-func detailReason(err error) (WriteReason, bool) {
+func detailReason(err error) (fsops.WriteReason, bool) {
 	var ce *connect.Error
 	if !errors.As(err, &ce) {
 		return "", false
@@ -364,9 +365,9 @@ func detailReason(err error) (WriteReason, bool) {
 }
 
 // writeReasonOf picks the label for a refusal; without a typed detail the fallback applies.
-func writeReasonOf(err error, fallback WriteReason) WriteReason {
+func writeReasonOf(err error, fallback fsops.WriteReason) fsops.WriteReason {
 	if errors.Is(err, errSessionArchived) {
-		return WriteReasonArchived
+		return fsops.WriteReasonArchived
 	}
 	if r, ok := detailReason(err); ok {
 		return r

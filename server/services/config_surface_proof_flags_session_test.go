@@ -30,12 +30,12 @@ func TestConfigSurfaceProof_HiddenSessionReadonlyGuards_ChangesWriteToHiddenSess
 
 func TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{hiddenSessionReplyFlagName: replyFlagAuditPolicy})
+	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{featureflags.HiddenSessionReplyFlagName: replyFlagAuditPolicy})
 	e.fix.svc.wireReplyFlag()
 	replies := 0
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		require.NoError(t, flagUpdateCtx(t.Context(), e.fix.svc.featureFlagSvc, hiddenSessionReplyFlagName, setting.(bool)))
+		require.NoError(t, flagUpdateCtx(t.Context(), e.fix.svc.featureFlagSvc, featureflags.HiddenSessionReplyFlagName, setting.(bool)))
 		replies++
 		return e.replyOK("1", "bkf-reply-"+string(rune('a'+replies))).Outcome
 	}, false, true)
@@ -47,7 +47,7 @@ func TestConfigSurfaceProof_TerminalWriteLease_ChangesLeaseExclusivity(t *testin
 	inst := &instance.Instance{UUID: "bkf-lease"}
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		require.NoError(t, flagUpdateCtx(t.Context(), svc.featureFlagSvc, terminalWriteLeaseFlagName, setting.(bool)))
+		require.NoError(t, flagUpdateCtx(t.Context(), svc.featureFlagSvc, featureflags.TerminalWriteLeaseFlagName, setting.(bool)))
 		first, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		require.True(t, ok)
 		defer first.Release()

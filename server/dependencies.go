@@ -16,9 +16,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/unfinishedwork"
 	"github.com/tstapler/stapler-squad/server/wakes"
@@ -92,7 +95,7 @@ type ServerDependencies struct {
 	// equivalents) for edits and hot-reloads their derived auto-approval rules. Started
 	// from wireDepsIntoServer with the server's lifecycle context so it stops cleanly
 	// on shutdown.
-	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+	ClaudeSettingsWatcher *claudesettings.ClaudeSettingsWatcher
 
 	// SlackNotifier is the single shared Slack notifier instance, wired into
 	// both ReactiveQueueMgr (review-queue items) and ApprovalHandler (pending
@@ -326,7 +329,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 // This ensures sessions with known pending approvals appear in the queue immediately on startup,
 // even before the first poll cycle detects them via terminal content scanning.
 func syncOrphanedApprovalsToQueue(
-	store *services.ApprovalStore,
+	store *approvalkit.ApprovalStore,
 	instances []*instance.Instance,
 	queue session.ReviewQueueWriter,
 ) {
@@ -420,7 +423,7 @@ type CoreDeps struct {
 	Storage        *session.Storage
 	EventBus       *events.EventBus
 	ReviewQueue    *queuepkg.ReviewQueue
-	ApprovalStore  *services.ApprovalStore
+	ApprovalStore  *approvalkit.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
 	// FlagRegistry is the one registry shared by the flag service and every other flag reader.
@@ -458,7 +461,7 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	driver.Register() // the instance package reaches the session driver only through this hook
 
 	// A flag owned by a leaf package adds its Spec slice as one more argument here.
-	flagRegistry := services.FlagRegistry()
+	flagRegistry := flagsvc.FlagRegistry()
 
 	var sessionService *services.SessionService
 	var err error
@@ -610,7 +613,7 @@ type RuntimeDeps struct {
 
 	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
 	// its full doc comment).
-	ClaudeSettingsWatcher *services.ClaudeSettingsWatcher
+	ClaudeSettingsWatcher *claudesettings.ClaudeSettingsWatcher
 
 	// SlackNotifier is the single shared Slack notifier instance (see the
 	// identically-named field on ServerDependencies for its full doc comment).

@@ -12,14 +12,16 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // fastLaneOffRegistry is the default registry with the resync fast-lane default inverted to off, so a
 // site that read the default (fast lane on) is distinguishable from one that read this.
 func fastLaneOffRegistry() *featureflags.Registry {
-	specs := services.FlagRegistry().Specs()
+	specs := flagsvc.FlagRegistry().Specs()
 	for i := range specs {
 		if specs[i].Name == featureflags.TerminalResyncExecGateFastLaneFlagName {
 			specs[i].Default = false
@@ -96,7 +98,7 @@ type resyncFake struct{ *fakePanePTY }
 
 func (resyncFake) IsBackendProcessAlive() bool { return true }
 
-func testWriterFn() services.TerminalWriter { return testWriter() }
+func testWriterFn() access.TerminalWriter { return testWriter() }
 
 func TestCurrentPaneAnswerer_ShouldRouteLaneByHandlerRegistry(t *testing.T) {
 	for _, tc := range []struct {

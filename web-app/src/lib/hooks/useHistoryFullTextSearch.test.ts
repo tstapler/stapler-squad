@@ -133,6 +133,40 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     expect(mockSearchClaudeHistory).not.toHaveBeenCalled();
   });
 
+  it("useHistoryFullTextSearch_should_ShowFirstBatchWithoutAnyTimerAdvance_And_NeverClearList_When_LaterBatchesArrive", async () => {
+    mockStreamingFlag = true;
+    let releaseSecond!: () => void;
+    const gate = new Promise<void>((r) => { releaseSecond = r; });
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [result("a")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: false, indexWarming: false };
+      await gate;
+      yield { results: [result("b")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    jest.useFakeTimers();
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    const seen: number[] = [];
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    try {
+      // Only microtasks are flushed; no timer is advanced, so a debounce/throttle/timeout
+      // between the first yield and the render would leave results empty here.
+      for (let i = 0; i < 20; i++) await act(async () => { await Promise.resolve(); });
+      expect(hook.current.results).toHaveLength(1);
+      seen.push(hook.current.results.length);
+      // Second batch is still gated, so the first batch is visible before the stream completes.
+      expect(hook.current.loading).toBe(true);
+
+      releaseSecond();
+      await act(async () => { await done; });
+      seen.push(hook.current.results.length);
+      expect(seen).toEqual([1, 2]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("useHistoryFullTextSearch_should_ExposeIndexWarmingUntilResultsArrive_When_ColdStartStream", async () => {
     mockStreamingFlag = true;
     let release!: () => void;
@@ -155,6 +189,45 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     await act(async () => { await done; });
     expect(hook.current.indexWarming).toBe(false);
     expect(hook.current.results.map((r) => r.sessionId)).toEqual(["a"]);
+  });
+
+  it("useHistoryFullTextSearch_should_ShowWarmingPreviewThenReplaceWithRanked_When_ColdStartStream", async () => {
+    mockStreamingFlag = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    mockStreamSearchClaudeHistory.mockImplementation(async function* () {
+      yield { results: [result("preview")], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      await gate;
+      yield { results: [result("ranked")], totalMatches: 1, queryTimeMs: 2n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    let done!: Promise<void>;
+    act(() => { done = hook.current.search({ query: "x" }); });
+
+    await waitFor(() => expect(hook.current.results.map((r) => r.sessionId)).toEqual(["preview"]));
+    expect(hook.current.indexWarming).toBe(true);
+
+    release();
+    await act(async () => { await done; });
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["ranked"]);
+  });
+
+  it("useHistoryFullTextSearch_should_KeepLoadedPages_When_AppendStreamStartsWithWarmingPreview", async () => {
+    mockStreamingFlag = true;
+    mockStreamSearchClaudeHistory.mockImplementationOnce(async function* () {
+      yield { results: [result("page1")], totalMatches: 2, queryTimeMs: 1n, hasMore: true, isFinal: true, indexWarming: false };
+    });
+    mockStreamSearchClaudeHistory.mockImplementationOnce(async function* () {
+      yield { results: [result("preview")], totalMatches: 0, queryTimeMs: 0n, hasMore: false, isFinal: false, indexWarming: true };
+      yield { results: [result("page2")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: true, indexWarming: false };
+    });
+
+    const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
+    await act(async () => { await hook.current.search({ query: "x" }); });
+    await act(async () => { await hook.current.search({ query: "x", append: true }); });
+
+    expect(hook.current.results.map((r) => r.sessionId)).toEqual(["page1", "preview", "page2"]);
   });
 
   it("useHistoryFullTextSearch_should_StopLoadingAndClearWarming_When_StreamEndsWithoutFinal", async () => {

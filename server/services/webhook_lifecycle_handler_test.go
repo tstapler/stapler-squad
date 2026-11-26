@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const hookSlug = "gh-signal-events" // the slug mgmtHarness.reconcileReq registers
@@ -121,7 +121,7 @@ func TestWebhookLifecycle_should_RemoveEverythingAndAllowRecreate_When_Deleted(t
 func TestWebhookLifecycle_should_HideRegistrationFromOtherPrincipals_When_TheyDisableOrDelete(t *testing.T) {
 	h := newMgmtHarness(t).seeded(t)
 	intruder, err := h.infra.EntRepo.IssueIntegrationCredential(context.Background(),
-		session.IntegrationCredentialInfo{PrincipalID: "intruder", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: h.root})
+		domain.IntegrationCredentialInfo{PrincipalID: "intruder", WorkspaceID: testMgmtWorkspace, AllowedDirRoot: h.root})
 	require.NoError(t, err)
 
 	for _, action := range []string{"disable", "delete"} {

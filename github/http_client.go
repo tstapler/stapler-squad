@@ -22,7 +22,7 @@ import (
 )
 
 // githubPriorityAdmissionFlagName gates AdmitOrigin's rejection branch below.
-// server/services/feature_flag_specs.go's flag Specs registers this
+// server/services/flagsvc/feature_flag_specs.go's flag Specs registers this
 // same literal under its own githubPriorityAdmissionFlagName constant — github
 // cannot import server/services (that would be a cycle; server/services
 // already imports github), so the name is duplicated here rather than shared,

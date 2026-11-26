@@ -12,13 +12,15 @@ import (
 // T-RO-11: each UI-exception path is reachable only through functions that take
 // its capability: the O7 steer takes the BacklogReviewLink (constructible only in
 // hidden_review_steer.go) and Reply takes the PendingQuestionClaim (constructible
-// only in pending_question_store.go), check (a).
+// only in questionkit/pending_question_store.go), check (a).
 func TestUiExceptionEntryPoints_ShouldEachRequireTheirCapabilityParam_WhenReflected(t *testing.T) {
 	entryPoints := []struct{ file, recv, name, param string }{
-		{"hidden_review_steer.go", "TerminalAccess", "BacklogSteerWriter", "BacklogReviewLink"},
+		{"hidden_review_steer.go", "", "newBacklogSteerWriter", "TerminalAccess"},
+		{"hidden_review_steer.go", "", "newBacklogSteerWriter", "BacklogReviewLink"},
 		{"hidden_review_steer.go", "SessionService", "steerHiddenReviewViaBacklogLink", "BacklogReviewLink"},
 		{"steer_authorization.go", "SessionService", "steerBacklogLinked", "BacklogReviewLink"},
-		{"pane_reply_core.go", "TerminalAccess", "QuestionReplyWriter", "PendingQuestionClaim"},
+		{"pane_reply_core.go", "", "newQuestionReplyWriter", "TerminalAccess"},
+		{"pane_reply_core.go", "", "newQuestionReplyWriter", "PendingQuestionClaim"},
 		{"pane_reply_core.go", "PaneReplyCore", "writeUnderLease", "PendingQuestionClaim"},
 	}
 	for _, ep := range entryPoints {
@@ -38,8 +40,11 @@ func TestUiExceptionEntryPoints_ShouldEachRequireTheirCapabilityParam_WhenReflec
 		}
 		found := false
 		for _, p := range fn.Type.Params.List {
-			if id, ok := p.Type.(*ast.Ident); ok && id.Name == ep.param {
-				found = true
+			switch pt := p.Type.(type) {
+			case *ast.Ident:
+				found = found || pt.Name == ep.param
+			case *ast.SelectorExpr: // a type of another package, e.g. access.TerminalAccess
+				found = found || pt.Sel.Name == ep.param
 			}
 		}
 		if !found {

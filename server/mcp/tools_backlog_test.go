@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
 )
@@ -6017,13 +6018,13 @@ func TestBuildMatchedWaitResult_MapsAllEventKinds(t *testing.T) {
 
 // TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
 // is the Story 2.1.3 (Task 2.1.3d) regression test for buildMatchedWaitResult's
-// switch to session.IsTerminalStatus: a custom stage marked IsTerminal via
-// session.SetTerminalStatusChecker must report IsTerminal true, matching
+// switch to terminalstate.IsTerminalStatus: a custom stage marked IsTerminal via
+// terminalstate.SetTerminalStatusChecker must report IsTerminal true, matching
 // plan.md's AC example verbatim (a "legal-review" custom terminal stage).
 func TestBuildMatchedWaitResult_should_SetIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
 	const customTerminal = domain.BacklogStatus("legal-review")
-	session.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
-	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+	terminalstate.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { terminalstate.SetTerminalStatusChecker(nil) })
 
 	res := buildMatchedWaitResult("item-under-test", &events.BacklogItemEventPayload{
 		Kind: events.BacklogChangeStatusTransition,
@@ -6046,11 +6047,11 @@ func TestBuildMatchedWaitResult_should_NotSetIsTerminal_When_NoCheckerConfigured
 // TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage
 // mirrors the above for currentStateWaitResult's "already satisfied" precheck
 // (the verdict_recorded branch, which is the one that reads the `terminal`
-// local re-routed to session.IsTerminalStatus).
+// local re-routed to terminalstate.IsTerminalStatus).
 func TestCurrentStateWaitResult_should_ReportIsTerminal_When_ItemIsAtConfiguredCustomTerminalStage(t *testing.T) {
 	const customTerminal = domain.BacklogStatus("legal-review")
-	session.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
-	t.Cleanup(func() { session.SetTerminalStatusChecker(nil) })
+	terminalstate.SetTerminalStatusChecker(func(s domain.BacklogStatus) bool { return s == customTerminal })
+	t.Cleanup(func() { terminalstate.SetTerminalStatusChecker(nil) })
 
 	item := &backlogdto.BacklogItemData{ID: "item-under-test", Status: string(customTerminal)}
 	verdict := &backlogdto.ReviewVerdictSummary{OverallOutcome: "pass", Summary: "looks good"}
@@ -7833,6 +7834,33 @@ func TestSubmitReviewVerdict_should_PersistFailureClassAndWaiver_And_RejectUnkno
 	require.Len(t, got, 1)
 	assert.Equal(t, domain.FailureClassUnattainable, got[0].FailureClass)
 	assert.True(t, got[0].ProposedWaiver)
+}
+
+func TestGetLinkedItem_should_ReportHeartbeatAge_When_ProgressRecorded(t *testing.T) {
+	t.Parallel()
+	storage := newTestBacklogStorage(t)
+	item := createTestItem(t, storage, string(domain.BacklogStatusInProgress))
+	callerUUID := uuid.New().String()
+	ctx := WithSessionUUID(context.Background(), callerUUID)
+	is, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
+		ItemID: item.ID, SessionUUID: callerUUID, SessionRole: instance.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	handler := &backlogHandlers{storage: storage}
+
+	result, err := handler.getLinkedItem(ctx, makeToolReq(nil))
+	require.NoError(t, err)
+	m := parseResult(t, result)
+	assert.NotContains(t, m, "heartbeat_age_seconds", "no age before any progress is observed")
+
+	require.NoError(t, storage.TouchItemSessionProgress(context.Background(), is.ID, time.Now().Add(-90*time.Second)))
+	result, err = handler.getLinkedItem(ctx, makeToolReq(nil))
+	require.NoError(t, err)
+	m = parseResult(t, result)
+	age, ok := m["heartbeat_age_seconds"].(float64)
+	require.True(t, ok, "heartbeat_age_seconds missing: %v", m)
+	assert.InDelta(t, 90, age, 5)
+	assert.Contains(t, m, "last_progress_at")
 }
 
 // AC gate outcome: an honestly missed criterion (report_progress not_met + note) must reach a human

@@ -63,6 +63,7 @@ go_test(
         "//session/instance",
         "//session/internal/fixturetest",
         "//session/internal/sessiontest",
+        "//session/procbackend",
         "//session/queue",
         "//session/tmux",
         "//testutil/wait",

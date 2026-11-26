@@ -32,8 +32,8 @@ exports, the queries that judge a flag flip, and the alerts that exist. Plan:
 | `notification_inline_action_total` | counter | `kind`: `open`, `approve`, `deny`, `answer_question`, `backlog_decision`, `answer_guidance`, `cancel_wake`, `cancel_peer_help` (`unspecified` for an unset kind). `tier`: `a`, `b`, `unknown` (`unknown` when an `answer_question` route cannot be resolved). `outcome`: `applied`, `already_resolved`, `stale`, `not_sent`, `send_indeterminate`, `rate_limited`, `forbidden`, `flag_off`, `invalid`, plus `error` for an infrastructure fault. `channel`: `web_local`, `web_remote`, `unknown` (the comment in the metrics file also names `mcp`, but no code sets it). | `server/services/notification_action_metrics.go` (`defaultActionMetrics`) |
 | `notification_inline_action_duration_seconds` | histogram, seconds; buckets 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 | `kind` (same values) | same |
 | `inline_action_undo_total` | counter | `kind`: `approve`, `deny`, `answer_question`, `backlog_decision`; anything else is `unknown` | `server/analytics/quality_metrics.go` |
-| `reopen_after_action_total` | counter | `kind`: always `answer_question` | `server/services/notification_quality_metrics.go` |
-| `human_active_refusal_total` | counter | none | `server/services/human_activity.go` |
+| `reopen_after_action_total` | counter | `kind`: always `answer_question` | `server/services/questionkit/notification_quality_metrics.go` |
+| `human_active_refusal_total` | counter | none | `server/services/access/human_activity.go` |
 
 Notes:
 
@@ -66,7 +66,7 @@ Notes:
 |---|---|---|---|
 | `guidance_answer_delivery_total` | counter | `route`: `hook_reply`, `live_keystroke`, `resume`, `read_only`. `state`: `pending`, `sent`, `acknowledged`, `delivery_failed`, `saved_for_later`, `stale`, `aborted_partial`. | `session/guidancestore/metrics.go` (counted in `SetDelivery`, `session/guidancestore/mirror.go`) |
 | `guidance_question_answer_latency_seconds` | histogram, seconds (default buckets) | `source`: `agent_mcp`, `ask_user_question_hook`, `peer`. `route`: as above. | `session/guidancestore/metrics.go` |
-| `guidance_answer_unconfirmed_total` | counter | none | `server/services/notification_quality_metrics.go`, incremented in `server/services/guidance_ack_detector.go` |
+| `guidance_answer_unconfirmed_total` | counter | none | `server/services/questionkit/notification_quality_metrics.go`, incremented in `server/services/guidance_ack_detector.go` |
 | `guidance_mirror_cleared_total` | counter | `reason`: `session_ended`, `answered_in_terminal`, `dialog_gone`, `dialog_replaced` | `server/deliverygate/metrics.go` |
 | `guidance_mirror_failed_total` | counter | `reason`: `timeout`, `error`, `cap_exceeded`, `no_payload`, `invalid_payload` | same |
 | `question_dialog_match_total` | counter | `result`: `match`, `mismatch`. `claude_version`: always `unknown` today. | same |
@@ -80,7 +80,7 @@ Notes:
   has no caller outside tests (`grep -rn SetVersionSource server`), so no version
   source is wired.
 - The plan lists `indeterminate` as a `result` value. The code defines only `match`
-  and `mismatch` (`server/services/guidance_dialog_canary.go:26-27`).
+  and `mismatch` (`server/services/questionkit/guidance_dialog_canary.go:26-27`).
 - `guidance_mirror_cleared_total{reason="answered_in_terminal"}` is incremented from the
   `AskUserQuestion` PostToolUse receipt (`ObservePostToolUse` in
   `server/services/guidance_ack_wiring.go`). That receipt exists only for sessions that
@@ -101,7 +101,7 @@ Notes:
 | `mcp_caller_gate_denied_total` | counter | `tool`, `role` (`work`, `triage`, `review`, `diagnose`) | `server/wakes/metrics.go`; incremented in `server/mcp/caller_identity_gate.go` |
 | `mcp_identity_unverified_total` | counter | `tool` | same |
 | `wake_fires_per_session` | histogram; buckets 0, 1, 2, 3, 5, 8, 13, 21, 34, 55 | none. One sample per session, taken when the session is deleted or archived. | `server/wakes/metrics_session.go` |
-| `agent_schedule_wakeup_calls_total` | counter | `role`: `work`, `triage`, `review`, `diagnose`, `jules_work`, `external`, `unlinked`, `unknown`. | `server/services/notification_quality_metrics.go` |
+| `agent_schedule_wakeup_calls_total` | counter | `role`: `work`, `triage`, `review`, `diagnose`, `jules_work`, `external`, `unlinked`, `unknown`. | `server/services/questionkit/notification_quality_metrics.go` |
 
 Notes:
 
@@ -236,7 +236,7 @@ Alerts are operator notifications, not pages. These exist:
 | A pending trigger past `expires_at` | One failure notification per trigger, naming its id. `ListWakeTriggers` sweeps expired rows as missed before it lists (`wakes.ExpireOverdue`, `server/wake_trigger_wiring.go:26`), so this works while the dispatcher is stopped. The next dispatcher start also marks them missed in its reconcile. | `server/wakes/expire.go` |
 | A `needs_revive` row waits more than 1 h | "Scheduled prompt waiting to revive a session", once per row | `needsReviveAlertAge` in `server/wakes/reconcile.go` |
 | A wake limit is hit | One failure digest per owner per hour | `notifyLimitOnce` in `server/wakes/limits.go` |
-| More than half of at least 5 dialog-match attempts in 1 h mismatch | "Question answers paused"; hook-mirrored question rows degrade to read only | `server/services/guidance_runtime_wiring.go`, `server/services/guidance_dialog_canary.go` |
+| More than half of at least 5 dialog-match attempts in 1 h mismatch | "Question answers paused"; hook-mirrored question rows degrade to read only | `server/services/guidance_runtime_wiring.go`, `server/services/questionkit/guidance_dialog_canary.go` |
 | `finished` is 0 while `stopped_unknown` is above 0 | "Background outcome evidence is empty" | `web-app/src/components/ui/NotificationPanel.tsx:371` |
 | A peer-help request is unanswered for 10 min, or its answerer is gone | One needs-human notification per request | `server/wakes/escalator.go` |
 

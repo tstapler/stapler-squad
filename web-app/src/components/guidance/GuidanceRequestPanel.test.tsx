@@ -130,4 +130,69 @@ describe("GuidanceRequestPanel", () => {
     expect(screen.getByText("Answer: yes")).toBeInTheDocument();
     expect(screen.queryByTestId("guidance-answer-yes-gr-done")).not.toBeInTheDocument();
   });
+
+  describe("expand/collapse of long text", () => {
+    const long = (c: string) => c.repeat(301);
+
+    it("shows a toggle for long question text and flips aria-expanded on click", () => {
+      mockRequests = [row({ questionText: long("q") })];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      const toggle = screen.getByTestId("guidance-question-toggle");
+      expect(toggle).toHaveTextContent("Show more");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle).toHaveAttribute("aria-label", "Show more question text");
+      expect(screen.getByTestId("guidance-question-text")).toHaveAttribute("data-expanded", "false");
+      fireEvent.click(toggle);
+      expect(screen.getByTestId("guidance-question-text")).toHaveAttribute("data-expanded", "true");
+      expect(toggle).toHaveTextContent("Show less");
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("renders no toggle for short question text", () => {
+      mockRequests = [row({ questionText: "q".repeat(300) })];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      expect(screen.queryByTestId("guidance-question-toggle")).not.toBeInTheDocument();
+    });
+
+    it("expands a long answer independently of the question", () => {
+      mockRequests = [row({ status: "answered", questionText: long("q"), answer: long("a") })];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      fireEvent.click(screen.getByTestId("guidance-answer-toggle"));
+      expect(screen.getByTestId("guidance-answer-toggle")).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByTestId("guidance-question-toggle")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("renders no toggle for a short answer", () => {
+      mockRequests = [row({ status: "answered", answer: "a".repeat(300) })];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      expect(screen.queryByTestId("guidance-answer-toggle")).not.toBeInTheDocument();
+    });
+
+    it("keeps expand state per item", () => {
+      mockRequests = [row({ id: "a", questionText: long("x") }), row({ id: "b", questionText: long("y") })];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      const [first, second] = screen.getAllByTestId("guidance-question-toggle");
+      fireEvent.click(first);
+      expect(first).toHaveAttribute("aria-expanded", "true");
+      expect(second).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("clamps long question text on an answered structured request", () => {
+      mockRequests = [
+        row({
+          status: "answered",
+          answer: "ok",
+          questionText: "s".repeat(301),
+          questions: [{ question: "Pick", header: "", multiSelect: false, options: [{ label: "A", description: "" }] }],
+        } as Partial<PlainGuidanceRequest>),
+      ];
+      render(<GuidanceRequestPanel scope="backlog-item" scopeKey="item-1" />);
+      const toggle = screen.getByTestId("guidance-question-toggle");
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
+  });
 });

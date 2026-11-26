@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -32,7 +33,8 @@ const reaperPeerSession = "7c1e0000-0000-4000-8000-0000000000bb"
 
 type reaperFixture struct {
 	storage *session.Storage
-	mirror  *GuidanceHookMirror
+	mirror  *questionkit.GuidanceHookMirror
+	pending *questionkit.PendingQuestionStore
 	reaper  *GuidanceSessionReaper
 	counts  *mirrorCounts
 	hookID  string
@@ -44,8 +46,9 @@ func newReaperFixture(t *testing.T, ends fakeSessionEnds) *reaperFixture {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	counts := &mirrorCounts{}
-	mirror := newRealStoreMirror(storage, NewPendingQuestionStore(nil), counts)
-	f := &reaperFixture{storage: storage, mirror: mirror, counts: counts}
+	pending := questionkit.NewPendingQuestionStore(nil)
+	mirror := newRealStoreMirror(storage, pending, counts)
+	f := &reaperFixture{storage: storage, mirror: mirror, pending: pending, counts: counts}
 	var ok bool
 	f.hookID, ok = mirror.Mirror(mirrorReq(t, "toolu_1", "Which color?", true))
 	require.True(t, ok)
@@ -139,7 +142,7 @@ func TestReaper_Run_should_RehydrateAfterTheStartupPass_AndStopWhenTheBusCloses(
 	go func() { f.reaper.Run(context.Background(), bus); close(done) }()
 
 	require.Eventually(t, func() bool {
-		_, ok := f.mirror.pending.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: f.hookID})
+		_, ok := f.pending.Peek(questionkit.QuestionKey{SessionUUID: mirrorSession, QuestionID: f.hookID})
 		return ok
 	},
 		5*time.Second, 5*time.Millisecond, "the open replyable row is rehydrated on start")
@@ -147,7 +150,7 @@ func TestReaper_Run_should_RehydrateAfterTheStartupPass_AndStopWhenTheBusCloses(
 	require.Eventually(t, func() bool { return f.cancelled(t, f.hookID) }, 5*time.Second, 5*time.Millisecond)
 	// The reaper cancels the row before evicting the cache entry, so eviction is asynchronous to the cancel.
 	require.Eventually(t, func() bool {
-		_, stillCached := f.mirror.pending.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: f.hookID})
+		_, stillCached := f.pending.Peek(questionkit.QuestionKey{SessionUUID: mirrorSession, QuestionID: f.hookID})
 		return !stillCached
 	}, 5*time.Second, 5*time.Millisecond, "the cancelled row leaves the pending cache")
 

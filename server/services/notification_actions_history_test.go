@@ -12,6 +12,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // The same stored history page is served to both listeners; only the stamped
@@ -22,13 +24,13 @@ func TestGetNotificationHistory_ShouldMarkTierBDesktopOnlyOnRemoteAndAvailableOn
 	require.NoError(t, err)
 	require.NoError(t, store.Append(&notifications.NotificationRecord{
 		ID: "n1", SessionID: "s1", NotificationType: int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		Title: "Question", CreatedAt: time.Now(), Metadata: map[string]string{metaQuestionID: "q1"},
+		Title: "Question", CreatedAt: time.Now(), Metadata: map[string]string{questionkit.MetaQuestionID: "q1"},
 	}))
 
 	f := newDescriptorFixture()
-	q := PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
+	q := questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
 	q.Dialog.Labels = []string{"Redis", "Memcached"}
-	f.questions.live[QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = q
+	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = q
 
 	ns := &NotificationService{notificationStore: store}
 	ns.SetDescriptorBuilder(f.builder())
@@ -42,8 +44,8 @@ func TestGetNotificationHistory_ShouldMarkTierBDesktopOnlyOnRemoteAndAvailableOn
 		return acts[0]
 	}
 
-	local := serve(stampedContext(t, nil, ListenerLocal, false, "localhost:8543", nil))
-	remote := serve(stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil))
+	local := serve(StampedContext(t, nil, access.ListenerLocal, false, "localhost:8543", nil))
+	remote := serve(StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil))
 
 	assert.True(t, local.Available)
 	assert.False(t, remote.Available)

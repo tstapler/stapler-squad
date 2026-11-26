@@ -15,6 +15,9 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -26,8 +29,8 @@ import (
 type steerEnv struct {
 	t    *testing.T
 	fix  *forkTestFixture
-	mfs  *memFS
-	sink *AuditSink
+	mfs  *memfs.MemFS
+	sink *auditkit.AuditSink
 	gate *deliverygate.Gate
 	warn func(string) int
 }
@@ -43,8 +46,8 @@ func newSteerEnv(t *testing.T) *steerEnv {
 	svctest.WithIsolatedStateDir(t) // flag flips persist to the config file
 	fix := setupForkTestFixture(t)
 	lg, warns := newLogCapture()
-	mfs := newMemFS()
-	sink := NewAuditSink(func() (string, error) { return "/cfg", nil }, WithAuditFS(mfs), WithAuditLogger(lg))
+	mfs := memfs.New()
+	sink := auditkit.NewAuditSink(func() (string, error) { return "/cfg", nil }, auditkit.WithAuditFS(mfs), auditkit.WithAuditLogger(lg))
 	t.Cleanup(sink.Close)
 	fix.svc.featureFlagSvc.SetAudit(sink, nil)
 	gate := deliverygate.NewGate()
@@ -96,12 +99,12 @@ func (e *steerEnv) endRow(id string) {
 
 // requestCtx is the context the real server chain gives a handler.
 func (e *steerEnv) requestCtx(listener string, requiresAuth bool, host string, hdr map[string]string) context.Context {
-	cfg := verdictServiceConfig("0.0.0.0:8543", []string{"onyx.lan"})
-	return stampedContext(e.t, &cfg, listener, requiresAuth, host, hdr)
+	cfg := VerdictServiceConfig("0.0.0.0:8543", []string{"onyx.lan"})
+	return StampedContext(e.t, &cfg, listener, requiresAuth, host, hdr)
 }
 
 func (e *steerEnv) localCtx() context.Context {
-	return e.requestCtx(ListenerLocal, false, "localhost:8543", nil)
+	return e.requestCtx(access.ListenerLocal, false, "localhost:8543", nil)
 }
 
 func (e *steerEnv) steer(ctx context.Context, id, msg string) error {
@@ -110,22 +113,22 @@ func (e *steerEnv) steer(ctx context.Context, id, msg string) error {
 }
 
 // auditLines flushes the sink and returns every line, oldest first.
-func (e *steerEnv) auditLines() []AuditLine {
+func (e *steerEnv) auditLines() []auditkit.AuditLine {
 	e.t.Helper()
 	e.sink.Close()
 	return e.readLines()
 }
 
 // readLines returns the lines written so far.
-func (e *steerEnv) readLines() []AuditLine {
+func (e *steerEnv) readLines() []auditkit.AuditLine {
 	e.t.Helper()
-	raw, ok := e.mfs.get(auditTestFile)
+	raw, ok := e.mfs.Get(auditTestFile)
 	if !ok || len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
-	var out []AuditLine
+	var out []auditkit.AuditLine
 	for _, l := range lines(raw) {
-		var al AuditLine
+		var al auditkit.AuditLine
 		require.NoError(e.t, json.Unmarshal(l, &al), string(l))
 		out = append(out, al)
 	}
@@ -136,8 +139,8 @@ func (e *steerEnv) count(outcome string) uint64 {
 	return e.gate.Metrics().Value(deliverygate.CounterBacklogSteer, outcome)
 }
 
-func steerLines(all []AuditLine, kind string) []AuditLine {
-	var out []AuditLine
+func steerLines(all []auditkit.AuditLine, kind string) []auditkit.AuditLine {
+	var out []auditkit.AuditLine
 	for _, l := range all {
 		if l.Kind == kind {
 			out = append(out, l)
@@ -172,11 +175,11 @@ func TestBacklogSteer_ShouldSucceedWithOneAuditPairAndMetric_WhenHiddenLiveLinke
 	assert.Empty(t, ended.pm.writes())
 	assert.EqualValues(t, 5, e.count(steerOutcomeNoLink))
 
-	all := steerLines(e.auditLines(), auditKindBacklogSteer)
+	all := steerLines(e.auditLines(), auditkit.AuditKindBacklogSteer)
 	require.Len(t, all, 2, "exactly one requested line and one result line, for the one qualifying steer")
 	req, res := all[0], all[1]
-	assert.Equal(t, auditPhaseRequest, req.Phase)
-	assert.Equal(t, auditPhaseResult, res.Phase)
+	assert.Equal(t, auditkit.AuditPhaseRequest, req.Phase)
+	assert.Equal(t, auditkit.AuditPhaseResult, res.Phase)
 	assert.Equal(t, steerOutcomeSent, res.Outcome)
 	assert.Equal(t, req.ChangeID, res.ChangeID)
 	assert.Equal(t, review.inst.UUID, req.SessionUUID)
@@ -185,9 +188,9 @@ func TestBacklogSteer_ShouldSucceedWithOneAuditPairAndMetric_WhenHiddenLiveLinke
 	assert.Equal(t, len(msg), req.MessageLen)
 	assert.Len(t, req.MessageSHA256, 64)
 	assert.Equal(t, msg, req.MessagePreview)
-	assert.Equal(t, ListenerLocal, req.Listener)
+	assert.Equal(t, access.ListenerLocal, req.Listener)
 	assert.Equal(t, "localhost:8543", req.Host)
-	assert.Equal(t, AuthModeNone, req.AuthMode)
+	assert.Equal(t, access.AuthModeNone, req.AuthMode)
 	require.NotNil(t, req.PeerLoopback)
 	require.NotNil(t, req.Proxied)
 }
@@ -198,7 +201,7 @@ func TestBacklogSteer_ShouldRecordOnlyThe80CharacterPreview_WhenTheMessageIsLong
 	msg := strings.Repeat("a", 79) + "é" + strings.Repeat("b", 500)
 
 	require.NoError(t, e.steer(e.localCtx(), review.inst.Title, msg))
-	req := steerLines(e.auditLines(), auditKindBacklogSteer)[0]
+	req := steerLines(e.auditLines(), auditkit.AuditKindBacklogSteer)[0]
 	assert.Equal(t, steerPreviewRunes, len([]rune(req.MessagePreview)))
 	assert.Equal(t, len(msg), req.MessageLen)
 }
@@ -207,7 +210,7 @@ func TestBacklogSteer_ShouldRecordOnlyThe80CharacterPreview_WhenTheMessageIsLong
 func TestBacklogSteer_ShouldReturnInternalWithZeroWritesAndAuditFailedMetric_WhenPreWriteAuditAppendFails(t *testing.T) {
 	e := newSteerEnv(t)
 	review := e.addSession("review-audit", true, instance.SessionRoleReview)
-	e.mfs.setFailWrite(errors.New("disk full"))
+	e.mfs.SetFailWrite(errors.New("disk full"))
 
 	err := e.steer(e.localCtx(), review.inst.Title, "go")
 	require.Error(t, err)
@@ -280,7 +283,7 @@ func TestBacklogSteer_ShouldReturnNoLinkWithZeroWrites_WhenInstanceStoppedEndedA
 		assert.EqualValues(t, 1, e.count(steerOutcomeNoLink))
 		instance.AssertLeaseFree(t, tgt.inst)
 
-		all := steerLines(e.auditLines(), auditKindBacklogSteer)
+		all := steerLines(e.auditLines(), auditkit.AuditKindBacklogSteer)
 		require.Len(t, all, 2)
 		assert.Equal(t, steerOutcomeAborted, all[1].Outcome)
 	})
@@ -328,9 +331,9 @@ func TestBacklogSteer_ShouldReturnPermissionDeniedWithZeroWritesOnHostRebindingO
 		name string
 		ctx  context.Context
 	}{
-		{"rebinding host", e.requestCtx(ListenerLocal, false, "evil.example:8543", nil)},
-		{"unverified lan host", e.requestCtx(ListenerLocal, false, "attacker.lan:8543", nil)},
-		{"foreign origin", e.requestCtx(ListenerLocal, false, "onyx.lan:8543", map[string]string{"Origin": "https://evil.example"})},
+		{"rebinding host", e.requestCtx(access.ListenerLocal, false, "evil.example:8543", nil)},
+		{"unverified lan host", e.requestCtx(access.ListenerLocal, false, "attacker.lan:8543", nil)},
+		{"foreign origin", e.requestCtx(access.ListenerLocal, false, "onyx.lan:8543", map[string]string{"Origin": "https://evil.example"})},
 	}
 	for _, c := range denied {
 		err := e.steer(c.ctx, review.inst.Title, "go")
@@ -340,11 +343,11 @@ func TestBacklogSteer_ShouldReturnPermissionDeniedWithZeroWritesOnHostRebindingO
 	assert.Empty(t, review.pm.writes())
 	assert.EqualValues(t, 3, e.count(steerOutcomeRefused))
 
-	require.NoError(t, e.steer(e.requestCtx(ListenerLocal, false, "onyx.lan:8543", nil), review.inst.Title, "from the lan"))
-	require.NoError(t, e.steer(e.requestCtx(ListenerRemote, true, "onyx.staplerhome.internal:8444", nil), review.inst.Title, "from the tailnet"))
+	require.NoError(t, e.steer(e.requestCtx(access.ListenerLocal, false, "onyx.lan:8543", nil), review.inst.Title, "from the lan"))
+	require.NoError(t, e.steer(e.requestCtx(access.ListenerRemote, true, "onyx.staplerhome.internal:8444", nil), review.inst.Title, "from the tailnet"))
 	assert.Len(t, review.pm.writes(), 4)
 
-	req := steerLines(e.auditLines(), auditKindBacklogSteer)[0]
+	req := steerLines(e.auditLines(), auditkit.AuditKindBacklogSteer)[0]
 	require.NotNil(t, req.PeerLoopback)
 	assert.False(t, *req.PeerLoopback, "the audit line records the peer instead of refusing on it")
 }

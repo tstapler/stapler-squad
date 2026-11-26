@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -71,7 +72,7 @@ func (r reasonSignature) key(pr githubpkg.LinkKey) string {
 	for _, h := range r.headers {
 		names = append(names, canonicalReasonForHeader(h))
 	}
-	return services.GuardSignature(pr, services.ReasonSetSignature(services.DropSubsumedChangesRequested(names)...))
+	return access.GuardSignature(pr, access.ReasonSetSignature(services.DropSubsumedChangesRequested(names)...))
 }
 
 func canonicalReasonForHeader(h string) string {

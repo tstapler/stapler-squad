@@ -220,7 +220,7 @@ func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdE
 
 // fakeImportCollisionStore is a session.InstanceStore test double scoped to
 // this file's well-formed-request tests (Finding #13). It is distinct from
-// session_image_upload_handler_test.go's fakeInstanceStore, whose
+// server/services/upload_fixtures_test.go's fakeInstanceStore, whose
 // ListInstanceData is hardcoded to return nil -- that fixed behavior is
 // depended on by the upload-handler tests, so this file uses its own
 // configurable fake instead of generalizing the shared one.

@@ -1,6 +1,9 @@
 package session
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/tstapler/stapler-squad/session/git/backend/gogit"
@@ -17,6 +20,12 @@ func ConsentEnrichmentProbe(gate *tcc.ConsentGate) func(string) (*instance.Workt
 			}
 			return nil
 		})
+		if errors.Is(err, fs.ErrNotExist) {
+			// Same Lstat ReadEnrichment already did, so no new protected-root access.
+			if _, statErr := os.Lstat(filepath.Join(path, ".git")); errors.Is(statErr, fs.ErrNotExist) {
+				return &instance.WorktreeInfo{}, nil // not a repository: nothing to enrich
+			}
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 
@@ -92,7 +92,7 @@ type keystrokeDelivery struct {
 
 // deliver queues the (deferred) keystroke bookkeeping, then sends to the backend, recording
 // input_bookkeep, input_send and input_total.
-func (k keystrokeDelivery) deliver(writer services.TerminalWriter, data []byte) {
+func (k keystrokeDelivery) deliver(writer access.TerminalWriter, data []byte) {
 	labels := k.latency.labels()
 	start := time.Now()
 	k.latency.noteInput(start)
@@ -104,7 +104,7 @@ func (k keystrokeDelivery) deliver(writer services.TerminalWriter, data []byte) 
 	// subprocess send-keys. Errors are non-fatal: keystrokes may be lost under load but the
 	// stream stays alive (sending TerminalError kills it).
 	sendCtx, cancel := context.WithTimeout(termlat.WithKeystroke(context.Background()), 2*time.Second)
-	_ = writer.SendInput(sendCtx, services.PaneInput{
+	_ = writer.SendInput(sendCtx, access.PaneInput{
 		ControlMode: k.instance,
 		TmuxSocket:  k.tmuxSocket,
 		TmuxSession: k.tmuxSession,

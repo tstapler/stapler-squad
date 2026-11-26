@@ -907,7 +907,7 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	// returns non-nil below — otherwise streamViaControlMode's "session
 	// missing, restore" branch never runs at all (a nil GetTmuxSession()
 	// skips straight to a no-op StartControlMode success, per
-	// session/tmux_process_manager.go's StartControlMode returning nil when
+	// session/procbackend/tmux_process_manager.go's StartControlMode returning nil when
 	// no session is set). NewTmuxSessionWithDeps (rather than
 	// NewTmuxSessionWithPrefix) is what makes the fake executor — and thus
 	// the call-counted exists/doesn't-exist answers — take effect; it also
@@ -3001,7 +3001,7 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 // project (Epics 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 8.3). Epic 8.1's job is to prove all seven
 // compose correctly, so the round-trip and spot-check tests below need the complete set in
 // one place rather than each hand-rolling its own (partial, driftable) list. All seven have
-// named Go constants (see feature_flag_service.go); three of them
+// named Go constants (see flagsvc/feature_flag_service.go); three of them
 // (terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName,
 // terminalResyncBatchingFlagName) are pure client-side concerns with no Go production call
 // site to share the constant with, but are still named for consistency and so this list and

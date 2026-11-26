@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -31,10 +32,10 @@ func TestRegisterQuestion_should_MirrorAndStampGuidanceRequestID_WhenProofVerifi
 
 	ev := q.post(askQuestionBody, map[string]string{hookProofHeader: q.proofs.HeaderValue("sess-uuid")})
 	md := ev.NotificationMetadata
-	require.NotEmpty(t, md[metaGuidanceRequestID])
-	assert.Equal(t, md[metaGuidanceRequestID], md[metaQuestionID], "the durable row id is the question id")
-	assert.True(t, isHookRow(md[metaGuidanceRequestID], "sess-uuid"))
-	_, ok := q.store.Peek(QuestionKey{SessionUUID: "sess-uuid", QuestionID: md[metaQuestionID]})
+	require.NotEmpty(t, md[questionkit.MetaGuidanceRequestID])
+	assert.Equal(t, md[questionkit.MetaGuidanceRequestID], md[questionkit.MetaQuestionID], "the durable row id is the question id")
+	assert.True(t, isHookRow(md[questionkit.MetaGuidanceRequestID], "sess-uuid"))
+	_, ok := q.store.Peek(questionkit.QuestionKey{SessionUUID: "sess-uuid", QuestionID: md[questionkit.MetaQuestionID]})
 	assert.True(t, ok)
 }
 
@@ -44,18 +45,18 @@ func TestRegisterQuestion_should_MirrorViewOnlyAndRegisterNothing_WhenAttributio
 
 	ev := q.post(askQuestionBody, map[string]string{"X-CS-Session-ID": "other-uuid"})
 	md := ev.NotificationMetadata
-	assert.Equal(t, replyCauseNoProof, md[metaReplyUnavailable])
-	assert.NotContains(t, md, metaQuestionID)
+	assert.Equal(t, replyCauseNoProof, md[questionkit.MetaReplyUnavailable])
+	assert.NotContains(t, md, questionkit.MetaQuestionID)
 	assert.Zero(t, q.store.Len())
-	require.NotEmpty(t, md[metaGuidanceRequestID], "an unverified question still mirrors, view-only")
-	assert.True(t, isHookRow(md[metaGuidanceRequestID], "other-uuid"))
+	require.NotEmpty(t, md[questionkit.MetaGuidanceRequestID], "an unverified question still mirrors, view-only")
+	assert.True(t, isHookRow(md[questionkit.MetaGuidanceRequestID], "other-uuid"))
 }
 
 func TestRegisterQuestion_should_NotMirror_WhenSessionHasNoUUID(t *testing.T) {
 	q := newQuestionHarness(t)
 	q.withMirror(t)
 	ev := q.post(askQuestionBody, map[string]string{})
-	assert.NotContains(t, ev.NotificationMetadata, metaGuidanceRequestID)
+	assert.NotContains(t, ev.NotificationMetadata, questionkit.MetaGuidanceRequestID)
 }
 
 func TestBroadcastQuestionNotification_should_RedactSecretsInTheMessage(t *testing.T) {
@@ -73,8 +74,7 @@ func TestAskUserQuestionHook_should_ReplyDeferWithinBound_WhenMirrorRepositoryBl
 	store := &blockingMirrorStore{release: make(chan struct{})}
 	t.Cleanup(func() { close(store.release) })
 	counts := &mirrorCounts{}
-	blocked := NewGuidanceHookMirror(store, q.store, counts.onFailed, counts.onCleared, testFlagRegistry())
-	blocked.enabled = mirrorFlagOn
+	blocked := questionkit.NewGuidanceHookMirror(store, q.store, counts.onFailed, counts.onCleared, mirrorFlagOn)
 	q.h.SetGuidanceMirror(blocked)
 
 	srv := httptest.NewServer(http.HandlerFunc(q.h.HandlePermissionRequest))
@@ -92,6 +92,6 @@ func TestAskUserQuestionHook_should_ReplyDeferWithinBound_WhenMirrorRepositoryBl
 	assert.Empty(t, resp.Header.Get("Content-Type"), "an empty body defers to the native dialog")
 
 	ev := svctest.RequireOneNotification(t, q.events)
-	assert.NotContains(t, ev.NotificationMetadata, metaGuidanceRequestID)
-	assert.Equal(t, []string{mirrorFailTimeout}, counts.failures())
+	assert.NotContains(t, ev.NotificationMetadata, questionkit.MetaGuidanceRequestID)
+	assert.Equal(t, []string{questionkit.MirrorFailTimeout}, counts.failures())
 }

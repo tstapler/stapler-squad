@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ type ackNotes interface {
 type ackCapture func(ctx context.Context, sessionUUID string, underLease bool) (string, error)
 
 type ackEntry struct {
-	SentDelivery
+	questionkit.SentDelivery
 	sentAt      time.Time
 	lastSample  time.Time
 	clean       int
@@ -81,14 +82,14 @@ func NewGuidanceAckDetector(store ackStore, capture ackCapture, ended func(strin
 func (a *GuidanceAckDetector) SetNotes(n ackNotes) { a.notes = n }
 
 // Sent starts tracking d. An indeterminate write is Unconfirmed at once.
-func (a *GuidanceAckDetector) Sent(d SentDelivery) {
+func (a *GuidanceAckDetector) Sent(d questionkit.SentDelivery) {
 	if d.Indeterminate {
-		recordAnswerUnconfirmed()
+		questionkit.RecordAnswerUnconfirmed()
 	}
 	a.track(d)
 }
 
-func (a *GuidanceAckDetector) track(d SentDelivery) {
+func (a *GuidanceAckDetector) track(d questionkit.SentDelivery) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	now := a.now()
@@ -124,11 +125,11 @@ func (a *GuidanceAckDetector) Restore(ctx context.Context) {
 		return
 	}
 	for _, row := range rows {
-		d := SentDelivery{RowID: row.ID, SessionUUID: row.AskerSessionUUID, Route: row.DeliveryRoute}
-		if dialog, ok := dialogFromRow(row); ok {
+		d := questionkit.SentDelivery{RowID: row.ID, SessionUUID: row.AskerSessionUUID, Route: row.DeliveryRoute}
+		if dialog, ok := questionkit.DialogFromRow(row); ok {
 			d.Dialog = dialog
-		} else if qs, ok := tabbedFromRow(row); ok {
-			d.Matches = tabbedHeadersMatch(qs)
+		} else if qs, ok := questionkit.TabbedFromRow(row); ok {
+			d.Matches = questionkit.TabbedHeadersMatch(qs)
 		}
 		a.track(d)
 	}
@@ -211,7 +212,7 @@ func (a *GuidanceAckDetector) decide(ctx context.Context, e ackEntry) {
 		a.mu.Lock()
 		if live, ok := a.tracked[e.RowID]; ok {
 			if !live.unconfirmed {
-				recordAnswerUnconfirmed() // an indeterminate send already counted at Sent
+				questionkit.RecordAnswerUnconfirmed() // an indeterminate send already counted at Sent
 			}
 			live.decided, live.unconfirmed, live.lastSample = true, true, a.now()
 		}

@@ -19,7 +19,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -45,14 +47,14 @@ func TestConfigSurfaceProof_TCCEnrichmentConsent_ChangesStartupGate(t *testing.T
 
 func TestConfigSurfaceProof_ChangelogFlags_ChangeReaders(t *testing.T) {
 	set := bkfFlagWriter(t)
-	set(ChangelogFlagName, true)
+	set(featureflags.ChangelogFlagName, true)
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(ChangelogFlagName, setting.(bool))
+		set(featureflags.ChangelogFlagName, setting.(bool))
 		return ChangelogEnabled(config.LoadConfig(), testFlagRegistry())
 	}, false, true)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(UpdateCheckFlagName, setting.(bool))
+		set(featureflags.UpdateCheckFlagName, setting.(bool))
 		return UpdateCheckFlagEnabled(config.LoadConfig(), testFlagRegistry())
 	}, false, true)
 }
@@ -80,8 +82,8 @@ func TestConfigSurfaceProof_BlockApprovalOnCIFailure_ChangesResolveApproval(t *t
 	set := bkfFlagWriter(t)
 	attempts := 0
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(blockApprovalOnCIFailureFlagName, setting.(bool))
-		store := NewApprovalStore("")
+		set(flagsvc.BlockApprovalOnCIFailureFlagName, setting.(bool))
+		store := approvalkit.NewApprovalStore("")
 		svc := NewApprovalService(store)
 		svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: failingCIInstance("bkf-session")})
 		attempts++
@@ -101,14 +103,14 @@ func TestConfigSurfaceProof_WorkspacePeersNudge_ChangesPromptBlock(t *testing.T)
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(featureflags.WorkspacePeersNudgeFlagName, setting.(bool))
-		return WorkspacePeersBlockFor(t.Context(), storage, repoPath) != ""
+		return flagsvc.WorkspacePeersBlockFor(t.Context(), storage, repoPath) != ""
 	}, false, true)
 }
 
 func TestConfigSurfaceProof_GitHubGraphQLPRInfo_ChangesPRInfoDispatch(t *testing.T) {
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(githubGraphQLMigrationFlagName, setting.(bool))
+		set(flagsvc.GithubGraphQLMigrationFlagName, setting.(bool))
 		return github.GraphQLPRInfoEnabled()
 	}, false, true)
 }
@@ -136,7 +138,7 @@ func TestConfigSurfaceProof_GitHubPriorityAdmission_ChangesBackgroundAdmission(t
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		github.ResetRateLimiterForTest(t)
-		set(githubPriorityAdmissionFlagName, setting.(bool))
+		set(flagsvc.GithubPriorityAdmissionFlagName, setting.(bool))
 		github.ResetPriorityAdmissionFlagCacheForTest()
 		require.NoError(t, do(github.OriginInteractive), "primes the limiter below headroom")
 		return do(github.OriginPRStatusPoller) == nil
@@ -154,7 +156,7 @@ func TestConfigSurfaceProof_UnfinishedMmapIndex_ChangesLoaderChoice(t *testing.T
 func TestConfigSurfaceProof_WorktreeChangeDetection_ChangesWorktreeSetup(t *testing.T) {
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(worktreeChangeDetectionFlagName, setting.(bool))
+		set(flagsvc.WorktreeChangeDetectionFlagName, setting.(bool))
 		return gitwt.WorktreeChangeDetectionEnabled()
 	}, false, true)
 }

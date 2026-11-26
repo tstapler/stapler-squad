@@ -29,3 +29,17 @@ describe("planLeafMove", () => {
     expect(planLeafMove(ids, 0, 9, 0).swaps).toEqual([]);
   });
 });
+
+import { titleFirstLine } from "../paneUtils";
+
+describe("titleFirstLine", () => {
+  it("returns the first non-empty line, trimmed", () => {
+    expect(titleFirstLine("\n  Fix the bug  \nlong body")).toBe("Fix the bug");
+  });
+  it("returns a single-line title unchanged", () => {
+    expect(titleFirstLine("Plain")).toBe("Plain");
+  });
+  it("falls back to the original when every line is blank", () => {
+    expect(titleFirstLine("  \n ")).toBe("  \n ");
+  });
+});

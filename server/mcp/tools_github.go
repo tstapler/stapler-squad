@@ -30,6 +30,9 @@ type githubHandlers struct {
 	svc SessionCreator
 	// createLimiter is shared with lifecycleHandlers.createLimiter; nil means unlimited.
 	createLimiter *tokenBucket
+	// publicURL is the instance's externally reachable UI base (STAPLER_SQUAD_PUBLIC_URL);
+	// empty means create_session_for_pr returns no ui_url.
+	publicURL string
 }
 
 // GitHubPRSummary is the MCP representation of one open pull request.
@@ -69,6 +72,8 @@ type CreateSessionForPRResult struct {
 	// ProgramWarning is set (non-fatally) when program isn't among the
 	// programs currently registered — see programWarningFor.
 	ProgramWarning string `json:"program_warning,omitempty"`
+	// UIURL links to the session in the web UI; see CreateSessionResult.UIURL.
+	UIURL string `json:"ui_url,omitempty"`
 }
 
 func registerGitHubTools(s *mcpserver.MCPServer, gh *githubHandlers) {
@@ -189,6 +194,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 						return okResult(CreateSessionForPRResult{
 							MCPResult: MCPResult{Success: true},
 							Session:   &detail,
+							UIURL:     sessionUIURL(gh.publicURL, inst.GetStableID()),
 						}), nil
 					}
 				}
@@ -250,6 +256,8 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 	}
 	sessionID := createResp.Msg.Session.Id
 
+	uiURL := sessionUIURL(gh.publicURL, sessionID)
+
 	outcome, awaitErr := gh.svc.AwaitCreationTerminal(ctx, sessionID, awaitTimeout)
 	if errors.Is(awaitErr, domain.ErrCreationAwaitTimeout) {
 		return okResult(CreateSessionForPRResult{
@@ -261,6 +269,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			}},
 			StillCreating:  true,
 			ProgramWarning: programWarning,
+			UIURL:          uiURL,
 		}), nil
 	}
 	if result := mapCreationOutcome(outcome, awaitErr); result != nil {
@@ -286,6 +295,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 		MCPResult:      MCPResult{Success: true},
 		Session:        &detail,
 		ProgramWarning: programWarning,
+		UIURL:          uiURL,
 	}), nil
 }
 

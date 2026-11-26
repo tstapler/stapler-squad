@@ -10,7 +10,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -171,7 +173,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 	// backlog mutation methods (Phase 2) can publish BacklogItemChanged
 	// events. This is a different struct than backlogLifecycleListener.SetNotifier
 	// above — placed here for readability only, not because it mirrors that call.
-	storage.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: eventBus})
+	storage.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: eventBus})
 	// Review now always spawns a real, hidden session.Instance (via
 	// SessionService.SpawnReviewSession) instead of an in-process headless LLM
 	// call, so review-queue visibility (idle/error/approval detection) works the
@@ -226,7 +228,7 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 	}
 	quotaGate := services.NewQuotaGate(
 		// config.LoadConfig() re-reads config.json from disk on every call
-		// (same pattern as feature_flag_service.go's GetFeatureFlags) — cfg
+		// (same pattern as flagsvc/feature_flag_service.go's GetFeatureFlags) — cfg
 		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
 		// never refreshed, so closing over cfg.Quota directly would freeze
 		// every Quota field at boot, contradicting this closure's whole
@@ -410,6 +412,8 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// runs inline, instead of relying solely on the 60s
 	// reconcileTerminalItemSessions safety-net sweep.
 	backlogLifecycleListener.SetWorktreeCleaner(backlogSvc)
+	// Feeds last_progress_at from live PTY output so silent-but-working sessions are not stale_work.
+	backlogLifecycleListener.SetHeartbeatSource(sessionService)
 	// One live-work probe for the lifecycle listener (merge hold), BacklogService
 	// (RULE L) and the cleanup gate; a missed site would silently revert to
 	// kill-at-done, so the wiring is asserted and exported as a gauge.
@@ -480,6 +484,6 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// discover config.json's handoff_summary.enabled up front via GetFeatureFlags,
 	// instead of only finding out disabled on the first TriggerHandoffSummary
 	// call's Code.FailedPrecondition.
-	sessionService.SetFeatureController("handoff-summary", services.HandoffSummaryFeatureController{})
+	sessionService.SetFeatureController("handoff-summary", flagsvc.HandoffSummaryFeatureController{})
 	return nil
 }

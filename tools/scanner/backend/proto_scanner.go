@@ -181,6 +181,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"DeletePipelineMode":          "backlog:delete-pipeline-mode",
 	"GetPipelineMode":             "backlog:get-pipeline-mode",
 	"ListPipelineModes":           "backlog:list-pipeline-modes",
+	"CreateEpicIntegrationChild":  "backlog:create-epic-integration-child",
 	"AddBacklogItemDependency":    "backlog:add-item-dependency",
 	"RemoveBacklogItemDependency": "backlog:remove-item-dependency",
 	"ListBacklogItemDependencies": "backlog:list-item-dependencies",
@@ -354,7 +355,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	// remote.proto was omitted from registry-generate-backend's explicit proto
 	// enumeration until this mapping was added (ssh-remote-workspaces Phase 6
 	// Epic 6.3, Story 6.3.1) -- these RPCs' // +api: markers in
-	// remote_service.go already used these exact kebab-case ids, so the ids
+	// remote/remote_service.go already used these exact kebab-case ids, so the ids
 	// here must match verbatim or ScanProto's method-name fallback would
 	// produce a second, non-marker-matching id and file.
 	"TestRemoteConnection":   "remote:test-connection",

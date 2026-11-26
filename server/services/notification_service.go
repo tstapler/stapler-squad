@@ -13,6 +13,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/gatestats"
 	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
@@ -37,9 +39,9 @@ type NotificationService struct {
 	storage                 session.InstanceStore
 	deliveryGate            *deliverygate.Gate // optional: unversioned-request counter and stats RPC
 	statsFileStatus         func() deliverygate.StatsFileStatus
-	auditSink               *AuditSink         // optional: prune apply refuses without it
-	pruneNow                func() time.Time   // injected clock; nil means time.Now
-	descriptors             *DescriptorBuilder // optional: inline action descriptors on history pages
+	auditSink               *auditkit.AuditSink // optional: prune apply refuses without it
+	pruneNow                func() time.Time    // injected clock; nil means time.Now
+	descriptors             *DescriptorBuilder  // optional: inline action descriptors on history pages
 }
 
 // SetDescriptorBuilder wires the inline-action descriptor assembly (ADR-002).
@@ -372,15 +374,15 @@ func (ns *NotificationService) GetDeliveryGateStats(
 	if ns.deliveryGate == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("delivery gate is not configured"))
 	}
-	view := gateStatsView{
+	view := gatestats.StatsView{
 		Snapshot:    ns.deliveryGate.StatsSnapshot(),
 		Series:      ns.deliveryGate.Metrics().Series(),
-		ExplicitOff: explicitOffScopes(),
+		ExplicitOff: gatestats.ExplicitOffScopes(),
 	}
 	if ns.statsFileStatus != nil {
 		view.File = ns.statsFileStatus()
 	}
-	return connect.NewResponse(buildGateStatsResponse(view)), nil
+	return connect.NewResponse(gatestats.BuildResponse(view)), nil
 }
 
 // ---------------------------------------------------------------------------

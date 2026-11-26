@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -11,10 +13,12 @@ import (
 // per-page descriptor lookups. Each performs one store read per page.
 
 // approvalStoreLookup answers ApprovalLookup from the in-memory approval store.
-type approvalStoreLookup struct{ store *ApprovalStore }
+type approvalStoreLookup struct{ store *approvalkit.ApprovalStore }
 
 // NewApprovalLookup adapts the approval store to ApprovalLookup.
-func NewApprovalLookup(store *ApprovalStore) ApprovalLookup { return approvalStoreLookup{store} }
+func NewApprovalLookup(store *approvalkit.ApprovalStore) ApprovalLookup {
+	return approvalStoreLookup{store}
+}
 
 func (l approvalStoreLookup) PendingApprovalIDs() map[string]bool {
 	out := map[string]bool{}
@@ -50,7 +54,7 @@ func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (
 	for _, r := range rows {
 		if want[r.ID] {
 			g := OpenGuidance{Options: decodeGuidanceOptions(r.Options), Source: r.Source, PeerHelp: r.Source == domain.QuestionSourcePeer}
-			if qs, ok := tabbedFromRow(r); ok {
+			if qs, ok := questionkit.TabbedFromRow(r); ok {
 				g.Tabbed = qs
 			}
 			out[r.ID] = g

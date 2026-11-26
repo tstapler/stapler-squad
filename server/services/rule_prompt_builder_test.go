@@ -5,14 +5,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // T-UNIT-GO-005
 func TestDefaultRulePromptBuilder_BuildSystemPrompt_ContainsSchemaAndSeeds(t *testing.T) {
 	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
-	ctx := RulePromptContext{
-		ExistingRules: []RuleSpec{},
+	ctx := anthropicwire.RulePromptContext{
+		ExistingRules: []domain.RuleSpec{},
 		WindowDays:    7,
 	}
 
@@ -29,8 +32,8 @@ func TestDefaultRulePromptBuilder_BuildSystemPrompt_ContainsSchemaAndSeeds(t *te
 func TestDefaultRulePromptBuilder_BuildUserPrompt_FormatsGap(t *testing.T) {
 	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
-	ctx := RulePromptContext{
-		AnalyticsGaps: []AnalyticsGap{
+	ctx := anthropicwire.RulePromptContext{
+		AnalyticsGaps: []anthropicwire.AnalyticsGap{
 			{ToolName: "Bash", Program: "git", Count: 42},
 		},
 		WindowDays: 7,
@@ -46,8 +49,8 @@ func TestDefaultRulePromptBuilder_BuildUserPrompt_FormatsGap(t *testing.T) {
 func TestBuildUserPrompt_RedactsSecretCommandPreviews(t *testing.T) {
 	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
-	ctx := RulePromptContext{
-		AnalyticsGaps: []AnalyticsGap{
+	ctx := anthropicwire.RulePromptContext{
+		AnalyticsGaps: []anthropicwire.AnalyticsGap{
 			{
 				ToolName:           "Bash",
 				Program:            "curl",
@@ -60,14 +63,14 @@ func TestBuildUserPrompt_RedactsSecretCommandPreviews(t *testing.T) {
 
 	prompt := builder.BuildUserPrompt(ctx)
 
-	assert.Contains(t, prompt, redactedPrompt, "user prompt must contain redactedPrompt for secret command")
+	assert.Contains(t, prompt, secretscan.RedactedPrompt, "user prompt must contain RedactedPrompt for secret command")
 	assert.NotContains(t, prompt, "ghp_", "user prompt must not contain raw GitHub token")
 }
 
 func TestDefaultRulePromptBuilder_BuildUserPrompt_CommandSample(t *testing.T) {
 	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
-	ctx := RulePromptContext{
+	ctx := anthropicwire.RulePromptContext{
 		CommandSample: "git push origin main",
 		WindowDays:    7,
 	}
@@ -81,22 +84,22 @@ func TestDefaultRulePromptBuilder_BuildUserPrompt_CommandSample(t *testing.T) {
 func TestDefaultRulePromptBuilder_BuildUserPrompt_RedactsSecretCommandSample(t *testing.T) {
 	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
-	ctx := RulePromptContext{
+	ctx := anthropicwire.RulePromptContext{
 		CommandSample: "curl -H 'Authorization: Bearer ghp_AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH1234'",
 		WindowDays:    7,
 	}
 
 	prompt := builder.BuildUserPrompt(ctx)
 
-	assert.Contains(t, prompt, redactedPrompt, "user prompt must contain redactedPrompt for secret command sample")
+	assert.Contains(t, prompt, secretscan.RedactedPrompt, "user prompt must contain RedactedPrompt for secret command sample")
 	assert.NotContains(t, prompt, "ghp_", "user prompt must not contain raw GitHub token in command sample")
 }
 
 func TestDefaultRulePromptBuilder_BuildUserPrompt_EmptyGaps(t *testing.T) {
 	t.Parallel()
 	builder := &DefaultRulePromptBuilder{}
-	ctx := RulePromptContext{
-		AnalyticsGaps: []AnalyticsGap{},
+	ctx := anthropicwire.RulePromptContext{
+		AnalyticsGaps: []anthropicwire.AnalyticsGap{},
 		WindowDays:    7,
 	}
 

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -40,17 +41,17 @@ func (f *migrationClosingManager) Close() error {
 func TestMigrationFromTymux_RequiresDaemonReadyBeforeClosingOldSession(t *testing.T) {
 	unavailable := errors.New("local daemon still unreachable")
 	ready := false
-	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
+	procbackend.SetEnsureDaemonRunningForTest(t, func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		if !ready {
 			return tymux.TymuxdReady{}, unavailable
 		}
 		return tymux.TymuxdReady{}, nil
-	})()
+	})
 	closeErr := errors.New("old session kill rejected")
 	fake := &migrationClosingManager{seamFakeTymux: seamFakeTymux{id: "old-daemon-session"}, closeErr: closeErr}
 	inst := &instance.Instance{Title: "migration-unreachable", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTymux}
 	inst.MarkStarted()
-	oldPM := NewTymuxBackend(fake)
+	oldPM := procbackend.NewTymuxBackend(fake)
 	inst.SetProcessManagerForTest(oldPM)
 
 	for attempt := 0; attempt < 2; attempt++ {
@@ -70,12 +71,10 @@ func TestMigrationFromTymux_RequiresDaemonReadyBeforeClosingOldSession(t *testin
 
 func TestMigrationToTymux_RegistersExitCallbackAndEnvironmentBeforeStart(t *testing.T) {
 	fake := &migrationLaunchManager{}
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
-	t.Cleanup(func() { newTymuxSessionFn = orig })
-	defer stubEnsureDaemonRunning(func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return fake })
+	procbackend.SetEnsureDaemonRunningForTest(t, func(context.Context, tymux.DaemonConfig) (tymux.TymuxdReady, error) {
 		return tymux.TymuxdReady{}, nil
-	})()
+	})
 	inst := &instance.Instance{Title: "migration-callback", UUID: "migration-proof", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTmux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
 	inst.MarkStarted()
 	require.NoError(t, initializeBaselineForRestartTest(inst))
@@ -87,4 +86,15 @@ func TestMigrationToTymux_RegistersExitCallbackAndEnvironmentBeforeStart(t *test
 	assert.Equal(t, 1, fake.resetCalls)
 	assert.Contains(t, fake.GotEnv, "STAPLER_SESSION_UUID=migration-proof")
 	assert.Contains(t, fake.GotEnv, "MIGRATION_CUSTOM=present")
+}
+
+// initializeBaselineForRestartTest installs a factory-built process manager matching
+// i.Backend, skipping the rest of NewInstance.
+func initializeBaselineForRestartTest(i *instance.Instance) error {
+	pm, err := procbackend.NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: i.Backend})
+	if err != nil {
+		return err
+	}
+	i.SetProcessManagerForTest(pm)
+	return nil
 }

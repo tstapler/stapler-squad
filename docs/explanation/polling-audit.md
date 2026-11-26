@@ -44,7 +44,7 @@ sampling; see [caveats](#caveats)).
 | 10 | `GetTmuxVersionStatus` (`web-app/src/components/system/TmuxVersionMismatchBanner.tsx:57`) | 60 s; **no visibility pause** | HAR 22 calls (0.99/min); server 2.26/min, 9.5 ms avg | Pure-event / cheap fix | The answer changes only on tmux upgrade or server restart; fetch on mount and on stream reconnect | 100% | Low |
 
 Next after the top 10 (same method, smaller cost): `DialogGoneSampler` 3 s DB read
-(`server/services/guidance_dialog_gone_sampler.go:204`; 111 `ListAllPendingGuidanceRequests`
+(`server/services/questionkit/guidance_dialog_gone_sampler.go:204`; 111 `ListAllPendingGuidanceRequests`
 queries in 7 minutes at 55 ms each), `guidanceRowStore` 3 s / 15 s client poll
 (`GetGuidanceRequest` is 4.51/min over 24 h server-side), `GetReviewQueue` fallback
 (`useReviewQueue.ts:481`), `ListWorkflows` 90 s backstop (`useWorkflows.ts:146`), and the
@@ -110,7 +110,7 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/mux/discovery.go:352` | 30 s backstop | Scan for external PTY sessions | Mux socket events | Cheap-enough |
 | `session/autonomous/health.go:636` | configured interval | `RecoverUnhealthySessions` over all instances, may `SaveInstances` | tmux session-closed notifications | Needs-new-event-source |
 | `session/worktree_pr_poller.go:285`, `pr_status_poller.go:262`, `session/jules/session_poller.go:236`, `session/tagpoller/session_tag_poller.go:218` (2 m), `github/user_pr_cache.go:646` (2 m), `server/prwatch/loop.go` (5 s) | 60 s / 2 m / 5 s | GitHub REST/GraphQL, conditional where possible | `/webhooks/github` | Must-stay-poll, webhook-assisted (rank 9) |
-| `server/services/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
+| `server/services/questionkit/guidance_dialog_gone_sampler.go:204` | 3 s | `ListAllPendingGuidanceRequests` DB read, 55 ms avg | In-process guidance row events | Pure-event |
 | `server/services/guidance_ack_detector.go:155` | 3 s | per-row sample (name) | same | Pure-event |
 | `server/services/config_file_rules_reload.go:76` | 3 s | stat `shared_rules.yaml` | FSEvents or a parent-directory watch, not per-file kqueue (editors replace the file by rename) | Pure-event, trivial |
 | `server/services/connectrpc_websocket.go:2015` | 1 s per terminal stream | `hub.SubscriberCount()` (O(1)) | Subscriber join/leave callback | Cheap-enough |
@@ -124,11 +124,11 @@ code; items marked (name) were classified from the file name and constant only.
 | `session/host_advertiser.go:76`, `claim_gossiper.go:107` (5 m), `main.go:1486,1730`, `sshremote/health_prober.go:300` | 5 m | Multi-host heartbeats | peer events | Cheap-enough |
 | `server/notifications/subscriber.go:110,152`, `resolved_item_reaper.go:79`, `server/events` heartbeats (`pkg/events/heartbeat.go`, 15 s per Watch stream) | 15 s | Stream keepalives | n/a | Cheap-enough |
 | `server/services/session_creation_await.go:87` (250 ms), `backlog_service_verdict_steer.go:148` (5 s), `server/wakes/revive.go` (1 s), `session/autonomous/autonomous_driver.go` (150-500 ms settle polls) | short | Bounded waits | n/a | Cheap-enough (bounded) |
-| `session/pty_discovery.go:459` (5 s), `external_tmux_streamer.go:426` (100 ms, control-mode-unavailable fallback only), `session/workspace/notify.go:51` (5 s, a no-op body), `daemon/daemon.go:107,210` (3 s / 5 s) | short | Discovery and fallbacks | n/a | Cheap-enough; `workspace/notify.go` ticker does nothing today |
+| `session/ptydiscovery/pty_discovery.go:459` (5 s), `external_tmux_streamer.go:426` (100 ms, control-mode-unavailable fallback only), `session/workspace/notify.go:51` (5 s, a no-op body), `daemon/daemon.go:107,210` (3 s / 5 s) | short | Discovery and fallbacks | n/a | Cheap-enough; `workspace/notify.go` ticker does nothing today |
 | Telemetry: `server/analytics/escape_event_batch_writer.go:47` (500 ms), `profiling/profiling.go:201`, `log/service_log_rotation.go:34`, `server/auth/session.go:233`, `scrollback/manager.go:53`, `workflow_engine_shadow.go:622`, `gitwiring/soak.go:83`, `tmux/fork_metrics.go:197`, `server/server_gatestats.go:22` | 500 ms to 10 m | Flush and metrics | n/a | Cheap-enough |
 
 Not ticker-based but polling by sleep or timer: `session/instance_scroll_forward.go:238`,
-`session/pane_submit.go:248`, `session/tmux_process_manager.go:560`, `session/tmux/server_registry.go:633`,
+`session/pane_submit.go:248`, `session/procbackend/tmux_process_manager.go:561`, `session/tmux/server_registry.go:633`,
 `session/cdp/manager.go:476` (all bounded waits).
 
 ## Caveats

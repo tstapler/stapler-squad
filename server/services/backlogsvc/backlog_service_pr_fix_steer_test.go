@@ -10,6 +10,7 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
 	"github.com/stretchr/testify/assert"
@@ -716,17 +717,17 @@ func TestSteerActiveSessionForPRFix_should_NotWriteAndDegradeToRespawnBlocked_Wh
 // real sessionNudgeGuard, standing in for SessionService's shared guard.
 type guardBackedSteerer struct {
 	*mockSessionSteerer
-	guard *services.SessionNudgeGuard
+	guard *access.SessionNudgeGuard
 }
 
 func (g *guardBackedSteerer) SteerSessionGuarded(ctx context.Context, uuid, sig, message string) (services.SteerOutcome, error) {
 	release, outcome := g.guard.TryBegin(uuid, sig)
 	switch outcome {
-	case services.GuardBusy:
+	case access.GuardBusy:
 		return services.SteerGuardBusy, nil
-	case services.GuardDuplicate:
+	case access.GuardDuplicate:
 		return services.SteerDuplicate, nil
-	case services.GuardCoolingDown:
+	case access.GuardCoolingDown:
 		return services.SteerCoolingDown, nil
 	}
 	err := g.recordSteer(ctx, uuid, message)
@@ -783,11 +784,11 @@ func TestSteerActiveSessionForPRFix_should_PassFullReasonSignatureToGuard_When_C
 
 func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed_When_ManualNudgeInFlight(t *testing.T) {
 	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
-	guard := &services.SessionNudgeGuard{}
+	guard := &access.SessionNudgeGuard{}
 	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: guard})
 	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 	release, outcome := guard.TryBegin(activeSessionUUIDPrimary, "manual")
-	require.Equal(t, services.GuardOK, outcome)
+	require.Equal(t, access.GuardOK, outcome)
 
 	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
 
@@ -803,7 +804,7 @@ func TestSteerActiveSessionForPRFix_should_ReturnWithoutDegradingOrMarkingFailed
 func TestSteerActiveSessionForPRFix_should_DeliverBothSignatures_When_FailingChecksThenMergeConflictWithin30s(t *testing.T) {
 	svc, steerer, _ := newTestBacklogServiceForSteerIntegration(t, activeSessionUUIDPrimary, "claude")
 	clk := &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: services.NewSessionNudgeGuardWithClock(clk.Now)})
+	svc.SetSessionSteerer(&guardBackedSteerer{mockSessionSteerer: steerer, guard: access.NewSessionNudgeGuardWithClock(clk.Now)})
 	itemID := createPRPendingItemWithActiveSession(t, svc.storage, activeSessionUUIDPrimary)
 
 	pinnedBaselineSteer(t, svc, itemID, ciOnlyFixContext)
@@ -853,31 +854,31 @@ func TestSharedGuard_should_DedupeAutoSteerAfterManualNudgeAndViceVersa_ForSameP
 	manual := services.NudgeSignature(pr, []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS})
 	auto := buildReasonSignature("## Failing CI checks\n- lint\n").key(pr.Key())
 
-	g := &services.SessionNudgeGuard{}
+	g := &access.SessionNudgeGuard{}
 	rel, out := g.TryBegin("s", manual)
-	require.Equal(t, services.GuardOK, out)
+	require.Equal(t, access.GuardOK, out)
 	rel(true)
 	_, out = g.TryBegin("s", auto)
-	assert.Equal(t, services.GuardDuplicate, out, "auto-steer after a delivered manual nudge")
+	assert.Equal(t, access.GuardDuplicate, out, "auto-steer after a delivered manual nudge")
 
-	g2 := &services.SessionNudgeGuard{}
+	g2 := &access.SessionNudgeGuard{}
 	rel, out = g2.TryBegin("s", auto)
-	require.Equal(t, services.GuardOK, out)
+	require.Equal(t, access.GuardOK, out)
 	rel(true)
 	_, out = g2.TryBegin("s", manual)
-	assert.Equal(t, services.GuardDuplicate, out, "manual nudge after a delivered auto-steer")
+	assert.Equal(t, access.GuardDuplicate, out, "manual nudge after a delivered auto-steer")
 }
 
 func TestSharedGuard_should_NotDedupe_When_SessionIsLinkedToTwoPRs(t *testing.T) {
 	reasons := []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_FAILING_CHECKS}
-	g := &services.SessionNudgeGuard{}
+	g := &access.SessionNudgeGuard{}
 	rel, out := g.TryBegin("s", services.NudgeSignature(testPRKey(t, 7), reasons))
-	require.Equal(t, services.GuardOK, out)
+	require.Equal(t, access.GuardOK, out)
 	rel(true)
 	_, out = g.TryBegin("s", services.NudgeSignature(testPRKey(t, 8), reasons))
-	assert.Equal(t, services.GuardOK, out, "a nudge for the second PR is not a repeat of the first")
+	assert.Equal(t, access.GuardOK, out, "a nudge for the second PR is not a repeat of the first")
 	_, out = g.TryBegin("s", buildReasonSignature("## Failing CI checks\n").key(testPRKey(t, 8).Key()))
-	assert.Equal(t, services.GuardBusy, out, "second claim is still in flight")
+	assert.Equal(t, access.GuardBusy, out, "second claim is still in flight")
 }
 
 func TestCanonicalReasonForHeader_should_KeepChangesRequestedSeparateFromThreads(t *testing.T) {
@@ -886,12 +887,12 @@ func TestCanonicalReasonForHeader_should_KeepChangesRequestedSeparateFromThreads
 	threads := services.NudgeSignature(testPRKey(t, 7), []sessionv1.NudgeReason{sessionv1.NudgeReason_NUDGE_REASON_UNRESOLVED_THREADS})
 	assert.NotEqual(t, threads, changes)
 
-	g := &services.SessionNudgeGuard{}
+	g := &access.SessionNudgeGuard{}
 	rel, out := g.TryBegin("s", changes)
-	require.Equal(t, services.GuardOK, out)
+	require.Equal(t, access.GuardOK, out)
 	rel(true)
 	_, out = g.TryBegin("s", threads)
-	assert.Equal(t, services.GuardOK, out, "changes-requested steer must not suppress a thread nudge")
+	assert.Equal(t, access.GuardOK, out, "changes-requested steer must not suppress a thread nudge")
 }
 
 func TestLinkKeyFromPRURL_should_MatchPRKeyKey(t *testing.T) {
@@ -903,7 +904,7 @@ func TestReasonSignatureKey_ChangesRequestedWithThreads_MatchesManualNudgeKey(t 
 	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
 	require.NoError(t, err)
 	pr := prk.Key()
-	manual := services.GuardSignature(pr, services.ReasonSetSignature(services.ReasonNameUnresolvedThreads))
+	manual := access.GuardSignature(pr, access.ReasonSetSignature(services.ReasonNameUnresolvedThreads))
 	cr := "## Review: changes requested by @a"
 	for _, headers := range [][]string{{cr, "## Reviewer comments"}, {"## Reviewer comments", cr}} {
 		require.Equal(t, manual, reasonSignature{headers: headers}.key(pr))
@@ -914,6 +915,6 @@ func TestReasonSignatureKey_ChangesRequestedOnly_DoesNotMatchManualThreadKey(t *
 	prk, err := githubpkg.NewPRKey("github.com", "o", "r", 1)
 	require.NoError(t, err)
 	pr := prk.Key()
-	manual := services.GuardSignature(pr, services.ReasonSetSignature(services.ReasonNameUnresolvedThreads))
+	manual := access.GuardSignature(pr, access.ReasonSetSignature(services.ReasonNameUnresolvedThreads))
 	require.NotEqual(t, manual, reasonSignature{headers: []string{"## Review: changes requested by @a"}}.key(pr))
 }

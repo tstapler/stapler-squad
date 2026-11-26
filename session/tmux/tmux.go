@@ -1959,7 +1959,7 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 // ([1, 65535]) before the narrowing int->uint16 conversion, so an
 // out-of-range or negative value can't silently wrap around into a bogus
 // terminal size. Exported so session/instance_tmux.go and
-// session/native_process_manager.go (which build pty.Winsize themselves,
+// session/procbackend/native_process_manager.go (which build pty.Winsize themselves,
 // outside this package) share one implementation instead of duplicating it.
 func ClampWinsizeDim(v int) uint16 {
 	switch {

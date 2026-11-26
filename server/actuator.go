@@ -11,7 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 	"github.com/tstapler/stapler-squad/session/dbobs"
@@ -59,14 +59,14 @@ func (s *Server) actuatorEndpoints() []actuatorEndpoint {
 		{"/actuator/inbox-pr-watch", http.HandlerFunc(handleActuatorInboxPRWatch)},
 		{"/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load)},
 		{"/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load)},
-		{"/actuator/terminal-input", handleActuatorTerminalInput(services.TerminalInputReport)},
+		{"/actuator/terminal-input", handleActuatorTerminalInput(access.TerminalInputReport)},
 		{"/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default)},
 	}
 }
 
 // handleActuatorTerminalInput serves the bounded per-session terminal input tally (frames,
 // bytes, class counts, last activity; never content). JSON by default; ?format=text for a terminal.
-func handleActuatorTerminalInput(report func() []services.TerminalInputSession) http.HandlerFunc {
+func handleActuatorTerminalInput(report func() []access.TerminalInputSession) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -75,7 +75,7 @@ func handleActuatorTerminalInput(report func() []services.TerminalInputSession) 
 		rows := report()
 		if r.URL.Query().Get("format") == "text" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = w.Write([]byte(services.RenderTerminalInputText(rows)))
+			_, _ = w.Write([]byte(access.RenderTerminalInputText(rows)))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -94,7 +94,7 @@ func handleActuatorTerminalMux(bridge func() *wsconn.TerminalMuxBridge) http.Han
 			return
 		}
 		if r.Method == http.MethodPost {
-			if rec, ok := services.RequestRecordFrom(r.Context()); !ok || rec.Listener != services.ListenerLocal {
+			if rec, ok := access.RequestRecordFrom(r.Context()); !ok || rec.Listener != access.ListenerLocal {
 				http.Error(w, "local listener only", http.StatusForbidden)
 				return
 			}

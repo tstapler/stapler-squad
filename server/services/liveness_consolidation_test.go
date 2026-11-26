@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -547,7 +548,7 @@ func (storedSessionTymux) GetSessionIdentifier() string       { return "" }
 // it dead, which lets backlog spawn a duplicate agent into the worktree.
 func TestFindConfirmedLiveInstance_MapMiss_TymuxShadowWithLiveStoredSession_ReturnsInstance(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	session.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return storedSessionTymux{} })
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return storedSessionTymux{} })
 	repo := session.NewTestEntRepository(t)
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)

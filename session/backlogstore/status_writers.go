@@ -288,6 +288,12 @@ func (b *Backlog) RawTransitionBacklogItemStatusWithNote(ctx context.Context, id
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
+	if toStatus == domain.BacklogStatusDone {
+		if gateErr := b.integrationGate(ctx, current); gateErr != nil {
+			return nil, gateErr
+		}
+	}
+
 	update := b.client.BacklogItem.Update().Where(backlogitem.ID(parsedID))
 	update = applyStatusPreconditionWhere(update, precondition)
 	// The note is appended to the Notes read above; pin updated_at so a

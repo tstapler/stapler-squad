@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,7 +10,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -23,25 +23,37 @@ type FilesFlags interface {
 	EditLarge(ctx context.Context) bool
 }
 
-type globalFilesFlags struct{ reader flagReader }
+type globalFilesFlags struct{ reader flagsvc.FlagReader }
 
 func (f globalFilesFlags) enabled(name string) bool {
-	return f.reader.enabled(config.LoadConfig(), name)
+	return f.reader.Enabled(config.LoadConfig(), name)
 }
 
-func (f globalFilesFlags) Editing(context.Context) bool    { return f.enabled(filesEditingFlagName) }
-func (f globalFilesFlags) ViewerV2(context.Context) bool   { return f.enabled(filesViewerV2FlagName) }
-func (f globalFilesFlags) MergePhone(context.Context) bool { return f.enabled(filesMergePhoneFlagName) }
-func (f globalFilesFlags) RangeRead(context.Context) bool  { return f.enabled(filesRangeReadFlagName) }
-func (f globalFilesFlags) DeltaWrite(context.Context) bool { return f.enabled(filesDeltaWriteFlagName) }
-func (f globalFilesFlags) EditLarge(context.Context) bool  { return f.enabled(filesEditLargeFlagName) }
+func (f globalFilesFlags) Editing(context.Context) bool {
+	return f.enabled(flagsvc.FilesEditingFlagName)
+}
+func (f globalFilesFlags) ViewerV2(context.Context) bool {
+	return f.enabled(flagsvc.FilesViewerV2FlagName)
+}
+func (f globalFilesFlags) MergePhone(context.Context) bool {
+	return f.enabled(flagsvc.FilesMergePhoneFlagName)
+}
+func (f globalFilesFlags) RangeRead(context.Context) bool {
+	return f.enabled(flagsvc.FilesRangeReadFlagName)
+}
+func (f globalFilesFlags) DeltaWrite(context.Context) bool {
+	return f.enabled(flagsvc.FilesDeltaWriteFlagName)
+}
+func (f globalFilesFlags) EditLarge(context.Context) bool {
+	return f.enabled(flagsvc.FilesEditLargeFlagName)
+}
 
 // FilePolicy holds the collaborators every file operation shares. Guard is read by
 // the FileWriter only; Telemetry serves that writer and the search handler.
 type FilePolicy struct {
 	Workspace WorkspaceProvider
 	Flags     FilesFlags
-	Telemetry FilesTelemetry
+	Telemetry fsops.FilesTelemetry
 	// Guard gates writes by session (hidden, archived). Nil refuses every write.
 	Guard WriteGuard
 }
@@ -50,7 +62,7 @@ type FilePolicy struct {
 // over a FileBackend; wire handlers are thin adapters around it (ADR-036).
 type FileOps struct {
 	policy  FilePolicy
-	backend FileBackend
+	backend fsops.FileBackend
 	epoch   flagEpoch
 	// analysis caches background whole-file passes for range reads and StatFile.
 	analysis *analysisCache
@@ -58,12 +70,12 @@ type FileOps struct {
 
 // NewFileOps builds FileOps over a backend; a nil Flags reads the live global flags through the default FlagRegistry
 // and a nil Telemetry records nothing.
-func NewFileOps(policy FilePolicy, backend FileBackend) *FileOps {
+func NewFileOps(policy FilePolicy, backend fsops.FileBackend) *FileOps {
 	if policy.Flags == nil {
-		policy.Flags = globalFilesFlags{reader: flagReader{FlagRegistry()}}
+		policy.Flags = globalFilesFlags{reader: flagsvc.FlagReader{Reg: flagsvc.FlagRegistry()}}
 	}
 	if policy.Telemetry == nil {
-		policy.Telemetry = noopFilesTelemetry{}
+		policy.Telemetry = fsops.NoopFilesTelemetry{}
 	}
 	return &FileOps{policy: policy, backend: backend, analysis: newAnalysisCache(analysisCacheEntries, analysisDefaultParallel)}
 }
@@ -71,23 +83,23 @@ func NewFileOps(policy FilePolicy, backend FileBackend) *FileOps {
 // opsRequest is a request after workspace lookup and path confinement.
 type opsRequest struct {
 	Dir       string // worktree directory the root was opened on
-	Root      FileRoot
-	Resolved  ResolvedPath
+	Root      fsops.FileRoot
+	Resolved  fsops.ResolvedPath
 	ViaLink   bool
 	Workspace domain.Workspace
 }
 
 // resolve is the only place a request path becomes a ResolvedPath for the backend.
-func (o *FileOps) resolve(ref FileRef, mode AccessMode) (*opsRequest, error) {
-	ws, dir, err := workspaceDirFor(o.policy.Workspace, ref, mode)
+func (o *FileOps) resolve(ref fsops.FileRef, mode fsops.AccessMode) (*opsRequest, error) {
+	ws, dir, err := fsops.WorkspaceDirFor(o.policy.Workspace, ref, mode)
 	if err != nil {
 		return nil, err
 	}
 	root, err := o.backend.OpenRoot(dir)
 	if err != nil {
-		return nil, openRootError(err)
+		return nil, fsops.OpenRootError(err)
 	}
-	resolved, viaLink, err := resolveInWorktreeLinks(root, refPathOrDot(ref), mode)
+	resolved, viaLink, err := fsops.ResolveInWorktreeLinks(root, fsops.RefPathOrDot(ref), mode)
 	if err != nil {
 		_ = root.Close()
 		return nil, err
@@ -146,8 +158,8 @@ type fileRead struct {
 	HasBOM      bool
 	LineEnding  sessionv1.LineEnding
 	Reason      sessionv1.ReadOnlyReason
-	Token       FileVersionToken
-	Body        []byte // raw bytes read (at most truncateSize), BOM stripped
+	Token       fsops.FileVersionToken
+	Body        []byte // raw bytes read (at most fsops.TruncateSize), BOM stripped
 	Src         fileSource
 }
 
@@ -179,7 +191,7 @@ func (o *FileOps) readFileFacts(sessionID, relPath string) (*fileRead, error) {
 	if relPath == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
-	rr, err := o.resolve(FileRef{SessionID: sessionID, Path: relPath}, AccessRead)
+	rr, err := o.resolve(fsops.FileRef{SessionID: sessionID, Path: relPath}, fsops.AccessRead)
 	if err != nil {
 		return nil, err
 	}
@@ -202,18 +214,12 @@ func (o *FileOps) readFileFacts(sessionID, relPath string) (*fileRead, error) {
 	return fr, nil
 }
 
-// internalIOError logs the I/O cause server-side and returns a generic Internal error, so the wire never carries host detail.
-func internalIOError(op string, path ResolvedPath, cause error, clientMsg string) *connect.Error {
-	log.Error("file I/O failed", "op", op, "path", string(path), "err", cause)
-	return connect.NewError(connect.CodeInternal, errors.New(clientMsg))
-}
-
 // classifyOpenFile sniffs, caps and classifies an opened file.
-func classifyOpenFile(f FileHandle, rr *opsRequest, relPath string, info os.FileInfo) (*fileRead, error) {
+func classifyOpenFile(f fsops.FileHandle, rr *opsRequest, relPath string, info os.FileInfo) (*fileRead, error) {
 	fr := &fileRead{Size: info.Size()}
 	mtimeNs := info.ModTime().UnixNano()
-	fr.Token = NonEditableToken(fr.Size, mtimeNs)
-	fr.ContentType, fr.IsBinary = sniffContent(f, isKnownTextFile(relPath))
+	fr.Token = fsops.NonEditableToken(fr.Size, mtimeNs)
+	fr.ContentType, fr.IsBinary = fsops.SniffContent(f, fsops.IsKnownTextFile(relPath))
 	if fr.IsBinary {
 		fr.Reason = sessionv1.ReadOnlyReason_READ_ONLY_REASON_BINARY
 		return fr, nil
@@ -223,19 +229,19 @@ func classifyOpenFile(f FileHandle, rr *opsRequest, relPath string, info os.File
 		fr.Reason = sessionv1.ReadOnlyReason_READ_ONLY_REASON_TOO_LARGE
 		return fr, nil
 	}
-	raw, truncated, readErr := readTextCapped(f, fr.Size)
+	raw, truncated, readErr := fsops.ReadTextCapped(f, fr.Size)
 	if readErr != nil {
-		return nil, internalIOError("read_content", rr.Resolved, readErr, "failed to read file content")
+		return nil, fsops.InternalIOError("read_content", rr.Resolved, readErr, "failed to read file content")
 	}
 	if truncated {
-		raw = truncateOnRuneBoundary(raw)
+		raw = fsops.TruncateOnRuneBoundary(raw)
 	}
-	fr.HasBOM, fr.Body = detectBOM(raw)
+	fr.HasBOM, fr.Body = fsops.DetectBOM(raw)
 	fr.Truncated = truncated
-	fr.LineEnding = detectLineEnding(fr.Body)
-	fr.Reason = classifyReadOnly(readFacts{Truncated: truncated, ViaLink: rr.ViaLink, Body: fr.Body})
+	fr.LineEnding = fsops.DetectLineEnding(fr.Body)
+	fr.Reason = fsops.ClassifyReadOnly(fsops.ReadFacts{Truncated: truncated, ViaLink: rr.ViaLink, Body: fr.Body})
 	if fr.Reason == sessionv1.ReadOnlyReason_READ_ONLY_REASON_NONE {
-		fr.Token = NewFileVersionToken(fr.Size, mtimeNs, raw)
+		fr.Token = fsops.NewFileVersionToken(fr.Size, mtimeNs, raw)
 	}
 	return fr, nil
 }
@@ -250,7 +256,7 @@ func lstatForRead(rr *opsRequest, relPath string) (os.FileInfo, error) {
 		if os.IsPermission(err) {
 			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied: %s", relPath))
 		}
-		return nil, internalIOError("stat", rr.Resolved, err, "failed to stat file")
+		return nil, fsops.InternalIOError("stat", rr.Resolved, err, "failed to stat file")
 	}
 	if info.IsDir() {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is a directory, not a file"))

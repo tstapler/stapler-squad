@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 const (
@@ -423,7 +424,7 @@ func (t *treeWalk) entry(ctx context.Context, dir string, e fs.DirEntry, jobs ch
 		}
 		return t.dir(ctx, rel, jobs)
 	}
-	if !e.Type().IsRegular() || isAtomicTempName(name) || !t.wantFile(rel) {
+	if !e.Type().IsRegular() || fsops.IsAtomicTempName(name) || !t.wantFile(rel) {
 		return nil
 	}
 	select {

@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
 )
 
@@ -160,7 +161,7 @@ type BacklogLifecycleListener struct {
 
 	// terminalSettled lets the 60s done/archived safety-net sweeps skip items they
 	// already fully handled (see terminalSweepSettleTTL); sweepClock nil: time.Now.
-	terminalSettled session.SettledTracker
+	terminalSettled terminalstate.SettledTracker
 	sweepClock      func() time.Time
 
 	// prCreatorMu guards prCreatorFactory for concurrent Set/get access.
@@ -2058,7 +2059,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 		return
 	}
 	for _, row := range open {
-		if session.IsTerminalStatus(row.ItemStatus) {
+		if terminalstate.IsTerminalStatus(row.ItemStatus) {
 			// Blanket terminal rule — see doc comment above. An item that has
 			// truly finished has nothing left needing operator attention,
 			// regardless of which reason its stuck row is for.

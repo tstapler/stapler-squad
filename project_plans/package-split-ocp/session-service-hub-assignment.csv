@@ -126,7 +126,7 @@ guidance_session_reaper.go,guidance,L1,4,153
 handoff_summary_service.go,backlogsync,L1,2,195
 headless_service.go,backlogsync,L1,2,110
 hidden_question_reply.go,attention,L1,4,227
-hidden_reply_audit.go,auditkit,L0,1,467
+hidden_reply_audit.go,auditkit,L0,1,468
 hidden_review_steer.go,attention,L1,4,255
 hook_classifier.go,attention,L1,4,126
 hook_context_cache.go,attention,L1,4,155

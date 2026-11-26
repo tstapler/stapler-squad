@@ -219,7 +219,7 @@ describe("mobile_input_layer flag", () => {
   afterEach(() => setSearch(""));
 
   it("preload_should_EqualGoDefaultConstant_When_NothingPersisted", () => {
-    const go = readFileSync(join(__dirname, "../../../../server/services/feature_flag_specs.go"), "utf8");
+    const go = readFileSync(join(__dirname, "../../../../server/services/flagsvc/feature_flag_specs.go"), "utf8");
     const block = /Name:\s*"mobile_input_layer",[\s\S]*?Default:\s*(true|false),/.exec(go);
     expect(block).not.toBeNull();
     expect(MOBILE_INPUT_LAYER_DEFAULT).toBe(block?.[1] === "true");
