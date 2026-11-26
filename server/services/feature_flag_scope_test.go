@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/gatestats"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -255,7 +256,7 @@ func TestStatusDetail_ShouldReportEachFalseKindOverrideAndStayEmpty_WhenNoneIsFa
 	gate := svc.DeliveryGate()
 	gate.Stats().SetWriterRunning(true)
 	assert.Empty(t, statusDetailOf(t, svc.featureFlagSvc, gateFlag), "default on says nothing")
-	assert.Empty(t, explicitOffScopes())
+	assert.Empty(t, gatestats.ExplicitOffScopes())
 
 	_, err := mutateFlag(svc.featureFlagSvc, gateFlag, setOn, "kind:diagnose")
 	require.NoError(t, err)
@@ -264,7 +265,7 @@ func TestStatusDetail_ShouldReportEachFalseKindOverrideAndStayEmpty_WhenNoneIsFa
 	_, err = mutateFlag(svc.featureFlagSvc, gateFlag, setOff, "kind:review")
 	require.NoError(t, err)
 	assert.Equal(t, kindOff, statusDetailOf(t, svc.featureFlagSvc, gateFlag))
-	assert.Equal(t, []string{"kind:review"}, explicitOffScopes())
+	assert.Equal(t, []string{"kind:review"}, gatestats.ExplicitOffScopes())
 
 	gate.Stats().SetWriterRunning(false)
 	assert.Equal(t, statsWriterNotRunning+"; "+kindOff,

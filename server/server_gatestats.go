@@ -6,7 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/gatestats"
 )
 
 // startGateStatsWriter persists the delivery gate's hourly buckets once a
@@ -17,8 +17,8 @@ func (s *Server) startGateStatsWriter(ctx context.Context, deps *ServerDependenc
 		log.Warn("delivery gate stats writer not started: no config dir", "err", configErr)
 		return
 	}
-	store := services.NewFileStatsStore(configDir)
-	writer := services.NewStatsWriter(gate.Stats(), store, nil, nil, nil)
+	store := gatestats.NewFileStatsStore(configDir)
+	writer := gatestats.NewStatsWriter(gate.Stats(), store, nil, nil, nil)
 	ticker := time.NewTicker(time.Minute)
 	writer.Start(ctx, ticker.C, &s.backgroundTasksWG)
 	deps.SessionService.SetGateStatsFileStatus(store.Status)
