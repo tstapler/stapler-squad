@@ -19,13 +19,19 @@ go_binary(
 
 go_test(
     name = "testshards_test",
-    srcs = ["testshards_test.go"],
+    srcs = [
+        "testshards_test.go",
+        "workflow_test.go",
+    ],
     data = [
         "//.github:workflows/main-ci.yml",
         "//:go.mod",
     ],
     embed = [":testshards_lib"],
-    deps = ["//internal/reporoot"],
+    deps = [
+        "//internal/reporoot",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
 )
 
 # Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.

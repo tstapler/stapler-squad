@@ -248,6 +248,7 @@ jobs:
 
       - name: Save Go cache
         if: ${{ steps.go.outputs.save == 'true' }}
+        timeout-minutes: 5
         continue-on-error: true  # a failed save must not skip the coverage gate
         uses: ./.github/actions/save-go-cache
         with:
