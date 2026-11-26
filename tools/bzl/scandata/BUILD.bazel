@@ -46,6 +46,7 @@ filegroup(
         "//cmd:go_sources",
         "//cmd/cmd_test:go_sources",
         "//cmd/commands:go_sources",
+        "//cmd/goal-pilot:go_sources",
         "//cmd/interfaces:go_sources",
         "//cmd/ssq-hooks:go_sources",
         "//cmd/ssq-mux:go_sources",

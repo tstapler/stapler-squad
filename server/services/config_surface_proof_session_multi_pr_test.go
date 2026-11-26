@@ -50,3 +50,11 @@ func TestConfigSurfaceProof_ArtifactScanV2_ChangesReader(t *testing.T) {
 		return config.LoadConfig().ArtifactScanV2Enabled()
 	}, false, true)
 }
+
+func TestConfigSurfaceProof_GoalMode_ChangesReader(t *testing.T) {
+	set := bkfFlagWriter(t)
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
+		set(config.GoalModeFlag, setting.(bool))
+		return config.LoadConfig().GetFeatureFlag(config.GoalModeFlag)
+	}, false, true)
+}
