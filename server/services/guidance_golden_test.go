@@ -766,18 +766,24 @@ func TestGuidanceRace_should_NotFinishTwice_When_AReceiptArrivesDuringASample(t 
 	idle, err := os.ReadFile("../../session/testdata/dialog_presence/idle_composer.txt")
 	require.NoError(t, err)
 	var det *guidance.GuidanceAckDetector
+	captures := 0
 	det = guidance.NewGuidanceAckDetector(store, func(context.Context, string, bool) (string, error) {
-		det.Receipt(ctx, "s1", "AskUserQuestion") // the hook lands while the capture is in flight
+		// The hook lands during the capture that would complete the clean streak.
+		if captures++; captures == 2 {
+			det.Receipt(ctx, "s1", "AskUserQuestion")
+			assert.Len(t, store.lines, 1, "the receipt records its state at once")
+		}
 		return string(idle), nil
 	}, nil, clock.Now)
 	det.Sent(questionkit.SentDelivery{RowID: "7c1e0000-0000-4000-8000-00000000b002", SessionUUID: "s1", Dialog: colorDialog, Route: domain.DeliveryRouteLiveKeystroke})
 
-	for range 2 { // two clean samples would acknowledge on their own
+	for range 2 {
 		clock.Advance(3 * time.Second)
 		det.Tick(ctx)
 	}
 
-	assert.Len(t, store.lines, 1, "only the receipt records a state")
+	assert.Equal(t, 2, captures)
+	assert.Len(t, store.lines, 1, "the stale sample does not finish the row again")
 }
 
 // Pinned as found: the 60 s decision does not re-check tracking after its capture, so a
