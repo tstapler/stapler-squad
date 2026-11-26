@@ -40,6 +40,7 @@ type BacklogRPC interface {
 	AttachSessionToItem(context.Context, *connect.Request[sessionv1.AttachSessionToItemRequest]) (*connect.Response[sessionv1.AttachSessionToItemResponse], error)
 	AddBacklogItemDependency(context.Context, *connect.Request[sessionv1.AddBacklogItemDependencyRequest]) (*connect.Response[sessionv1.AddBacklogItemDependencyResponse], error)
 	RemoveBacklogItemDependency(context.Context, *connect.Request[sessionv1.RemoveBacklogItemDependencyRequest]) (*connect.Response[sessionv1.RemoveBacklogItemDependencyResponse], error)
+	CreateEpicIntegrationChild(context.Context, *connect.Request[sessionv1.CreateEpicIntegrationChildRequest]) (*connect.Response[sessionv1.CreateEpicIntegrationChildResponse], error)
 	TriggerTriage(context.Context, *connect.Request[sessionv1.TriggerTriageRequest]) (*connect.Response[sessionv1.TriggerTriageResponse], error)
 	TransitionBacklogItemStatus(context.Context, *connect.Request[sessionv1.TransitionBacklogItemStatusRequest]) (*connect.Response[sessionv1.TransitionBacklogItemStatusResponse], error)
 }

@@ -345,6 +345,9 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// IntegrationAttributionThreshold is the minimum file-overlap confidence (0-1] for attributing an
+	// epic integration failure to one sibling; below it the failure escalates. 0 = default (0.6).
+	IntegrationAttributionThreshold float64 `json:"integration_attribution_threshold,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
 	// stopping without a DONE signal (session/autonomous/autonomous_driver.go). 0 = use the default
 	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
@@ -1263,6 +1266,19 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return DefaultMaxAutoReworkIterations
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// DefaultIntegrationAttributionThreshold is the file-overlap confidence at or above which an
+// epic integration failure is attributed to one sibling (see backlogstore.AttributeByFileOverlap).
+const DefaultIntegrationAttributionThreshold = 0.6
+
+// IntegrationAttributionThresholdOrDefault returns the configured threshold, or the default when
+// unset, out of (0,1], or c is nil.
+func (c *Config) IntegrationAttributionThresholdOrDefault() float64 {
+	if c == nil || c.IntegrationAttributionThreshold <= 0 || c.IntegrationAttributionThreshold > 1 {
+		return DefaultIntegrationAttributionThreshold
+	}
+	return c.IntegrationAttributionThreshold
 }
 
 // autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).

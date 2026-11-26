@@ -1066,3 +1066,15 @@ describe("BacklogItemCard source badge URL safety and fallbacks", () => {
     expect(screen.getByLabelText("Imported from External issue X-1")).toBeInTheDocument();
   });
 });
+
+describe("BacklogItemCard — Integration Check badge", () => {
+  it("shows the badge for an integration child", () => {
+    render(<BacklogItemCard item={makeItem({ isIntegrationChild: true })} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(screen.getByTestId("integration-check-badge")).toHaveTextContent("Integration Check");
+  });
+
+  it("omits the badge for an ordinary item", () => {
+    render(<BacklogItemCard item={makeItem()} onAction={jest.fn()} onClick={jest.fn()} />);
+    expect(screen.queryByTestId("integration-check-badge")).not.toBeInTheDocument();
+  });
+});
