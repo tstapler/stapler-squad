@@ -22,12 +22,6 @@ import (
 // The wire shape is the one spike S1 measured: updatedInput echoes the
 // questions unchanged and adds answers keyed by the full question text.
 
-// HookReplier answers an AskUserQuestion PreToolUse hook, or returns nil so the
-// native dialog stays. sessionUUID is the Stapler Squad session the hook runs in.
-type HookReplier interface {
-	Reply(ctx context.Context, sessionUUID string, toolInput map[string]interface{}) *hookipc.HookOutput
-}
-
 type hookReplyRows interface {
 	ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*domain.GuidanceRequestData, error)
 	AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error)
@@ -36,7 +30,7 @@ type hookReplyRows interface {
 
 type hookReplyResolver struct {
 	rows  hookReplyRows
-	flags actionFlags
+	flags answerFlags
 	acks  questionkit.DeliverySink
 }
 

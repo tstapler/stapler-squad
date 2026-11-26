@@ -434,7 +434,7 @@ func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
 
 // fakeCriticalEscalateClassifier always escalates with RiskCritical, independent of any real
 // seed rule table (no seed rule reaches Escalate+RiskCritical today — RiskCritical is reserved
-// for AutoDeny rules like force-push/env-write). Used to prove riskLevelString(RiskCritical)
+// for AutoDeny rules like force-push/env-write). Used to prove RiskCritical.Label()
 // threads through end-to-end without depending on the seed rule set staying exactly as-is.
 type fakeCriticalEscalateClassifier struct{}
 
@@ -448,7 +448,7 @@ func (fakeCriticalEscalateClassifier) BuildContext(_ string) classifier.Classifi
 
 // TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesRiskCriticalRule
 // covers plan.md Task 1.1.1/1.1.2: a classified Escalate result's RiskLevel must be threaded
-// onto PendingApproval.RiskLevel via riskLevelString, not dropped.
+// onto PendingApproval.RiskLevel via RiskLevel.Label, not dropped.
 func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatchesRiskCriticalRule(t *testing.T) {
 	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
@@ -485,7 +485,7 @@ func TestCreateApproval_should_SetRiskLevelFromClassifier_When_EscalationMatches
 
 // TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation covers
 // pre-mortem.md Failure #1: when h.classifier is nil (no SetClassifier call) and no domain
-// checker fires, `escalation` is never assigned — riskLevelString(escalation.RiskLevel) would
+// checker fires, `escalation` is never assigned — escalation.RiskLevel.Label() would
 // naively return "low" (RiskLow is the Go zero value), silently mislabeling an unclassified
 // request as genuinely safe. RiskLevel must be "" (not recorded), never "low".
 func TestCreateApproval_should_SetEmptyRiskLevel_When_ClassifierIsNilAtCreation(t *testing.T) {

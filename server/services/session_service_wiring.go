@@ -63,6 +63,15 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 	return s.rulesSvc.analyticsStore
 }
 
+// ClassificationRecorder is GetAnalyticsStore as the hook paths consume it: a
+// nil interface, not a typed nil pointer, when there is no store.
+func (s *SessionService) ClassificationRecorder() ClassificationRecorder {
+	if a := s.GetAnalyticsStore(); a != nil {
+		return a
+	}
+	return nil
+}
+
 // GetClaudeSettingsWatcher returns the claude-settings file watcher for starting/stopping it
 // with the server lifecycle (see wireDepsIntoServer).
 func (s *SessionService) GetClaudeSettingsWatcher() *claudesettings.ClaudeSettingsWatcher {

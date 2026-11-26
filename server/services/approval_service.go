@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 
 	"connectrpc.com/connect"
@@ -26,12 +27,17 @@ import (
 // as a separate unexported copy since the two packages don't share this constant.
 const ciConclusionFailure = "failure"
 
+// liveSessionFinder looks up the running instance of a session; nil when it is not live.
+type liveSessionFinder interface {
+	FindLiveInstance(id string) *instance.Instance
+}
+
 // ApprovalService handles Claude Code hook approval RPCs.
 type ApprovalService struct {
 	approvalStore      *approvalkit.ApprovalStore
 	notificationStore  approvalNotificationStamper // optional; nil-safe
 	eventBus           *events.EventBus            // optional; nil-safe; broadcasts resolution to connected clients
-	liveFinder         LiveInstanceFinder          // optional; nil-safe — CI status for the block-on-red guard (not persisted, see plan.md's Implementation Deviations)
+	liveFinder         liveSessionFinder           // optional; nil-safe — CI status for the block-on-red guard (not persisted, see plan.md's Implementation Deviations)
 	reviewQueueRemover session.ReviewQueueRemover  // optional; nil-safe — removes the review-queue item on a reconciled resolve (Epic 2.3.1)
 }
 
@@ -56,7 +62,7 @@ func (as *ApprovalService) SetEventBus(bus *events.EventBus) {
 // SetLiveInstanceFinder wires the live in-memory instance lookup used by the
 // block-on-red-CI guard (AC5). See ApprovalHandler.SetLiveInstanceFinder for why this
 // must be the live registry rather than *session.Storage.
-func (as *ApprovalService) SetLiveInstanceFinder(f LiveInstanceFinder) {
+func (as *ApprovalService) SetLiveInstanceFinder(f liveSessionFinder) {
 	as.liveFinder = f
 }
 
@@ -338,4 +344,16 @@ func (as *ApprovalService) advanceCollapsedRow(decidedID, sessionID string) bool
 		log.Warn("[ApprovalService] could not hand the collapsed approval row to the next approval", "approval_id", decidedID, "err", err)
 	}
 	return advanced
+}
+
+// stampedDecision is the recorded outcome of an already-resolved approval ("allow",
+// "deny", ...), the value an "Answered elsewhere" card shows; "" when unknown.
+func (as *ApprovalService) stampedDecision(approvalID string) string {
+	if as == nil || as.notificationStore == nil {
+		return ""
+	}
+	if rec, ok := as.notificationStore.GetByID(approvalID); ok {
+		return rec.Metadata["approval_decision"]
+	}
+	return ""
 }

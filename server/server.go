@@ -1063,7 +1063,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
 	approvalHandler.SetClassifier(deps.SessionService.GetClassifier())
-	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
+	approvalHandler.SetAnalyticsStore(deps.SessionService.ClassificationRecorder())
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
 	approvalHandler.SetDomainChecker(domainage.NewDomainAgeChecker(true))
 	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance

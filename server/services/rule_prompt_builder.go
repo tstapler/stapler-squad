@@ -218,7 +218,7 @@ func pickSeedExamples() []map[string]interface{} {
 		m := map[string]interface{}{
 			"name":       r.Name,
 			"decision":   decisionString(r.Decision),
-			"risk_level": riskLevelString(r.RiskLevel),
+			"risk_level": r.RiskLevel.Label(),
 			"priority":   r.Priority,
 			"reason":     r.Reason,
 			"source":     r.Source,

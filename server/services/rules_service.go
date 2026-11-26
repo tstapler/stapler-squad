@@ -787,7 +787,7 @@ func ruleToSpec(r classifier.Rule) domain.RuleSpec {
 		ToolName:              r.ToolName,
 		ToolCategory:          r.ToolCategory,
 		Decision:              decisionString(r.Decision),
-		RiskLevel:             riskLevelString(r.RiskLevel),
+		RiskLevel:             r.RiskLevel.Label(),
 		Reason:                r.Reason,
 		Alternative:           r.Alternative,
 		Priority:              r.Priority,

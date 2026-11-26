@@ -1,10 +1,14 @@
 package services
 
 import (
+	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // NotificationActionWiring is what WireNotificationActions needs beyond the
@@ -63,4 +67,51 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 		}
 		return nil
 	}, s.InjectedFlagRegistry())
+}
+
+// inProcessPeer lets the interim adapter call the reply handler in process: a
+// request built by connect.NewRequest has no peer address, which the handler's
+// local-caller verdict would refuse. The dispatcher has already run that
+// verdict on the real peer. A network request always carries an address.
+func inProcessPeer(req connect.AnyRequest) string {
+	if addr := req.Peer().Addr; addr != "" {
+		return addr
+	}
+	return "127.0.0.1:0"
+}
+
+// answerSessions classifies a session for the router from the live poller.
+func (s *SessionService) answerSessions() answerSessionFinder {
+	return func(sessionID string) routedSession {
+		inst := s.findInstance(sessionID)
+		switch {
+		case inst == nil:
+			return routedSession{}
+		case inst.IsArchived():
+			return routedSession{inst: inst, phase: phaseArchived}
+		case inst.Snapshot().Status.IsSuspended():
+			return routedSession{inst: inst, phase: phaseStopped}
+		}
+		return routedSession{inst: inst, phase: phaseLive}
+	}
+}
+
+// WireAnswerRouter installs the in-process peer the router needs to call the
+// hidden reply handler and returns the QuestionReplier over this service.
+func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
+	if s.replyPeerAddr == nil {
+		s.replyPeerAddr = inProcessPeer
+	}
+	r := &AnswerRouter{
+		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
+		visible: s.paneReplyCore, guard: access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity),
+		flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
+	}
+	r.ensure = s.ensureRegistered(d.Mirror)
+	store := s.replyState().store
+	r.reopen = func(q questionkit.PendingQuestion) {
+		store.Forget(questionkit.QuestionKey{SessionUUID: q.SessionUUID, QuestionID: q.QuestionID})
+		store.Register(q)
+	}
+	return r
 }
