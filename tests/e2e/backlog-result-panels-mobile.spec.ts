@@ -56,7 +56,7 @@ async function expectPanelFitsAt320(page: Page, panelId: string, rawId: string) 
 test("backlogList_should_ScrollThePageNotTheList_When_320px", async ({ page, request }) => {
   const title = `e2e list scroll mobile ${Date.now()}`;
   const open = await openItem(page, request, title);
-  for (let i = 0; i < 8; i++) await createBacklogItemDirect(request, { title: `${title} ${i}` });
+  for (let i = 0; i < 8; i++) await createBacklogItemDirect(request, { title: `filler ${i} for ${Date.now()}` });
   await seedReviewVerdictItem(request, { title });
   const backlog = new BacklogPage(page);
   await backlog.goto();
@@ -68,7 +68,7 @@ test("backlogList_should_ScrollThePageNotTheList_When_320px", async ({ page, req
   await open();
 });
 
-test("triageResultPanel_should_NotOverflowAnd_Have44pxDisclosure_When_320px",async ({ page, request }) => {
+test("triageResultPanel_should_NotOverflowAnd_Have44pxDisclosure_When_320px", async({ page, request }) => {
   await enableFlag(request, "backlog-triage-results-panel");
   const title = `e2e triage panel mobile ${Date.now()}`;
   const open = await openItem(page, request, title);
