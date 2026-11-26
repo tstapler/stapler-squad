@@ -18,7 +18,7 @@ var attentionFlagNames = []string{
 	AttentionInboxConsolidationFlagName,
 }
 
-func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceForEachOfSixFlags(t *testing.T) {
+func TestGetFeatureFlag_Should_ReturnDefaultsWithRegistryEntry_When_FreshInstanceForEachOfSixFlags(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	for _, name := range attentionFlagNames {
 		t.Run(name, func(t *testing.T) {
@@ -26,15 +26,15 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 			for _, f := range testFlagRegistry().Specs() {
 				if f.Name == name {
 					found = true
-					require.False(t, f.Default)
+					require.Equal(t, name == AttentionAckBypassFixFlagName, f.Default)
 					require.NotEmpty(t, f.Description)
 				}
 			}
 			require.True(t, found, "registry entry missing")
-			require.False(t, testFlagRegistry().Default(name))
+			require.Equal(t, name == AttentionAckBypassFixFlagName, testFlagRegistry().Default(name))
 		})
 	}
-	require.Equal(t, AttentionFlags{}, LoadAttentionFlags(testFlagRegistry()))
+	require.Equal(t, AttentionFlags{AckBypassFix: true}, LoadAttentionFlags(testFlagRegistry()))
 }
 
 func TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt(t *testing.T) {

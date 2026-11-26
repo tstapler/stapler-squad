@@ -327,7 +327,8 @@ var coreFlagSpecTable = []featureflags.Spec{
 	},
 	{
 		Name:        AttentionAckBypassFixFlagName,
-		Description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: off.",
+		Description: "Attention ack-bypass fix: an acknowledged item no longer reappears or hides a newer question because of unrelated activity. Applies at once; global only. Default: on.",
+		Default:     true,
 	},
 	{
 		Name:        AttentionIdleClockOutputFlagName,

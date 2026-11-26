@@ -33,7 +33,7 @@ func TestBuildServiceDeps_ShouldFeedCoreFlagRegistryToAttentionSource(t *testing
 	svc, err := BuildServiceDeps(core)
 	require.NoError(t, err)
 	_, rules := svc.AttentionOptions()
-	assert.True(t, rules.AckBypassFix, "BuildServiceDeps resolves attention flags through core.FlagRegistry")
+	assert.False(t, rules.AckBypassFix, "BuildServiceDeps resolves attention flags through core.FlagRegistry")
 }
 
 func TestWireGuidanceMirror_ShouldGateOnServiceRegistry(t *testing.T) {

@@ -30,9 +30,9 @@ func TestLoadAttentionFlags_ShouldUseInjectedDefaults_WhenRegistryInjected(t *te
 	svctest.WithIsolatedStateDir(t)
 	reg := flippedDefaults(attentionFlagNames...)
 
-	assert.Equal(t, AttentionFlags{}, LoadAttentionFlags(testFlagRegistry()), "default registry: all six default off")
+	assert.Equal(t, AttentionFlags{AckBypassFix: true}, LoadAttentionFlags(testFlagRegistry()), "default registry: only AckBypassFix defaults on")
 	assert.Equal(t, AttentionFlags{
-		ProseQuestionDetection: true, SessionEventLog: true, AckBypassFix: true,
+		ProseQuestionDetection: true, SessionEventLog: true,
 		IdleClockOutput: true, ProseQuestionLLMTiebreak: true, InboxConsolidation: true,
 	}, LoadAttentionFlags(reg), "injected registry's defaults, not the global's")
 }
