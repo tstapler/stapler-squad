@@ -1,35 +1,43 @@
-# Validation: fix-e2e-stale-baseline-specs
+# Validation: fix-e2e-stale-baseline-specs (plan revision 2)
 
-## Blocker Check
+The tests under change are the tests, so each AC is verified by running them. All runs use both
+Chromium projects with `--retries=0`.
 
-| # | Blocker question | Assessment |
+| AC | Verification | Pass condition |
 |---|---|---|
-| B1 | Does deleting `terminal-flickering.spec.ts` break any import or reference? | No other spec imports from it; `grep -r 'terminal-flickering' tests/e2e/` returns only the file itself. Safe to delete. |
-| B2 | Is `createIdleSession` / `waitForSessionsActive` available in all spec files that need it? | `SessionClient` is exported from `tests/e2e/helpers/session-client.ts`; already used in `input-drop-badge.spec.ts` (createIdleSession). `waitForSessionsActive` is a public method. No new dependency required. |
-| B3 | Does `process.env.CI` evaluate correctly in Playwright tests? | Yes — Playwright runs in Node; `process.env.CI` is `'true'` in GitHub Actions. Confirmed by existing specs that gate CI-only or non-CI behaviour with this variable. |
-| B4 | Does the `UpdateFeatureFlag` RPC exist in test-mode? | `terminal-resync-feature-flags.spec.ts` already posts to it in `resetFlag`, which implies it is wired. The 2 failing rows are more likely a timing issue. |
-| B5 | Does `BottomNav` render when no sessions exist? | Uncertain; android-url-bar task mitigates by seeding a session. |
-| B6 | Will the baseline re-record step produce a clean file? | Requires a successful CI run first (or verified local run). Task 8 is blocked on Tasks 1–7 completing cleanly. |
+| 1 | `git ls-files tests/e2e/terminal-flickering.spec.ts`; `grep -rn "test-terminal" web-app/src tests/e2e/*.ts` | both empty |
+| 2 | stress specs with `CI=1`, then without | CI: 3 ascii tests per project skipped, none failed. Off CI: large-payload passes; ascii floors may fail on a loaded host |
+| 3 | `terminal-mobile-overflow.spec.ts` | 12/12 pass |
+| 4 | `input-drop-badge.spec.ts` | 10/10 pass |
+| 5 | `android-url-bar.spec.ts` | 10/10 pass |
+| 6 | `terminal-resize.spec.ts` | dom test 5 passes; no failures |
+| 7 | `terminal-resync-feature-flags.spec.ts` | 6/6 pass |
+| 8 | `make ci`; `bun run lint:duplicates`; baseline unit tests; PR shard report for changed specs | exit 0; no previously-passing row fails |
+| 9 | recompute counts from `next-e2e-baseline.json` rows | `meta` matches rows; every flipped row was observed pass/skip |
 
-## AC Verification Matrix
+## Regression guards (does the test fail without the fix?)
 
-| AC | How to verify |
+| Change | Evidence it fails without the fix |
 |---|---|
-| AC-1 terminal-flickering | `git rm` committed; `grep -r '/test-terminal' tests/e2e/` returns nothing; no new `/test-terminal` route in `web-app/src/app/routes.tsx`. |
-| AC-2 terminal-stress perf floors | `bun run test -- --reporter=list terminal-stress` on a CI runner shows all tests `skipped`; `process.env.CI` confirmed set. |
-| AC-3 terminal-mobile-overflow | Local run: `npx playwright test terminal-mobile-overflow.spec.ts` passes all 8 tests with an isolated test server in test-mode. |
-| AC-4 input-drop-badge | Local run: `npx playwright test input-drop-badge.spec.ts` passes all 10 tests (no `waitForFunction` timeout). |
-| AC-5 android-url-bar | Local run on Android viewport: both tests pass; BottomNav is visible. |
-| AC-6 terminal-resize | `npx playwright test terminal-resize.spec.ts` — test 5 passes (or skips if not in `chromium-dom` project); 0 fail rows. |
-| AC-7 terminal-resync-feature-flags | Both tests pass; flag row visible before assertions. |
-| AC-8 no new failures | `make ci` exits 0; baseline diff shows only the 47 target rows changing from `fail` to `pass`/`skip`. |
-| AC-9 baseline update | `tests/e2e/baseline/next-e2e-baseline.json` committed; `git diff --stat HEAD~1 tests/e2e/baseline/` shows the file changed. |
+| Hook gate | before-run: 10 timeouts against the built bundle |
+| Stress progress flush | before-run: `> 102400` received 102400 |
+| Stress Stop loop | run the new reset test against the unfixed loop; it must fail on the duration bound |
+| Android drawer filter | filter names two drawers only, so any other overflowing fixed element still fails |
 
-## Risk Register
+## Pre-mortem
 
-| Risk | Likelihood | Mitigation |
+| Risk | Priority | Mitigation |
 |---|---|---|
-| BottomNav still not rendered after session seed | Low | Inspect with screenshot if still failing; fall back to seeding session in `beforeEach` and navigating directly to `/?session=<id>`. |
-| terminal-resync-feature-flags still fails after waitForFlagRow | Medium | Check test-mode server logs for `UpdateFeatureFlag` RPC errors; if endpoint returns 404 in test mode, guard with explicit capability check or skip. |
-| Baseline re-record diverges between runs | Low | Use same runner tier for capture and verification; commit the capture output as authoritative. |
-| terminal-stress CI skip causes perf regressions to go undetected | Medium (long-term) | Accepted trade-off; follow-on item creates benchmark workflow. |
+| A row flipped to `pass` fails on a slower CI runner and reds main (comparator is main-only) | P2 | Condition-based waits only; check the PR shard report for the changed specs before merge |
+| `skipped` baseline rows treated as a gap by the comparator | P2 | Run the comparator and its unit tests against the edited baseline |
+| Hook enabled in production by accident | P3 | Requires a script to set `window.__E2E_HOOKS__`; it only shows a badge |
+
+No P1 items.
+
+## Readiness gate: PASS
+
+Every AC has a verification; no TODOs or ADR references in plan.md; the one adversarial BLOCKER is
+resolved (re-review verdict CONCERNS, its guard suggestion adopted); no schema change; no new package.
+
+Triad check (done inline, not by separate agents): product — restores PR signal on eight specs;
+UX — no user-visible change; engineering — product edits limited to a test hook and a test page.
