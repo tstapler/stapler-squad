@@ -245,7 +245,7 @@ func (s *AnalyticsStore) RecordFromResult(payload classifier.PermissionRequestPa
 		CommandPreview: preview,
 		Cwd:            payload.Cwd,
 		Decision:       decisionString(result.Decision),
-		RiskLevel:      riskLevelString(result.RiskLevel),
+		RiskLevel:      result.RiskLevel.Label(),
 		RuleID:         result.RuleID,
 		RuleName:       result.RuleName,
 		Reason:         result.Reason,
@@ -724,21 +724,6 @@ func decisionString(d classifier.ClassificationDecision) string {
 		return "auto_deny"
 	default:
 		return "escalate"
-	}
-}
-
-func riskLevelString(r classifier.RiskLevel) string {
-	switch r {
-	case classifier.RiskLow:
-		return "low"
-	case classifier.RiskMedium:
-		return "medium"
-	case classifier.RiskHigh:
-		return "high"
-	case classifier.RiskCritical:
-		return "critical"
-	default:
-		return "medium"
 	}
 }
 

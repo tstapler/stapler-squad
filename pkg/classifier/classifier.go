@@ -18,7 +18,7 @@ import (
 //
 // WARNING: RiskLevel is persisted as an int column by ApprovalRule.risk_level
 // (session/ent/schema/approvalrule.go) and converted to/from persisted strings elsewhere by
-// riskLevelString/parseRiskLevel (server/services) for ClassificationAnalytics.RiskLevel,
+// Label and parseRiskLevel (server/services) for ClassificationAnalytics.RiskLevel,
 // PendingApproval.RiskLevel, and PersistedApproval.RiskLevel. New values MUST be appended to
 // the end of this iota block — inserting or reordering values would silently corrupt the
 // int-column data and desync the int↔string mapping for the string-typed surfaces.
@@ -30,6 +30,22 @@ const (
 	RiskHigh
 	RiskCritical
 )
+
+// Label is the persisted string of a risk level; a value outside the block is "medium".
+func (r RiskLevel) Label() string {
+	switch r {
+	case RiskLow:
+		return "low"
+	case RiskMedium:
+		return "medium"
+	case RiskHigh:
+		return "high"
+	case RiskCritical:
+		return "critical"
+	default:
+		return "medium"
+	}
+}
 
 // ClassificationDecision is the action taken by the classifier.
 type ClassificationDecision int

@@ -14,7 +14,7 @@ import (
 // never creates a pending approval.
 type HookClassifier struct {
 	policy       classifier.Classifier
-	analytics    *AnalyticsStore
+	analytics    ClassificationRecorder
 	contextCache *HookContextCache
 	deduper      *HookDeduper
 	replier      HookReplier
@@ -28,7 +28,7 @@ func (h *HookClassifier) SetHookReplier(r HookReplier) { h.replier = r }
 // it runs in; it is the only context an AskUserQuestion hook needs.
 const SessionUUIDEnv = "STAPLER_SESSION_UUID"
 
-func NewHookClassifier(policy classifier.Classifier, analytics *AnalyticsStore) *HookClassifier {
+func NewHookClassifier(policy classifier.Classifier, analytics ClassificationRecorder) *HookClassifier {
 	service := &HookClassifier{
 		policy:    policy,
 		analytics: analytics,
@@ -123,4 +123,15 @@ func preToolUseOutput(result classifier.ClassificationResult) *hookipc.HookOutpu
 	default:
 		return nil
 	}
+}
+
+// HookReplier answers an AskUserQuestion PreToolUse hook, or returns nil so the
+// native dialog stays. sessionUUID is the Stapler Squad session the hook runs in.
+type HookReplier interface {
+	Reply(ctx context.Context, sessionUUID string, toolInput map[string]interface{}) *hookipc.HookOutput
+}
+
+// ClassificationRecorder records one classification decision for analytics.
+type ClassificationRecorder interface {
+	RecordFromResult(payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, sessionID, approvalID string, durationMs int64, source string)
 }

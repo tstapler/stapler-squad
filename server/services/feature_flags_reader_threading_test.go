@@ -62,18 +62,18 @@ func TestNewNotificationActionDispatcher_ShouldUseInjectedRegistry(t *testing.T)
 
 func TestWireAnswerRouter_ShouldUseServiceRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	assert.True(t, newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.Inline(inlineApprove))
-	assert.False(t, newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.Inline(inlineApprove))
+	assert.True(t, newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(actionFlags).Inline(inlineApprove))
+	assert.False(t, newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry()).WireAnswerRouter(AnswerRouterDeps{}).flags.(actionFlags).Inline(inlineApprove))
 }
 
 func TestWireHookReply_ShouldUseServiceRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	injected := newGatedSessionService(svctest.CreateTestStorage(t), inlineOnRegistry())
 	injected.wireHookReply(svctest.CreateTestStorage(t), nil)
-	assert.True(t, injected.hookReply.Load().flags.Inline(inlineApprove))
+	assert.True(t, injected.hookReply.Load().flags.(actionFlags).Inline(inlineApprove))
 	global := newGatedSessionService(svctest.CreateTestStorage(t), testFlagRegistry())
 	global.wireHookReply(svctest.CreateTestStorage(t), nil)
-	assert.False(t, global.hookReply.Load().flags.Inline(inlineApprove))
+	assert.False(t, global.hookReply.Load().flags.(actionFlags).Inline(inlineApprove))
 }
 
 func TestSessionService_ShouldNotTouchProcessRegistry_WhenNoneInjected(t *testing.T) {

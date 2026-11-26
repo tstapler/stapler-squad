@@ -87,7 +87,7 @@ type ApprovalHandler struct {
 	eventBus            *events.EventBus
 	queueChecker        ReviewQueueChecker                    // optional: triggers immediate review queue check on new approval
 	classifier          classifier.Classifier                 // optional: auto-classify before escalating to manual review
-	analyticsStore      *AnalyticsStore                       // optional: record classification decisions
+	analyticsStore      ClassificationRecorder                // optional: record classification decisions
 	domainChecker       *domainage.DomainAgeChecker           // optional: escalate requests to newly-registered domains
 	notificationStamper approvalNotificationStamper           // optional: stamps approval outcomes on notification records
 	autoApprovalLog     autoApprovalLogger                    // optional: writes silent records for auto-approved/denied ops
@@ -95,7 +95,7 @@ type ApprovalHandler struct {
 	headlessPool        headlessPoolApprover                  // optional: LLM approval for autonomous sessions
 	autonomousChecker   func(string) bool                     // optional: returns true if sessionID is an autonomous session
 	pollInterval        time.Duration                         // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
-	liveFinder          LiveInstanceFinder                    // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
+	liveFinder          liveSessionFinder                     // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
 	slackNotifier       *notify.SlackNotifier                 // optional: notifies a configured Slack webhook about new pending approvals; concrete type, no interface
 	dashboardBaseURLFn  func() string                         // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
@@ -132,7 +132,7 @@ func (h *ApprovalHandler) SetPollInterval(d time.Duration) {
 // persisted in the ent schema (see Storage.UpdateInstancePRStatus) — they only live on
 // the in-memory Instance the PRStatusPoller keeps fresh — so a *session.Storage lookup
 // cannot see them; this must be the live registry (typically *SessionService).
-func (h *ApprovalHandler) SetLiveInstanceFinder(f LiveInstanceFinder) {
+func (h *ApprovalHandler) SetLiveInstanceFinder(f liveSessionFinder) {
 	h.liveFinder = f
 }
 
@@ -174,8 +174,9 @@ func (h *ApprovalHandler) SetClassifier(c classifier.Classifier) {
 	h.classifier = c
 }
 
-// SetAnalyticsStore injects an AnalyticsStore for recording classification decisions.
-func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
+// SetAnalyticsStore injects the recorder of classification decisions. Pass a nil
+// interface, never a nil pointer in one: see SessionService.ClassificationRecorder.
+func (h *ApprovalHandler) SetAnalyticsStore(a ClassificationRecorder) {
 	h.analyticsStore = a
 }
 
@@ -591,7 +592,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	approvalID := uuid.New().String()
 	riskLevel := ""
 	if classified {
-		riskLevel = riskLevelString(escalation.RiskLevel)
+		riskLevel = escalation.RiskLevel.Label()
 	}
 	approval := &approvalkit.PendingApproval{
 		ID:                 approvalID,
