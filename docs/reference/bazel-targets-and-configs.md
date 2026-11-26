@@ -91,6 +91,7 @@ Reference for the Bazel labels that replace each `make` binary target, the `--co
 | `build`, `build-embedded`, `build-embedded-tymux` | `stapler-squad` (otelc-woven) | `//:stapler-squad` | The one shipped binary is always otelc-woven (sandboxed, remote-cacheable action, see "otel weave" below). `--config=release` stamps the version and embeds tmux and tymuxd. `//:stapler-squad_plain` is the uninstrumented `go_binary`, used only by the parity harness. |
 | `install-hooks` | `ssq-hooks` | `//cmd/ssq-hooks:ssq-hooks` | Makefile passes no ldflags, so no `x_defs`. |
 | `build-mux`, `install-mux` | `ssq-mux` | `//cmd/ssq-mux:ssq-mux` | `cmd/claude-mux` was renamed to `cmd/ssq-mux`; `make build-mux` builds `./cmd/ssq-mux` to `./ssq-mux`. |
+| `build-ssq`, `install-ssq` | `ssq` | `//cmd/ssq:ssq` | API CLI; commands are built from the proto descriptors at runtime, nothing is generated for it. |
 | `registry-generate-backend` | `tools/scanner/backend/cmd/scanner` | `//tools/scanner/backend/cmd:cmd` | Bazel names the output `cmd` (the package name); `make` names it `scanner`. Callers use the label, not the path. |
 
 `bazel build //cmd/... //tools/scanner/...` builds every row that has a label.
