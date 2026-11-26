@@ -88,7 +88,7 @@ func (g *slackReplayGuard) commit(key slackRequestKey) {
 	}
 }
 
-// release forgets a failed request, so that a retry of it is processed again.
+// release forgets a request, so that a retry of it is processed again.
 func (g *slackReplayGuard) release(key slackRequestKey) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

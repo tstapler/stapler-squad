@@ -114,6 +114,78 @@ func TestSlackInteractiveHandler_ShouldProcessARetry_WhenTheFirstAttemptFailed(t
 	assert.Equal(t, []string{"one:allow", "one:allow"}, resolver.calls)
 }
 
+// Not parallel: t.Setenv and an isolated state dir.
+func TestSlackInteractiveHandler_ShouldNotProcessARetry_WhenTheClickWasRefused(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
+	for _, code := range []connect.Code{connect.CodeInvalidArgument, connect.CodeNotFound, connect.CodeFailedPrecondition} {
+		t.Run(code.String(), func(t *testing.T) {
+			resolver := &recordingApprovalResolver{err: connect.NewError(code, errors.New("refused"))}
+			h := NewSlackInteractiveHandler(resolver)
+			click := newSignedSlackClick(slackClickBody("one:allow"))
+
+			require.Equal(t, http.StatusOK, click.send(h))
+			resolver.err = nil
+			require.Equal(t, http.StatusOK, click.send(h))
+
+			assert.Equal(t, []string{"one:allow"}, resolver.calls)
+		})
+	}
+}
+
+// Not parallel: t.Setenv and an isolated state dir.
+func TestSlackInteractiveHandler_ShouldProcessARetry_WhenOnlyAnEarlierActionFailed(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
+	calls := 0
+	h := NewSlackInteractiveHandler(funcApprovalResolver(func() error {
+		calls++
+		if calls == 1 {
+			return errors.New("unavailable")
+		}
+		return nil
+	}))
+	click := newSignedSlackClick("payload=" + url.QueryEscape(`{"actions":[{"value":"one:allow"},{"value":"two:allow"}]}`))
+
+	require.Equal(t, http.StatusOK, click.send(h))
+	require.Equal(t, http.StatusOK, click.send(h))
+
+	assert.Equal(t, 4, calls)
+}
+
+// Not parallel: t.Setenv and an isolated state dir.
+func TestSlackInteractiveHandler_ShouldNotProcessARetry_WhenAnyActionWasRefused(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
+	calls := 0
+	h := NewSlackInteractiveHandler(funcApprovalResolver(func() error {
+		calls++
+		if calls == 1 {
+			return connect.NewError(connect.CodeFailedPrecondition, errors.New("refused"))
+		}
+		return errors.New("unavailable")
+	}))
+	click := newSignedSlackClick("payload=" + url.QueryEscape(`{"actions":[{"value":"one:allow"},{"value":"two:allow"}]}`))
+
+	require.Equal(t, http.StatusOK, click.send(h))
+	require.Equal(t, http.StatusOK, click.send(h))
+
+	assert.Equal(t, 2, calls)
+}
+
+// Not parallel: t.Setenv and an isolated state dir.
+func TestSlackInteractiveHandler_ShouldNotRecordARequest_WhenItsSignatureIsInvalid(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	t.Setenv("SLACK_SIGNING_SECRET", slackInteractiveTestSecret)
+	h := NewSlackInteractiveHandler(&recordingApprovalResolver{})
+	click := newSignedSlackClick(slackClickBody("one:allow"))
+	click.signature = "v0=00"
+
+	require.Equal(t, http.StatusUnauthorized, click.send(h))
+
+	assert.Empty(t, h.replays.entries)
+}
+
 type funcApprovalResolver func() error
 
 func (f funcApprovalResolver) ResolveApproval(context.Context, *connect.Request[sessionv1.ResolveApprovalRequest]) (*connect.Response[sessionv1.ResolveApprovalResponse], error) {

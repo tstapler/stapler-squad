@@ -71,8 +71,8 @@ func NewSlackInteractiveHandler(resolver approvalResolver) *SlackInteractiveHand
 // signature verification and payload parsing. The URL query and Content-Type
 // are not signed, so nothing is read from them (never r.FormValue/r.Form).
 // Any verification failure gets a generic 401. A repeat of a handled request
-// is acknowledged without acting again, one still in progress gets 409, and a
-// request that failed to resolve may be retried.
+// (resolved or refused) is acknowledged without acting again, one still in
+// progress gets 409, and one that hit any other error may be retried.
 func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSlackInteractiveBodyBytes)
 	rawBody, err := io.ReadAll(r.Body)
@@ -117,15 +117,15 @@ func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request)
 		answerUnclaimedSlackRequest(w, claim)
 		return
 	}
-	succeeded := false
+	settled := false
 	defer func() {
-		if succeeded {
+		if settled {
 			h.replays.commit(key)
 		} else {
 			h.replays.release(key)
 		}
 	}()
-	succeeded = h.resolveActions(r.Context(), payload)
+	settled = h.resolveActions(r.Context(), payload)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -159,10 +159,10 @@ func parseSlackInteractivePayload(rawBody []byte) (SlackInteractivePayload, erro
 	return payload, err
 }
 
-// resolveActions resolves every recognized button in payload and reports
-// whether all of those resolutions succeeded.
+// resolveActions resolves every recognized button in payload. It reports false
+// if the same request may be retried: some resolution failed and none was refused.
 func (h *SlackInteractiveHandler) resolveActions(ctx context.Context, payload SlackInteractivePayload) bool {
-	succeeded := true
+	failed, refused := false, false
 	for _, action := range payload.Actions {
 		approvalID, decision, ok := parseSlackActionValue(action.Value)
 		if !ok {
@@ -173,7 +173,11 @@ func (h *SlackInteractiveHandler) resolveActions(ctx context.Context, payload Sl
 			Decision:   decision,
 		})
 		if _, err := h.resolver.ResolveApproval(ctx, req); err != nil {
-			succeeded = false
+			if isRefusal(err) {
+				refused = true
+			} else {
+				failed = true
+			}
 			log.Warn("SlackInteractiveHandler: ResolveApproval failed", "approval_id", approvalID, "slack_user", payload.User.Username, "error", err)
 		} else {
 			// Audit trail: this is an internet-facing endpoint granting/denying
@@ -182,7 +186,18 @@ func (h *SlackInteractiveHandler) resolveActions(ctx context.Context, payload Sl
 			log.Info("SlackInteractiveHandler: approval resolved via Slack", "approval_id", approvalID, "decision", decision, "slack_user", payload.User.Username)
 		}
 	}
-	return succeeded
+	return refused || !failed
+}
+
+// isRefusal reports whether the resolver gave a verdict on the click. Replaying
+// a refused click could approve it later without a new click.
+func isRefusal(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeInvalidArgument, connect.CodeNotFound, connect.CodeFailedPrecondition:
+		return true
+	default:
+		return false
+	}
 }
 
 // parseSlackActionValue splits a button's value ("<approvalID>:allow" or
