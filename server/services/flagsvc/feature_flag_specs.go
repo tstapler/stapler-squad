@@ -263,6 +263,10 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Scopes:      config.SessionMultiPRScopes(),
 	},
 	{
+		Name:        config.GoalModeFlag,
+		Description: "Goal mode pilot: run opted-in chore/docs backlog items through Claude Code /goal as a direct subprocess (not visible in the terminal UI) with a cost ceiling and heartbeat, instead of the autonomous driver. Off leaves the driver untouched. Global only. Default: off.",
+	},
+	{
 		Name:        config.ArtifactScanV2Flag,
 		Description: "Artifact scan v2: the rescan that rebuilds every session's artifact blob with typed records. Off until the owner flips it after a dry run on a database copy; turning it off stops further rescans. Applies at once; global only. Default: off.",
 	},

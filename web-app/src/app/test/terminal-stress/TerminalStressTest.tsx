@@ -63,6 +63,7 @@ export function TerminalStressTest() {
 
   // Refs for test control
   const abortControllerRef = useRef<AbortController | null>(null);
+  const flushProgressRef = useRef<(() => void) | null>(null);
   const frameTimesRef = useRef<number[]>([]);
   const lastFrameTimeRef = useRef<number>(0);
   const metricsRef = useRef(renderMetrics);
@@ -126,6 +127,7 @@ export function TerminalStressTest() {
     resizeObserver.observe(terminalRef.current);
 
     return () => {
+      abortControllerRef.current?.abort();
       resizeObserver.disconnect();
       term.dispose();
     };
@@ -230,8 +232,10 @@ export function TerminalStressTest() {
     // Clear terminal
     terminal.clear();
 
-    // Create abort controller
-    abortControllerRef.current = new AbortController();
+    // The loop holds its own signal: stopTest nulls the ref, so reading through it would never stop.
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const { signal } = controller;
 
     // Get config
     const config = customConfig || TEST_PRESETS[selectedPreset];
@@ -249,18 +253,26 @@ export function TerminalStressTest() {
     let lastRenderTime = 0;
     let totalBytesGenerated = 0;
 
+    const publishProgress = (elapsed: number) =>
+      setProgress({
+        elapsed,
+        framesGenerated: generator.getSequence(),
+        bytesGenerated: totalBytesGenerated,
+      });
+
+    flushProgressRef.current = () => publishProgress(performance.now() - startTime);
+
     // Use requestAnimationFrame for proper vsync and frame timing
     const runLoop = (currentTime: number) => {
-      if (abortControllerRef.current?.signal.aborted) {
-        setStatus('completed');
-        updateMetrics();
-        return;
-      }
+      // stopTest/resetTest already set status and metrics.
+      if (signal.aborted) return;
 
       const elapsed = currentTime - startTime;
       if (elapsed >= durationMs) {
         setStatus('completed');
         updateMetrics();
+        publishProgress(elapsed);
+        flushProgressRef.current = null;
         return;
       }
 
@@ -276,11 +288,7 @@ export function TerminalStressTest() {
 
         // Update progress (batch updates to reduce React overhead)
         if (frameTimesRef.current.length % 5 === 0) {
-          setProgress({
-            elapsed,
-            framesGenerated: generator.getSequence(),
-            bytesGenerated: totalBytesGenerated,
-          });
+          publishProgress(elapsed);
         }
       }
 
@@ -298,6 +306,8 @@ export function TerminalStressTest() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    flushProgressRef.current?.();
+    flushProgressRef.current = null;
     setStatus('completed');
     updateMetrics();
   }, [updateMetrics]);

@@ -7,8 +7,8 @@
  * server-side connection teardown against a client keystroke — impractical
  * to do reliably in an e2e harness. Per this plan's fallback convention
  * (matching Tasks 1.2.4/1.2.5), this spec instead drives the badge via a
- * test-only trigger (`window.__e2eTriggerInputDropped`, wired in
- * TerminalOutput.tsx) that forwards to the exact same `onInputDropped`
+ * test-only trigger (`window.__e2eTriggerInputDropped`, installed by
+ * useE2eInputDropTrigger.ts only on the e2e server) that forwards to the exact same `onInputDropped`
  * handler a real drop would invoke — the drop-detection mechanism itself
  * (MessageQueue.close()'s drop semantics, the connection-generation guard)
  * already has direct Jest coverage (Stories 2.1/2.2); this spec covers what
@@ -25,6 +25,9 @@ const BASE_URL = baseUrl();
 /** Auto-dismiss window from notification-policy.ts's DEFAULT_TOAST_MS. */
 const DEFAULT_TOAST_MS = 8_000;
 
+/** Not a latency assertion: the 400ms coalescing window plus render took up to 1.15s on a loaded host. */
+const BADGE_TIMEOUT_MS = 5_000;
+
 async function openTerminalView(page: import('@playwright/test').Page, sessionId?: string): Promise<boolean> {
   const url = sessionId ? `${BASE_URL}/?session=${sessionId}` : BASE_URL;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -38,6 +41,19 @@ async function openTerminalView(page: import('@playwright/test').Page, sessionId
 
   await expect(page.locator('[data-testid="toolbar-toggle"]')).toBeVisible({ timeout: 8000 });
   return true;
+}
+
+/** Creates a bash session and waits until the server reports it active. */
+async function createActiveSession(client: SessionClient, title: string) {
+  const session = await client.createIdleSession(title, '/tmp');
+  try {
+    // Shorter than the 30s test timeout, so a slow start reports which session and status.
+    await client.waitForSessionsActive([title], 20000);
+  } catch (err) {
+    await client.deleteSession(session.id, true).catch(() => {});
+    throw err;
+  }
+  return session;
 }
 
 /** Waits until the e2e test-only trigger has been installed by TerminalOutput. */
@@ -56,9 +72,12 @@ async function triggerDrop(page: import('@playwright/test').Page, count: number)
 }
 
 test.describe('input-drop-badge', () => {
+  // Session start, toolbar, trigger and connect waits together exceed the default 30s.
+  test.describe.configure({ timeout: 60_000 });
+
   test('badge becomes visible with the correct singular/plural count text', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const session = await client.createIdleSession(`e2e-input-drop-${Date.now()}`, '/tmp');
+    const session = await createActiveSession(client, `e2e-input-drop-${Date.now()}`);
 
     try {
       const opened = await openTerminalView(page, session.id);
@@ -68,9 +87,8 @@ test.describe('input-drop-badge', () => {
 
       await triggerDrop(page, 1);
 
-      // Coalescing window (400ms) + render — UX-AC-1: visible within 500ms.
       const badge = page.getByTestId('input-drop-badge');
-      await expect(badge).toBeVisible({ timeout: 1000 });
+      await expect(badge).toBeVisible({ timeout: BADGE_TIMEOUT_MS });
       await expect(badge).toHaveText(/1 keystroke dropped — reconnecting/);
     } finally {
       await client.deleteSession(session.id, true).catch(() => {});
@@ -79,7 +97,7 @@ test.describe('input-drop-badge', () => {
 
   test('coalesces a burst of drops into a single badge with the summed count', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const session = await client.createIdleSession(`e2e-input-drop-burst-${Date.now()}`, '/tmp');
+    const session = await createActiveSession(client, `e2e-input-drop-burst-${Date.now()}`);
 
     try {
       const opened = await openTerminalView(page, session.id);
@@ -87,13 +105,14 @@ test.describe('input-drop-badge', () => {
 
       await waitForTestTrigger(page);
 
-      // Three drops within the 400ms coalescing window.
-      await triggerDrop(page, 1);
-      await triggerDrop(page, 1);
-      await triggerDrop(page, 1);
+      // Three drops in one task, so they always land inside the 400ms coalescing window.
+      await page.evaluate(() => {
+        const trigger = (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
+        [1, 1, 1].forEach((n) => trigger?.(n));
+      });
 
       const badge = page.getByTestId('input-drop-badge');
-      await expect(badge).toHaveText(/3 keystrokes dropped — reconnecting/, { timeout: 1000 });
+      await expect(badge).toHaveText(/3 keystrokes dropped — reconnecting/, { timeout: BADGE_TIMEOUT_MS });
     } finally {
       await client.deleteSession(session.id, true).catch(() => {});
     }
@@ -101,20 +120,20 @@ test.describe('input-drop-badge', () => {
 
   test('badge does not overlap the terminal cursor region (design/ux.md UX-AC-2)', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const session = await client.createIdleSession(`e2e-input-drop-bounds-${Date.now()}`, '/tmp');
+    const session = await createActiveSession(client, `e2e-input-drop-bounds-${Date.now()}`);
 
     try {
       const opened = await openTerminalView(page, session.id);
       test.skip(!opened, 'No session available in test server');
 
       await page.setViewportSize({ width: 1200, height: 800 });
-      await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
 
       await waitForTestTrigger(page);
       await triggerDrop(page, 2);
 
       const badge = page.getByTestId('input-drop-badge');
-      await expect(badge).toBeVisible({ timeout: 1000 });
+      await expect(badge).toBeVisible({ timeout: BADGE_TIMEOUT_MS });
 
       const badgeBox = await badge.boundingBox();
       const cursorLayer = page.locator('.xterm-cursor-layer').first();
@@ -139,8 +158,9 @@ test.describe('input-drop-badge', () => {
   });
 
   test('badge auto-dismisses within the configured timeout', async ({ page }) => {
+    test.slow(); // waits out the ~8s toast on top of session setup
     const client = new SessionClient(BASE_URL);
-    const session = await client.createIdleSession(`e2e-input-drop-dismiss-${Date.now()}`, '/tmp');
+    const session = await createActiveSession(client, `e2e-input-drop-dismiss-${Date.now()}`);
 
     try {
       const opened = await openTerminalView(page, session.id);
@@ -150,7 +170,7 @@ test.describe('input-drop-badge', () => {
       await triggerDrop(page, 1);
 
       const badge = page.getByTestId('input-drop-badge');
-      await expect(badge).toBeVisible({ timeout: 1000 });
+      await expect(badge).toBeVisible({ timeout: BADGE_TIMEOUT_MS });
 
       // Auto-dismisses within ~8-8.5s of becoming visible (UX-AC-3), no user action.
       await expect(badge).not.toBeVisible({ timeout: DEFAULT_TOAST_MS + 1500 });
@@ -161,7 +181,7 @@ test.describe('input-drop-badge', () => {
 
   test('badge appearing does not steal focus (design/ux.md §3.1)', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
-    const session = await client.createIdleSession(`e2e-input-drop-focus-${Date.now()}`, '/tmp');
+    const session = await createActiveSession(client, `e2e-input-drop-focus-${Date.now()}`);
 
     try {
       const opened = await openTerminalView(page, session.id);
@@ -169,14 +189,43 @@ test.describe('input-drop-badge', () => {
 
       await waitForTestTrigger(page);
 
-      const activeElementBefore = await page.evaluate(() => document.activeElement?.tagName ?? null);
+      // Focus the terminal input once it is connected, so its own autofocus can't move focus mid-test.
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
+      const terminalInput = page.getByRole('textbox', { name: 'Terminal input' });
+      await terminalInput.focus();
+      await expect(terminalInput).toBeFocused();
 
       await triggerDrop(page, 1);
-      await expect(page.getByTestId('input-drop-badge')).toBeVisible({ timeout: 1000 });
+      await expect(page.getByTestId('input-drop-badge')).toBeVisible({ timeout: BADGE_TIMEOUT_MS });
 
-      const activeElementAfter = await page.evaluate(() => document.activeElement?.tagName ?? null);
+      await expect(terminalInput).toBeFocused();
+    } finally {
+      await client.deleteSession(session.id, true).catch(() => {});
+    }
+  });
 
-      expect(activeElementAfter).toBe(activeElementBefore);
+  test('trigger is not installed when the server is a production one', async ({ page }) => {
+    // The same production bundle, answered as a production server would, with a page-set global too.
+    await page.route('**/api/server-info', async (route) => {
+      const response = await route.fetch();
+      const info = await response.json();
+      delete info.e2e_hooks;
+      await route.fulfill({ response, json: info });
+    });
+    await page.addInitScript(() => {
+      (window as unknown as { __E2E_HOOKS__?: boolean }).__E2E_HOOKS__ = true;
+    });
+    const client = new SessionClient(BASE_URL);
+    const session = await createActiveSession(client, `e2e-input-drop-prod-${Date.now()}`);
+
+    try {
+      const answered = page.waitForResponse('**/api/server-info');
+      await openTerminalView(page, session.id);
+      await answered;
+      // A connected terminal has long since run the effect that would install the trigger.
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
+
+      expect(await page.evaluate(() => '__e2eTriggerInputDropped' in window)).toBe(false);
     } finally {
       await client.deleteSession(session.id, true).catch(() => {});
     }

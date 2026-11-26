@@ -397,6 +397,7 @@ go_test(
         "//session/gitprovider:go_sources",
         "//session/gitwiring:go_sources",
         "//session/gitwt:go_sources",
+        "//session/goalrunner:go_sources",
         "//session/guidancestore:go_sources",
         "//session/headless:go_sources",
         "//session/hibernation:go_sources",
