@@ -5,7 +5,7 @@ const BASE_URL = baseUrl();
 
 /**
  * Wrappers around the `/api/debug/backlog/mutate-*` endpoints
- * (server/services/backlog_debug_mutate_handler.go), added alongside this
+ * (server/services/backlogmisc/backlog_debug_mutate_handler.go), added alongside this
  * file for project_plans/backlog-event-driven-updates's Playwright e2e
  * layer.
  *

@@ -1,0 +1,62 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "completionreview",
+    srcs = [
+        "completion_reviewer.go",
+        "completion_reviewer_memory.go",
+        "completion_reviewer_prompt.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/completionreview",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/featureflags",
+        "//session",
+        "//session/backlogaux",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/headless",
+        "@com_github_gofrs_flock//:flock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":completionreview",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "completionreview_test",
+    srcs = [
+        "completion_reviewer_call_test.go",
+        "completion_reviewer_golden_test.go",
+        "completion_reviewer_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":completionreview"],
+    deps = [
+        "//server/events",
+        "//server/services/featureflags",
+        "//server/services/flagsvc",
+        "//server/services/internal/svctest",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/headless",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

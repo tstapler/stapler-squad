@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/conflictretry"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -1376,18 +1377,18 @@ func TestReconcilePRPending_ConflictOnly_StopsAfterMaxAttempts_WithOneNotice(t *
 	ctx := context.Background()
 	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9311)
 
-	for i := 1; i <= session.ConflictRetryMaxAttempts; i++ {
+	for i := 1; i <= conflictretry.ConflictRetryMaxAttempts; i++ {
 		listener.ReconcilePRPending(ctx, storage.Repo)
 		require.Equal(t, i, spawner.callCount, "hourly grant %d must spawn", i)
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
 	assert.NotContains(t, n.Titles(), "Auto-rework paused", "no dead-end notice while the override is still retrying")
 
 	for i := 0; i < 3; i++ {
 		listener.ReconcilePRPending(ctx, storage.Repo)
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
-	assert.Equal(t, session.ConflictRetryMaxAttempts, spawner.callCount, "no session past the max")
+	assert.Equal(t, conflictretry.ConflictRetryMaxAttempts, spawner.callCount, "no session past the max")
 	paused := 0
 	for _, title := range n.Titles() {
 		if title == "Auto-rework paused" {
@@ -1409,7 +1410,7 @@ func TestReconcilePRPending_ConflictOnly_ParkingRowDoesNotAnnounceDeadEnd(t *tes
 	for attempt := int32(1); attempt <= session.MaxRemediationAttempts; attempt++ {
 		listener.ReconcilePRPending(ctx, storage.Repo)
 		backdateNextRemediationAt(t, storage.Repo, item.ID, domain.StuckReasonPRNeedsFix, time.Now().Add(-time.Second))
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
 	assert.NotContains(t, n.Titles(), "Auto-rework paused")
 }
@@ -1429,7 +1430,7 @@ func TestReconcilePRPending_ConflictOnly_StandsDownWhenReworkCapOpen(t *testing.
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	clock.Add(session.ConflictRetryInterval + time.Second)
+	clock.Add(conflictretry.ConflictRetryInterval + time.Second)
 	listener.ReconcilePRPending(ctx, storage.Repo)
 	assert.Equal(t, 1, spawner.callCount, "no hourly respawn once the rework cap row is open")
 }
@@ -1443,11 +1444,11 @@ func TestReconcilePRPending_ConflictOnly_FailedSpawnIsRefunded(t *testing.T) {
 	listener, spawner, n, clock, _, _ := conflictOnlyListener(t, storage, 9315)
 	spawner.err = errors.New("spawn failed")
 
-	for i := 0; i < session.ConflictRetryMaxAttempts+3; i++ {
+	for i := 0; i < conflictretry.ConflictRetryMaxAttempts+3; i++ {
 		listener.ReconcilePRPending(ctx, storage.Repo)
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
-	assert.Equal(t, session.ConflictRetryMaxAttempts+3, spawner.callCount, "every hourly tick keeps trying: failed spawns spend nothing")
+	assert.Equal(t, conflictretry.ConflictRetryMaxAttempts+3, spawner.callCount, "every hourly tick keeps trying: failed spawns spend nothing")
 	assert.NotContains(t, n.Titles(), "Auto-rework paused", "no \"survived N sessions\" notice when no session ran")
 }
 
@@ -1459,17 +1460,17 @@ func TestReconcilePRPending_ConflictOnly_ResetReArmsExhaustedOverride(t *testing
 	ctx := context.Background()
 	listener, spawner, _, clock, _, item := conflictOnlyListener(t, storage, 9316)
 
-	for i := 0; i < session.ConflictRetryMaxAttempts+1; i++ {
+	for i := 0; i < conflictretry.ConflictRetryMaxAttempts+1; i++ {
 		listener.ReconcilePRPending(ctx, storage.Repo)
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
-	require.Equal(t, session.ConflictRetryMaxAttempts, spawner.callCount, "setup: exhausted")
+	require.Equal(t, conflictretry.ConflictRetryMaxAttempts, spawner.callCount, "setup: exhausted")
 
 	applied, err := storage.ResetStuckRemediation(ctx, item.ID, domain.StuckReasonPRNeedsFix)
 	require.NoError(t, err)
 	require.True(t, applied)
 	listener.ReconcilePRPending(ctx, storage.Repo)
-	assert.Greater(t, spawner.callCount, session.ConflictRetryMaxAttempts, "Reset must let the hourly override try again")
+	assert.Greater(t, spawner.callCount, conflictretry.ConflictRetryMaxAttempts, "Reset must let the hourly override try again")
 }
 
 // A merged PR drops the item's ledger entry.
@@ -1552,7 +1553,7 @@ func TestReconcilePRPending_ConflictOnly_RespawnsWhileParked_ButCIFailingDoesNot
 			parkPRNeedsFixRow(t, storage, item.ID)
 
 			// Step the clock past the hourly conflict throttle.
-			clock.Add(session.ConflictRetryInterval + time.Second)
+			clock.Add(conflictretry.ConflictRetryInterval + time.Second)
 			listener.ReconcilePRPending(ctx, storage.Repo)
 			assert.Equal(t, tc.wantCalls, fakeSpawner.callCount)
 
@@ -4607,6 +4608,13 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 // ever calling report_pr_created (Epic 3.1) to report it back.
 func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchName string) *backlogdto.BacklogItemData {
 	t.Helper()
+	return newOrphanedAgentPRTestItemWithSession(t, storage, branchName, false)
+}
+
+// newOrphanedAgentPRTestItemWithSession is newOrphanedAgentPRTestItem with the work session left live
+// (EndedAt nil) when live is true.
+func newOrphanedAgentPRTestItemWithSession(t *testing.T, storage *session.Storage, branchName string, live bool) *backlogdto.BacklogItemData {
+	t.Helper()
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
@@ -4631,7 +4639,9 @@ func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchNa
 	require.NoError(t, err)
 	// No live session — the whole point of this backstop is that the agent
 	// that shipped the PR has already exited/crashed.
-	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	if !live {
+		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
+	}
 
 	return item
 }
@@ -4670,6 +4680,42 @@ func TestReconcileOrphanedAgentPRs_should_LinkPR_When_ReviewStatusNoLiveSessionP
 	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 77, fetched.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/77", fetched.PrURL)
+}
+
+// TestReconcileOrphanedAgentPRs_should_LinkMergedPR_When_WorkSessionStillLive is the R2 regression: a
+// merged PR with pr_number=0 must reach pr_pending (and so done) even though the work session never ended.
+func TestReconcileOrphanedAgentPRs_should_LinkMergedPR_When_WorkSessionStillLive(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		state      string
+		wantStatus domain.BacklogStatus
+		wantPR     int
+	}{
+		{github.PRStateMerged, domain.BacklogStatusPRPending, 88},
+		{github.PRStateOpen, domain.BacklogStatusReview, 0},
+		{github.PRStateClosed, domain.BacklogStatusReview, 0},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			item := newOrphanedAgentPRTestItemWithSession(t, storage, "backlog/live-merged", true)
+
+			listener := NewBacklogLifecycleListener(storage)
+			listener.SetOrphanedPRFinder(func(_ context.Context, _, branch string) (*github.PRInfo, error) {
+				return &github.PRInfo{Number: 88, HTMLURL: "https://github.com/tstapler/stapler-squad/pull/88", State: tc.state, HeadRef: branch}, nil
+			})
+
+			listener.reconcileOrphanedAgentPRs(ctx, storage.Repo)
+
+			fetched, err := storage.GetBacklogItem(ctx, item.ID)
+			require.NoError(t, err)
+			assert.Equal(t, string(tc.wantStatus), fetched.Status)
+			assert.Equal(t, tc.wantPR, fetched.PrNumber)
+		})
+	}
 }
 
 // TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR verifies the
@@ -4896,24 +4942,24 @@ func TestRemediatePRFixWithBackoffGate_AlwaysFailingSpawn_ExhaustsAndNotifiesOnc
 		return listener.remediatePRFixWithBackoffGate(ctx, storage.Repo, spawner, item.ID, item.Title, "## Merge conflict\n", true)
 	}
 
-	const attempts = session.ConflictRetryMaxRefunds + session.ConflictRetryMaxAttempts
+	const attempts = conflictretry.ConflictRetryMaxRefunds + conflictretry.ConflictRetryMaxAttempts
 	for i := 1; i <= attempts; i++ {
 		attempted, err := call()
 		require.True(t, attempted, "call %d must attempt a spawn", i)
 		require.Error(t, err, "call %d must surface the spawn error", i)
 		require.Equal(t, i, spawner.callCount)
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
 	grants, refunds := listener.conflictRetries.Counters(item.ID)
-	assert.Equal(t, session.ConflictRetryMaxRefunds, refunds, "refund called (and honored) up to its cap")
-	assert.Equal(t, session.ConflictRetryMaxAttempts, grants, "net grants consumed")
+	assert.Equal(t, conflictretry.ConflictRetryMaxRefunds, refunds, "refund called (and honored) up to its cap")
+	assert.Equal(t, conflictretry.ConflictRetryMaxAttempts, grants, "net grants consumed")
 	assert.NotContains(t, n.Titles(), "Auto-rework paused", "no dead-end notice before exhaustion")
 
 	for i := 0; i < 3; i++ {
 		attempted, err := call()
 		assert.False(t, attempted, "exhausted: no spawn attempted")
 		assert.NoError(t, err)
-		clock.Add(session.ConflictRetryInterval)
+		clock.Add(conflictretry.ConflictRetryInterval)
 	}
 	assert.Equal(t, attempts, spawner.callCount, "no spawn after exhaustion")
 	exhausted := 0

@@ -148,7 +148,7 @@ skip it in future rounds.
 - **status**: open
 - **severity**: high
 - **fingerprint**: GAP-HIBERNATE-sweeper-no-driver-stop
-- **file**: `session/hibernation_sweeper.go`
+- **file**: `session/sweeper/hibernation_sweeper.go`
 - **detail**: sweep() (line 237) and sweepResourcePressure() (line 354) both call `inst.Hibernate(ctx)` directly on the Instance. This transitions the session state and kills the tmux process, but the HibernationSweeper has no reference to the SessionService or its driverRegistry. Any running AutonomousDriver goroutine registered in driverRegistry is left alive after the tmux process is killed. The driver's next attempt to `SendCommandImmediate` to the now-dead controller will fail, causing the driver to exit with a 'stuck' outcome and emit a spurious failure notification to the user. Contrast with the HibernateSession RPC (session_service.go:1505) which correctly calls `s.stopAndDeregisterDriver(instance.Title)` before hibernating. server/server.go constructs NewHibernationSweeper with no driver stopper argument and no way to wire one in.
 - **fix hint**: Add a DriverStopper interface (with a single `StopDriver(sessionTitle string)` method) to the session package. Thread it into HibernationSweeper via a `SetDriverStopper` method or a constructor argument. Call `stopper.StopDriver(inst.Title)` before `inst.Hibernate(ctx)` in both sweep() and sweepResourcePressure(). Wire the SessionService as the implementation in server/server.go after both are constructed.
 
@@ -1001,7 +1001,7 @@ skip it in future rounds.
 ### GAP-124 — Dual escape analytics systems with separate stores
 - **status**: open
 - **severity**: low
-- **files**: `server/services/escape_code_handler.go` (old REST + in-memory),
+- **files**: `server/services/escapecode/escape_code_handler.go` (old REST + in-memory),
   `server/services/analytics_escape_service.go` (new ConnectRPC + ent DB)
 - **detail**: Two independent tracking paths exist. The nav points to the new SQLite-
   backed one at `/analytics/escape`. The old REST debug page at `/debug/escape-codes`

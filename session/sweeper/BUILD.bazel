@@ -1,0 +1,58 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sweeper",
+    srcs = [
+        "hibernation_sweeper.go",
+        "orphan_sweep.go",
+        "orphan_tmux_sweeper.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/sweeper",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//log",
+        "//session",
+        "//session/instance",
+        "//session/memory",
+        "//session/tmux",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sweeper",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sweeper_test",
+    srcs = [
+        "hibernation_sweeper_test.go",
+        "orphan_sweep_test.go",
+    ],
+    embed = [":sweeper"],
+    deps = [
+        "//config",
+        "//session",
+        "//session/domain",
+        "//session/instance",
+        "//session/memory/memorytest",
+        "//session/procbackend",
+        "//session/tmux",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

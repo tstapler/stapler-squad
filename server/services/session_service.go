@@ -14,8 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -25,12 +29,22 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
@@ -39,11 +53,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -90,7 +107,7 @@ type SessionService struct {
 	eventBus          *events.EventBus
 	statusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
-	federation        *FederatedSessions // nil unless host gossip is running
+	federation        *federation.FederatedSessions // nil unless host gossip is running
 
 	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
 	prRefs prRefsSeams
@@ -101,7 +118,7 @@ type SessionService struct {
 
 	// guards is the live hidden_session_readonly_guards value the unary handlers
 	// read through AccessForUnary; the zero value is "on".
-	guards *UnaryGuardsFlag
+	guards *access.UnaryGuardsFlag
 	// guardBypass counts and rate-limits the guards-off bypass writes.
 	guardBypass guardBypassState
 	// reply is the Reply machinery (pending questions, idempotency, limiters,
@@ -126,8 +143,8 @@ type SessionService struct {
 	guidanceAcks *GuidanceAckDetector
 	hookReply    atomic.Pointer[hookReplyResolver]
 	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
-	dialogCanary   atomic.Pointer[DialogMatchCanary]
-	guidanceMirror atomic.Pointer[GuidanceHookMirror]
+	dialogCanary   atomic.Pointer[questionkit.DialogMatchCanary]
+	guidanceMirror atomic.Pointer[questionkit.GuidanceHookMirror]
 	ackCancel      context.CancelFunc
 	ackDone        chan struct{}
 
@@ -146,10 +163,10 @@ type SessionService struct {
 	// (session-classifier-pipeline Epic 4.4). nil when HeadlessPool is nil (no
 	// claude binary found) — every AddInstance/RemoveInstance call site below
 	// guards for nil the same way reviewQueuePoller does.
-	sessionTagPoller *session.SessionTagClassificationPoller
+	sessionTagPoller *tagpoller.SessionTagClassificationPoller
 
 	// concStorage is the concrete backing store, used for operations (like
-	// ListWorkspacePeers) not part of the InstanceStore interface. nil when storage is a
+	// GetItemSessionBySessionUUID) not part of the InstanceStore interface. nil when storage is a
 	// fake InstanceStore (tests) — callers must nil-check.
 	concStorage *session.Storage
 
@@ -181,7 +198,7 @@ type SessionService struct {
 
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
-	searchSvc       *SearchService
+	searchSvc       *searchrpc.SearchService
 	githubSvc       *GitHubService
 	workspaceSvc    *WorkspaceService
 	configSvc       *ConfigService
@@ -201,7 +218,7 @@ type SessionService struct {
 	taggingEngine *classifier.TaggingEngine
 
 	// External session discovery (for mux-enabled sessions from external terminals)
-	externalDiscovery *session.ExternalSessionDiscovery
+	externalDiscovery *external.ExternalSessionDiscovery
 
 	// historyLinker tracks JSONL conversation files per session.
 	// Must be kept in sync with deletions so the shutdown hook does not
@@ -209,7 +226,7 @@ type SessionService struct {
 	historyLinker *importer.HistoryLinker
 
 	// approvalStore holds pending Claude Code hook approval requests.
-	approvalStore *ApprovalStore
+	approvalStore *approvalkit.ApprovalStore
 
 	// deleteSessionCleanupTimeout bounds DeleteSession's cleanup-timeout warning;
 	// see defaultDeleteSessionCleanupTimeout's doc comment. Overridable via
@@ -223,7 +240,7 @@ type SessionService struct {
 	// name (main sessions and shell siblings alike). Wired in so StopShell can
 	// evict a shell's streamer on close instead of letting a stale/degraded one
 	// persist across shell restarts.
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager
 
 	// userPRCache supplies enterprise hosts from dynamically-added GitHub
 	// accounts (gh CLI import, device auth) for CreateSession's GitHub URL
@@ -260,11 +277,11 @@ type SessionService struct {
 	// swaps that for the process-wide instance once dependencies.go builds it,
 	// so this chain never resolves the Jules OS-keychain entry through a
 	// second, independent cache/circuit-breaker.
-	credChain *CredentialChain
+	credChain *credkit.CredentialChain
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
-	callbackConfigSvc *CallbackConfigService
+	callbackConfigSvc *webhooks.CallbackConfigService
 
 	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
 	// (terminal-multi-connection-streaming Story 3.3).
@@ -286,7 +303,7 @@ type SessionService struct {
 	prCreationSvc *PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
-	featureFlagSvc *FeatureFlagService
+	featureFlagSvc *flagsvc.FeatureFlagService
 
 	// terminalSvc handles GetTerminalSnapshot/WriteToSession RPCs.
 	terminalSvc *TerminalService
@@ -338,7 +355,7 @@ type SessionService struct {
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
-	memoryCacheReader session.MemoryCacheReader
+	memoryCacheReader sweeper.MemoryCacheReader
 
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
@@ -365,7 +382,7 @@ type SessionService struct {
 
 	// registry is the live-handle map for all running sessions. Wired after construction
 	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
-	registry *session.Registry
+	registry *registry.Registry
 
 	// deleteCleanupWG tracks DeleteSession's background tmux/worktree cleanup
 	// goroutines so Shutdown can await them instead of letting them outlive the
@@ -711,7 +728,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 // so it can be unit-tested directly without needing config.IsTestMode() to be false.
 func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassifier, cwd string, eventBus *events.EventBus) {
 	var claudeSettingsRules []classifier.Rule
-	for _, result := range LoadClaudeSettingsRulesDetailed(cwd) {
+	for _, result := range claudesettings.LoadClaudeSettingsRulesDetailed(cwd) {
 		claudeSettingsRules = append(claudeSettingsRules, result.Rules...)
 	}
 	if len(claudeSettingsRules) == 0 {
@@ -804,7 +821,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	} else {
 		log.Warn("failed to get config dir for approval persistence", "err", configErr)
 	}
-	approvalStore := NewApprovalStore(approvalFilePath)
+	approvalStore := approvalkit.NewApprovalStore(approvalFilePath)
 	reviewQueueSvc := NewReviewQueueService(reviewQueue, concStorage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
@@ -868,11 +885,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
 	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
 	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
-	var promptBuilder RulePromptBuilder
-	var aiClientImpl AIClient
+	var promptBuilder anthropicwire.RulePromptBuilder
+	var aiClientImpl anthropicwire.AIClient
 	{
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if c, backend := NewBestAvailableAIClient(apiKey, knownCLIAgents); c != nil {
+		if c, backend := anthropicwire.NewBestAvailableAIClient(apiKey, anthropicwire.KnownCLIAgents); c != nil {
 			promptBuilder = &DefaultRulePromptBuilder{}
 			aiClientImpl = c
 			log.Info("[SessionService] AI rule generation enabled", "backend", backend)
@@ -880,12 +897,12 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, WrapRulesAIClient(aiClientImpl))
+	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
 	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
-	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
+	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
 		rulesSvc.rebuildClaudeSettingsRules(rules)
 		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
 		// notify is false for Start()'s initial priming reload — the operator already saw a
@@ -927,7 +944,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			directCfg = c
 		}
 	}
-	credChain := NewDefaultChain(directCfg)
+	credChain := credkit.NewDefaultChain(directCfg)
 
 	var capRoleResolver SessionRoleResolver
 	var capTerminator SessionTerminator
@@ -957,11 +974,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// h2 connection they leave in the shared transport pool shows up as a leaked
 	// goroutine in whichever goleak-checked test runs next.
 	if !config.IsTestMode() {
-		capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
-		capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("anthropic", anthropicwire.NewAnthropicLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("google", anthropicwire.NewGeminiLimitsClient(credChain, ""))
 	}
 
-	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
+	if anthropicClient, ok := aiClientImpl.(*anthropicwire.AnthropicAIClient); ok {
 		anthropicClient.OnResponseHeaders = func(h http.Header) {
 			capacityMonitor.UpdateFromResponseHeaders("anthropic", h)
 		}
@@ -974,7 +991,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		concStorage:                 concStorage,
 		eventBus:                    eventBus,
 		reviewQueueSvc:              reviewQueueSvc,
-		searchSvc:                   NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		searchSvc:                   searchrpc.NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:                   NewGitHubService(concStorage),
 		workspaceSvc:                workspaceSvc,
 		configSvc:                   NewConfigService(),
@@ -992,13 +1009,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
-		callbackConfigSvc:           NewCallbackConfigService(),
+		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
 		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
 		artifactSvc:                 &ArtifactService{},
-		featureFlagSvc:              NewFeatureFlagService(),
+		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
@@ -1010,13 +1027,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
 
-	svc.guards = &UnaryGuardsFlag{}
+	svc.guards = &access.UnaryGuardsFlag{}
 	svc.terminalSvc.SetGuardsFlag(svc.guards)
 	if concStorage != nil {
 		svc.terminalSvc.SetNudgeRecorder(concStorage)
 	}
 	workspaceSvc.SetGuardsFlag(svc.guards)
-	var linkLookup itemSessionLookup
+	var linkLookup questionkit.ItemSessionLookup
 	if concStorage != nil {
 		linkLookup = concStorage
 	}
@@ -1099,7 +1116,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*instance.Instance, error)
 // NewSessionServiceFromConfig creates a SessionService using EntRepository as storage backend.
 // On first startup, if the legacy state.json exists and Ent DB is empty, sessions are
 // auto-migrated from JSON to Ent.
-func NewSessionServiceFromConfig() (*SessionService, error) {
+func NewSessionServiceFromConfig(flags *featureflags.Registry) (*SessionService, error) {
 	// Write workspace metadata on startup so the workspace switcher can discover this workspace.
 	config.EnsureWorkspaceMeta()
 
@@ -1124,24 +1141,26 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 		return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
 	}
 
-	return newGatedSessionService(storage), nil
+	return newGatedSessionService(storage, flags), nil
 }
 
 // newGatedSessionService builds the production SessionService: the delivery
 // gate is created with the bus and installed as its publish filter before any
 // producer can publish, so there is no un-gated window and no later bind step.
-func newGatedSessionService(storage session.InstanceStore) *SessionService {
+func newGatedSessionService(storage session.InstanceStore, flags *featureflags.Registry) *SessionService {
 	gate := deliverygate.NewGate(deliverygate.WithInstanceLister(storage))
 	eventBus := events.NewEventBus(100)
 	eventBus.SetPublishFilter(gate.PublishFilter())
 	svc := NewSessionService(storage, eventBus)
+	svc.featureFlagSvc = flagsvc.NewFeatureFlagServiceWithRegistry(flags)
+	svc.fileSvc.SetFlagRegistry(flags)
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
 	svc.wireGateFlag(gate)
 	svc.wireLeaseFlag()
 	svc.wireGuardsFlag()
 	svc.wireReplyFlag()
-	wireNotificationActionFlags(svc.featureFlagSvc)
+	flagsvc.WireNotificationActionFlags(svc.featureFlagSvc)
 	return svc
 }
 
@@ -1167,19 +1186,40 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		}
 		return ""
 	})
-	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, globalOffStatusDetail)
-	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
-	sink := NewAuditSink(config.GetConfigDir,
-		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, func(cfg *config.Config) string {
+		return s.flagReader().GlobalOffStatusDetail(cfg)
+	})
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, flagsvc.KindOffStatusDetail)
+	sink := auditkit.NewAuditSink(config.GetConfigDir,
+		auditkit.WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)
 	ff.SetAudit(sink, map[string]featureflags.FlagAuditPolicy{
-		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
-		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
-		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
-		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
+		config.HiddenSessionGateFeatureFlag:              {}, // every gate flip takes the non-blocking path
+		featureflags.TerminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
+		featureflags.HiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
+		featureflags.HiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
-	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
-	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
+	ff.MergeAuditPolicies(flagsvc.NotificationActionsFlagAuditPolicies())
+	ff.MergeAuditPolicies(flagsvc.SessionMultiPRFlagAuditPolicies())
+}
+
+// flagReader reads flag decisions through this service's registry.
+// NewSessionService starts on the default FlagRegistry; newGatedSessionService swaps in the injected one.
+func (s *SessionService) flagReader() flagsvc.FlagReader {
+	return flagsvc.FlagReader{Reg: s.InjectedFlagRegistry()}
+}
+
+// InjectedFlagRegistry returns the registry the flag service was built with; nil only for a nil receiver.
+func (s *SessionService) InjectedFlagRegistry() *featureflags.Registry {
+	if s == nil {
+		return nil
+	}
+	return s.featureFlagSvc.InjectedRegistry()
+}
+
+// FeatureFlagRegistry returns the registry the flag service resolves flags against.
+func (s *SessionService) FeatureFlagRegistry() *featureflags.Registry {
+	return s.featureFlagSvc.Registry()
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built
@@ -1196,14 +1236,14 @@ func (s *SessionService) SetGateStatsFileStatus(fn func() deliverygate.StatsFile
 // NewSessionServiceWithEntClient creates a SessionService from a pre-existing *ent.Client.
 // Use this when the caller already opened a database (e.g. in tests or when sharing a
 // connection) and wants to bypass the config-based path discovery in NewSessionServiceFromConfig.
-func NewSessionServiceWithEntClient(entClient *ent.Client) (*SessionService, error) {
+func NewSessionServiceWithEntClient(entClient *ent.Client, flags *featureflags.Registry) (*SessionService, error) {
 	config.EnsureWorkspaceMeta()
 	repo := session.NewEntRepositoryFromClient(entClient)
 	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage with provided ent client: %w", err)
 	}
-	return newGatedSessionService(storage), nil
+	return newGatedSessionService(storage, flags), nil
 }
 
 // GetStorage returns the concrete *session.Storage for components that haven't migrated to InstanceStore yet.
@@ -1318,4 +1358,4 @@ func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host strin
 }
 
 // Federation returns the federated-sessions view, nil unless host gossip is running.
-func (s *SessionService) Federation() *FederatedSessions { return s.federation }
+func (s *SessionService) Federation() *federation.FederatedSessions { return s.federation }

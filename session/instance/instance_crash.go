@@ -10,7 +10,7 @@ import (
 // MarkCrashed kills the stale dead-pane tmux session and transitions the
 // instance from Active to Crashed with exitReason recorded. Called by
 // SessionHealthChecker when it detects an abnormally-exited dead pane
-// (session/health.go) — remain-on-exit keeps the tmux session/pane around as
+// (session/autonomous/health.go) — remain-on-exit keeps the tmux session/pane around as
 // a placeholder after the wrapped program exits, so TmuxAlive() alone never
 // notices. Returns an error (and leaves the instance's Status/ExitReason
 // untouched) if the instance is not Active when the actor executes this

@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-func writerForHandler(t *testing.T, sender services.TmuxInputSender, inst *instance.Instance) services.TerminalWriter {
+func writerForHandler(t *testing.T, sender access.TmuxInputSender, inst *instance.Instance) access.TerminalWriter {
 	t.Helper()
 	h := &ConnectRPCWebSocketHandler{tmuxSender: sender}
 	return h.writerFor(inst)
@@ -30,7 +30,7 @@ func resizeFrame(cols, rows int32) *sessionv1.TerminalData {
 	return &sessionv1.TerminalData{Data: &sessionv1.TerminalData_Resize{Resize: &sessionv1.TerminalResize{Cols: cols, Rows: rows}}}
 }
 
-func capturePaneParamsFor(inst *instance.Instance, writer services.TerminalWriter, managed bool) capturePaneStreamParams {
+func capturePaneParamsFor(inst *instance.Instance, writer access.TerminalWriter, managed bool) capturePaneStreamParams {
 	snap := *inst.Snapshot()
 	snap.Permissions.CanSendCommand = true
 	return capturePaneStreamParams{
@@ -150,7 +150,7 @@ func TestReadOnlyAttach_ShouldInvokeNoResizeClosure_WhenControlModeShellPTYOrHub
 	t.Run("fastLaneStep refuses without a writer", func(t *testing.T) {
 		for _, fastLane := range []bool{false, true} {
 			step := fastLaneStep{target: target, ctx: context.Background(), fastLane: fastLane}
-			assert.ErrorIs(t, step.resize(200, 50), services.ErrReadOnly)
+			assert.ErrorIs(t, step.resize(200, 50), access.ErrReadOnly)
 		}
 		assert.Equal(t, 0, target.resizePTYCalled)
 	})
@@ -165,8 +165,8 @@ func TestReadOnlyAttach_ShouldInvokeNoResizeClosure_WhenControlModeShellPTYOrHub
 
 	t.Run("shellPanePTY refuses without a writer", func(t *testing.T) {
 		p := shellPanePTY{session: tmux.NewTmuxSessionFromExisting("ro-shell-missing")}
-		assert.ErrorIs(t, p.ResizePTY(200, 50), services.ErrReadOnly)
-		assert.ErrorIs(t, p.ResizePTYContext(context.Background(), 200, 50), services.ErrReadOnly)
+		assert.ErrorIs(t, p.ResizePTY(200, 50), access.ErrReadOnly)
+		assert.ErrorIs(t, p.ResizePTYContext(context.Background(), 200, 50), access.ErrReadOnly)
 	})
 
 	t.Run("control-mode coalescer applies nothing", func(t *testing.T) {

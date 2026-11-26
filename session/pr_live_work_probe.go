@@ -65,7 +65,7 @@ func (p *SnapshotLiveWorkProbe) IsLive(_ context.Context, sessionUUID string, no
 	}
 	data, err := p.store.FindInstanceDataByID(sessionUUID)
 	switch {
-	case errors.Is(err, ErrInstanceDataNotFound):
+	case errors.Is(err, domain.ErrInstanceDataNotFound):
 		p.clearErrorHold(sessionUUID)
 		return false, nil
 	case err != nil:

@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -148,7 +149,7 @@ func (f *fakeHeadlessPool) callAt(i int) fakePoolCall {
 
 // validTriageJSON returns a minimal valid triage result for use in success-path tests.
 func validTriageJSON() string {
-	return `{"summary":"test summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}`
+	return `{"summary":"test summary","acceptance_criteria":[{"index":0,"text":"go test ./... passes","status":"pending"}],"suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}`
 }
 
 // fakeGitHubResolver is a test stub for BacklogService.resolveGitHubInput. It
@@ -1548,8 +1549,8 @@ func TestTransitionBacklogItemStatus_SendBackToIdea_ClearsRejectionReason(t *tes
 // inst.Prompt/inst.InitialPrompt mismatch (ADR-022) breaks the execution phase's
 // prompt delivery. It does not — CreateDirectorySession stores the real prompt in
 // inst.Prompt, and buildClaudeCommand includes it as a CLI arg on first launch
-// (claudeSessionID == ""), so session_driver.go's InitialPrompt-typing step
-// correctly no-ops (see session_driver.go:135 "No initial prompt configured").
+// (claudeSessionID == ""), so session/driver/session_driver.go's InitialPrompt-typing step
+// correctly no-ops (see session/driver/session_driver.go:135 "No initial prompt configured").
 // This test locks in that the real item content — not a generic fallback —
 // reaches the session-creation boundary.
 func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *testing.T) {
@@ -1562,7 +1563,7 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	svctest.WithIsolatedStateDir(t)
 
 	storage := svctest.CreateTestStorage(t)
-	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	pool := &fakeHeadlessPool{response: `{"summary":"test summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}` /* item already has criteria; triage must not replace them */}
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
@@ -4101,7 +4102,7 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 	storage := svctest.CreateTestStorage(t)
 	const slug = "my-test-slug"
 	pool := &fakeHeadlessPool{
-		response: `{"title":"` + slug + `","summary":"test summary"}`,
+		response: `{"title":"` + slug + `","summary":"test summary","acceptance_criteria":[{"index":0,"text":"go test passes","status":"pending"}]}`,
 		onCall: func(workDir string) {
 			// Simulate the SDD skills writing project_plans/<slug>/implementation/plan.md.
 			dir := filepath.Join(workDir, "project_plans", slug, "implementation")
@@ -4119,7 +4120,7 @@ func TestTriggerTriage_CommitsSDDArtifactsInWorktree_AndUpdatesPlanArtifactsPath
 		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     repoPath,
-		PipelineMode: session.DefaultSDDPipelineModeSlug,
+		PipelineMode: pipelinemode.DefaultSDDPipelineModeSlug,
 	})
 	require.NoError(t, err)
 
@@ -4227,7 +4228,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	storage := svctest.CreateTestStorage(t)
 	const slug = "widget-integration"
 	pool := &fakeHeadlessPool{
-		response: `{"title":"` + slug + `","summary":"build the widget"}`,
+		response: `{"title":"` + slug + `","summary":"build the widget","acceptance_criteria":[{"index":0,"text":"go test passes","status":"pending"}]}`,
 		onCall: func(workDir string) {
 			dir := filepath.Join(workDir, "project_plans", slug, "implementation")
 			require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -4241,7 +4242,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	pipelineMode := session.DefaultSDDPipelineModeSlug
+	pipelineMode := pipelinemode.DefaultSDDPipelineModeSlug
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:        "widget integration",
 		RepoPath:     repoPath,
@@ -4340,7 +4341,7 @@ func TestBacklogFullLifecycle_SDDTriageWorktreeIsReusedBySpawnedWorkSession(t *t
 func TestTriggerTriage_should_ApplyAssessedPriorityAndCategory_When_LLMProvidesThem(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
-	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
+	pool := &fakeHeadlessPool{response: `{"summary":"critical bug","acceptance_criteria":[{"index":0,"text":"go test passes","status":"pending"}],"priority":1,"item_category":"bugfix","suggestions":[{"text":"fix it","rationale":"why"}]}`}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
@@ -4520,7 +4521,7 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	pipelineMode := session.DefaultSDDPipelineModeSlug
+	pipelineMode := pipelinemode.DefaultSDDPipelineModeSlug
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:            "sdd auto-handoff item",
 		RepoPath:         repoPath,
@@ -4529,7 +4530,7 @@ func TestCreateBacklogItem_should_SpawnSDDSession_When_PipelineModeSDDAndAutoSpa
 	}))
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
-	assert.Equal(t, session.DefaultSDDPipelineModeSlug, *createResp.Msg.Item.PipelineMode)
+	assert.Equal(t, pipelinemode.DefaultSDDPipelineModeSlug, *createResp.Msg.Item.PipelineMode)
 
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), itemID)

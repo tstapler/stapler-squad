@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/protocol"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -65,7 +65,7 @@ const (
 
 func firstPaintInstance(t *testing.T, pane *paneFake) *instance.Instance {
 	t.Helper()
-	return instance.NewStartedInstanceForTest(t, "first-paint", session.NewTymuxBackend(pane))
+	return instance.NewStartedInstanceForTest(t, "first-paint", procbackend.NewTymuxBackend(pane))
 }
 
 func readOutput(t *testing.T, conn *websocket.Conn) *sessionv1.TerminalOutput {

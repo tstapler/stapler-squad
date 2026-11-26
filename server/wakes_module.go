@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -147,16 +148,7 @@ func wakeTypeEnabled(t domain.WakeTriggerType) bool {
 // wakeDispatcherEnabled applies the flag matrix row "dispatcher running":
 // the global flag, or an explicit scoped true for any trigger type.
 func wakeDispatcherEnabled(cfg *config.Config) bool {
-	return cfg.WakeDispatcherRunning(wakeTriggerTypeNames())
-}
-
-func wakeTriggerTypeNames() []string {
-	types := domain.AllWakeTriggerTypes()
-	names := make([]string, len(types))
-	for i, t := range types {
-		names[i] = string(t)
-	}
-	return names
+	return cfg.WakeDispatcherRunning(domain.AllWakeTriggerTypeNames())
 }
 
 // startWakes wires the wake dispatcher's lifecycle to the flag matrix and
@@ -172,10 +164,10 @@ func startWakes(ctx context.Context, srv *Server, deps *ServerDependencies, guid
 		},
 	}
 	activeWakeLifecycle.Store(lc)
-	services.SetWakeFlagListener(func() { lc.Reconcile(ctx) })
+	flagsvc.SetWakeFlagListener(func() { lc.Reconcile(ctx) })
 	lc.sync(ctx)
 	srv.shutdownHooks = append(srv.shutdownHooks, func() {
-		services.SetWakeFlagListener(nil)
+		flagsvc.SetWakeFlagListener(nil)
 		activeWakeLifecycle.Store(nil)
 		lc.shutdown()
 	})
@@ -212,7 +204,7 @@ func buildAndStartWakes(ctx context.Context, deps *ServerDependencies, guidance 
 		Leader:      leader,
 		Limits:      wakeLimitSettings(cfg.WakeLimits),
 		TypeEnabled: wakeTypeEnabled,
-		Metrics:     deps.WakeMetrics,
+		Metrics:     deps.sharedWakeMetrics(),
 	}, deps.Storage.SetWakeChangeHook)
 	if err := d.Start(ctx); err != nil {
 		deps.Storage.SetWakeChangeHook(nil)

@@ -14,6 +14,8 @@ go_library(
         "diagnose.go",
         "guidance_port.go",
         "hooks.go",
+        "integration_attribution.go",
+        "integration_child_writer.go",
         "item_delete.go",
         "item_queries.go",
         "item_reads_guidance.go",

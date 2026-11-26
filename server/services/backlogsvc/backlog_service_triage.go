@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
@@ -60,10 +61,10 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *backlogdto.
 // workspacePeersBlockFor returns the rendered workspace-peers nudge for repoPath, or ""
 // when the workspacePeersNudgeFlagName feature flag is off (default), on any
 // detection/lookup failure, or when repoPath is empty. Delegates to
-// session.WorkspacePeersBlockForPath, shared with SessionService.CreateSession so the two
+// workspacepeers.Lister.BlockForPath, shared with SessionService.CreateSession so the two
 // callers can't drift on how the nudge is built.
 func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return services.WorkspacePeersBlockFor(ctx, s.storage, repoPath)
+	return flagsvc.WorkspacePeersBlockFor(ctx, s.storage, repoPath)
 }
 
 // triagePromptFor returns s.pipelineEngine.TriagePromptFor(...) when pipelineEngine is
@@ -1759,30 +1760,6 @@ func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, it
 	}
 }
 
-// findActiveReviewSession returns the open (not yet ended) review-role
-// ItemSession, if any — the review-role counterpart of findActiveWorkSession.
-// Used by AutoRespawnReview to avoid double-spawning a review pass that is
-// already running, and to give its skip branch the session UUID it needs to
-// enrich notifyRespawnBlockedByActiveSession with a progress signal instead
-// of a bare "already active."
-func findActiveReviewSession(priorSessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
-	for i := range priorSessions {
-		if priorSessions[i].Role == instance.SessionRoleReview && priorSessions[i].EndedAt == nil {
-			return &priorSessions[i]
-		}
-	}
-	return nil
-}
-
-// HasActiveReviewSession reports whether any of the provided ItemSessions is an
-// open (not yet ended) review-role session. Mirrors hasActiveWorkSession; used by
-// AutoRespawnReview to avoid double-spawning a review pass that is already running,
-// and by server/mcp's request_review handler to refuse re-routing a pr_pending item
-// out from under a running reviewer (FR2).
-func HasActiveReviewSession(priorSessions []backlogdto.ItemSessionSummary) bool {
-	return findActiveReviewSession(priorSessions) != nil
-}
-
 // buildRevisionTitle returns the session title for a backlog work session. On reopen
 // (isReopen=true) it appends "-rN" where N is one past the existing work-session count.
 func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []backlogdto.ItemSessionSummary) string {
@@ -1931,6 +1908,11 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return fmt.Errorf("load item: %w", err)
 	}
 	if s.heldByTransitionDenial(ctx, "AutoReopenAfterFailedReview", item) {
+		return nil
+	}
+	// A FAIL verdict on an epic's integration child is a failing end-to-end check: attribute it to a
+	// sibling (fix child) or escalate to the epic's owner instead of blindly reworking the check itself.
+	if item.IsIntegrationChild && s.handleIntegrationCheckFailure(ctx, item) {
 		return nil
 	}
 
@@ -2579,7 +2561,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
 	active := findActiveWorkSession(sessions)
 	if active == nil {
-		active = findActiveReviewSession(sessions)
+		active = backlogdto.FindActiveReviewSession(sessions)
 	}
 	if active == nil {
 		active = findActiveJulesSession(sessions)

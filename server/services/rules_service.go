@@ -14,8 +14,12 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
 	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -25,7 +29,7 @@ import (
 // ConfigFileRulesRepository is the seam for config-file rule persistence.
 // Implementations are registered via NewRulesService; nil means the feature is unavailable.
 type ConfigFileRulesRepository interface {
-	GetRules(ctx context.Context) (rules []RuleSpec, filePath string, err error)
+	GetRules(ctx context.Context) (rules []domain.RuleSpec, filePath string, err error)
 	SaveRules(ctx context.Context, ruleIDs []string, rule *sessionv1.ApprovalRuleProto) (filePath string, err error)
 }
 
@@ -35,8 +39,8 @@ type RulesService struct {
 	configStore    ConfigFileRulesRepository // nil = feature unavailable
 	analyticsStore *AnalyticsStore
 	classifier     *classifier.RuleBasedClassifier
-	promptBuilder  RulePromptBuilder // nil = AI generation unavailable
-	aiClient       AIClient          // nil = AI generation unavailable
+	promptBuilder  anthropicwire.RulePromptBuilder // nil = AI generation unavailable
+	aiClient       anthropicwire.AIClient          // nil = AI generation unavailable
 
 	// rebuildMu serializes rebuildClassifier and rebuildClaudeSettingsRules — each does a
 	// read-filter-replace against the classifier that must run as one atomic unit relative
@@ -58,7 +62,7 @@ type RulesService struct {
 	// claudeSettingsWatcher owns the fsnotify watch + debounce + last-known-good cache for
 	// claude-settings files. Nil until SetClaudeSettingsWatcher is called (or if fsnotify
 	// is unavailable) — ReloadClaudeSettingsRules degrades to CodeUnimplemented in that case.
-	claudeSettingsWatcher *ClaudeSettingsWatcher
+	claudeSettingsWatcher *claudesettings.ClaudeSettingsWatcher
 
 	// approvalSvc is nil until SetApprovalService is called — reconcilePendingApprovals
 	// no-ops when nil, same idiom as claudeSettingsWatcher.
@@ -91,7 +95,7 @@ type reconcileCounts struct {
 // reconciliation-loop tests inject a lightweight fake for cases that only
 // exercise classify-and-branch logic, without a real ApprovalStore.
 type reconciliationResolver interface {
-	ListPendingApprovalsInternal() []*PendingApproval
+	ListPendingApprovalsInternal() []*approvalkit.PendingApproval
 	ResolveApprovalReconciled(ctx context.Context, approvalID, decision, ruleName string) error
 	// IsApprovalPending disambiguates a genuine CI-red-guard decline from
 	// "lost the race to a concurrent reconciliation pass" when
@@ -103,7 +107,7 @@ type reconciliationResolver interface {
 // SetClaudeSettingsWatcher wires the watcher constructed alongside this service in
 // NewSessionService. Same same-function setter-injection idiom as SetHistoryLinker/
 // SetHeadlessPool elsewhere in this package.
-func (rs *RulesService) SetClaudeSettingsWatcher(w *ClaudeSettingsWatcher) {
+func (rs *RulesService) SetClaudeSettingsWatcher(w *claudesettings.ClaudeSettingsWatcher) {
 	rs.claudeSettingsWatcher = w
 }
 
@@ -124,7 +128,7 @@ func (rs *RulesService) afterRebuildReadHook() {
 
 // NewRulesService creates a RulesService.
 // configStore, promptBuilder, and aiClient may be nil; nil means that capability is unavailable.
-func NewRulesService(rulesStore *RulesStore, configStore ConfigFileRulesRepository, analyticsStore *AnalyticsStore, classifier *classifier.RuleBasedClassifier, promptBuilder RulePromptBuilder, aiClient AIClient) *RulesService {
+func NewRulesService(rulesStore *RulesStore, configStore ConfigFileRulesRepository, analyticsStore *AnalyticsStore, classifier *classifier.RuleBasedClassifier, promptBuilder anthropicwire.RulePromptBuilder, aiClient anthropicwire.AIClient) *RulesService {
 	return &RulesService{
 		exportAntigravity: antigravityexport.ExportAntigravityRulesFromDB,
 		rulesStore:        rulesStore,
@@ -180,7 +184,7 @@ func (rs *RulesService) UpsertApprovalRule(
 		}
 	}
 
-	spec := RuleSpec{
+	spec := domain.RuleSpec{
 		ID:             r.Id,
 		Name:           r.Name,
 		ToolName:       r.ToolName,
@@ -534,8 +538,8 @@ func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string
 }
 
 // allRuleSpecs returns user rules + seed rules as specs (for listing).
-func (rs *RulesService) allRuleSpecs() []RuleSpec {
-	var all []RuleSpec
+func (rs *RulesService) allRuleSpecs() []domain.RuleSpec {
+	var all []domain.RuleSpec
 
 	// User rules from store.
 	all = append(all, rs.rulesStore.All()...)
@@ -742,7 +746,7 @@ func (rs *RulesService) reconcilePendingApprovals(counts *reconcileCounts) {
 
 // -- Mapping helpers ----------------------------------------------------------
 
-func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
+func specToProto(spec domain.RuleSpec) *sessionv1.ApprovalRuleProto {
 	p := &sessionv1.ApprovalRuleProto{
 		Id:             spec.ID,
 		Name:           spec.Name,
@@ -776,8 +780,8 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 	return p
 }
 
-func ruleToSpec(r classifier.Rule) RuleSpec {
-	spec := RuleSpec{
+func ruleToSpec(r classifier.Rule) domain.RuleSpec {
+	spec := domain.RuleSpec{
 		ID:                    r.ID,
 		Name:                  r.Name,
 		ToolName:              r.ToolName,
@@ -962,8 +966,8 @@ func (rs *RulesService) GenerateSuggestedRule(
 }
 
 // buildPromptContext assembles a RulePromptContext from the request and analytics store.
-func (rs *RulesService) buildPromptContext(ctx context.Context, req *sessionv1.GenerateSuggestedRuleRequest, days int) RulePromptContext {
-	promptCtx := RulePromptContext{
+func (rs *RulesService) buildPromptContext(ctx context.Context, req *sessionv1.GenerateSuggestedRuleRequest, days int) anthropicwire.RulePromptContext {
+	promptCtx := anthropicwire.RulePromptContext{
 		ExistingRules:  rs.allRuleSpecs(),
 		WindowDays:     days,
 		CommandSample:  req.CommandSample,
@@ -983,7 +987,7 @@ func (rs *RulesService) buildPromptContext(ctx context.Context, req *sessionv1.G
 
 	// Group escalated, rule-less entries by (ToolName, Program).
 	type gapKey struct{ tool, program string }
-	gapMap := make(map[gapKey]*AnalyticsGap)
+	gapMap := make(map[gapKey]*anthropicwire.AnalyticsGap)
 	for _, e := range entries {
 		if e.Decision != "escalate" {
 			continue
@@ -994,7 +998,7 @@ func (rs *RulesService) buildPromptContext(ctx context.Context, req *sessionv1.G
 		k := gapKey{tool: e.ToolName, program: e.CommandProgram}
 		g, ok := gapMap[k]
 		if !ok {
-			g = &AnalyticsGap{ToolName: e.ToolName, Program: e.CommandProgram}
+			g = &anthropicwire.AnalyticsGap{ToolName: e.ToolName, Program: e.CommandProgram}
 			gapMap[k] = g
 		}
 		g.Count++
@@ -1003,7 +1007,7 @@ func (rs *RulesService) buildPromptContext(ctx context.Context, req *sessionv1.G
 		}
 	}
 
-	gaps := make([]AnalyticsGap, 0, len(gapMap))
+	gaps := make([]anthropicwire.AnalyticsGap, 0, len(gapMap))
 	for _, g := range gapMap {
 		gaps = append(gaps, *g)
 	}
@@ -1499,7 +1503,7 @@ func (rs *RulesService) BulkUpsertRules(
 			fmt.Errorf("validation errors: %s", strings.Join(validationErrors, "; ")))
 	}
 
-	specs := make([]RuleSpec, 0, len(req.Msg.Rules))
+	specs := make([]domain.RuleSpec, 0, len(req.Msg.Rules))
 	for _, proto := range req.Msg.Rules {
 		specs = append(specs, ruleProtoToSpec(proto))
 	}
@@ -1518,11 +1522,11 @@ func (rs *RulesService) BulkUpsertRules(
 
 // ruleProtoToSpec converts an ApprovalRuleProto to a RuleSpec for storage.
 // Security: always discards client-supplied id and source to prevent injection.
-func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) RuleSpec {
+func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) domain.RuleSpec {
 	if p == nil {
-		return RuleSpec{}
+		return domain.RuleSpec{}
 	}
-	return RuleSpec{
+	return domain.RuleSpec{
 		// ID intentionally left empty -- BulkUpsert assigns "user-<uuid>" server-side.
 		Name:                  p.Name,
 		ToolName:              p.ToolName,

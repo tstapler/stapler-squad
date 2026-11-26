@@ -345,8 +345,11 @@ type Config struct {
 	// BacklogItemData.ReworkCapOverride (0 = unlimited for that item, >0 = that item's own
 	// cap) — see effectiveReworkCap in server/services/backlog_service_triage.go.
 	MaxAutoReworkIterations int `json:"max_auto_rework_iterations,omitempty"`
+	// IntegrationAttributionThreshold is the minimum file-overlap confidence (0-1] for attributing an
+	// epic integration failure to one sibling; below it the failure escalates. 0 = default (0.6).
+	IntegrationAttributionThreshold float64 `json:"integration_attribution_threshold,omitempty"`
 	// AutonomousMaxTurns caps how many turns a single AutonomousDriver run gets before
-	// stopping without a DONE signal (session/autonomous_driver.go). 0 = use the default
+	// stopping without a DONE signal (session/autonomous/autonomous_driver.go). 0 = use the default
 	// (30); values above autonomousMaxTurnsHardCeiling are clamped to it. Unlike
 	// MaxAutoReworkIterations (caps respawned sessions), this caps turns within one session.
 	AutonomousMaxTurns int `json:"autonomous_max_turns,omitempty"`
@@ -580,7 +583,7 @@ const HiddenSessionGateFeatureFlag = "hidden_session_gate"
 const HiddenSessionGateDefault = true
 
 // DriverPaneActivityGateDefault is the registry default of the session driver's
-// pane-activity gate (session.FeatureFlagDriverPaneActivityGate), shared by the
+// pane-activity gate (paneactivity.FeatureFlagDriverPaneActivityGate), shared by the
 // flag service and the driver's reader so they cannot disagree.
 const DriverPaneActivityGateDefault = true
 
@@ -1080,7 +1083,7 @@ func ceilingOrDefault(configured, def int) int {
 
 // HeadlessFailureCaptureDirOrDefault returns the resolved directory for durable
 // headless (triage/review claude -p) failure captures — see
-// session.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
+// backlogaux.WriteHeadlessFailureCapture. "headless-failures" under GetConfigDir() —
 // see HibernationCheckpointDirOrDefault's doc comment for why this routes through
 // GetConfigDir() rather than a hardcoded ~/.stapler-squad path. Previously hardcoded
 // to os.UserHomeDir() regardless of test mode: every go test run that exercised a
@@ -1263,6 +1266,19 @@ func (c *Config) MaxAutoReworkIterationsOrDefault() int {
 		return DefaultMaxAutoReworkIterations
 	}
 	return c.MaxAutoReworkIterations
+}
+
+// DefaultIntegrationAttributionThreshold is the file-overlap confidence at or above which an
+// epic integration failure is attributed to one sibling (see backlogstore.AttributeByFileOverlap).
+const DefaultIntegrationAttributionThreshold = 0.6
+
+// IntegrationAttributionThresholdOrDefault returns the configured threshold, or the default when
+// unset, out of (0,1], or c is nil.
+func (c *Config) IntegrationAttributionThresholdOrDefault() float64 {
+	if c == nil || c.IntegrationAttributionThreshold <= 0 || c.IntegrationAttributionThreshold > 1 {
+		return DefaultIntegrationAttributionThreshold
+	}
+	return c.IntegrationAttributionThreshold
 }
 
 // autonomousMaxTurnsDefault is used when the config value is unset (0 or negative).

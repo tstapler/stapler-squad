@@ -14,8 +14,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 )
 
 const toolRequestOwnerAction = "request_owner_action"
@@ -133,11 +133,11 @@ func parseOwnerActionArgs(args map[string]any) (itemID, question string, respons
 
 // checkOwnerActionItem rejects a caller that is not linked to the item, or an archived item.
 func (h *peerHelpHandlers) checkOwnerActionItem(ctx context.Context, caller, itemID string) *mcpgo.CallToolResult {
-	if _, linkErr := session.ResolveItemLink(ctx, h.storage, caller, itemID); linkErr != nil {
+	if _, linkErr := itemlink.ResolveItemLink(ctx, h.storage, caller, itemID); linkErr != nil {
 		switch linkErr.Code {
-		case session.ItemLinkNotFound:
+		case itemlink.ItemLinkNotFound:
 			return errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
-		case session.ItemLinkPermissionDenied:
+		case itemlink.ItemLinkPermissionDenied:
 			return errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 		default:
 			return errResult(ErrInternalError, linkErr.Message, "")

@@ -8,6 +8,7 @@ go_library(
         "claim_index.go",
         "claim_lookup_auth.go",
         "claim_url.go",
+        "claim_verdict.go",
         "federation.go",
         "host_advertiser.go",
         "host_identity.go",
@@ -34,6 +35,7 @@ go_test(
     srcs = [
         "claim_gossiper_test.go",
         "claim_index_test.go",
+        "claim_verdict_test.go",
         "federation_test.go",
         "host_identity_test.go",
         "host_registry_test.go",

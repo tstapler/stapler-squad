@@ -9,10 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 type canaryProbe struct {
-	canary   *DialogMatchCanary
+	canary   *questionkit.DialogMatchCanary
 	clock    *manualClock
 	notified int
 	counted  map[string]int
@@ -20,13 +21,13 @@ type canaryProbe struct {
 
 func newCanaryProbe() *canaryProbe {
 	p := &canaryProbe{clock: newManualClock(), counted: map[string]int{}}
-	p.canary = NewDialogMatchCanary(p.clock.Now, func(r DialogMatchResult, v string) { p.counted[string(r)+"/"+v]++ }, func() { p.notified++ })
+	p.canary = questionkit.NewDialogMatchCanary(p.clock.Now, func(r questionkit.DialogMatchResult, v string) { p.counted[string(r)+"/"+v]++ }, func() { p.notified++ })
 	return p
 }
 
 func (p *canaryProbe) record(matches ...bool) {
 	for _, m := range matches {
-		p.canary.Record(DialogMatchResultOf(m))
+		p.canary.Record(questionkit.DialogMatchResultOf(m))
 		p.clock.Advance(time.Minute)
 	}
 }
@@ -81,21 +82,21 @@ func TestCanary_should_CountEveryOutcomeByResultAndVersion(t *testing.T) {
 	p.record(true, false, false)
 	assert.Equal(t, map[string]int{"match/2.1.296": 1, "mismatch/2.1.296": 2}, p.counted)
 
-	var nilCanary *DialogMatchCanary
-	assert.NotPanics(t, func() { nilCanary.Record(DialogMatched) })
+	var nilCanary *questionkit.DialogMatchCanary
+	assert.NotPanics(t, func() { nilCanary.Record(questionkit.DialogMatched) })
 	assert.False(t, nilCanary.Tripped())
 }
 
 func TestBuildDescriptors_ShouldDegradeHookQuestionToReadOnly_WhenCanaryTripped_ExceptWithHookReply(t *testing.T) {
 	t.Parallel()
 	f := newDescriptorFixture()
-	key := QuestionKey{SessionUUID: "s1", QuestionID: "q1"}
-	f.questions.live[key] = PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
+	key := questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}
+	f.questions.live[key] = questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
 	canary := newCanaryProbe()
 	canary.record(false, false, false, false, false)
 	require.True(t, canary.canary.Tripped())
 	annotate := func(hookReply bool) *sessionv1.NotificationActionDescriptor {
-		b := NewDescriptorBuilder(DescriptorSources{Questions: f.questions, Canary: canary.canary})
+		b := NewDescriptorBuilder(DescriptorSources{Questions: f.questions, Canary: canary.canary}, testFlagRegistry())
 		b.flag = func(string) bool { return true }
 		b.hookReplyOn = func() bool { return hookReply }
 		rec := questionRecord("n1", "s1", "q1")

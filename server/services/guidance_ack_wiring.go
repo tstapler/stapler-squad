@@ -6,6 +6,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -81,7 +83,7 @@ func answerRouterDeps(w NotificationActionWiring, acks *GuidanceAckDetector) Ans
 // ObservePostToolUse routes a PostToolUse receipt to the detector. sessionID is
 // the hook header value, a session title or UUID.
 func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, toolName string) {
-	if toolName == scheduleWakeupTool {
+	if toolName == questionkit.ScheduleWakeupTool {
 		s.observeScheduleWakeup(ctx, sessionID)
 	}
 	if toolName != askUserQuestion {
@@ -105,14 +107,14 @@ func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, tool
 // observeScheduleWakeup resolves the hook header (title or UUID) to the stable
 // session id before counting, so the log line and the role lookup agree.
 func (s *SessionService) observeScheduleWakeup(ctx context.Context, sessionID string) {
-	roles := scheduleWakeupRoles{}
+	roles := questionkit.ScheduleWakeupRoles{}
 	if s.concStorage != nil {
-		roles.lookup = s.concStorage
+		roles.Lookup = s.concStorage
 	}
 	if inst := s.findInstance(sessionID); inst != nil {
 		sessionID = inst.GetStableID()
 	}
-	observeScheduleWakeup(ctx, roles, sessionID)
+	questionkit.ObserveScheduleWakeup(ctx, roles, sessionID)
 }
 
 // wireHookReply installs the pre-answered-question resolver. It stays inert
@@ -121,7 +123,7 @@ func (s *SessionService) wireHookReply(storage *session.Storage, acks *GuidanceA
 	if storage == nil {
 		return
 	}
-	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: compiledFlagEvidence}}
+	r := &hookReplyResolver{rows: storage, flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}}
 	if acks != nil {
 		r.acks = acks
 	}

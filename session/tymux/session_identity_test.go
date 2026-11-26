@@ -32,7 +32,7 @@ func TestStart_NameCarriesSessionLabel(t *testing.T) {
 				return connect.NewResponse(fakeSession("id-"+label, "pane-"+label, dir, v1.Liveness_LIVENESS_LIVE)), nil
 			},
 		}
-		sess := NewTymuxGRPCSession(transport)
+		sess := newWiredTestSession(transport)
 		sess.SetSessionLabel(label)
 		require.NoError(t, sess.Start(dir))
 		t.Cleanup(func() { _ = sess.Close() })
@@ -51,13 +51,13 @@ func TestRestoreWithWorkDir_NeverAdoptsSessionClaimedByAnotherOwner(t *testing.T
 			return connect.NewResponse(namedSession("fresh-2", dir+" [b]", dir)), nil
 		},
 	}
-	a := NewTymuxGRPCSession(transport)
+	a := newWiredTestSession(transport)
 	a.SetSessionLabel("a")
 	require.NoError(t, a.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = a.Close() })
 	require.Equal(t, "legacy-1", a.GetSessionIdentifier())
 
-	b := NewTymuxGRPCSession(transport)
+	b := newWiredTestSession(transport)
 	b.SetSessionLabel("b")
 	require.NoError(t, b.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = b.Close() })
@@ -74,7 +74,7 @@ func TestRestoreWithWorkDir_PrefersLabeledOverLegacy(t *testing.T) {
 			}}), nil
 		},
 	}
-	c := NewTymuxGRPCSession(transport)
+	c := newWiredTestSession(transport)
 	c.SetSessionLabel("c")
 	require.NoError(t, c.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = c.Close() })
@@ -88,7 +88,7 @@ func TestClose_ReleasesClaim(t *testing.T) {
 			return connect.NewResponse(namedSession("claim-r", dir, dir)), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	require.NoError(t, sess.Start(dir))
 	_, claimed := claimedSessions.Load("claim-r")
 	require.True(t, claimed)
@@ -107,7 +107,7 @@ func TestClose_NotFoundFromKillIsSuccess(t *testing.T) {
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("no such session"))
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	require.NoError(t, sess.Start(dir))
 	assert.NoError(t, sess.Close())
 }
@@ -122,7 +122,7 @@ func TestIsAlive_NotFoundMeansDead(t *testing.T) {
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	require.NoError(t, sess.Start(dir))
 	t.Cleanup(func() { _ = sess.Close() })
 	assert.False(t, sess.IsAlive())
@@ -143,7 +143,7 @@ func TestRestoreWithWorkDir_StoredIDSurvivesLabelChange(t *testing.T) {
 			return connect.NewResponse(namedSession("dup-2", dir, dir)), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	sess.SetSessionLabel("new-title") // Instance was renamed before the restart
 	sess.SetStoredSessionID("renamed-1")
 	require.NoError(t, sess.RestoreWithWorkDir(dir))
@@ -167,7 +167,7 @@ func TestRestoreWithWorkDir_ConcurrentRestoresNeverShareASession(t *testing.T) {
 	sessions := make([]TymuxManager, n)
 	var wg sync.WaitGroup
 	for i := range sessions {
-		sessions[i] = NewTymuxGRPCSession(transport)
+		sessions[i] = newWiredTestSession(transport)
 		wg.Add(1)
 		go func(s TymuxManager) {
 			defer wg.Done()
@@ -201,10 +201,10 @@ func TestClose_DoesNotKillSessionClaimedByAnotherOwner(t *testing.T) {
 			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		},
 	}
-	winner := NewTymuxGRPCSession(transport)
+	winner := newWiredTestSession(transport)
 	require.NoError(t, winner.Start(dir))
 	t.Cleanup(func() { _ = winner.Close() })
-	loser := NewTymuxGRPCSession(transport)
+	loser := newWiredTestSession(transport)
 	require.NoError(t, loser.Start(dir)) // daemon handed back the same id; loser never holds the claim
 	require.NoError(t, loser.Close())
 	assert.Zero(t, killed, "a non-owner's Close must not kill the owner's session")
@@ -230,7 +230,7 @@ func TestIsAlive_NotFoundButSessionListed_ReportsDeadThenStartKillsStale(t *test
 			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	require.NoError(t, sess.Start(dir))
 	require.False(t, sess.IsAlive())
 	require.NoError(t, sess.Start(dir)) // health-check recovery
@@ -252,7 +252,7 @@ func TestIsAlive_NotFoundAndListUnreachable_FallsBackToCached(t *testing.T) {
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	require.NoError(t, sess.Start(dir))
 	t.Cleanup(func() { _ = sess.Close() })
 	assert.True(t, sess.IsAlive(), "NotFound is not definitive unless a daemon round trip confirms it")
@@ -293,11 +293,11 @@ func TestStart_DoesNotKillStaleSessionReadoptedByAnotherOwner(t *testing.T) {
 			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{deadSession(listedID, dir)}}), nil
 		},
 	}
-	a := NewTymuxGRPCSession(transport)
+	a := newWiredTestSession(transport)
 	require.NoError(t, a.Start(dir))
 	oldID := a.GetSessionIdentifier()
 	listedID = oldID
-	other := NewTymuxGRPCSession(transport)
+	other := newWiredTestSession(transport)
 	claimedSessions.Store(oldID, any(other)) // another owner re-adopted a's cached id
 	require.NoError(t, a.Start(dir))
 	t.Cleanup(func() { _ = a.Close() })
@@ -317,7 +317,7 @@ func TestRestoreWithWorkDir_StoredIDAbsent_FallsBackToLabel(t *testing.T) {
 			return connect.NewResponse(namedSession("new-one", dir, dir)), nil
 		},
 	}
-	s := NewTymuxGRPCSession(transport)
+	s := newWiredTestSession(transport)
 	s.SetSessionLabel("t")
 	s.SetStoredSessionID("gone-id")
 	require.NoError(t, s.RestoreWithWorkDir(dir))
@@ -341,10 +341,10 @@ func TestRestoreWithWorkDir_StoredIDAbsent_DoesNotAdoptLabelSessionStoredByAnoth
 			return connect.NewResponse(namedSession("new-one", dir, dir)), nil
 		},
 	}
-	other := NewTymuxGRPCSession(transport) // record that stores "theirs", not restored yet
+	other := newWiredTestSession(transport) // record that stores "theirs", not restored yet
 	other.SetSessionLabel("o")
 	other.SetStoredSessionID("theirs")
-	s := NewTymuxGRPCSession(transport)
+	s := newWiredTestSession(transport)
 	s.SetSessionLabel("t")
 	s.SetStoredSessionID("gone-id")
 	require.NoError(t, s.RestoreWithWorkDir(dir))
@@ -372,10 +372,10 @@ func TestRestoreWithWorkDir_LegacyRecordDoesNotDoubleHoldAnotherRecordsStoredID(
 			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		},
 	}
-	stored := NewTymuxGRPCSession(transport)
+	stored := newWiredTestSession(transport)
 	stored.SetSessionLabel("s")
 	stored.SetStoredSessionID("held")
-	legacy := NewTymuxGRPCSession(transport)
+	legacy := newWiredTestSession(transport)
 	legacy.SetSessionLabel("l")
 	require.NoError(t, legacy.RestoreWithWorkDir(dir)) // restores first
 	require.NoError(t, stored.RestoreWithWorkDir(dir))
@@ -401,7 +401,7 @@ func TestClose_UnrestoredSessionKeepsStoredIDWhenKillFails(t *testing.T) {
 			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	sess.SetStoredSessionID("keep-1")
 	require.Error(t, sess.Close())
 	assert.Equal(t, "keep-1", sess.PersistedSessionID(), "a failed kill must not drop the persisted id")
@@ -431,7 +431,7 @@ func TestIsAlive_NotFoundButSessionListedLiveUnderNewPane_StaysAliveAndRecachesP
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("no such pane"))
 		},
 	}
-	s := NewTymuxGRPCSession(transport)
+	s := newWiredTestSession(transport)
 	require.NoError(t, s.Start(dir))
 	t.Cleanup(func() { _ = s.Close() })
 	assert.True(t, s.IsAlive())
@@ -446,7 +446,7 @@ func TestPersistedSessionID_StoredBeforeRestore_ClearedOnClose(t *testing.T) {
 			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{namedSession("p-1", dir, dir)}}), nil
 		},
 	}
-	s := NewTymuxGRPCSession(transport)
+	s := newWiredTestSession(transport)
 	s.SetStoredSessionID("p-1")
 	assert.Equal(t, "p-1", s.PersistedSessionID(), "not-yet-restored instance keeps its loaded id")
 	require.NoError(t, s.RestoreWithWorkDir(dir))
@@ -464,7 +464,7 @@ func TestClose_UnrestoredSessionKillsItsStoredDaemonSession(t *testing.T) {
 			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport)
+	sess := newWiredTestSession(transport)
 	sess.SetStoredSessionID("stored-u1")
 	require.NoError(t, sess.Close())
 	assert.Equal(t, []string{"stored-u1"}, killed)
@@ -486,13 +486,13 @@ func TestRestoreWithWorkDir_SameStoredRecordBorrowsInsteadOfSpawning(t *testing.
 			return connect.NewResponse(namedSession("dup", dir, dir)), nil
 		},
 	}
-	owner := NewTymuxGRPCSession(transport)
+	owner := newWiredTestSession(transport)
 	owner.SetSessionLabel("x")
 	owner.SetStoredSessionID("rec-1")
 	require.NoError(t, owner.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = owner.Close() })
 
-	view := NewTymuxGRPCSession(transport)
+	view := newWiredTestSession(transport)
 	view.SetSessionLabel("x")
 	view.SetStoredSessionID("rec-1")
 	require.NoError(t, view.RestoreWithWorkDir(dir))
@@ -516,11 +516,11 @@ func TestClose_StoredIDViewKillsTheRecordsSession(t *testing.T) {
 			return connect.NewResponse(&v1.KillSessionResponse{}), nil
 		},
 	}
-	owner := NewTymuxGRPCSession(transport)
+	owner := newWiredTestSession(transport)
 	owner.SetStoredSessionID("rec-2")
 	require.NoError(t, owner.RestoreWithWorkDir(dir))
 	t.Cleanup(func() { _ = owner.Close() })
-	view := NewTymuxGRPCSession(transport)
+	view := newWiredTestSession(transport)
 	view.SetStoredSessionID("rec-2")
 	require.NoError(t, view.RestoreWithWorkDir(dir))
 
@@ -544,7 +544,7 @@ func TestStoredSessionLive(t *testing.T) {
 			return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{s}}), nil
 		},
 	}
-	view := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	view := newWiredTestSession(transport).(*tymuxGRPCSession)
 	assert.False(t, view.StoredSessionLive(), "no stored id")
 	view.SetStoredSessionID("rec-3")
 	assert.True(t, view.StoredSessionLive())
@@ -601,7 +601,7 @@ func seedDaemonSession(t *testing.T, d *modelDaemon, name, dir string, live bool
 }
 
 func labeledView(d *modelDaemon, label, storedID string) TymuxManager {
-	v := NewTymuxGRPCSession(d)
+	v := newWiredTestSession(d)
 	v.SetSessionLabel(label)
 	v.SetStoredSessionID(storedID)
 	return v
@@ -667,7 +667,7 @@ func TestRestoreWithWorkDir_HeldClaimWinsOverStoredID(t *testing.T) {
 	resetClaims(t)
 	dir := t.TempDir()
 	d := newModelDaemon()
-	view := NewTymuxGRPCSession(d)
+	view := newWiredTestSession(d)
 	view.SetSessionLabel("x")
 	require.NoError(t, view.Start(dir))
 	t.Cleanup(func() { _ = view.Close() })
@@ -764,7 +764,7 @@ func TestStart_UnrestoredRecordDoesNotCreateWhenDaemonListFails(t *testing.T) {
 			return connect.NewResponse(namedSession("dup", "d", "d")), nil
 		},
 	}
-	view := NewTymuxGRPCSession(transport)
+	view := newWiredTestSession(transport)
 	view.SetStoredSessionID("live-1")
 
 	require.Error(t, view.Start(t.TempDir()))
@@ -791,7 +791,7 @@ func TestClose_RestoredViewKeepsIDWhenKillFails(t *testing.T) {
 		},
 	}
 	live = namedSession("run-1", dir, dir)
-	view := NewTymuxGRPCSession(transport)
+	view := newWiredTestSession(transport)
 	view.SetStoredSessionID("run-1")
 	require.NoError(t, view.RestoreWithWorkDir(dir))
 

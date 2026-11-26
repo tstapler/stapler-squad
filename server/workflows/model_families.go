@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/stagecfg"
 )
 
 // DefaultModelFamilies returns the hardcoded family alias → concrete model ID
@@ -72,10 +73,10 @@ func ResolveModel(families map[string]string, model string) (string, error) {
 // silently breaking workflow launch later at fire time. Empty is always valid
 // (means "use the program's default model").
 //
-// Delegates to session.ValidateModel — the pure character-class check moved
-// there so session/pipeline_mode_validation.go (which cannot import
+// Delegates to stagecfg.ValidateModel — the pure character-class check moved
+// there so session/pipelinemode (which cannot import
 // server/workflows) can reuse the identical check for PipelineMode stage
 // executors without a second, independently-drifting copy.
 func ValidateModel(model string) error {
-	return session.ValidateModel(model)
+	return stagecfg.ValidateModel(model)
 }

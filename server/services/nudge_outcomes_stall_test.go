@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
-func nudTotals(r *session.NudgeOutcomeRecorder) map[string]int64 {
+func nudTotals(r *nudgeoutcomes.NudgeOutcomeRecorder) map[string]int64 {
 	m := map[string]int64{}
 	for _, c := range r.Snapshot().Totals {
 		m[string(c.Kind)+"/"+string(c.Outcome)] = c.Value
@@ -19,8 +19,8 @@ func nudTotals(r *session.NudgeOutcomeRecorder) map[string]int64 {
 
 func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 	t.Run("delivered then cooldown counts skipped_cap", func(t *testing.T) {
-		rec := session.NewNudgeOutcomeRecorder("", nil)
-		defer session.SwapNudgeOutcomeRecorder(rec)()
+		rec := nudgeoutcomes.NewNudgeOutcomeRecorder("", nil)
+		defer nudgeoutcomes.SwapNudgeOutcomeRecorder(rec)()
 		f := newStallNudgeFixture(t, "nud-counted", domain.BacklogStatusInProgress, true, true)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -30,18 +30,18 @@ func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 		assert.Equal(t, map[string]int64{"stall/delivered": 1, "stall/skipped_cap": 1}, nudTotals(rec))
 	})
 	t.Run("uncertain submit", func(t *testing.T) {
-		rec := session.NewNudgeOutcomeRecorder("", nil)
-		defer session.SwapNudgeOutcomeRecorder(rec)()
+		rec := nudgeoutcomes.NewNudgeOutcomeRecorder("", nil)
+		defer nudgeoutcomes.SwapNudgeOutcomeRecorder(rec)()
 		f := newStallNudgeFixture(t, "nud-uncertain", domain.BacklogStatusInProgress, true, true)
-		f.nudger.err = fmt.Errorf("%w: boom", session.ErrNudgeSubmitUncertain)
+		f.nudger.err = fmt.Errorf("%w: boom", domain.ErrNudgeSubmitUncertain)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 
 		assert.Equal(t, map[string]int64{"stall/uncertain": 1}, nudTotals(rec))
 	})
 	t.Run("flags off records nothing", func(t *testing.T) {
-		rec := session.NewNudgeOutcomeRecorder("", nil)
-		defer session.SwapNudgeOutcomeRecorder(rec)()
+		rec := nudgeoutcomes.NewNudgeOutcomeRecorder("", nil)
+		defer nudgeoutcomes.SwapNudgeOutcomeRecorder(rec)()
 		f := newStallNudgeFixture(t, "nud-off", domain.BacklogStatusInProgress, false, false)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))

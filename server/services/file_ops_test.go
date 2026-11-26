@@ -20,6 +20,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/fsops/fsopstest"
 )
 
 // readCorpusMTime pins mtimes so version tokens are reproducible.
@@ -28,7 +30,7 @@ var readCorpusMTime = time.Unix(1_700_000_000, 123_456_789)
 // buildReadCorpus lays out the Story 0.2.3 read corpus plus the symlink fixture.
 func buildReadCorpus(t *testing.T) string {
 	t.Helper()
-	dir, _ := newResolverFixture(t)
+	dir, _ := fsopstest.NewResolverFixture(t)
 	files := map[string][]byte{
 		"plain.txt":    []byte("a\nb\n"),
 		"docs/a.md":    crlfBomDoc(),
@@ -125,13 +127,13 @@ func TestGetFileContent_ShouldBeByteIdenticalThroughFileOps_And_EmitSlogAndTelem
 
 // strictOver wraps a backend and panics on any Open/Lstat path the resolver
 // could not have produced: absolute, unclean, escaping or inside .git.
-type strictOver struct{ inner FileBackend }
+type strictOver struct{ inner fsops.FileBackend }
 
-func strictBackend() FileBackend { return strictOver{osRootBackend{}} }
+func strictBackend() fsops.FileBackend { return strictOver{fsops.OsRootBackend{}} }
 
-type strictRoot struct{ FileRoot }
+type strictRoot struct{ fsops.FileRoot }
 
-func (b strictOver) OpenRoot(dir string) (FileRoot, error) {
+func (b strictOver) OpenRoot(dir string) (fsops.FileRoot, error) {
 	r, err := b.inner.OpenRoot(dir)
 	if err != nil {
 		return nil, err
@@ -139,20 +141,20 @@ func (b strictOver) OpenRoot(dir string) (FileRoot, error) {
 	return strictRoot{r}, nil
 }
 
-func mustBeResolverOutput(p ResolvedPath) {
+func mustBeResolverOutput(p fsops.ResolvedPath) {
 	s := string(p)
 	if s == "" || filepath.IsAbs(s) || s != filepath.ToSlash(filepath.Clean(s)) || s == ".." ||
-		strings.HasPrefix(s, "../") || hasGitComponent(s) || strings.ContainsRune(s, 0) {
+		strings.HasPrefix(s, "../") || fsops.HasGitComponent(s) || strings.ContainsRune(s, 0) {
 		panic("backend reached with unresolved path: " + s)
 	}
 }
 
-func (r strictRoot) Open(p ResolvedPath) (FileHandle, error) {
+func (r strictRoot) Open(p fsops.ResolvedPath) (fsops.FileHandle, error) {
 	mustBeResolverOutput(p)
 	return r.FileRoot.Open(p)
 }
 
-func (r strictRoot) Lstat(p ResolvedPath) (os.FileInfo, error) {
+func (r strictRoot) Lstat(p fsops.ResolvedPath) (os.FileInfo, error) {
 	mustBeResolverOutput(p)
 	return r.FileRoot.Lstat(p)
 }

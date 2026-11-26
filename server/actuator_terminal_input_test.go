@@ -11,16 +11,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
-func twoSessionRows() []services.TerminalInputSession {
+func twoSessionRows() []access.TerminalInputSession {
 	at := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
-	return []services.TerminalInputSession{
+	return []access.TerminalInputSession{
 		{SessionID: "alpha", Frames: 3, Bytes: 12, ByKind: map[string]int64{"text": 2, "escape": 1}, LastAt: at,
-			ByPath: map[string]services.TerminalInputPathCounts{"cm": {Received: 3, Forwarded: 2}}},
+			ByPath: map[string]access.TerminalInputPathCounts{"cm": {Received: 3, Forwarded: 2}}},
 		{SessionID: "beta", Frames: 1, Bytes: 1, ByKind: map[string]int64{"text": 1}, LastAt: at.Add(-time.Minute),
-			ByPath: map[string]services.TerminalInputPathCounts{"shell": {Received: 1, Forwarded: 1}}},
+			ByPath: map[string]access.TerminalInputPathCounts{"shell": {Received: 1, Forwarded: 1}}},
 	}
 }
 
@@ -69,7 +69,7 @@ func TestActuatorTerminalInput_ShouldRejectNonGet_When_PostRequest(t *testing.T)
 func TestActuatorTerminalInput_ShouldReturnEmptyArray_When_NothingRecorded(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	handleActuatorTerminalInput(func() []services.TerminalInputSession { return []services.TerminalInputSession{} })(w,
+	handleActuatorTerminalInput(func() []access.TerminalInputSession { return []access.TerminalInputSession{} })(w,
 		httptest.NewRequest(http.MethodGet, "/actuator/terminal-input", nil))
 	assert.JSONEq(t, "[]", w.Body.String())
 }

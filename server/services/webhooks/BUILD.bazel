@@ -1,0 +1,78 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "webhooks",
+    srcs = [
+        "callback_config_service.go",
+        "callback_dispatcher.go",
+        "webhook_auth_limiter.go",
+        "webhook_lifecycle_service.go",
+        "webhook_registration_handler.go",
+        "webhook_registration_service.go",
+        "webhook_ssrf.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/webhooks",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/fsops",
+        "//server/workflows",
+        "//session",
+        "//session/domain",
+        "//session/stagecfg",
+        "//session/webhookstore",
+        "//session/workflowengine",
+        "@com_connectrpc_connect//:connect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":webhooks",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "webhooks_test",
+    srcs = [
+        "callback_config_service_test.go",
+        "callback_dispatcher_test.go",
+        "support_test.go",
+        "webhook_auth_limiter_test.go",
+        "webhook_contract_test.go",
+        "webhook_lifecycle_handler_test.go",
+        "webhook_management_routes_test.go",
+        "webhook_registration_handler_test.go",
+        "webhook_ssrf_test.go",
+        "webhooks_golden_test.go",
+    ],
+    data = glob(["testdata/**"]) + ["//contracts:webhook_management_v1"],
+    embed = [":webhooks"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//server/services/internal/svctest",
+        "//server/services/webhooktrigger",
+        "//session/domain",
+        "//testutil/wait",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_xeipuuv_gojsonschema//:gojsonschema",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

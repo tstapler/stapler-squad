@@ -11,6 +11,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -22,7 +24,7 @@ func newGuardsEnv(t *testing.T) *steerEnv {
 	t.Helper()
 	e := newSteerEnv(t)
 	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{
-		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
+		featureflags.HiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
 	})
 	e.fix.svc.wireGuardsFlag()
 	return e
@@ -30,17 +32,15 @@ func newGuardsEnv(t *testing.T) *steerEnv {
 
 func (e *steerEnv) setGuards(on bool) {
 	e.t.Helper()
-	require.NoError(e.t, flagUpdateCtx(context.Background(), e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName, on))
+	require.NoError(e.t, flagUpdateCtx(context.Background(), e.fix.svc.featureFlagSvc, featureflags.HiddenSessionReadonlyGuardsFlagName, on))
 }
 
 func TestGuardsFlag_ShouldBeRegisteredDefaultOnGlobalOnlyAndApplyEveryFlipAtOnce(t *testing.T) {
 	e := newGuardsEnv(t)
-	require.True(t, FeatureFlagDefault(hiddenSessionReadonlyGuardsFlagName), "default on")
-	for _, kf := range featureflags.Current().Specs() {
-		if kf.Name == hiddenSessionReadonlyGuardsFlagName {
-			assert.Empty(t, kf.Scopes, "global only")
-		}
-	}
+	require.True(t, testFlagRegistry().Default(featureflags.HiddenSessionReadonlyGuardsFlagName), "default on")
+	spec, found := testFlagRegistry().Lookup(featureflags.HiddenSessionReadonlyGuardsFlagName)
+	require.True(t, found, "flag registered")
+	assert.Empty(t, spec.Scopes, "global only")
 	assert.True(t, e.fix.svc.guards.GuardsEnabled())
 
 	e.setGuards(false)
@@ -53,11 +53,11 @@ func TestGuardsFlag_ShouldStartOffOnlyForAnExplicitPersistedFalse_AndKeepGuardsO
 	e := newGuardsEnv(t)
 	require.True(t, e.fix.svc.guards.GuardsEnabled(), "no persisted key: on")
 
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(hiddenSessionReadonlyGuardsFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.HiddenSessionReadonlyGuardsFlagName, false))
 	e.fix.svc.wireGuardsFlag()
 	assert.False(t, e.fix.svc.guards.GuardsEnabled())
 
-	require.NoError(t, config.LoadConfig().DeleteFeatureFlag(hiddenSessionReadonlyGuardsFlagName))
+	require.NoError(t, config.LoadConfig().DeleteFeatureFlag(featureflags.HiddenSessionReadonlyGuardsFlagName))
 	e.fix.svc.wireGuardsFlag()
 	assert.True(t, e.fix.svc.guards.GuardsEnabled(), "deleting the key returns to on")
 }
@@ -76,7 +76,7 @@ func TestUnaryGuards_ShouldAcceptHiddenTargetWhenReadonlyGuardsFlagOffAndRejectW
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("flag-hidden"))
 	require.NoError(t, err, "flag off: accepted as on main")
 	assert.Equal(t, []string{"ls", instance.EnterKeySequence}, hidden.pm.writes())
-	assert.Equal(t, TerminalReadOnly, AccessFor(hidden.inst), "the stream drops are not behind the flag")
+	assert.Equal(t, access.TerminalReadOnly, access.AccessFor(hidden.inst), "the stream drops are not behind the flag")
 
 	e.setGuards(true)
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("flag-hidden"))
@@ -119,11 +119,11 @@ func TestUnaryGuards_ShouldKeepTypedPathAndAuditInBothFlagStates_AndAuditGuardBy
 	assert.Equal(t, uint64(1), e.fix.svc.guardBypass.count.Load())
 
 	lines := e.auditLines()
-	assert.Len(t, steerLines(lines, auditKindBacklogSteer), 4, "two typed steers, a request and a result line each")
-	bypass := steerLines(lines, auditKindGuardBypass)
+	assert.Len(t, steerLines(lines, auditkit.AuditKindBacklogSteer), 4, "two typed steers, a request and a result line each")
+	bypass := steerLines(lines, auditkit.AuditKindGuardBypass)
 	require.Len(t, bypass, 2)
-	assert.Equal(t, auditPhaseRequest, bypass[0].Phase)
-	assert.Equal(t, auditPhaseResult, bypass[1].Phase)
+	assert.Equal(t, auditkit.AuditPhaseRequest, bypass[0].Phase)
+	assert.Equal(t, auditkit.AuditPhaseResult, bypass[1].Phase)
 	assert.Equal(t, steerOutcomeSent, bypass[1].Outcome)
 	assert.Equal(t, diag.inst.UUID, bypass[0].SessionUUID)
 }
@@ -134,7 +134,7 @@ func TestGuardBypass_ShouldRefuseWithZeroWrites_WhenTheAuditSinkIsDown_AndStillS
 	diag := e.addSession("down-diagnose", true, instance.SessionRoleDiagnose)
 	e.setGuards(false)
 	e.sink.Close() // drains the flag-change result line before the fault is injected
-	e.mfs.setFailWrite(errDiskFull)
+	e.mfs.SetFailWrite(errDiskFull)
 
 	err := e.steer(e.localCtx(), diag.inst.Title, "bypass")
 	require.Error(t, err)
@@ -161,16 +161,16 @@ func TestGuardBypass_ShouldRateLimitTheWarnToOncePerMinuteAndCountEveryBypass(t 
 
 func TestGuardsFlag_ShouldShowOffStatusLineWithBypassCountInSettings(t *testing.T) {
 	e := newGuardsEnv(t)
-	assert.Empty(t, statusDetailOf(t, e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName))
+	assert.Empty(t, statusDetailOf(t, e.fix.svc.featureFlagSvc, featureflags.HiddenSessionReadonlyGuardsFlagName))
 
 	e.setGuards(false)
 	assert.Equal(t, "Hidden-session write guards are OFF: 0 writes bypassed",
-		statusDetailOf(t, e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName))
+		statusDetailOf(t, e.fix.svc.featureFlagSvc, featureflags.HiddenSessionReadonlyGuardsFlagName))
 
 	diag := e.addSession("status-diagnose", true, instance.SessionRoleDiagnose)
 	require.NoError(t, e.steer(e.localCtx(), diag.inst.Title, "x"))
 	assert.Equal(t, "Hidden-session write guards are OFF: 1 writes bypassed",
-		statusDetailOf(t, e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName))
+		statusDetailOf(t, e.fix.svc.featureFlagSvc, featureflags.HiddenSessionReadonlyGuardsFlagName))
 }
 
 // Every flip is a flag_change line with the true previous value; the off flip
@@ -182,11 +182,11 @@ func TestGuardsFlag_ShouldRecordFlagChangeLinesAndPersistOffWithOnlyTheFallbackR
 	e.sink.Close() // drains the queued result lines
 
 	var requested, results int
-	for _, l := range steerLines(e.readLines(), auditKindFlagChg) {
-		if l.Flag != hiddenSessionReadonlyGuardsFlagName {
+	for _, l := range steerLines(e.readLines(), auditkit.AuditKindFlagChg) {
+		if l.Flag != featureflags.HiddenSessionReadonlyGuardsFlagName {
 			continue
 		}
-		if l.Phase == auditPhaseRequest {
+		if l.Phase == auditkit.AuditPhaseRequest {
 			requested++
 			continue
 		}
@@ -198,8 +198,8 @@ func TestGuardsFlag_ShouldRecordFlagChangeLinesAndPersistOffWithOnlyTheFallbackR
 	assert.Equal(t, 1, requested, "only the loosening flip writes a durable requested line first")
 	assert.Equal(t, 2, results)
 
-	e.mfs.setFailWrite(errDiskFull)
-	require.NoError(t, flagUpdateCtx(context.Background(), e.fix.svc.featureFlagSvc, hiddenSessionReadonlyGuardsFlagName, false),
+	e.mfs.SetFailWrite(errDiskFull)
+	require.NoError(t, flagUpdateCtx(context.Background(), e.fix.svc.featureFlagSvc, featureflags.HiddenSessionReadonlyGuardsFlagName, false),
 		"off is the hatch for a sink fault: never refused")
 	assert.False(t, e.fix.svc.guards.GuardsEnabled())
 	assert.GreaterOrEqual(t, e.warn("flag_change_audit_degraded"), 1)

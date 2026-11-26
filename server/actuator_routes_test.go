@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -34,7 +35,15 @@ func TestRegisterActuatorRoutes_should_RegisterExactlyThePinnedPaths(t *testing.
 			t.Errorf("path %s: mux pattern = %q, want registered", p, pattern)
 		}
 	}
-	if got, want := len(s.actuatorEndpoints()), len(expectedActuatorPaths); got != want {
-		t.Errorf("actuatorEndpoints() has %d rows, want %d: update expectedActuatorPaths", got, want)
+	rows := s.actuatorEndpoints()
+	got := make([]string, 0, len(rows))
+	for _, e := range rows {
+		got = append(got, e.Path)
+		if e.Handler == nil {
+			t.Errorf("row %s has a nil handler", e.Path)
+		}
+	}
+	if !slices.Equal(got, expectedActuatorPaths) {
+		t.Errorf("actuatorEndpoints() paths = %v, want %v (order is registration order)", got, expectedActuatorPaths)
 	}
 }

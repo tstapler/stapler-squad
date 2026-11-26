@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -25,13 +26,13 @@ func wireGuidanceMirror(h *services.ApprovalHandler, deps *ServerDependencies, s
 		return func(reason string) { gate.Metrics().Add(name, reason) }
 	}
 	cleared := count(deliverygate.CounterGuidanceMirrorCleared)
-	mirror := services.NewGuidanceHookMirror(deps.Storage, deps.SessionService.PendingQuestions(),
-		count(deliverygate.CounterGuidanceMirrorFailed), cleared)
+	mirror := questionkit.NewGuidanceHookMirror(deps.Storage, deps.SessionService.PendingQuestions(),
+		count(deliverygate.CounterGuidanceMirrorFailed), cleared, services.AskUserQuestionRenderGate(deps.SessionService.InjectedFlagRegistry()))
 	h.SetGuidanceMirror(mirror)
 	deps.SessionService.SetGuidanceMirror(mirror)
 	reaper := services.NewGuidanceSessionReaper(deps.Storage, storageSessionEnds{storage: deps.Storage}, mirror, cleared)
 	goBackground(func() { reaper.Run(serverCtx, deps.EventBus) })
-	sampler := services.NewDialogGoneSampler(deps.Storage, deps.SessionService.PaneCapture, mirror, nil)
+	sampler := questionkit.NewDialogGoneSampler(deps.Storage, deps.SessionService.PaneCapture, mirror, nil)
 	goBackground(func() { sampler.Run(serverCtx) })
 }
 

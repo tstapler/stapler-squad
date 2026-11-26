@@ -18,6 +18,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -30,6 +31,10 @@ var ErrNotSupportedOnTymuxBackend = errors.New("not supported by the tymux backe
 // errSessionNotStarted is returned by methods that need a live pane_id
 // (capture/cursor/dimensions) when Start/RestoreWithWorkDir hasn't run yet.
 var errSessionNotStarted = errors.New("tymux: session not started")
+
+// errLaunchCommandNotWired is returned by RestoreWithWorkDir when it would have to create a
+// session but the instance has not wired its launch command yet (Start has not run).
+var errLaunchCommandNotWired = fmt.Errorf("%w: %w", errSessionNotStarted, domain.ErrLaunchNotWired)
 
 // Structured-log field keys shared across this file's log.Info/Warn calls.
 const (
@@ -362,7 +367,6 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.restartIsPending = false
 	s.closed = false
-	s.resetPaneActivityAsync()
 	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
 	// a reused session object (e.g. Start() after an earlier Close(), or
 	// a second RestoreWithWorkDir()) doesn't carry a stale closing flag,
@@ -372,6 +376,8 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.backendRestartedAt = time.Time{}
 	s.abortReconnect = make(chan struct{})
 	s.mu.Unlock()
+	// After Unlock: it takes activity.mu, and SetPaneActivity holds that while taking s.mu.RLock.
+	s.resetPaneActivityAsync()
 	s.closing.Store(false)
 
 	log.Info("tymux: session ready", logKeySessionID, sess.GetId(), "pane_id", pane.GetId(), "cwd", pane.GetCwd())
@@ -597,6 +603,12 @@ func (s *tymuxGRPCSession) SetCommand(command launchcmd.LaunchCommand) {
 	s.mu.Lock()
 	s.command = command
 	s.mu.Unlock()
+}
+
+func (s *tymuxGRPCSession) hasLaunchCommand() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.command != nil
 }
 
 // killStaleGeneration kills this owner's previous daemon session, if it still
@@ -834,6 +846,11 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 	}
 	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
+		// A nil command makes the daemon spawn its default shell, not the agent, so a restore that
+		// races ahead of the instance's first Start must not create one (the "opens to zsh" bug).
+		if !s.hasLaunchCommand() {
+			return errLaunchCommandNotWired
+		}
 		startAt := time.Now()
 		err := s.Start(workDir)
 		termlat.Default.Record(termlat.StageRestoreStart, tymuxLabels, time.Since(startAt))

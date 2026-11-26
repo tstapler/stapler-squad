@@ -10,7 +10,9 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -21,16 +23,16 @@ func resetDefaultLeaseFlag(t *testing.T) {
 	t.Cleanup(func() { instance.DefaultLeaseFlag.SetEnabled(true) })
 }
 
-func leaseFlagEnabledInRegistry(t *testing.T, svc *FeatureFlagService) bool {
+func leaseFlagEnabledInRegistry(t *testing.T, svc *flagsvc.FeatureFlagService) bool {
 	t.Helper()
 	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
 	require.NoError(t, err)
 	for _, f := range resp.Msg.Flags {
-		if f.Name == terminalWriteLeaseFlagName {
+		if f.Name == featureflags.TerminalWriteLeaseFlagName {
 			return f.Enabled
 		}
 	}
-	t.Fatalf("%s is not registered in the flag registry", terminalWriteLeaseFlagName)
+	t.Fatalf("%s is not registered in the flag registry", featureflags.TerminalWriteLeaseFlagName)
 	return false
 }
 
@@ -38,15 +40,15 @@ func leaseFlagEnabledInRegistry(t *testing.T, svc *FeatureFlagService) bool {
 func TestTerminalWriteLeaseFlag_ShouldBeRegisteredDefaultOnGlobalOnlyAndApplyEveryFlipAtOnce(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	svc := newGatedFlagService(t)
-	require.True(t, FeatureFlagDefault(terminalWriteLeaseFlagName), "default on")
+	require.True(t, testFlagRegistry().Default(featureflags.TerminalWriteLeaseFlagName), "default on")
 	assert.True(t, leaseFlagEnabledInRegistry(t, svc.featureFlagSvc))
 	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 
-	require.NoError(t, flagUpdateCtx(context.Background(), svc.featureFlagSvc, terminalWriteLeaseFlagName, false))
+	require.NoError(t, flagUpdateCtx(context.Background(), svc.featureFlagSvc, featureflags.TerminalWriteLeaseFlagName, false))
 	assert.False(t, instance.DefaultLeaseFlag.Enabled(), "the off flip applies at once, no reload")
 	assert.False(t, leaseFlagEnabledInRegistry(t, svc.featureFlagSvc))
 
-	require.NoError(t, flagUpdateCtx(context.Background(), svc.featureFlagSvc, terminalWriteLeaseFlagName, true))
+	require.NoError(t, flagUpdateCtx(context.Background(), svc.featureFlagSvc, featureflags.TerminalWriteLeaseFlagName, true))
 	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 }
 
@@ -55,11 +57,11 @@ func TestTerminalWriteLeaseFlag_ShouldStartOffOnlyForAnExplicitPersistedFalse(t 
 	svc := newGatedFlagService(t)
 	require.True(t, instance.DefaultLeaseFlag.Enabled(), "no persisted key: on")
 
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalWriteLeaseFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalWriteLeaseFlagName, false))
 	svc.wireLeaseFlag()
 	assert.False(t, instance.DefaultLeaseFlag.Enabled())
 
-	require.NoError(t, config.LoadConfig().DeleteFeatureFlag(terminalWriteLeaseFlagName))
+	require.NoError(t, config.LoadConfig().DeleteFeatureFlag(featureflags.TerminalWriteLeaseFlagName))
 	svc.wireLeaseFlag()
 	assert.True(t, instance.DefaultLeaseFlag.Enabled(), "deleting the key returns to the registry default")
 }
@@ -69,18 +71,18 @@ func TestTerminalWriteLeaseFlag_ShouldStartOffOnlyForAnExplicitPersistedFalse(t 
 func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeverFailInternal_WhenTheAuditSinkIsDown(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	e := newAuditEnv(t)
-	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
-	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
-	e.mfs.setFailWrite(errDiskFull)
+	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{featureflags.TerminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
+	e.svc.SetFeatureController(featureflags.TerminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
+	e.mfs.SetFailWrite(errDiskFull)
 
-	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))
-	v, ok := overrideOf(terminalWriteLeaseFlagName)
+	require.NoError(t, e.flip(featureflags.TerminalWriteLeaseFlagName, false))
+	v, ok := overrideOf(featureflags.TerminalWriteLeaseFlagName)
 	assert.True(t, ok && !v, "persisted")
 	assert.False(t, instance.DefaultLeaseFlag.Enabled(), "applied")
-	assert.GreaterOrEqual(t, e.degradedCount(auditModeFallbackLog), 1)
+	assert.GreaterOrEqual(t, e.degradedCount(auditkit.AuditModeFallbackLog), 1)
 
 	// The on flip is a tightening flip: it never waits on or fails with the sink.
-	require.NoError(t, e.flip(terminalWriteLeaseFlagName, true))
+	require.NoError(t, e.flip(featureflags.TerminalWriteLeaseFlagName, true))
 	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 }
 
@@ -88,18 +90,18 @@ func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeve
 func TestTerminalWriteLeaseFlag_ShouldAppendFlagChangeLineWithTruePreviousValueForEveryFlip(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	e := newAuditEnv(t)
-	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
-	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
+	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{featureflags.TerminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
+	e.svc.SetFeatureController(featureflags.TerminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
 
-	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))
-	require.NoError(t, e.flip(terminalWriteLeaseFlagName, true))
+	require.NoError(t, e.flip(featureflags.TerminalWriteLeaseFlagName, false))
+	require.NoError(t, e.flip(featureflags.TerminalWriteLeaseFlagName, true))
 	e.sink.Close()
 
-	var results []AuditLine
+	var results []auditkit.AuditLine
 	for _, l := range e.lines(t) {
-		assert.Equal(t, auditKindFlagChg, l.Kind)
-		assert.Equal(t, terminalWriteLeaseFlagName, l.Flag)
-		if l.Phase == auditPhaseResult {
+		assert.Equal(t, auditkit.AuditKindFlagChg, l.Kind)
+		assert.Equal(t, featureflags.TerminalWriteLeaseFlagName, l.Flag)
+		if l.Phase == auditkit.AuditPhaseResult {
 			results = append(results, l)
 		}
 	}

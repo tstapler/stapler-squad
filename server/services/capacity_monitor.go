@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -22,7 +23,7 @@ import (
 )
 
 type CapacityMonitor struct {
-	clients         map[string]ProviderLimitsClient
+	clients         map[string]credkit.ProviderLimitsClient
 	config          config.CapacityConfig
 	eventBus        *events.EventBus
 	poller          InstancePoller
@@ -35,13 +36,13 @@ type CapacityMonitor struct {
 	now             func() time.Time
 
 	mu                 sync.RWMutex
-	current            map[string]ProviderLimits
-	sessionLimits      map[string]ProviderLimits  // keyed by session title
-	lastWarningTime    map[string]time.Time       // keyed by session title to rate-limit events
-	idleWaitState      map[string]idleWaitTracker // keyed by session UUID (see checkIdleWaitLoop)
-	roleCache          map[string]string          // session UUID -> backlog role (hits only)
-	handledOnce        map[string]bool            // "<kind>:<session UUID>" one-shot guardrail actions
-	spendRateAlertedAt map[string]time.Time       // session UUID -> last spend-rate alert (cooldown)
+	current            map[string]credkit.ProviderLimits
+	sessionLimits      map[string]credkit.ProviderLimits // keyed by session title
+	lastWarningTime    map[string]time.Time              // keyed by session title to rate-limit events
+	idleWaitState      map[string]idleWaitTracker        // keyed by session UUID (see checkIdleWaitLoop)
+	roleCache          map[string]string                 // session UUID -> backlog role (hits only)
+	handledOnce        map[string]bool                   // "<kind>:<session UUID>" one-shot guardrail actions
+	spendRateAlertedAt map[string]time.Time              // session UUID -> last spend-rate alert (cooldown)
 }
 
 // SessionRoleResolver returns the backlog session role ("triage", "work", ...)
@@ -108,7 +109,7 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		}
 	}
 	return &CapacityMonitor{
-		clients:            make(map[string]ProviderLimitsClient),
+		clients:            make(map[string]credkit.ProviderLimitsClient),
 		config:             p.Config,
 		eventBus:           p.EventBus,
 		poller:             p.Poller,
@@ -122,14 +123,14 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		roleCache:          make(map[string]string),
 		handledOnce:        make(map[string]bool),
 		spendRateAlertedAt: make(map[string]time.Time),
-		current:            make(map[string]ProviderLimits),
-		sessionLimits:      make(map[string]ProviderLimits),
+		current:            make(map[string]credkit.ProviderLimits),
+		sessionLimits:      make(map[string]credkit.ProviderLimits),
 		lastWarningTime:    make(map[string]time.Time),
 		idleWaitState:      make(map[string]idleWaitTracker),
 	}
 }
 
-func (m *CapacityMonitor) RegisterClient(name string, client ProviderLimitsClient) {
+func (m *CapacityMonitor) RegisterClient(name string, client credkit.ProviderLimitsClient) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clients[name] = client
@@ -173,7 +174,7 @@ func (m *CapacityMonitor) UpdateFromResponseHeaders(provider string, headers htt
 
 func (m *CapacityMonitor) poll(ctx context.Context) {
 	m.mu.Lock()
-	clientsCopy := make(map[string]ProviderLimitsClient, len(m.clients))
+	clientsCopy := make(map[string]credkit.ProviderLimitsClient, len(m.clients))
 	for k, v := range m.clients {
 		clientsCopy[k] = v
 	}
@@ -351,7 +352,7 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *instance.I
 	m.handleTransitionTrigger(ctx, inst, reason, limits)
 }
 
-func (m *CapacityMonitor) overCostBudget(limits ProviderLimits, role string) bool {
+func (m *CapacityMonitor) overCostBudget(limits credkit.ProviderLimits, role string) bool {
 	budget := m.config.CostBudgetFor(role)
 	return budget > 0 && limits.EstimatedCostUSD >= budget
 }
@@ -453,7 +454,7 @@ func (m *CapacityMonitor) checkSpendRate(snap *domain.InstanceSnapshot, parseRes
 	))
 }
 
-func (m *CapacityMonitor) checkThresholds(limits ProviderLimits, role string) string {
+func (m *CapacityMonitor) checkThresholds(limits credkit.ProviderLimits, role string) string {
 	// Check context window pct.
 	if limits.ContextTokensMax > 0 && limits.ContextTokensUsed > 0 {
 		pct := float64(limits.ContextTokensUsed) / float64(limits.ContextTokensMax)
@@ -475,7 +476,7 @@ func (m *CapacityMonitor) checkThresholds(limits ProviderLimits, role string) st
 	return ""
 }
 
-func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *instance.Instance, reason string, limits ProviderLimits) {
+func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *instance.Instance, reason string, limits credkit.ProviderLimits) {
 	// Lock-free snapshot read for inst.Title, inst.Program, inst.UUID.
 	snap := inst.Snapshot()
 
@@ -814,18 +815,18 @@ func (m *CapacityMonitor) estimateCost(model string, input, output int64) float6
 	return (float64(input)*inputPrice + float64(output)*outputPrice) / 1_000_000.0
 }
 
-func (m *CapacityMonitor) GetCurrentLimits() map[string]ProviderLimits {
+func (m *CapacityMonitor) GetCurrentLimits() map[string]credkit.ProviderLimits {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	out := make(map[string]ProviderLimits, len(m.current))
+	out := make(map[string]credkit.ProviderLimits, len(m.current))
 	for k, v := range m.current {
 		out[k] = v
 	}
 	return out
 }
 
-func (m *CapacityMonitor) GetSessionLimits(title string) (ProviderLimits, bool) {
+func (m *CapacityMonitor) GetSessionLimits(title string) (credkit.ProviderLimits, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

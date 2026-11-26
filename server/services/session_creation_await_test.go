@@ -115,8 +115,8 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationAwaitTimeout_When_Instanc
 
 	outcome, err := svc.awaitCreationTerminal(context.Background(), "await-stuck", 60*time.Millisecond, 10*time.Millisecond)
 
-	require.ErrorIs(t, err, ErrCreationAwaitTimeout)
-	assert.Equal(t, CreationOutcome{}, outcome)
+	require.ErrorIs(t, err, domain.ErrCreationAwaitTimeout)
+	assert.Equal(t, domain.CreationOutcome{}, outcome)
 }
 
 // TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsRemovedMidWait
@@ -140,8 +140,8 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsR
 	outcome, err := svc.awaitCreationTerminal(ctx, "await-vanish", 5*time.Second, 10*time.Millisecond)
 	elapsed := time.Since(start)
 
-	require.ErrorIs(t, err, ErrCreationVanished)
-	assert.Equal(t, CreationOutcome{}, outcome)
+	require.ErrorIs(t, err, domain.ErrCreationVanished)
+	assert.Equal(t, domain.CreationOutcome{}, outcome)
 	assert.Less(t, elapsed, 2*time.Second, "vanish should be observed promptly, not at the full timeout")
 }
 
@@ -166,14 +166,14 @@ func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t
 	outcome, err := svc.awaitCreationTerminal(ctx, "await-ctx-done", 5*time.Second, 10*time.Millisecond)
 
 	require.ErrorIs(t, err, context.Canceled)
-	assert.NotErrorIs(t, err, ErrCreationAwaitTimeout)
-	assert.NotErrorIs(t, err, ErrCreationVanished)
-	assert.Equal(t, CreationOutcome{}, outcome)
+	assert.NotErrorIs(t, err, domain.ErrCreationAwaitTimeout)
+	assert.NotErrorIs(t, err, domain.ErrCreationVanished)
+	assert.Equal(t, domain.CreationOutcome{}, outcome)
 }
 
 // TestAwaitCreationTerminal_should_ReturnConsistentSnapshot_When_StatusAndFailureReasonAreReadTogether
-// is the regression test for the non-atomic-reader race CreationOutcome
-// exists to close (see the Domain Glossary's CreationOutcome entry): the
+// is the regression test for the non-atomic-reader race domain.CreationOutcome
+// exists to close (see the Domain Glossary's domain.CreationOutcome entry): the
 // returned Status/FailureReason pair must always be one the instance actually
 // held simultaneously, never a torn combination assembled from two separate
 // reads taken at different times. This exercises the underlying

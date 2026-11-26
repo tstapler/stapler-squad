@@ -13,8 +13,10 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/itemlink"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,7 +34,7 @@ type GuidanceRequestService struct {
 	storage         *session.Storage
 	notifier        *EventBusNotifier
 	triageRespawner TriageRespawner
-	answerListener  atomic.Pointer[AnswerListener]
+	answerListener  atomic.Pointer[questionkit.AnswerListener]
 	waiverResumer   atomic.Pointer[WaiverResumer]
 	probes          atomic.Pointer[DeliveryProbes]
 }
@@ -98,7 +100,9 @@ type WaiverResumer func(ctx context.Context, itemID string)
 func (s *GuidanceRequestService) SetWaiverResumer(fn WaiverResumer) { s.waiverResumer.Store(&fn) }
 
 // SetAnswerListener registers fn to run after each successfully applied answer.
-func (s *GuidanceRequestService) SetAnswerListener(fn AnswerListener) { s.answerListener.Store(&fn) }
+func (s *GuidanceRequestService) SetAnswerListener(fn questionkit.AnswerListener) {
+	s.answerListener.Store(&fn)
+}
 
 // TriageRespawner is the narrow slice of *BacklogService's existing
 // AutoRespawnTriage (server/services/backlog_service_triage.go) that
@@ -204,22 +208,22 @@ func truncateForNotification(s string) string {
 	return string(runes[:maxNotificationFieldLen]) + "..."
 }
 
-// connectErrorForItemLink translates a *session.ItemLinkError into the
+// connectErrorForItemLink translates a *itemlink.ItemLinkError into the
 // connect.Error shape CreateGuidanceRequest returns for a backlog-item-scope
 // ownership failure — the identical (code, remediation) pair
 // server/mcp's resolveItemLink already produces for every other mutating
 // backlog MCP tool (AC6). See
 // server/services/guidance_request_ownership_parity_test.go for the
 // regression test guarding this against drifting from the MCP adapter.
-func connectErrorForItemLink(linkErr *session.ItemLinkError) error {
+func connectErrorForItemLink(linkErr *itemlink.ItemLinkError) error {
 	msg := linkErr.Message
 	if linkErr.Remediation != "" {
 		msg = fmt.Sprintf("%s: %s", linkErr.Message, linkErr.Remediation)
 	}
 	switch linkErr.Code {
-	case session.ItemLinkNotFound:
+	case itemlink.ItemLinkNotFound:
 		return connect.NewError(connect.CodeNotFound, errors.New(msg))
-	case session.ItemLinkPermissionDenied:
+	case itemlink.ItemLinkPermissionDenied:
 		return connect.NewError(connect.CodePermissionDenied, errors.New(msg))
 	default:
 		return connect.NewError(connect.CodeInternal, errors.New(msg))
@@ -281,14 +285,14 @@ func guidanceRequestToProto(d *domain.GuidanceRequestData) *sessionv1.GuidanceRe
 	if d.CancelledAt != nil {
 		out.CancelledAt = timestamppb.New(*d.CancelledAt)
 	}
-	setGuidanceMirrorFields(out, d)
+	questionkit.SetGuidanceMirrorFields(out, d)
 	return out
 }
 
 // checkCreateGuidanceRequestOwnership applies the scope-appropriate
 // ownership check for CreateGuidanceRequest:
 //   - scope == "backlog-item": callerUUID must be linked to itemID, via the
-//     SAME session.ResolveItemLink helper server/mcp's resolveItemLink wraps,
+//     SAME itemlink.ResolveItemLink helper server/mcp's resolveItemLink wraps,
 //     so the rejection is identical to every other mutating backlog MCP tool
 //     (AC6).
 //   - scope == "session": callerUUID must equal sessionUUID — a session may
@@ -301,7 +305,7 @@ func (s *GuidanceRequestService) checkCreateGuidanceRequestOwnership(ctx context
 		if itemID == "" {
 			return connect.NewError(connect.CodeInvalidArgument, errors.New("item_id is required for scope=backlog-item"))
 		}
-		if _, linkErr := session.ResolveItemLink(ctx, s.storage, callerUUID, itemID); linkErr != nil {
+		if _, linkErr := itemlink.ResolveItemLink(ctx, s.storage, callerUUID, itemID); linkErr != nil {
 			return connectErrorForItemLink(linkErr)
 		}
 	case domain.RequestScopeSession:

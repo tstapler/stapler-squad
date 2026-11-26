@@ -11,11 +11,32 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
+
+// realSession is the real *services.SessionService behind the SessionRPC ports: the
+// service plus the two package-level hook helpers the composition root's adapter adds.
+type realSession struct{ *services.SessionService }
+
+func (realSession) InjectHooksConfig(rootDir, sessionTitle string, hooks []string) error {
+	names := make([]services.HookName, len(hooks))
+	for i, h := range hooks {
+		names[i] = services.HookName(h)
+	}
+	return services.InjectHooksConfig(rootDir, sessionTitle, names)
+}
+
+func (realSession) RefreshInstanceHookProof(inst *instance.Instance) {
+	services.RefreshInstanceHookProof(inst)
+}
+
+var _ SessionRPC = realSession{}
+
+type programUpserter interface {
+	UpsertProgramConfig(context.Context, *connect.Request[sessionv1.UpsertProgramConfigRequest]) (*connect.Response[sessionv1.UpsertProgramConfigResponse], error)
+}
 
 // testCustomProgramID is the custom program ID registered by
 // upsertTestCustomProgram, shared by every test that needs a
@@ -25,9 +46,9 @@ const testCustomProgramID = "claude-250k-proxy"
 // upsertTestCustomProgram registers a custom program on svc, for tests
 // asserting that create_session/create_session_for_pr accept a program
 // beyond the built-in set.
-func upsertTestCustomProgram(t *testing.T, svc *services.SessionService) {
+func upsertTestCustomProgram(t *testing.T, svc any) {
 	t.Helper()
-	_, err := svc.UpsertProgramConfig(context.Background(), connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
+	_, err := svc.(programUpserter).UpsertProgramConfig(context.Background(), connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
 		Program: &sessionv1.ProgramConfigProto{
 			Id:      testCustomProgramID,
 			Label:   "Claude 250k proxy",
@@ -99,7 +120,7 @@ func (s *stubStore) FindInstanceDataByID(id string) (*domain.InstanceData, error
 			return &data, nil
 		}
 	}
-	return nil, session.ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 
 // makeScrollbackMgr creates a scrollback manager backed by a temp directory.

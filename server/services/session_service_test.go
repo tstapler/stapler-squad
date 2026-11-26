@@ -11,11 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
 	connect "connectrpc.com/connect"
@@ -684,7 +688,7 @@ func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *test
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live tmux session still attached")
 	require.True(t, inst.TmuxSessionExists(), "test setup must have a genuinely alive tmux session")
 
-	session.StartSessionDriverForTest(t, inst, t.TempDir())
+	driver.StartSessionDriverForTest(t, inst, t.TempDir())
 
 	err := cleanupPartialCreation(inst, false)
 	require.NoError(t, err)
@@ -725,7 +729,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	// database/sql connection-pool cleaners from their own createTestStorage
 	// pools) starting mid-flight and getting misattributed as "leaked" by this
 	// test. See withShrunkIdleSettleTimers's identical rationale in
-	// session/autonomous_driver_test.go.
+	// session/autonomous/autonomous_driver_test.go.
 	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
@@ -1431,7 +1435,7 @@ func TestUpdateSession_NoteCleared_PersistsAsEmptyAcrossReload(t *testing.T) {
 
 // TestUpdateSession_UnrelatedFieldUpdate_PreservesExistingNote guards the interaction
 // between the RPC handler's conditional field application (Note only mutated when
-// req.Msg.Note != nil) and ent_repository.go's *unconditional* SetNote(data.Note) on
+// req.Msg.Note != nil) and session/instancestore/update.go's *unconditional* SetNote(data.Note) on
 // every Update call: an UpdateSession call that doesn't touch Note at all must not
 // let the unconditional set clobber an existing note, since data.Note always reflects
 // the instance's already-current in-memory value when Note wasn't part of this request.
@@ -1979,7 +1983,7 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 // the note on TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition
 // above), so this drives a real Instance.Resume() with the package-level
 // backend switched to the native PTY backend — the same real-subprocess
-// approach session/native_process_manager_test.go uses — rather than a
+// approach session/procbackend/native_process_manager_test.go uses — rather than a
 // fake/mock SendKeys recorder, to get a genuinely "started" Instance whose
 // SendKeys call actually succeeds.
 func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *testing.T) {
@@ -2465,7 +2469,7 @@ func TestIsSafeSteerStatus_TurnCompleteOnly(t *testing.T) {
 			turnComplete = p.Description
 		}
 	}
-	require.Equal(t, session.TurnCompleteStatusContext, turnComplete, "claude.go's verb_duration_completion description changed")
+	require.Equal(t, autonomous.TurnCompleteStatusContext, turnComplete, "claude.go's verb_duration_completion description changed")
 
 	require.True(t, isSafeSteerStatus(detection.StatusSuccess, turnComplete))
 	require.False(t, isSafeSteerStatus(detection.StatusSuccess, "All tests passed"))
@@ -3697,7 +3701,7 @@ func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
 
 	// Register a pending approval for this session
 	approvalStore := svc.GetApprovalStore()
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:        "approval-001",
 		SessionID: sessionUUID,
 		ToolName:  "Bash",
@@ -4278,7 +4282,7 @@ func TestNewSessionService_WiresApprovalServiceIntoRulesService(t *testing.T) {
 // TestLoadClaudeSettingsRulesAtStartup_CwdEqualsHome_NoDuplicateClaudeSettingsRules is the
 // Blocker 2 end-to-end regression test: the live deployed systemd unit runs with
 // WorkingDirectory=$HOME (see scripts/install-service.sh), so the server's own cwd equals
-// home. Without the settingsPaths dedup fix, the classifier would load the same file's rules
+// home. Without claudesettings.settingsPaths's dedup fix, the classifier would load the same file's rules
 // twice (once tagged "global", once tagged "project"). Exercises
 // loadClaudeSettingsRulesAtStartup directly — see the sibling
 // TestLoadClaudeSettingsRulesAtStartup_MergesRulesIntoClassifier's doc comment for why.
@@ -4678,7 +4682,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 	})
 }
 
-// wireRegistryForActorSerialization wires a *session.Registry into fix.svc if
+// wireRegistryForActorSerialization wires a *registry.Registry into fix.svc if
 // one isn't already present -- mirroring newRetryTestInstance's doc comment
 // in session_retry_creation_test.go: CreateManagedInstance only wraps the new
 // instance in a session.LiveInstance (session/create_managed_instance.go)
@@ -4694,7 +4698,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 // here rather than changed in the shared fixture.
 func wireRegistryForActorSerialization(fix *forkTestFixture) {
 	if fix.svc.registry == nil {
-		fix.svc.SetRegistry(session.NewRegistry(fix.storage, nil))
+		fix.svc.SetRegistry(registry.NewRegistry(fix.storage, nil))
 	}
 }
 
@@ -4739,7 +4743,7 @@ func wireRegistryForActorSerialization(fix *forkTestFixture) {
 //
 // This test caught a real bug on first run: DeleteSession and
 // CancelSessionCreation never released the creating instance's entry from
-// the SessionService-wide *session.Registry (Registry.ForceRelease was only
+// the SessionService-wide *registry.Registry (Registry.ForceRelease was only
 // ever called from CreateManagedInstance's own register-then-fail-to-persist
 // rollback path), so every deleted/cancelled session leaked its runActor
 // goroutine (session/actor.go) for the life of the process. Confirmed via

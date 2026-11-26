@@ -49,7 +49,7 @@ const (
 )
 
 // AllowedFeatureKeys is the set of feature keys accepted by the MCP-exposed RunHeadlessCall path
-// (server/services/headless_service.go). FeatureKeyTriage is intentionally excluded — triage calls
+// (server/services/backlogmisc/headless_service.go). FeatureKeyTriage is intentionally excluded — triage calls
 // go through BacklogService.TriggerTriage → Pool.CallBlocking directly, bypassing the
 // MCP gate. This prevents triage from being triggered via the public headless API.
 var AllowedFeatureKeys = map[FeatureKey]bool{
@@ -226,7 +226,7 @@ const CodebaseReadAllowedTools = "Read,Grep,Glob"
 // whatever text was last written and exits, discarding any subagent that reports
 // running "in the background" rather than actually blocking the call until done.
 // This paragraph is deliberately in the shared system prompt (not only the
-// sdd-mode-specific TriagePromptTemplate in pipeline_mode_seed.go) so the same
+// sdd-mode-specific TriagePromptTemplate in pipelinemode/pipeline_mode_seed.go) so the same
 // guard applies to every pipeline mode's triage content, not just "sdd" — see that
 // file's sddTriagePromptTemplate for the mode-specific reinforcement of the same
 // rule.

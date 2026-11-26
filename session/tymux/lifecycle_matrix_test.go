@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 )
 
@@ -429,9 +431,27 @@ func TestLifecycleMatrix_Restore_DaemonFaults(t *testing.T) {
 		}
 		sess := NewTymuxGRPCSession(ft)
 		t.Cleanup(func() { _ = sess.Close() })
+		sess.SetCommand(testLaunchCommand)
 		require.NoError(t, sess.RestoreWithWorkDir(dir))
 		assert.Equal(t, int32(1), calls.create.Load())
 		assert.Zero(t, calls.revive.Load())
+	})
+	// Regression: a restore racing ahead of Start used to create a session with no command,
+	// which the daemon fills with its default shell (zsh) instead of the agent.
+	t.Run("session absent, launch command not wired: no create", func(t *testing.T) {
+		resetClaims(t)
+		dir := t.TempDir()
+		calls := &matrixCalls{}
+		ft := matrixTransport(dir, dead, calls)
+		ft.listSessionsFn = func(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
+			return connect.NewResponse(&v1.ListSessionsResponse{}), nil
+		}
+		sess := NewTymuxGRPCSession(ft)
+		t.Cleanup(func() { _ = sess.Close() })
+		err := sess.RestoreWithWorkDir(dir)
+		require.ErrorIs(t, err, errSessionNotStarted)
+		require.ErrorIs(t, err, domain.ErrLaunchNotWired)
+		assert.Zero(t, calls.create.Load(), "must not spawn a bare shell before the launch command is wired")
 	})
 }
 
@@ -644,4 +664,16 @@ func TestLifecycleMatrix_NotStarted(t *testing.T) {
 	_, err = sess.CapturePaneContent()
 	require.Error(t, err)
 	assert.NoError(t, sess.Close(), "Close before Start is a no-op")
+}
+
+// testLaunchCommand stands in for the command Instance.wireTmuxSession installs before any
+// restore may create a session.
+var testLaunchCommand = launchcmd.ExecCommand{Argv: []launchcmd.Arg{launchcmd.Word("sh")}}
+
+// newWiredTestSession is NewTymuxGRPCSession with a launch command wired, for tests whose restore
+// path creates a session.
+func newWiredTestSession(tr rpcTransport) TymuxManager {
+	s := NewTymuxGRPCSession(tr)
+	s.SetCommand(testLaunchCommand)
+	return s
 }

@@ -8,14 +8,14 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // claimCheckService is the slice of *services.BacklogService the
 // check_cross_host_claim tool needs.
 type claimCheckService interface {
-	LookupCrossHostClaim(ctx context.Context, externalURL string) (services.ClaimVerdict, error)
+	LookupCrossHostClaim(ctx context.Context, externalURL string) (hostclaim.ClaimVerdict, error)
 }
 
 type claimHandlers struct {
@@ -60,7 +60,7 @@ func (h *claimHandlers) checkCrossHostClaim(ctx context.Context, req mcpgo.CallT
 	}
 
 	verdict, err := h.svc.LookupCrossHostClaim(ctx, externalURL)
-	if errors.Is(err, backlogsvc.ErrCrossHostClaimDedupDisabled) {
+	if errors.Is(err, domain.ErrCrossHostClaimDedupDisabled) {
 		return okResult(CheckCrossHostClaimResult{MCPResult: MCPResult{Success: true}, Note: "cross_host_claim_dedup is disabled on this host"}), nil
 	}
 	if err != nil {
@@ -69,12 +69,12 @@ func (h *claimHandlers) checkCrossHostClaim(ctx context.Context, req mcpgo.CallT
 
 	out := CheckCrossHostClaimResult{MCPResult: MCPResult{Success: true}}
 	switch verdict.Kind {
-	case services.ClaimHeldByOther:
+	case hostclaim.ClaimHeldByOther:
 		out.Claimed, out.Checked = true, true
 		out.ClaimingHostID = verdict.Record.ClaimingHostID.String()
 		out.ItemDeepLink = verdict.Record.ItemDeepLink
 		out.Disputed = verdict.Record.Disputed
-	case services.ClaimCheckIndeterminate:
+	case hostclaim.ClaimCheckIndeterminate:
 		out.Note = "at least one known peer was unreachable; the URL could not be confirmed clear"
 	default:
 		out.Checked = true

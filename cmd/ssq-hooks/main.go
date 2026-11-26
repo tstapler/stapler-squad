@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func main() {
@@ -727,7 +728,7 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 func recordResult(storage *session.Storage, payload classifier.PermissionRequestPayload, result classifier.ClassificationResult, durationMs int64) {
 	cmd, _ := payload.ToolInput["command"].(string)
 
-	entry := session.AnalyticsData{
+	entry := domain.AnalyticsData{
 		ID:             uuid.New().String(),
 		ToolName:       payload.ToolName,
 		CommandPreview: cmd,
@@ -1448,7 +1449,7 @@ func installOpenCode() {
 // (server/services/approval_handler.go's resolveSessionID).
 //
 // Per Story 4.2.3, the ping is re-sent every piExtensionRepingInterval
-// (server/services/pi_extension_health.go) for the lifetime of the pi process, in
+// (server/services/piextension/pi_extension_health.go) for the lifetime of the pi process, in
 // addition to the initial load-time ping, so a stapler-squad server restart doesn't
 // permanently strand a live, still-enforcing session's health badge at Unknown —
 // PiExtensionHealthTracker's grace window is sized to comfortably tolerate one

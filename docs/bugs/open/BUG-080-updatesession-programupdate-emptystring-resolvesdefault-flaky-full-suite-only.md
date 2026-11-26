@@ -56,7 +56,7 @@ resolution, not a captured root cause.
 Discovered while running this repo's standard verification commands
 (`go test ./server/services/... -race -count=1`) for an unrelated change —
 Story 6.1.1 of ssh-remote-workspaces (Settings → Remotes UI: `RemoteService`
-proto/handler additions in `server/services/remote_service.go`,
+proto/handler additions in `server/services/remote/remote_service.go`,
 `session/sshremote/keygen.go`, and the new frontend surface under
 `web-app/src/app/settings/remotes/` and
 `web-app/src/components/settings/`). None of those files touch

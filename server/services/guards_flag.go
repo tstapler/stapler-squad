@@ -9,16 +9,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
-
-// hiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary
-// write guards (plan Story 5.2). Global only, default on, no env var. Off lets
-// WriteToSession, the steer branch, RestartSession/RestartShell, SpawnShell, SwitchWorkspace
-// and UpdateSession's program/auto_approve accept a hidden target as on main;
-// the stream drops and Reply are governed elsewhere.
-const hiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
 
 // guardsFlagAuditPolicy: off loosens, so it is audited durably before it is
 // persisted; it is also the hatch for a faulty sink, so it is never refused
@@ -30,7 +25,7 @@ var guardsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 
 // guardsFlagController applies the persisted flag to the injected atomic the
 // unary handlers read.
-type guardsFlagController struct{ flag *UnaryGuardsFlag }
+type guardsFlagController struct{ flag *access.UnaryGuardsFlag }
 
 func (c guardsFlagController) Enable(context.Context) error { c.flag.SetEnabled(true); return nil }
 func (c guardsFlagController) Disable() error               { c.flag.SetEnabled(false); return nil }
@@ -49,10 +44,10 @@ func (s *SessionService) guardsOffStatusDetail() string {
 // an explicit persisted false starts with the guards off; a missing or
 // unreadable config keeps them on.
 func (s *SessionService) wireGuardsFlag() {
-	s.guards.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(hiddenSessionReadonlyGuardsFlagName, true))
+	s.guards.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(featureflags.HiddenSessionReadonlyGuardsFlagName, true))
 	ff := s.featureFlagSvc
-	ff.SetFeatureController(hiddenSessionReadonlyGuardsFlagName, guardsFlagController{flag: s.guards})
-	ff.AddStatusDetailSource(hiddenSessionReadonlyGuardsFlagName, s.guardsOffStatusDetail)
+	ff.SetFeatureController(featureflags.HiddenSessionReadonlyGuardsFlagName, guardsFlagController{flag: s.guards})
+	ff.AddStatusDetailSource(featureflags.HiddenSessionReadonlyGuardsFlagName, s.guardsOffStatusDetail)
 }
 
 // guardBypassState counts steers allowed by the off flag and rate-limits the
@@ -86,14 +81,14 @@ func (g *guardBypassState) note() (warn bool) {
 // steer to a non-qualifying hidden target goes through (guards off). With the
 // sink down the write is refused: the flag exists to restore the review
 // composer, not to open writes to triage, diagnose and other sessions blind.
-func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) (AuditLine, error) {
+func (s *SessionService) auditGuardBypass(ctx context.Context, d steerDecision, inst *instance.Instance, msg string) (auditkit.AuditLine, error) {
 	line := s.steerAuditLine(withSteerRequestFacts(ctx, d.facts), inst, msg)
-	line.Kind = auditKindGuardBypass
-	line.Phase = auditPhaseRequest
+	line.Kind = auditkit.AuditKindGuardBypass
+	line.Phase = auditkit.AuditPhaseRequest
 	sink := s.auditSink()
 	var err error
 	if sink == nil {
-		err = ErrAuditFailed
+		err = auditkit.ErrAuditFailed
 	} else {
 		err = sink.AppendBounded(ctx, line)
 	}

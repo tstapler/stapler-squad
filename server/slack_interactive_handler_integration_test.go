@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 )
 
 // computeTestSlackInteractiveSignature independently reimplements Slack's v0
@@ -61,7 +61,7 @@ func TestSlackInteractiveRoute_ResolvesApproval_When_ApprovalEnabledAndSignature
 	require.NoError(t, err)
 
 	approvalStore := deps.SessionService.GetApprovalStore()
-	require.NoError(t, approvalStore.Create(&services.PendingApproval{
+	require.NoError(t, approvalStore.Create(&approvalkit.PendingApproval{
 		ID:        "appr-int-1",
 		SessionID: "sess-int-1",
 		ToolName:  "Bash",
@@ -116,7 +116,7 @@ func TestSlackInteractiveRoute_Returns404_When_ApprovalDisabled(t *testing.T) {
 	require.NoError(t, err)
 
 	approvalStore := deps.SessionService.GetApprovalStore()
-	require.NoError(t, approvalStore.Create(&services.PendingApproval{
+	require.NoError(t, approvalStore.Create(&approvalkit.PendingApproval{
 		ID:        "appr-int-2",
 		SessionID: "sess-int-2",
 		ToolName:  "Bash",

@@ -38,4 +38,4 @@ sqlite3 -readonly ~/.stapler-squad/workspaces/<hash>/sessions.db \
   "SELECT title, status, one_shot, archived_at FROM sessions WHERE title='<session-title>';"
 ```
 
-If `one_shot=1` and `archived_at` is `NULL` while the backlog item is already `done`/`archived`, this is the same class of bug reappearing somewhere else in the revival/reconcile paths — check every `ArchivedAt`-based skip (`session/health.go`, `session/instance_serialization.go`, `session/review_queue_poller.go`) for a missing `isOneShot` (or equivalent terminal-status) companion check.
+If `one_shot=1` and `archived_at` is `NULL` while the backlog item is already `done`/`archived`, this is the same class of bug reappearing somewhere else in the revival/reconcile paths — check every `ArchivedAt`-based skip (`session/autonomous/health.go`, `session/instance_serialization.go`, `session/review_queue_poller.go`) for a missing `isOneShot` (or equivalent terminal-status) companion check.

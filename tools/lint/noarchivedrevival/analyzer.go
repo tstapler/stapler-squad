@@ -36,9 +36,9 @@ var Analyzer = &analysis.Analyzer{
 // instance_crash.go, import_commit.go, retry_state.go, MCP hydration) are
 // deliberately absent.
 var lifecycleFiles = []string{
-	"session/health.go",
+	"session/autonomous/health.go",
 	"session/review_queue_poller.go",
-	"session/session_driver.go",
+	"session/driver/session_driver.go",
 	"session/instance/instance_claude.go",
 	"session/instance/instance_serialization.go",
 	"session/instance/hot_restore.go",
@@ -47,10 +47,10 @@ var lifecycleFiles = []string{
 	"server/wakes/revive.go",
 	"server/services/question_answer_router.go",
 	"server/services/session_service_clear_terminal.go",
-	"server/services/session_federation.go",
-	"server/services/session_federation_terminal.go",
-	"server/services/session_federation_dial.go",
-	"server/services/federated_watch_aggregator.go",
+	"server/services/federation/session_federation.go",
+	"server/services/federation/session_federation_terminal.go",
+	"server/services/federation/session_federation_dial.go",
+	"server/services/federation/federated_watch_aggregator.go",
 }
 
 func isLifecycleFile(filename string) bool {
@@ -67,7 +67,7 @@ func isLifecycleFile(filename string) bool {
 // bool) whose body itself performs an archival check, e.g. a skip-reason helper
 // that reads ArchivedAt; a call to one counts as an archival check. IsArchived is
 // always included. Derived from bodies so a helper that does not check archival
-// (health.go's healthCheckSkipReason before PR #810) is not trusted.
+// (autonomous/health.go's healthCheckSkipReason before PR #810) is not trusted.
 func archivalHelpers(files []*ast.File) map[string]bool {
 	h := map[string]bool{"IsArchived": true}
 	for _, f := range files {
@@ -144,7 +144,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 	// covered(fn): fn is unexported, has callers, and every call site is guarded
 	// in its caller or the caller is itself covered. Handles guards that live in
-	// an outer function (health.go's checkSingleSession -> recoverMissingSession).
+	// an outer function (autonomous/health.go's checkSingleSession -> recoverMissingSession).
 	memo := map[*fnInfo]bool{}
 	visiting := map[*fnInfo]bool{}
 	var covered func(fi *fnInfo) bool

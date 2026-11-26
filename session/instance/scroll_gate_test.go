@@ -62,7 +62,7 @@ func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsUnknownWithActiveC
 // turn sits here, not at StatusIdle/StatusUnknown, until it's interacted
 // with again. AutonomousDriver's isIdleStatus already treats StatusSuccess
 // as idle-equivalent for the more sensitive operation of injecting real
-// input (session/autonomous_driver.go); the scroll gate must match.
+// input (session/autonomous/autonomous_driver.go); the scroll gate must match.
 func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsSuccess(t *testing.T) {
 	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusSuccess)
 
@@ -74,7 +74,7 @@ func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsSuccess(t *testing
 }
 
 // TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady covers the
-// other member of isIdleStatus's allowlist (session/autonomous_driver.go)
+// other member of isIdleStatus's allowlist (session/autonomous/autonomous_driver.go)
 // alongside StatusIdle and StatusSuccess above.
 func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady(t *testing.T) {
 	inst := newScrollGateTestInstance(t, "claude", true, detection.StatusReady)

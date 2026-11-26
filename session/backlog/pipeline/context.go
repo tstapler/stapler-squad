@@ -6,11 +6,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 )
 
 // SanitizeForAgentContext strips HTML tags from s and truncates to maxLen,
@@ -57,23 +58,23 @@ func ClosingKeywordWithRepo(issueURL, prRemoteURL string) string {
 const maxPriorAttemptsWithFullEvidence = 3
 
 // taskProtocolBlock is the standard agent task protocol injected at the end of every prompt.
-var taskProtocolBlock = session.ForDefault("## Your Task Protocol\n" +
+var taskProtocolBlock = pipelinemode.ForDefault("## Your Task Protocol\n" +
 	"1. Read ALL acceptance criteria before starting any work.\n" +
-	"2. Work through criteria systematically. " + session.SecWorkDiscipline + "\n" +
+	"2. Work through criteria systematically. " + pipelinemode.SecWorkDiscipline + "\n" +
 	"3. When ALL criteria are done or waived, run ¦/backlog/review¦ with a 2–3 sentence summary of what you built, and pass each proving command with its output in verification_notes.\n" +
-	"4. " + session.SecBlockerRouting + "\n" +
-	"5. " + session.SecContextLost + "\n" +
-	"6. " + session.SecCommandsFail + "\n" +
-	"7. " + session.SecNeverEnd + "\n" +
-	"8. After ¦/backlog/review¦, " + session.SecAwaitVerdict + " " + session.SecOnPass + "\n" +
-	"9. " + session.OnFailSection())
+	"4. " + pipelinemode.SecBlockerRouting + "\n" +
+	"5. " + pipelinemode.SecContextLost + "\n" +
+	"6. " + pipelinemode.SecCommandsFail + "\n" +
+	"7. " + pipelinemode.SecNeverEnd + "\n" +
+	"8. After ¦/backlog/review¦, " + pipelinemode.SecAwaitVerdict + " " + pipelinemode.SecOnPass + "\n" +
+	"9. " + pipelinemode.OnFailSection())
 
 // reviewHadVerdictMostRecentFirst extracts, most-recent-first, one bool per
 // review-role session in priorSessions — true if that session ever wrote a
 // verdict — mirroring server/services/backlog_service_triage.go's
 // recentReviewHadVerdict exactly (that helper also does not filter on
 // EndedAt, for the identical reason given on
-// reviewVerdictSummariesMostRecentFirst above), computed from data already
+// backlogaux.ReviewVerdictSummariesMostRecentFirst above), computed from data already
 // in hand.
 func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSummary) []bool {
 	var out []bool
@@ -99,7 +100,7 @@ func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSumma
 // parks the item and never respawns at all, so this never needs to render a
 // "third strike" framing.
 func escalationNotice(priorSessions []backlogdto.ItemSessionSummary) string {
-	verdicts := session.ReviewVerdictSummariesMostRecentFirst(priorSessions)
+	verdicts := backlogaux.ReviewVerdictSummariesMostRecentFirst(priorSessions)
 	if streak := stuck.ReviewFailureStreakLen(verdicts); streak == stuck.RepeatedFailureEscalationThreshold {
 		return fmt.Sprintf(
 			"## Escalation Notice\nThe last %d review attempts failed for the identical reason: %q. Repeating the same fix will fail again. Before writing any code, diagnose why the previous fix did not resolve this, and take a genuinely different approach this time (different root cause, different files touched, or a different fix strategy).\n\n",

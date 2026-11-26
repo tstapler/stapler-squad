@@ -11,10 +11,10 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // IssueFetcher is the optional plugin capability behind the one-off tracker
@@ -61,7 +61,7 @@ func (h *backlogHandlers) importTrackerIssue(ctx context.Context, toolName, trac
 	skipTriage, _ := args["skip_triage"].(bool)
 
 	if h.backlogSvc != nil {
-		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, ext.URL); claimErr == nil && verdict.Kind == services.ClaimHeldByOther {
+		if verdict, claimErr := h.backlogSvc.LookupCrossHostClaim(ctx, ext.URL); claimErr == nil && verdict.Kind == hostclaim.ClaimHeldByOther {
 			return errResult(ErrInvalidArgument,
 				fmt.Sprintf("issue %s is already claimed by host %s (see %s)", ext.URL, verdict.Record.ClaimingHostID.String(), verdict.Record.ItemDeepLink),
 				"Open that link to see the owning item, or import from the web UI with an override reason.")

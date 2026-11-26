@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
@@ -26,7 +27,7 @@ type CheckpointService struct {
 	// Both are wired via SetPoller/SetExternalDiscovery after construction,
 	// mirroring the SessionService deferred-setter pattern.
 	poller       *session.ReviewQueuePoller
-	extDiscovery *session.ExternalSessionDiscovery
+	extDiscovery *external.ExternalSessionDiscovery
 
 	// loadInstances provides the fallback instance-load path used in
 	// ClearConversationState when the target session is not in the live poller.
@@ -55,7 +56,7 @@ func (cs *CheckpointService) SetPoller(p *session.ReviewQueuePoller) {
 }
 
 // SetExternalDiscovery wires external session discovery (mux-enabled sessions).
-func (cs *CheckpointService) SetExternalDiscovery(d *session.ExternalSessionDiscovery) {
+func (cs *CheckpointService) SetExternalDiscovery(d *external.ExternalSessionDiscovery) {
 	cs.extDiscovery = d
 }
 

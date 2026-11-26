@@ -187,6 +187,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_UpdateTransitionGate_KindConfigAndOrder_ChangeHandlerAnswer",
 		entrypoint: "BacklogService.UpdateTransitionGate",
 	},
+	"flag:epic_integration_child_enabled": {
+		testName:   "TestConfigSurfaceProof_EpicIntegrationChild_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:session_multi_pr": {
 		testName:   "TestConfigSurfaceProof_SessionMultiPR_ChangesReader",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
@@ -305,7 +309,7 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
 	"flag:handoff-summary": {
-		exempt: "read-only mirror: HandoffSummaryFeatureController.Enable and Disable refuse (feature_flag_service.go), so UpdateFeatureFlag cannot flip it; the real setting is config.json handoff_summary.enabled, read via HandoffSummaryConfig.EnabledOrDefault, which is not a feature_flags surface",
+		exempt: "read-only mirror: HandoffSummaryFeatureController.Enable and Disable refuse (flagsvc/feature_flag_service.go), so UpdateFeatureFlag cannot flip it; the real setting is config.json handoff_summary.enabled, read via HandoffSummaryConfig.EnabledOrDefault, which is not a feature_flags surface",
 	},
 	"flag:driver_pane_activity_gate": {
 		testName:   "TestConfigSurfaceProof_DriverPaneActivityGate_ChangesDriverGateSetting",
@@ -357,6 +361,9 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	},
 	"flag:batch_unary": {
 		exempt: "client-only: no Go reader; the web client gates request batching on it (web-app/src/lib/api/batchTransport.ts via flagStore), and the server only persists and echoes the value through GetFeatureFlags; the batch endpoint itself is always mounted and deny-by-default per call",
+	},
+	"flag:history_search_streaming": {
+		exempt: "client-only: no Go reader; the web client gates the streaming history search on it (web-app/src/lib/hooks/useHistoryFullTextSearch.ts via useFeatureFlag), and the server only persists and echoes the value through GetFeatureFlags; the streaming RPC itself is always mounted and covered by server/services/searchrpc/search_service_streaming_test.go",
 	},
 	"flag:diagnose-session-panel": {
 		exempt: "client-only: no Go reader; the web client gates DiagnoseSessionPanel and WorkflowSuggestionsSection on it (web-app/src/components/backlog/detail via useFeatureFlag), and the server only persists and echoes the value through GetFeatureFlags",
@@ -461,7 +468,7 @@ func TestConfigSurfaceProofs_EveryRegisteredSurfaceHasEntry_WhenFieldsEnumerated
 	if got := len(pendingSurfaces); got != pendingCeiling {
 		t.Errorf("pendingSurfaces has %d entries, pendingCeiling is %d: delete pending lines and lower the ceiling together; never add", got, pendingCeiling)
 	}
-	errs := validateConfigSurfaces(allConfigSurfaces(), configSurfaceProofs, pendingSurfaces, testFuncBodies(t, ".", "backlogsvc", "wsconn"))
+	errs := validateConfigSurfaces(allConfigSurfaces(), configSurfaceProofs, pendingSurfaces, testFuncBodies(t, servicesSourceDirs(t)...))
 	if len(errs) > 0 {
 		t.Fatalf("config surface proof violations:\n%s", strings.Join(errs, "\n"))
 	}

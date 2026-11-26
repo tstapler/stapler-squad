@@ -158,7 +158,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.Ite
 	var reasons []string
 	for _, id := range uuids {
 		d, derr := g.src.FindInstanceDataByID(id)
-		if errors.Is(derr, ErrInstanceDataNotFound) {
+		if errors.Is(derr, domain.ErrInstanceDataNotFound) {
 			d = &domain.InstanceData{UUID: id}
 		} else if derr != nil {
 			return append(reasons, fmt.Sprintf("session %s: unreadable: %v", id, derr))

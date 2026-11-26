@@ -23,6 +23,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -43,30 +44,30 @@ func onDisk(dir string) domain.Workspace {
 
 type recordingTelemetry struct {
 	mu       sync.Mutex
-	searches []SearchOutcomeEvent
-	firsts   []SearchFirstResultEvent
-	writes   []WriteOutcomeEvent
-	patches  []PatchOutcomeEvent
+	searches []fsops.SearchOutcomeEvent
+	firsts   []fsops.SearchFirstResultEvent
+	writes   []fsops.WriteOutcomeEvent
+	patches  []fsops.PatchOutcomeEvent
 }
 
-func (r *recordingTelemetry) RecordWrite(_ context.Context, _ string, ev WriteOutcomeEvent) {
+func (r *recordingTelemetry) RecordWrite(_ context.Context, _ string, ev fsops.WriteOutcomeEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.writes = append(r.writes, ev)
 }
 
-func (r *recordingTelemetry) RecordPatch(_ context.Context, _ string, ev PatchOutcomeEvent) {
+func (r *recordingTelemetry) RecordPatch(_ context.Context, _ string, ev fsops.PatchOutcomeEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.patches = append(r.patches, ev)
 }
 
-func (r *recordingTelemetry) RecordSearch(_ context.Context, _ string, ev SearchOutcomeEvent) {
+func (r *recordingTelemetry) RecordSearch(_ context.Context, _ string, ev fsops.SearchOutcomeEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.searches = append(r.searches, ev)
 }
-func (r *recordingTelemetry) RecordSearchFirstResult(_ context.Context, _ string, ev SearchFirstResultEvent) {
+func (r *recordingTelemetry) RecordSearchFirstResult(_ context.Context, _ string, ev fsops.SearchFirstResultEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.firsts = append(r.firsts, ev)
@@ -80,8 +81,8 @@ type handlerRig struct {
 func newRig(t testing.TB, ws dirWorkspaces) *handlerRig {
 	t.Helper()
 	tel := &recordingTelemetry{}
-	ops := NewFileOps(FilePolicy{Workspace: ws, Telemetry: tel}, osRootBackend{})
-	h := newSearchHandler(ops)
+	ops := NewFileOps(FilePolicy{Workspace: ws, Telemetry: tel}, fsops.OsRootBackend{})
+	h := newSearchHandler(ops, testFilesFlags().ViewerV2)
 	h.viewerV2 = func(context.Context) bool { return true }
 	return &handlerRig{h: h, tel: tel}
 }
@@ -300,7 +301,7 @@ func TestSearchContentHandler_ShouldReturnFailedPrecondition_WhenViewerV2FlagOff
 	assert.Equal(t, sessionv1.ReadOnlyReason_READ_ONLY_REASON_FLAG_OFF, searchReadOnlyReason(t, err))
 	assert.Empty(t, out.kinds())
 	require.Len(t, rig.tel.searches, 1)
-	assert.Equal(t, SearchOutcomeDisabled, rig.tel.searches[0].Outcome)
+	assert.Equal(t, fsops.SearchOutcomeDisabled, rig.tel.searches[0].Outcome)
 }
 
 func searchReadOnlyReason(t testing.TB, err error) sessionv1.ReadOnlyReason {
@@ -436,7 +437,7 @@ func TestSearchContentHandler_ShouldEndQueuedStreamWithSearchBusy_When_QueueWait
 		require.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
 		assert.Equal(t, "queue_timeout", busyDetail(t, err))
 		assert.EqualValues(t, maxConcurrentWalks, gs.started.Load(), "no third walk ran")
-		assert.Equal(t, SearchOutcomeBusy, rig.tel.searches[len(rig.tel.searches)-1].Outcome)
+		assert.Equal(t, fsops.SearchOutcomeBusy, rig.tel.searches[len(rig.tel.searches)-1].Outcome)
 		assert.Equal(t, 0, rig.h.gateWaiting(), "the waiter and its slot request are gone")
 		close(gs.release)
 		synctest.Wait()
@@ -476,7 +477,7 @@ func TestStreamLimiter_ShouldRefuseFourthStreamWithSearchBusy_When_SameRemoteIpH
 	assert.Equal(t, "per_ip", busyDetail(t, err))
 	assert.Empty(t, out.kinds(), "no Queued message")
 	assert.EqualValues(t, 3, gs.started.Load(), "no walk and no registry entry")
-	assert.Equal(t, SearchOutcomeBusy, rig.tel.searches[len(rig.tel.searches)-1].Outcome)
+	assert.Equal(t, fsops.SearchOutcomeBusy, rig.tel.searches[len(rig.tel.searches)-1].Outcome)
 
 	go func() {
 		errs <- rig.h.Handle(context.Background(), searchReq("s1", "phone", "needle"), "192.168.1.20:1", (&sink{}).send)
@@ -666,11 +667,11 @@ func TestSearchContentHandler_ShouldRecordOutcomeAndFirstResult_When_OkTruncated
 		require.NoError(t, rig.h.Handle(context.Background(), searchReq("s1", "c", "needle"), "10.0.0.1:1", (&sink{}).send))
 		require.Len(t, rig.tel.searches, 1)
 		ev := rig.tel.searches[0]
-		assert.Equal(t, SearchOutcomeOK, ev.Outcome)
-		assert.Equal(t, BucketCount(1), ev.Results)
-		assert.Equal(t, BucketScale(1), ev.Scale)
+		assert.Equal(t, fsops.SearchOutcomeOK, ev.Outcome)
+		assert.Equal(t, fsops.BucketCount(1), ev.Results)
+		assert.Equal(t, fsops.BucketScale(1), ev.Scale)
 		assert.False(t, ev.Queued)
-		assert.Equal(t, SearchBackendWalker, ev.Backend)
+		assert.Equal(t, fsops.SearchBackendWalker, ev.Backend)
 		assert.Positive(t, ev.Duration)
 		require.Len(t, rig.tel.firsts, 1, "exactly one first-result event")
 	})
@@ -680,8 +681,8 @@ func TestSearchContentHandler_ShouldRecordOutcomeAndFirstResult_When_OkTruncated
 		req.Options.Limits = &sessionv1.SearchLimits{MaxResults: 27}
 		require.NoError(t, rig.h.Handle(context.Background(), req, "10.0.0.1:1", (&sink{}).send))
 		require.Len(t, rig.tel.searches, 1)
-		assert.Equal(t, SearchOutcomeTruncated, rig.tel.searches[0].Outcome)
-		assert.Equal(t, BucketCount(27), rig.tel.searches[0].Results)
+		assert.Equal(t, fsops.SearchOutcomeTruncated, rig.tel.searches[0].Outcome)
+		assert.Equal(t, fsops.BucketCount(27), rig.tel.searches[0].Results)
 	})
 	t.Run("cancelled", func(t *testing.T) {
 		rig := newRig(t, ws)
@@ -690,7 +691,7 @@ func TestSearchContentHandler_ShouldRecordOutcomeAndFirstResult_When_OkTruncated
 		err := rig.h.Handle(ctx, searchReq("s1", "c", "needle"), "10.0.0.1:1", (&sink{}).send)
 		require.Equal(t, connect.CodeCanceled, connect.CodeOf(err))
 		require.Len(t, rig.tel.searches, 1)
-		assert.Equal(t, SearchOutcomeCancelled, rig.tel.searches[0].Outcome)
+		assert.Equal(t, fsops.SearchOutcomeCancelled, rig.tel.searches[0].Outcome)
 		assert.Empty(t, rig.tel.firsts)
 	})
 	t.Run("invalid", func(t *testing.T) {
@@ -700,14 +701,14 @@ func TestSearchContentHandler_ShouldRecordOutcomeAndFirstResult_When_OkTruncated
 		err := rig.h.Handle(context.Background(), req, "10.0.0.1:1", (&sink{}).send)
 		require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 		require.Len(t, rig.tel.searches, 1)
-		assert.Equal(t, SearchOutcomeInvalid, rig.tel.searches[0].Outcome)
+		assert.Equal(t, fsops.SearchOutcomeInvalid, rig.tel.searches[0].Outcome)
 	})
 	t.Run("disabled", func(t *testing.T) {
 		rig := newRig(t, ws)
 		rig.h.viewerV2 = func(context.Context) bool { return false }
 		_ = rig.h.Handle(context.Background(), searchReq("s1", "c", "needle"), "10.0.0.1:1", (&sink{}).send)
 		require.Len(t, rig.tel.searches, 1)
-		assert.Equal(t, SearchOutcomeDisabled, rig.tel.searches[0].Outcome)
+		assert.Equal(t, fsops.SearchOutcomeDisabled, rig.tel.searches[0].Outcome)
 	})
 }
 

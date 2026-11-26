@@ -148,7 +148,7 @@ jobs:
           # the daemon-backed fidelity corpus (session/tymux) needs the oracle; fail if it's missing
           FIDELITY_REQUIRE_ORACLE: "1"
         run: |
-          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+          # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           TMUX_BIN="$(pwd)/bin/tmux" TYMUXD_BIN="$(pwd)/session/tymux/embed/tymuxd" timeout 20m go test -race -tags integration \
             -coverprofile=integration.out -covermode=atomic ./... \
             || { echo "::error::CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget"; echo "CI-BUDGET-EXCEEDED: 'integration-coverage' exceeded its 20m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }

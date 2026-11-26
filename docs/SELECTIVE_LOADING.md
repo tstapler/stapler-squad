@@ -4,6 +4,8 @@
 
 Stapler Squad's SQLite repository now supports selective data loading through `LoadOptions`. This allows you to control exactly what child data is loaded for each session, optimizing performance and memory usage.
 
+`LoadOptions` and its presets live in `session/domain` (import `github.com/tstapler/stapler-squad/session/domain`); the examples below use the `domain.` qualifier.
+
 ## Performance Impact
 
 | Operation | Before | After (LoadSummary) | After (LoadMinimal) | Improvement |
@@ -18,7 +20,7 @@ Stapler Squad's SQLite repository now supports selective data loading through `L
 Loads only core session fields without any child data.
 
 ```go
-sessions, err := repo.ListWithOptions(ctx, session.LoadMinimal)
+sessions, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 // Loaded: Title, Path, Status, Timestamps, etc.
 // NOT loaded: Worktree, DiffStats, Tags, ClaudeSession
 ```
@@ -34,7 +36,7 @@ sessions, err := repo.ListWithOptions(ctx, session.LoadMinimal)
 Loads lightweight child data suitable for list views.
 
 ```go
-sessions, err := repo.ListWithOptions(ctx, session.LoadSummary)
+sessions, err := repo.ListWithOptions(ctx, domain.LoadSummary)
 // Loaded: Worktree, DiffStats counts, Tags, ClaudeSession
 // NOT loaded: Diff content (can be 1-25 MB)
 ```
@@ -50,7 +52,7 @@ sessions, err := repo.ListWithOptions(ctx, session.LoadSummary)
 Loads all data including full diff content.
 
 ```go
-sessionData, err := repo.GetWithOptions(ctx, "my-session", session.LoadFull)
+sessionData, err := repo.GetWithOptions(ctx, "my-session", domain.LoadFull)
 // Loaded: Everything including full diff content
 ```
 
@@ -65,7 +67,7 @@ sessionData, err := repo.GetWithOptions(ctx, "my-session", session.LoadFull)
 Loads only diff-related data for preview panes.
 
 ```go
-sessionData, err := repo.GetWithOptions(ctx, "my-session", session.LoadDiffOnly)
+sessionData, err := repo.GetWithOptions(ctx, "my-session", domain.LoadDiffOnly)
 // Loaded: Worktree, DiffStats, Diff content
 // NOT loaded: Tags, ClaudeSession
 ```
@@ -79,7 +81,7 @@ sessionData, err := repo.GetWithOptions(ctx, "my-session", session.LoadDiffOnly)
 Optimized for review queue operations.
 
 ```go
-sessions, err := repo.ListWithOptions(ctx, session.LoadForReviewQueue)
+sessions, err := repo.ListWithOptions(ctx, domain.LoadForReviewQueue)
 // Loaded: Worktree, DiffStats counts, Tags
 // NOT loaded: Diff content, ClaudeSession
 ```
@@ -95,7 +97,7 @@ You can create custom options for specific use cases:
 
 ```go
 // Load only what you need
-customOptions := session.LoadOptions{
+customOptions := domain.LoadOptions{
     LoadWorktree:      true,  // Need branch info
     LoadDiffStats:     true,  // Need change counts
     LoadDiffContent:   false, // Don't need full diff
@@ -112,12 +114,12 @@ LoadOptions supports fluent builder methods:
 
 ```go
 // Start with minimal and add what you need
-options := session.LoadMinimal.
+options := domain.LoadMinimal.
     WithTags().
     WithDiffContent()
 
 // Or remove what you don't need
-options := session.LoadFull.
+options := domain.LoadFull.
     WithoutDiffContent()
 ```
 
@@ -138,13 +140,13 @@ sessionData, err := repo.Get(ctx, "my-session")
 sessions, err := repo.List(ctx)  // Now uses LoadSummary internally
 
 // Or be explicit about what you need
-sessions, err := repo.ListWithOptions(ctx, session.LoadMinimal)
+sessions, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 
 // Get still loads everything for detail views
 sessionData, err := repo.Get(ctx, "my-session")  // Uses LoadFull internally
 
 // Or customize for specific needs
-sessionData, err := repo.GetWithOptions(ctx, "my-session", session.LoadDiffOnly)
+sessionData, err := repo.GetWithOptions(ctx, "my-session", domain.LoadDiffOnly)
 ```
 
 ## Common Use Cases
@@ -168,7 +170,7 @@ sessionData, err := repo.Get(ctx, sessionTitle)
 ### 3. Quick Status Check
 ```go
 // Minimal loading for fast status checks
-sessions, err := repo.ListWithOptions(ctx, session.LoadMinimal)
+sessions, err := repo.ListWithOptions(ctx, domain.LoadMinimal)
 for _, s := range sessions {
     fmt.Printf("%s: %v\n", s.Title, s.Status)
 }
@@ -185,7 +187,7 @@ sessions, err := repo.ListByTag(ctx, "Frontend")
 ### 5. Review Queue
 ```go
 // Optimized for review queue with only needed data
-options := session.LoadForReviewQueue
+options := domain.LoadForReviewQueue
 sessions, err := repo.ListByStatusWithOptions(ctx, session.Ready, options)
 ```
 

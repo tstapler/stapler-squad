@@ -8,6 +8,10 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
@@ -20,14 +24,14 @@ import (
 type ListenerClass string
 
 const (
-	ListenerClassLocal  ListenerClass = ListenerLocal
-	ListenerClassRemote ListenerClass = ListenerRemote
+	ListenerClassLocal  ListenerClass = access.ListenerLocal
+	ListenerClassRemote ListenerClass = access.ListenerRemote
 )
 
 // ListenerClassFrom derives the class from the request record stamped by the
 // listener chain. A request nobody stamped is treated as remote (fail closed).
 func ListenerClassFrom(ctx context.Context) ListenerClass {
-	if rec, ok := RequestRecordFrom(ctx); ok && rec.Listener == ListenerLocal {
+	if rec, ok := access.RequestRecordFrom(ctx); ok && rec.Listener == access.ListenerLocal {
 		return ListenerClassLocal
 	}
 	return ListenerClassRemote
@@ -99,9 +103,9 @@ var controlPolicies = map[Control]actionPolicy{
 
 // answerTier is the tier of an ANSWER_QUESTION on route: only a live keystroke
 // writes into a pane.
-func answerTier(route answerRoute) sessionv1.ActionTier {
+func answerTier(route flagsvc.AnswerRoute) sessionv1.ActionTier {
 	switch route {
-	case routeLiveKeystrokeHidden, routeLiveKeystrokeVisible:
+	case flagsvc.RouteLiveKeystrokeHidden, flagsvc.RouteLiveKeystrokeVisible:
 		return sessionv1.ActionTier_ACTION_TIER_B
 	default:
 		return sessionv1.ActionTier_ACTION_TIER_A
@@ -116,7 +120,7 @@ type DescriptorSources struct {
 	Backlog   BacklogDecisionLookup
 	Guidance  GuidanceLookup
 	// Canary degrades hook-mirrored answers to read_only when the layout drifts (optional).
-	Canary *DialogMatchCanary
+	Canary *questionkit.DialogMatchCanary
 	// Routes tells where an answer would go, so a stored answer (stopped or
 	// archived session, Tier A, no keystroke) stays available remotely (optional;
 	// nil keeps every answer desktop-only on the remote listener).
@@ -125,7 +129,7 @@ type DescriptorSources struct {
 
 // answerRouteLookup is the slice of AnswerRouter the descriptor builder reads.
 type answerRouteLookup interface {
-	RouteFor(sessionID string) (route answerRoute, known bool)
+	RouteFor(sessionID string) (route flagsvc.AnswerRoute, known bool)
 }
 
 // ApprovalLookup returns the ids of approvals still waiting for a decision.
@@ -135,7 +139,7 @@ type ApprovalLookup interface {
 
 // QuestionLookup returns the live registered questions among keys.
 type QuestionLookup interface {
-	PeekQuestions(keys []QuestionKey) map[QuestionKey]PendingQuestion
+	PeekQuestions(keys []questionkit.QuestionKey) map[questionkit.QuestionKey]questionkit.PendingQuestion
 }
 
 // BacklogDecisionState is what the builder needs to know about an item.
@@ -175,23 +179,25 @@ type DescriptorBuilder struct {
 }
 
 // NewDescriptorBuilder builds a builder reading the live flags.
-func NewDescriptorBuilder(src DescriptorSources) *DescriptorBuilder {
+// reg must be non-nil.
+func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *DescriptorBuilder {
+	fr := flagsvc.FlagReader{Reg: reg}
 	return &DescriptorBuilder{sources: src, flag: func(dp string) bool {
-		return effectiveFlag(notificationInlineActionsFlagName, dp)
-	}, hookReplyOn: func() bool { return effectiveAnswerQuestion(routeHookReply) }}
+		return fr.EffectiveFlag(flagsvc.NotificationInlineActionsFlagName, dp)
+	}, hookReplyOn: func() bool { return fr.EffectiveAnswerQuestion(flagsvc.RouteHookReply) }}
 }
 
 // pageKeys are the entity keys of the unresolved records of one page.
 type pageKeys struct {
 	needApprovals bool
-	questions     []QuestionKey
+	questions     []questionkit.QuestionKey
 	itemIDs       []string
 	guidanceIDs   []string
 }
 
 func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 	var k pageKeys
-	seenQ, seenItem, seenG := map[QuestionKey]bool{}, map[string]bool{}, map[string]bool{}
+	seenQ, seenItem, seenG := map[questionkit.QuestionKey]bool{}, map[string]bool{}, map[string]bool{}
 	for _, r := range records {
 		if r.GetIsRead() {
 			continue
@@ -208,7 +214,7 @@ func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 			seenItem[id] = true
 			k.itemIDs = append(k.itemIDs, id)
 		}
-		if id := md[metaGuidanceRequestID]; id != "" && !seenG[id] {
+		if id := md[questionkit.MetaGuidanceRequestID]; id != "" && !seenG[id] {
 			seenG[id] = true
 			k.guidanceIDs = append(k.guidanceIDs, id)
 		}
@@ -216,18 +222,18 @@ func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 	return k
 }
 
-func questionKeyOf(r *sessionv1.NotificationHistoryRecord) (QuestionKey, bool) {
+func questionKeyOf(r *sessionv1.NotificationHistoryRecord) (questionkit.QuestionKey, bool) {
 	md := r.GetMetadata()
-	if md[metaQuestionID] == "" || md[metaReplyUnavailable] == boolTrue || r.GetSessionId() == "" {
-		return QuestionKey{}, false
+	if md[questionkit.MetaQuestionID] == "" || md[questionkit.MetaReplyUnavailable] == boolTrue || r.GetSessionId() == "" {
+		return questionkit.QuestionKey{}, false
 	}
-	return QuestionKey{SessionUUID: r.GetSessionId(), QuestionID: md[metaQuestionID]}, true
+	return questionkit.QuestionKey{SessionUUID: r.GetSessionId(), QuestionID: md[questionkit.MetaQuestionID]}, true
 }
 
 // pageState is the result of the per-page lookups.
 type pageState struct {
 	approvals map[string]bool
-	questions map[QuestionKey]PendingQuestion
+	questions map[questionkit.QuestionKey]questionkit.PendingQuestion
 	backlog   map[string]BacklogDecisionState
 	guidance  map[string]OpenGuidance
 }
@@ -285,10 +291,10 @@ func (b *DescriptorBuilder) describe(r *sessionv1.NotificationHistoryRecord, st 
 func (b *DescriptorBuilder) gate(in []*sessionv1.NotificationActionDescriptor, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
 	out := in[:0:0]
 	for _, d := range in {
-		if !b.flag(scopePrefixAction + kindName(d.GetKind())) {
+		if !b.flag(flagsvc.ScopePrefixAction + kindName(d.GetKind())) {
 			continue
 		}
-		if lc == ListenerClassRemote && !b.flag(scopeChannelRemote) {
+		if lc == ListenerClassRemote && !b.flag(flagsvc.ScopeChannelRemote) {
 			continue
 		}
 		out = append(out, d)
@@ -340,7 +346,7 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 	if !live {
 		return b.tabbedQuestionDescriptor(r, st, lc)
 	}
-	tier := answerTier(routeLiveKeystrokeHidden)
+	tier := answerTier(flagsvc.RouteLiveKeystrokeHidden)
 	d := &sessionv1.NotificationActionDescriptor{
 		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: tier, Available: true,
 		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: key.QuestionID,
@@ -381,7 +387,7 @@ func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionD
 	d.Tier = answerTier(route)
 	// A live keystroke is Tier B: offered remotely only when channel:remote:tierB is effective,
 	// the same check the dispatcher's tierGate makes.
-	return route == routeDurableRecord || b.flag(scopeChannelTierB)
+	return route == flagsvc.RouteDurableRecord || b.flag(flagsvc.ScopeChannelTierB)
 }
 
 // tabbedQuestionDescriptor is ANSWER_QUESTION for an open hook row in the
@@ -389,13 +395,13 @@ func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionD
 // ActionOption.value, so a client can group them without a proto change; the
 // answer travels as EncodeSequencePicks in params.answer.
 func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHistoryRecord, st pageState, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
-	id := r.GetMetadata()[metaGuidanceRequestID]
+	id := r.GetMetadata()[questionkit.MetaGuidanceRequestID]
 	g, open := st.guidance[id]
 	if id == "" || !open || len(g.Tabbed) == 0 || r.GetSessionId() == "" {
 		return nil
 	}
 	d := &sessionv1.NotificationActionDescriptor{
-		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: answerTier(routeLiveKeystrokeHidden), Available: true,
+		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: answerTier(flagsvc.RouteLiveKeystrokeHidden), Available: true,
 		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: id, SessionId: r.GetSessionId(),
 	}
 	for i, q := range g.Tabbed {
@@ -407,7 +413,7 @@ func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHi
 }
 
 func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
-	id := r.GetMetadata()[metaGuidanceRequestID]
+	id := r.GetMetadata()[questionkit.MetaGuidanceRequestID]
 	g, open := st.guidance[id]
 	if id == "" || !open || g.Source == domain.QuestionSourceHook {
 		return nil

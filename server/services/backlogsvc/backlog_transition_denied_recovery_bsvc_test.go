@@ -14,9 +14,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -76,7 +78,7 @@ func TestDequeueClaim_should_SurfaceTransitionDeniedOnceAndRecover_When_EngineDe
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureClaimLogs(t)
-			svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()})
+			svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: hostclaim.NewUnclaimedVerdict()})
 			svc.claimDedupFlag = func() bool { return false }
 			itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 
@@ -176,7 +178,7 @@ func denSpawnCases() []denSpawnCase {
 			}},
 		{"DequeueNextQueuedItems", domain.BacklogStatusQueued, domain.BacklogStatusInProgress, domain.CallerClaimAndSpawn,
 			func(t *testing.T) (*BacklogService, string) {
-				svc, _, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()})
+				svc, _, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: hostclaim.NewUnclaimedVerdict()})
 				svc.claimDedupFlag = func() bool { return false }
 				return svc, createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 			},
@@ -318,7 +320,7 @@ func TestAutonomousTriageDenied_should_StayQuietAndFinishByItself_When_TheOperat
 	listener.SetTriageRespawner(spy)
 	ctx := context.Background()
 
-	f.complete(session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
+	f.complete(autonomous.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
 	triageSessions := denTriageSessionCount(t, svc, f.itemID)
 	for range 5 {
 		listener.ReconcileStuck(ctx)

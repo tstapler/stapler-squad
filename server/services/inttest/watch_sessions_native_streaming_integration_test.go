@@ -30,9 +30,11 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -85,8 +87,8 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 
 	prStatusPoller := prpoller.NewPRStatusPoller(storage)
 
-	registry := session.NewRegistry(storage, sessionService.WireInstanceCallbacks)
-	sessionService.SetRegistry(registry)
+	reg := registry.NewRegistry(storage, sessionService.WireInstanceCallbacks)
+	sessionService.SetRegistry(reg)
 
 	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
 
@@ -94,9 +96,9 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	scrollbackConfig.StoragePath = t.TempDir()
 	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
 
-	tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
-	externalDiscovery := session.NewExternalSessionDiscovery()
-	externalApprovalMonitor := session.NewExternalApprovalMonitor()
+	tmuxStreamerManager := external.NewExternalTmuxStreamerManager()
+	externalDiscovery := external.NewExternalSessionDiscovery()
+	externalApprovalMonitor := external.NewExternalApprovalMonitor()
 
 	// Safe under this test's STAPLER_SQUAD_TEST_DIR isolation (see
 	// NewHistoryLinkerFromRealInspector's own doc comment): it resolves its
@@ -119,7 +121,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 		ExternalApprovalMonitor: externalApprovalMonitor,
 		HistoryLinker:           historyLinker,
 		ErrorRegistry:           errorRegistry,
-		Registry:                registry,
+		Registry:                reg,
 		BacklogEnabledCheck:     func() bool { return false },
 	}
 }

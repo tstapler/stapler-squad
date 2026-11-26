@@ -23,7 +23,7 @@ func TestCapturePane_should_RecordRenderTimeSeparatelyFromTheRPC(t *testing.T) {
 			return connect.NewResponse(&v1.PaneSnapshot{Grid: []*v1.Row{{Cells: []*v1.Cell{{Text: "h"}}}}, Modes: &v1.TerminalModes{}}), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess := newWiredTestSession(transport).(*tymuxGRPCSession)
 	sess.paneID = testPaneID
 	before := stageTotal(termlat.Default, termlat.StageCaptureRender)
 
@@ -49,7 +49,7 @@ func TestCapturePane_should_RecordTheRevivePathWhenItRuns(t *testing.T) {
 			return connect.NewResponse(&v1.ReviveSessionResponse{}), nil
 		},
 	}
-	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	sess := newWiredTestSession(transport).(*tymuxGRPCSession)
 	sess.paneID = testPaneID
 	before := stageTotal(termlat.Default, termlat.StageCaptureRevive)
 
@@ -91,7 +91,7 @@ func TestRestoreWithWorkDir_should_TimeEachRestoreStep(t *testing.T) {
 		before[st] = stageTotal(termlat.Default, st)
 	}
 
-	require.NoError(t, NewTymuxGRPCSession(transport).RestoreWithWorkDir(dir))
+	require.NoError(t, newWiredTestSession(transport).RestoreWithWorkDir(dir))
 
 	for _, st := range stages {
 		assert.Greater(t, stageTotal(termlat.Default, st), before[st], st)
@@ -111,7 +111,7 @@ func TestRestoreWithWorkDir_should_TimeStartWhenThereIsNothingToAdopt(t *testing
 	}
 	before := stageTotal(termlat.Default, termlat.StageRestoreStart)
 
-	require.NoError(t, NewTymuxGRPCSession(transport).RestoreWithWorkDir(dir))
+	require.NoError(t, newWiredTestSession(transport).RestoreWithWorkDir(dir))
 
 	assert.Greater(t, stageTotal(termlat.Default, termlat.StageRestoreStart), before)
 }

@@ -1,0 +1,63 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sessionretention",
+    srcs = [
+        "session_retention_item_hold.go",
+        "session_retention_pr.go",
+        "session_retention_reverify.go",
+        "session_retention_sweeper.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/sessionretention",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/domain",
+        "//session/git",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sessionretention",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sessionretention_test",
+    srcs = [
+        "fixture_test.go",
+        "session_retention_sweeper_pr_test.go",
+        "session_retention_sweeper_test.go",
+    ],
+    embed = [":sessionretention"],
+    deps = [
+        "//config",
+        "//github",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/git",
+        "//session/instance",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

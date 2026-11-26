@@ -64,7 +64,7 @@ go_test(
         "straggler_test.go",
         "system_ids_test.go",
     ],
-    data = glob(["*.go"]),
+    data = glob(["*.go"]) + ["//tools/bzl/scandata:module_go_sources"],
     embed = [":deliverygate"],
     deps = [
         "//config",

@@ -907,7 +907,7 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	// returns non-nil below — otherwise streamViaControlMode's "session
 	// missing, restore" branch never runs at all (a nil GetTmuxSession()
 	// skips straight to a no-op StartControlMode success, per
-	// session/tmux_process_manager.go's StartControlMode returning nil when
+	// session/procbackend/tmux_process_manager.go's StartControlMode returning nil when
 	// no session is set). NewTmuxSessionWithDeps (rather than
 	// NewTmuxSessionWithPrefix) is what makes the fake executor — and thus
 	// the call-counted exists/doesn't-exist answers — take effect; it also
@@ -3001,7 +3001,7 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 // project (Epics 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 8.3). Epic 8.1's job is to prove all seven
 // compose correctly, so the round-trip and spot-check tests below need the complete set in
 // one place rather than each hand-rolling its own (partial, driftable) list. All seven have
-// named Go constants (see feature_flag_service.go); three of them
+// named Go constants (see flagsvc/feature_flag_service.go); three of them
 // (terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName,
 // terminalResyncBatchingFlagName) are pure client-side concerns with no Go production call
 // site to share the constant with, but are still named for consistency and so this list and
@@ -3070,7 +3070,7 @@ func TestFullResyncRoundTrip_should_MatchPreProjectBaseline_When_AllSevenFlagsOf
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3143,7 +3143,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	}
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3190,7 +3190,7 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 	// covers it in this same all-flags-on context, not only in isolation.
 	batchTarget := &fakePanePTY{captureContent: "batch-content", cols: 80, rows: 24}
 	batchOnCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", batchTarget, r, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	}
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{{ResyncId: "batch-1"}, {ResyncId: "batch-2"}},
@@ -3230,7 +3230,7 @@ func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_
 	defer cleanup()
 
 	onCurrentPaneRequest := func(ctx context.Context, r *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(testWriter()))
+		return handleCurrentPaneRequest(ctx, "test-session", target, r, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	}
 	var resizeSettling atomic.Bool
 	handleCurrentPaneRequestFrame(stream, "test-session", req, onCurrentPaneRequest, &resizeSettling)
@@ -3310,7 +3310,7 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3359,7 +3359,7 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 		TargetRows: int32Ptr(40),
 	}
 
-	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	_, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3398,7 +3398,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 		TargetRows: int32Ptr(40),
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}
@@ -3435,7 +3435,7 @@ func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDime
 		StaleDimensions: true,
 	}
 
-	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(testWriter()))
+	output, err := handleCurrentPaneRequest(context.Background(), "test-session", target, req, currentResyncOptionsFor(defaultFlags(), testWriter()))
 	if err != nil {
 		t.Fatalf("handleCurrentPaneRequest returned error: %v", err)
 	}

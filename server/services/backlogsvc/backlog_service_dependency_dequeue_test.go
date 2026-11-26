@@ -10,16 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // blockedDequeueFixture seeds a queued dependent whose blocker is a not-yet-started
 // idea item, so the blocker stays unresolved until a test moves it.
 func blockedDequeueFixture(t *testing.T) (svc *BacklogService, creator *mockSessionCreator, blockerID, dependentID string) {
 	t.Helper()
-	svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()})
+	svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: hostclaim.NewUnclaimedVerdict()})
 	svc.claimDedupFlag = func() bool { return false }
 	ctx := context.Background()
 
@@ -100,7 +100,7 @@ func TestDequeueNextQueuedItems_should_StartItem_When_BlockerDeleted(t *testing.
 // reopened). The dequeue sweep must leave the item queued rather than
 // claiming it into in_progress with no readable plan content.
 func TestDequeueNextQueuedItems_should_NotStartItem_When_PlanArtifactsPathDeletedAfterApproval(t *testing.T) {
-	svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()})
+	svc, creator, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: hostclaim.NewUnclaimedVerdict()})
 	svc.claimDedupFlag = func() bool { return false }
 	ctx := context.Background()
 

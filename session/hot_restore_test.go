@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/procbackendtest"
 )
 
 func TestHotRestoreIfLive_Outcomes(t *testing.T) {
@@ -41,7 +42,7 @@ func TestHotRestoreIfLive_Outcomes(t *testing.T) {
 				Title:      "t",
 				Status:     tc.status,
 				ArchivedAt: tc.archivedAt,
-			}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: tc.live})
+			}).WithProcessManagerForTest(&procbackendtest.FakeLivenessProcessManager{Alive: tc.live})
 			probed := false
 			got, err := instance.HotRestoreIfLive(inst, func() bool {
 				probed = true
@@ -58,7 +59,7 @@ func TestHotRestoreIfLive_Outcomes(t *testing.T) {
 // failingAttachPM models a live pane whose hot attach (RestoreWithWorkDir) fails.
 // Close is what kill-session does on the tmux backend.
 type failingAttachPM struct {
-	fakeLivenessProcessManager
+	procbackendtest.FakeLivenessProcessManager
 	closeCalls atomic.Int32
 }
 
@@ -80,7 +81,7 @@ func TestHotRestoreIfLive_FailedAttachNeverKillsTheLiveSession(t *testing.T) {
 	t.Parallel()
 	t.Run("tmux-like backend without a releaser", func(t *testing.T) {
 		t.Parallel()
-		pm := &failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}
+		pm := &failingAttachPM{FakeLivenessProcessManager: procbackendtest.FakeLivenessProcessManager{Alive: true}}
 		inst := (&instance.Instance{Title: "t", Status: domain.PermanentlyFailed}).WithProcessManagerForTest(pm)
 		got, err := instance.HotRestoreIfLive(inst, func() bool { return true })
 		require.Error(t, err)
@@ -90,7 +91,7 @@ func TestHotRestoreIfLive_FailedAttachNeverKillsTheLiveSession(t *testing.T) {
 	})
 	t.Run("tymux-like backend with a releaser", func(t *testing.T) {
 		t.Parallel()
-		pm := &releasingFailingAttachPM{failingAttachPM: failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}}
+		pm := &releasingFailingAttachPM{failingAttachPM: failingAttachPM{FakeLivenessProcessManager: procbackendtest.FakeLivenessProcessManager{Alive: true}}}
 		inst := (&instance.Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(pm)
 		_, err := instance.HotRestoreIfLive(inst, func() bool { return true })
 		require.Error(t, err)
@@ -104,7 +105,7 @@ func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
 	var restores atomic.Int32
-	pm := &fakeLivenessProcessManager{alive: true, restoreRelease: release, onRestore: func() { restores.Add(1) }}
+	pm := &procbackendtest.FakeLivenessProcessManager{Alive: true, RestoreRelease: release, OnRestore: func() { restores.Add(1) }}
 	inst := (&instance.Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(pm)
 
 	var wg sync.WaitGroup
@@ -134,7 +135,7 @@ func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 
 func TestHotRestoreIfLive_FailedAttachRestoresStartedFlag(t *testing.T) {
 	t.Parallel()
-	pm := &failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}
+	pm := &failingAttachPM{FakeLivenessProcessManager: procbackendtest.FakeLivenessProcessManager{Alive: true}}
 	inst := (&instance.Instance{Title: "t", Status: domain.PermanentlyFailed}).WithProcessManagerForTest(pm)
 	inst.MarkStarted() // a runtime failure: the session had started
 	_, err := instance.HotRestoreIfLive(inst, func() bool { return true })
@@ -145,7 +146,7 @@ func TestHotRestoreIfLive_FailedAttachRestoresStartedFlag(t *testing.T) {
 
 func TestHotRestoreIfLive_ClearedDropsPendingRetryState(t *testing.T) {
 	t.Parallel()
-	inst := (&instance.Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
+	inst := (&instance.Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(&procbackendtest.FakeLivenessProcessManager{Alive: true})
 	inst.MutateForTest(func(i *instance.Instance) {
 		i.NextRetryAt = time.Now().Add(time.Hour)
 		i.RetryAttempt = 2
@@ -164,7 +165,7 @@ func TestHotRestoreIfLive_ClearedDropsPendingRetryState(t *testing.T) {
 
 // closeCountingPM is a dead backing process that records any launch/kill attempt.
 type closeCountingPM struct {
-	fakeLivenessProcessManager
+	procbackendtest.FakeLivenessProcessManager
 	starts, closes atomic.Int32
 }
 
@@ -173,7 +174,7 @@ func (m *closeCountingPM) Close() error       { m.closes.Add(1); return nil }
 
 func TestHotRestoreIfLive_NeverColdLaunchesWhenProcessDiedAfterProbe(t *testing.T) {
 	t.Parallel()
-	pm := &closeCountingPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: false}}
+	pm := &closeCountingPM{FakeLivenessProcessManager: procbackendtest.FakeLivenessProcessManager{Alive: false}}
 	inst := (&instance.Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(pm)
 	got, err := instance.HotRestoreIfLive(inst, func() bool { return true })
 	require.Error(t, err)
@@ -182,13 +183,15 @@ func TestHotRestoreIfLive_NeverColdLaunchesWhenProcessDiedAfterProbe(t *testing.
 	assert.Equal(t, domain.Failed, inst.GetLifecycleStatus())
 }
 
-type panickingAttachPM struct{ fakeLivenessProcessManager }
+type panickingAttachPM struct {
+	procbackendtest.FakeLivenessProcessManager
+}
 
 func (m *panickingAttachPM) RestoreWithWorkDir(string) error { panic("attach exploded") }
 
 func TestStartHotAttach_ClearsFlagWhenStartPanics(t *testing.T) {
 	t.Parallel()
-	inst := (&instance.Instance{Title: "t", Status: domain.Creating}).WithProcessManagerForTest(&panickingAttachPM{fakeLivenessProcessManager{alive: true}})
+	inst := (&instance.Instance{Title: "t", Status: domain.Creating}).WithProcessManagerForTest(&panickingAttachPM{procbackendtest.FakeLivenessProcessManager{Alive: true}})
 	assert.Panics(t, func() { _ = inst.StartHotAttachForTest() })
 	assert.False(t, inst.HotAttachingForTest(), "a panic must not leave the release-only flag stuck")
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // itemWorld is an in-memory backlog item whose status the fake RPCs mutate, so a
@@ -54,7 +55,7 @@ func (w *itemWorld) decider() BacklogDecider {
 	return NewBacklogDecider(BacklogDeciderDeps{Status: w, Transitions: w, Sessions: w, Merger: w})
 }
 
-func decide(t *testing.T, b BacklogDecider, choice string, confirm bool) ActionResult {
+func decide(t *testing.T, b BacklogDecider, choice string, confirm bool) questionkit.ActionResult {
 	t.Helper()
 	res, err := b.Decide(context.Background(), BacklogDecision{ItemID: "item1", Choice: choice, Confirm: confirm, Reason: "needs tests"})
 	require.NoError(t, err)
@@ -85,7 +86,7 @@ func TestBacklogDecider_ShouldSendBackToReady_WhenReworkFromReview(t *testing.T)
 func TestBacklogDecider_ShouldReturnAlreadyResolvedWithoutMerging_WhenMergeRetriedAfterRestart(t *testing.T) {
 	t.Parallel()
 	w := &itemWorld{status: backlogStatusReview, sessionID: "work-1"}
-	d := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil)
+	d := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil, testFlagRegistry())
 	d.flags, d.metrics = fakeActionFlags{off: map[string]bool{}}, &recordingMetrics{}
 	req := func() *sessionv1.InvokeNotificationActionRequest {
 		return &sessionv1.InvokeNotificationActionRequest{
@@ -99,7 +100,7 @@ func TestBacklogDecider_ShouldReturnAlreadyResolvedWithoutMerging_WhenMergeRetri
 	require.EqualValues(t, 1, w.merges.Load())
 
 	// A restart empties the in-memory cache; the item's own state is the guard.
-	restarted := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil)
+	restarted := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil, testFlagRegistry())
 	restarted.flags, restarted.metrics = fakeActionFlags{off: map[string]bool{}}, &recordingMetrics{}
 	retry, err := restarted.Invoke(context.Background(), ActionCall{Msg: req()})
 	require.NoError(t, err)

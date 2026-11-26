@@ -12,7 +12,7 @@ import type {
   HitRange, LineRange, ModeConfig, PendingEdits, ScrollSnapshot, VirtualDoc,
 } from "./EditorEngine";
 import { loadCodemirrorLang } from "./languages";
-import { diffHighlightExtension, markAtDocLine } from "./diffHighlight";
+import { diffHighlightExtension, markAtDocLine, nextHunkDocLine } from "./diffHighlight";
 import { legacyVimKeymap } from "./legacyKeymap";
 import { cmTheme } from "./cmTheme";
 import { changesToEdits } from "./pendingEdits";
@@ -21,6 +21,8 @@ import { GapLineController } from "./cm6LazyDoc/gapLineController";
 import { gapTableOf, segAtFileLine } from "./cm6LazyDoc/gapTable";
 import { lazyBufferParts } from "./cm6LazyDoc/lazyBuffer";
 import { WindowSwapController } from "./cm6LazyDoc/windowSwap";
+
+const isCoarsePointer = (): boolean => typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 
 const GUTTER_MARKER_CLASS: Record<GutterMarkType, string> = {
   add: gutterMarkerAdd,
@@ -114,6 +116,18 @@ export class CmEngine implements EditorEngine {
         if (!marks || marks.size === 0) return null;
         const markType = markAtDocLine(view.state, marks, view.state.doc.lineAt(block.from).number);
         return markType ? new ChangeGutterMarker(markType) : null;
+      },
+      domEventHandlers: {
+        // Touch only: a mouse click in the gutter keeps its previous (no-op) behaviour.
+        click(view, block) {
+          if (!marks || marks.size === 0 || !isCoarsePointer()) return false;
+          const line = view.state.doc.lineAt(block.from).number;
+          if (markAtDocLine(view.state, marks, line) === undefined) return false;
+          const target = nextHunkDocLine(view.state, marks, line);
+          if (target === null) return false;
+          view.dispatch({ selection: { anchor: view.state.doc.line(target).from }, scrollIntoView: true });
+          return true;
+        },
       },
     });
     // Wrapped lines break the fixed line height a lazy document's placeholders are sized with.

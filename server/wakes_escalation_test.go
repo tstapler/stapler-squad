@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -63,7 +64,7 @@ func TestPeerHelpEscalation_should_RaiseOneInputRequiredDeliveredForAHiddenAsker
 	}
 	assert.Equal(t, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED), got.NotificationType)
 	assert.Equal(t, "peer-help-stalled:"+row.ID, got.NotificationID)
-	assert.Equal(t, row.ID, got.NotificationMetadata[services.MetaGuidanceRequestID])
+	assert.Equal(t, row.ID, got.NotificationMetadata[questionkit.MetaGuidanceRequestID])
 	assert.Equal(t, "title-peer", got.NotificationMetadata[services.MetaPeerTitle])
 	assert.Equal(t, "asker", got.SessionID)
 	hint, _ := deliverygate.ParseClassHint(got.NotificationMetadata)

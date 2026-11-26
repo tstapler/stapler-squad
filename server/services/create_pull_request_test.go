@@ -32,7 +32,7 @@ import (
 )
 
 // firstCallJSONPR returns a valid first-call stream-json terminal "result" line
-// for DraftPullRequest tests, matching the schema headless_service_test.go's
+// for DraftPullRequest tests, matching the schema backlogmisc/headless_service_test.go's
 // firstCallJSONHS uses. Marshaled via encoding/json (rather than string
 // concatenation) so a multi-line result string is escaped correctly.
 // total_cost_usd (not cost_usd) matches the real CLI's field name — see
@@ -477,7 +477,7 @@ type fakePRInstanceStore struct {
 func (f *fakePRInstanceStore) LoadInstances() ([]*instance.Instance, error)     { return nil, nil }
 func (f *fakePRInstanceStore) ListInstanceData() ([]domain.InstanceData, error) { return nil, nil }
 func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*domain.InstanceData, error) {
-	return nil, session.ErrInstanceDataNotFound
+	return nil, domain.ErrInstanceDataNotFound
 }
 func (f *fakePRInstanceStore) AddInstance(*instance.Instance) error                   { return nil }
 func (f *fakePRInstanceStore) DeleteInstance(string) error                            { return nil }

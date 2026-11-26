@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutList, LayoutDashboard, Columns2, Rows2, Maximize2, X } from "lucide-react";
+import { LayoutList, LayoutDashboard, Columns2, Rows2, Maximize2, X, GripVertical } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LeafPane, PaneViewKind } from "@/lib/pane/paneTypes";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
@@ -8,12 +8,14 @@ import { SessionActionsOverflow } from "@/components/sessions/SessionActionsOver
 import { BacklogOriginBadge } from "@/components/shared/BacklogOriginBadge";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { usePaneContext } from "./PaneContext";
+import { titleFirstLine } from "@/lib/pane/paneUtils";
 import {
   paneHeader,
   paneTitle,
   paneHeaderButton,
   paneHeaderActions,
   paneCloseButton,
+  paneDragHandle,
 } from "@/styles/pane/paneHeader.css";
 
 interface PaneHeaderProps {
@@ -27,6 +29,8 @@ interface PaneHeaderProps {
   splitButtonVisible?: boolean;
   onSplitVertical?: () => void;
   onSplitHorizontal?: () => void;
+  /** When set, a grip is shown and dragging it starts a pane swap. */
+  onDragStart?: (e: React.DragEvent) => void;
 }
 
 export function PaneHeader({
@@ -40,6 +44,7 @@ export function PaneHeader({
   splitButtonVisible,
   onSplitVertical,
   onSplitHorizontal,
+  onDragStart,
 }: PaneHeaderProps) {
   const cockpit = useCockpitActions();
   const { backlogIndex, triggerPickerForceNew } = usePaneContext();
@@ -48,7 +53,7 @@ export function PaneHeader({
     ? sessions.find((s) => s.id === pane.sessionId) ?? null
     : null;
   const sessionActions = useSessionActions(session?.id ?? "");
-  const titleText = isListPane ? "Sessions" : (session ? session.title : "Empty");
+  const titleText = isListPane ? "Sessions" : (session ? titleFirstLine(session.title) : "Empty");
 
   return (
     <div
@@ -56,7 +61,21 @@ export function PaneHeader({
       data-testid={`pane-header-${pane.id}`}
       onClick={onFocus}
     >
-      <span className={paneTitle} title={titleText}>
+      {onDragStart && (
+        <span
+          className={paneDragHandle}
+          draggable
+          onDragStart={onDragStart}
+          onClick={(e) => e.stopPropagation()}
+          title="Drag to swap with another pane"
+          role="img"
+          aria-label="Drag to swap panes"
+          data-testid={`pane-drag-handle-${pane.id}`}
+        >
+          <GripVertical size={14} aria-hidden="true" />
+        </span>
+      )}
+      <span className={paneTitle} title={session?.title ?? titleText}>
         {titleText}
       </span>
       {session && <BacklogOriginBadge entry={backlogIndex.get(session.id)} compact />}

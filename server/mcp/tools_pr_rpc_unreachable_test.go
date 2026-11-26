@@ -27,7 +27,7 @@ func TestMCPTools_ShouldNotRouteToPRMutatingRPCs(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
 	svc := services.NewSessionService(storage, nil)
-	core := NewCore(&stubStore{}, svc, nil, storage, nil, nil, nil, nil, nil, nil)
+	core := NewCore(&stubStore{}, realSession{svc}, nil, storage, nil, nil, nil, nil, nil)
 
 	for name := range core.ListTools() {
 		for rpc, snake := range uiOnlyPRRPCs {

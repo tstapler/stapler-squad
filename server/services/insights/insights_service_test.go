@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -1723,10 +1722,10 @@ func TestGetInsightsSummary_should_IncludeGeminiPricedSessionWithNoTranscript_Wh
 type fakeDismissedFindingsStore struct {
 	mu           sync.Mutex
 	dismissed    map[string]bool
-	dismissCalls []session.DismissedFindingData
+	dismissCalls []domain.DismissedFindingData
 }
 
-func (f *fakeDismissedFindingsStore) DismissFinding(_ context.Context, data session.DismissedFindingData) error {
+func (f *fakeDismissedFindingsStore) DismissFinding(_ context.Context, data domain.DismissedFindingData) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.dismissed == nil {

@@ -296,6 +296,10 @@ export interface BacklogItem {
    * default (Settings → Defaults). 0 = unlimited retries for this item. >0 =
    * this item's own cap, replacing the global value.
    */
+  /** True for an epic's auto-created end-to-end check child (shows the "Integration Check" badge). */
+  isIntegrationChild?: boolean;
+  /** On an epic: ID of its integration child; "" or undefined when none. */
+  integrationChildId?: string;
   reworkCapOverride?: number;
   /**
    * Per-item, optional soft-budget-warning threshold in USD. Undefined means
@@ -776,6 +780,8 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
+    isIntegrationChild: p.isIntegrationChild,
+    integrationChildId: p.integrationChildId || undefined,
     costBudgetThresholdUsd: p.costBudgetThresholdUsd,
     duplicatePending: p.duplicatePending,
     duplicateRef: p.duplicateRef,

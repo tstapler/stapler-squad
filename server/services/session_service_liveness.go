@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -71,15 +72,15 @@ func (s *SessionService) SessionProgram(sessionUUID string) (string, bool) {
 // TestSafeIdleStatusContexts_MatchClaudeIdlePatternDescriptions (which pins
 // it against claude.go's actual pattern descriptions) needs no change. The
 // allowlist itself now lives in the session package so
-// session/nudge_gate.go's CheckNudgeEligible can share it instead of
+// session/autonomous/nudge_gate.go's CheckNudgeEligible can share it instead of
 // maintaining a second copy — see session.SafeIdleStatusContexts's doc
 // comment.
-var safeIdleStatusContexts = session.SafeIdleStatusContexts
+var safeIdleStatusContexts = autonomous.SafeIdleStatusContexts
 
 // isSafeSteerStatus reports whether a detection result is safe for an
 // unattended PTY write — see session.IsSafeSteerStatus's doc comment.
 func isSafeSteerStatus(status detection.DetectedStatus, statusContext string) bool {
-	return session.IsSafeSteerStatus(status, statusContext)
+	return autonomous.IsSafeSteerStatus(status, statusContext)
 }
 
 // IsHiddenSession implements SessionSteerer: true only for a live instance that

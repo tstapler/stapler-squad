@@ -117,7 +117,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.persist(domain.InstanceData{Title: "t"}, func(updateSkip) bool {
+		f.persist(domain.InstanceData{Title: "t"}, func(domain.UpdateSkip) bool {
 			close(inWrite)
 			<-release
 			return true
@@ -139,17 +139,17 @@ func TestWriteRow_Should_ForgetAfterWrite(t *testing.T) {
 	t.Parallel()
 	s := &Storage{}
 	data := domain.InstanceData{Title: "t"}
-	s.saved.persist(data, func(updateSkip) bool { return true })
+	s.saved.persist(data, func(domain.UpdateSkip) bool { return true })
 
 	err := s.writeRow("t", func() error {
 		// simulates a save racing with the write and re-recording the title
-		s.saved.persist(data, func(updateSkip) bool { return true })
+		s.saved.persist(data, func(domain.UpdateSkip) bool { return true })
 		return nil
 	})
 	require.NoError(t, err)
 
 	wrote := false
-	s.saved.persist(data, func(updateSkip) bool { wrote = true; return true })
+	s.saved.persist(data, func(domain.UpdateSkip) bool { wrote = true; return true })
 	assert.True(t, wrote, "fingerprint recorded during the write must not survive it")
 }
 
@@ -261,9 +261,9 @@ func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *tes
 	require.Len(t, got, 1, "an unchanged instance deleted from storage must be re-created by the next save")
 }
 
-func recordSkip(f *savedFingerprints, data domain.InstanceData, ok bool) updateSkip {
-	var got updateSkip
-	f.persist(data, func(skip updateSkip) bool { got = skip; return ok })
+func recordSkip(f *savedFingerprints, data domain.InstanceData, ok bool) domain.UpdateSkip {
+	var got domain.UpdateSkip
+	f.persist(data, func(skip domain.UpdateSkip) bool { got = skip; return ok })
 	return got
 }
 
@@ -276,21 +276,21 @@ func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
 	scalar := base
 	scalar.Tags = []string{"a", "b"} // reorder is not a change
 	scalar.Path = "/other"
-	assert.Equal(t, updateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, recordSkip(&f, scalar, true),
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, recordSkip(&f, scalar, true),
 		"a session-column change must skip every child section")
 
 	diff := scalar
 	diff.DiffStats.Content = "y"
-	assert.Equal(t, updateSkip{Tags: true, Worktree: true, Claude: true}, recordSkip(&f, diff, true))
+	assert.Equal(t, domain.UpdateSkip{Tags: true, Worktree: true, Claude: true}, recordSkip(&f, diff, true))
 
 	tags := diff
 	tags.Tags = []string{"a", "c"}
-	assert.Equal(t, updateSkip{DiffStats: true, Worktree: true, Claude: true}, recordSkip(&f, tags, true))
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Worktree: true, Claude: true}, recordSkip(&f, tags, true))
 
 	wt := tags
 	wt.Worktree.BranchName = "br"
 	wt.ClaudeSession.ConversationUUID = "conv"
-	assert.Equal(t, updateSkip{DiffStats: true, Tags: true}, recordSkip(&f, wt, true))
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true}, recordSkip(&f, wt, true))
 }
 
 // A failed write rolls back, so the row still holds the previous data: the next
@@ -312,7 +312,7 @@ func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
 func TestPersist_Should_WriteEverything_When_TitleUnseen(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	assert.Equal(t, updateSkip{}, recordSkip(&f, domain.InstanceData{Title: "new"}, true))
+	assert.Equal(t, domain.UpdateSkip{}, recordSkip(&f, domain.InstanceData{Title: "new"}, true))
 }
 
 // End to end: skipping unchanged sections must not lose a changed one.
@@ -347,7 +347,116 @@ func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
 
 	bad := base
 	bad.CreatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) // json.Marshal fails: year out of range
-	f.persist(bad, func(updateSkip) bool { return true })
+	f.persist(bad, func(domain.UpdateSkip) bool { return true })
 
-	assert.Equal(t, updateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
+	assert.Equal(t, domain.UpdateSkip{}, recordSkip(&f, base, true), "an unhashable write must not leave sections to skip against")
+}
+
+// A zero sum is hashJSON's marshal-failure marker, so two zero sums must never
+// count as "unchanged": the section would be skipped without ever being written.
+func TestSkipAgainst_Should_NotSkipSection_When_BothSumsAreZero(t *testing.T) {
+	t.Parallel()
+	known := sectionsOf(domain.InstanceData{Title: "t", Tags: []string{"a"}})
+
+	assert.Equal(t, domain.UpdateSkip{}, sectionSums{}.skipAgainst(sectionSums{}), "zero against zero is unknown, not unchanged")
+
+	partial := known
+	partial.tags = sectionSums{}.tags
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Worktree: true, Claude: true}, partial.skipAgainst(partial),
+		"only the unhashable section is rewritten; the others still skip")
+	assert.Equal(t, domain.UpdateSkip{DiffStats: true, Tags: true, Worktree: true, Claude: true}, known.skipAgainst(known))
+}
+
+// sectionWrites counts the writes each child table sees through the storage client.
+type sectionWrites struct{ session, worktree, diff, claude atomic.Int64 }
+
+func countSectionWrites(t *testing.T, storage *Storage) *sectionWrites {
+	t.Helper()
+	w := &sectionWrites{}
+	hook := func(n *atomic.Int64) ent.Hook {
+		return func(next ent.Mutator) ent.Mutator {
+			return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+				n.Add(1)
+				return next.Mutate(ctx, m)
+			})
+		}
+	}
+	c := storage.GetEntClient()
+	c.Session.Use(hook(&w.session))
+	c.Worktree.Use(hook(&w.worktree))
+	c.DiffStats.Use(hook(&w.diff))
+	c.ClaudeSession.Use(hook(&w.claude))
+	return w
+}
+
+func (w *sectionWrites) snapshot() [4]int64 {
+	return [4]int64{w.session.Load(), w.worktree.Load(), w.diff.Load(), w.claude.Load()}
+}
+
+func restoredStarted(t *testing.T, data domain.InstanceData) *instance.Instance {
+	t.Helper()
+	inst, err := instance.FromInstanceDataDeferred(data)
+	require.NoError(t, err)
+	inst.MarkStarted()
+	return inst
+}
+
+// End to end through saveInstanceToRepo: changing exactly one section of an already-saved session
+// must write that section's rows and no other section's (UpdateSkipping receives the dedup skip).
+func TestSaveInstances_Should_WriteOnlyTheChangedSection_When_OneSectionChanges(t *testing.T) {
+	t.Parallel()
+	base := func() domain.InstanceData {
+		return domain.InstanceData{
+			Title: "dedup-e2e", UUID: "u-dedup-e2e", Path: "/tmp/e2e", Program: "claude", Status: domain.Paused,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(), Tags: []string{"one"},
+			Worktree:      domain.GitWorktreeData{RepoPath: "/repo", WorktreePath: "/wt", SessionName: "dedup-e2e", BranchName: "b", BaseCommitSHA: "s"},
+			DiffStats:     domain.DiffStatsData{Added: 1, Removed: 2, Content: "d"},
+			ClaudeSession: domain.ClaudeSessionData{ConversationUUID: "conv", Metadata: map[string]string{"k": "v"}},
+		}
+	}
+	// writes is {session, worktree, diff stats, claude} writes caused by the one changed save.
+	cases := []struct {
+		name   string
+		change func(*domain.InstanceData)
+		check  func(t *testing.T, w [4]int64, got domain.InstanceData)
+	}{
+		{"session column only", func(d *domain.InstanceData) { d.Path = "/tmp/e2e-2" }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 0, 0, 0}, w)
+			assert.Equal(t, "/tmp/e2e-2", got.Path)
+		}},
+		{"worktree only", func(d *domain.InstanceData) { d.Worktree.BranchName = "b2" }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 1, 0, 0}, w)
+			assert.Equal(t, "b2", got.Worktree.BranchName)
+		}},
+		{"diff stats only", func(d *domain.InstanceData) { d.DiffStats.Added = 9 }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 0, 1, 0}, w)
+			assert.Equal(t, 9, got.DiffStats.Added)
+		}},
+		{"tags only", func(d *domain.InstanceData) { d.Tags = []string{"one", "two"} }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{3, 0, 0, 0}, w, "main update plus clear and add of the tag edge")
+			assert.ElementsMatch(t, []string{"one", "two"}, got.Tags)
+		}},
+		{"claude only", func(d *domain.InstanceData) { d.ClaudeSession.Metadata = map[string]string{"k": "v2"} }, func(t *testing.T, w [4]int64, got domain.InstanceData) {
+			assert.Equal(t, [4]int64{1, 0, 0, 1}, w)
+			assert.Equal(t, map[string]string{"k": "v2"}, got.ClaudeSession.Metadata)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			storage, cleanup := createTestStorage(t)
+			defer cleanup()
+			require.NoError(t, storage.AddInstance(restoredStarted(t, base())))
+			require.NoError(t, storage.SaveInstances([]*instance.Instance{restoredStarted(t, base())}))
+			w := countSectionWrites(t, storage)
+
+			changed := base()
+			tc.change(&changed)
+			require.NoError(t, storage.SaveInstances([]*instance.Instance{restoredStarted(t, changed)}))
+
+			loaded, err := storage.Repo.GetWithOptions(context.Background(), "dedup-e2e", domain.LoadFull)
+			require.NoError(t, err)
+			tc.check(t, w.snapshot(), *loaded)
+		})
+	}
 }

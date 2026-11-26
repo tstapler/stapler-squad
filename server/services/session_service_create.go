@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudehistory"
 	"github.com/tstapler/stapler-squad/session/domain"
 	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -157,7 +159,7 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 	// Fork dispatch: when fork_source_id is set, copy the source conversation
 	// file and set resume_id to the new UUID so the normal start path picks it
 	// up with --resume.
-	srcPath, findErr := session.FindConversationFilePath(ctx, msg.ForkSourceId)
+	srcPath, findErr := claudehistory.FindConversationFilePath(ctx, msg.ForkSourceId)
 	if findErr != nil {
 		return connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("fork source conversation not found: %w", findErr))
@@ -480,10 +482,10 @@ func (s *SessionService) setupRemoteSessionTarget(
 			errors.New("remote session support is not configured on this server"))
 	}
 
-	target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remoteAddr(resolvedRemote.Host)}
+	target := tmux.SSHTarget{Name: resolvedRemote.Name, Addr: remote.RemoteAddr(resolvedRemote.Host)}
 	clientConfig := ssh.ClientConfig{
 		User:            resolvedRemote.User,
-		Auth:            resolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
+		Auth:            remote.ResolveIdentityAuthMethods(ctx, s.remoteKeyStore, resolvedRemote.IdentityRef),
 		HostKeyCallback: s.remoteKnownHosts.HostKeyCallback(),
 	}
 	runner := tmux.NewSSHRunner(target, clientConfig, tmux.WithSSHClientPool(s.sshClientPool()))

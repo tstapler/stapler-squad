@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -42,7 +41,7 @@ func TestTransitionBacklogItemStatus_should_NotRecordManualNudge_When_ActorIsAge
 			svc, storage, _, _ := enfService(t)
 			item := enfItemAt(t, storage, domain.BacklogStatusIdea)
 
-			require.NoError(t, enfTransition(services.WithTransitionActor(t.Context(), actor), svc, item.ID, domain.BacklogStatusRefining, ""))
+			require.NoError(t, enfTransition(domain.WithTransitionActor(t.Context(), actor), svc, item.ID, domain.BacklogStatusRefining, ""))
 
 			assert.Empty(t, nudgeRows(t, storage, item.ID))
 		})

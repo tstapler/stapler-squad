@@ -17,6 +17,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/itemlink"
+	"github.com/tstapler/stapler-squad/session/nudgeoutcomes"
 )
 
 // diagnoseHandlers implements the Diagnose & Nudge MCP tools (backlog item
@@ -30,6 +32,8 @@ type diagnoseHandlers struct {
 	storage  *session.Storage
 	live     liveInstanceFinder
 	eventBus *events.EventBus
+	// nudgeGate is the write-time safety check; nil refuses every nudge.
+	nudgeGate NudgeGate
 }
 
 // diagnoseOutcomeValues are the valid submit_diagnosis_result outcomes,
@@ -172,10 +176,10 @@ func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.Call
 // resolveDiagnoseItemLink is resolveItemLink's diagnose-role counterpart:
 // backlogHandlers.resolveItemLink is a method on a different struct, so this
 // is a small free-function duplicate calling the same
-// session.ResolveItemLink — mirrors submitReviewVerdict's own
+// itemlink.ResolveItemLink — mirrors submitReviewVerdict's own
 // resolveItemLink-then-role-check shape for SessionRoleReview.
 func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
-	itemSession, linkErr := session.ResolveItemLink(ctx, storage, callerUUID, itemID)
+	itemSession, linkErr := itemlink.ResolveItemLink(ctx, storage, callerUUID, itemID)
 	if linkErr == nil {
 		if itemSession.Role != instance.SessionRoleDiagnose {
 			return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only %q may call this tool", itemSession.Role, instance.SessionRoleDiagnose), "")
@@ -183,9 +187,9 @@ func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, call
 		return itemSession, nil
 	}
 	switch linkErr.Code {
-	case session.ItemLinkNotFound:
+	case itemlink.ItemLinkNotFound:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
-	case session.ItemLinkPermissionDenied:
+	case itemlink.ItemLinkPermissionDenied:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
 		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
@@ -359,7 +363,7 @@ func (dh *diagnoseHandlers) checkNudgeCapForWrite(ctx context.Context, itemID, s
 		return errResult(ErrInternalError, fmt.Sprintf("check nudge eligibility: %v", gateErr), "")
 	}
 	if !allowed {
-		session.RecordNudgeOutcome(session.NudgeKindDiagnose, session.NudgeOutcomeSkippedCap, targetSessionID)
+		nudgeoutcomes.RecordNudgeOutcome(nudgeoutcomes.NudgeKindDiagnose, nudgeoutcomes.NudgeOutcomeSkippedCap, targetSessionID)
 		return errResult(ErrPermissionDenied, disallowReason, declineToDiagnoseRemediation)
 	}
 	return nil
@@ -398,7 +402,7 @@ func (dh *diagnoseHandlers) claimNudgeAttemptForWrite(ctx context.Context, calle
 
 // resolveNudgeTarget finds and idle/pane-ownership-verifies a's target
 // instance — extracted from performNudge purely to stay under the funlen
-// gate. See session.VerifyNudgeSafeToWrite's doc comment for why the
+// gate. See NudgeGate.VerifyNudgeSafeToWrite's doc comment for why the
 // write-time pane-ownership re-verification can't be skipped even though
 // DiagnoseNudgeAllowed/dispatch-time eligibility already looked idle (AC2's
 // two-part write-time gate).
@@ -410,7 +414,10 @@ func (dh *diagnoseHandlers) resolveNudgeTarget(ctx context.Context, a nudgeSessi
 	if target == nil {
 		return nil, errResult(ErrSessionNotFound, fmt.Sprintf("session %q not found or not live", a.targetSessionID), "")
 	}
-	if verifyErr := session.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
+	if dh.nudgeGate == nil {
+		return nil, errResult(ErrInternalError, "nudge safety gate unavailable", "")
+	}
+	if verifyErr := dh.nudgeGate.VerifyNudgeSafeToWrite(ctx, target); verifyErr != nil {
 		// The settle wait honours ctx: a cancelled request is not a refusal
 		// to nudge, so it must not tell the agent to decline.
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -460,7 +467,7 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 	if errRes := dh.writeNudge(ctx, callerUUID, target, a.message); errRes != nil {
 		return errRes, nil
 	}
-	session.RecordNudgeOutcome(session.NudgeKindDiagnose, session.NudgeOutcomeDelivered, a.targetSessionID)
+	nudgeoutcomes.RecordNudgeOutcome(nudgeoutcomes.NudgeKindDiagnose, nudgeoutcomes.NudgeOutcomeDelivered, a.targetSessionID)
 
 	if _, recErr := dh.storage.RecordDiagnoseNudgeAttempt(ctx, a.itemID, domain.StuckReason(a.stuckReason)); recErr != nil {
 		log.Warn("[diagnose_nudge_session] failed to record nudge attempt", "item", a.itemID, "session", a.targetSessionID, "err", recErr)
@@ -472,9 +479,9 @@ func (dh *diagnoseHandlers) performNudge(ctx context.Context, callerUUID string,
 // recordDiagnoseWriteFailure counts a failed diagnose write; an uncertain
 // submit may still have reached the pane, so it is kept apart from "failed".
 func recordDiagnoseWriteFailure(target *instance.Instance, err error) {
-	outcome := session.NudgeOutcomeFailed
-	if errors.Is(err, session.ErrNudgeSubmitUncertain) {
-		outcome = session.NudgeOutcomeUncertain
+	outcome := nudgeoutcomes.NudgeOutcomeFailed
+	if errors.Is(err, domain.ErrNudgeSubmitUncertain) {
+		outcome = nudgeoutcomes.NudgeOutcomeUncertain
 	}
-	session.RecordNudgeOutcome(session.NudgeKindDiagnose, outcome, target.Snapshot().Title)
+	nudgeoutcomes.RecordNudgeOutcome(nudgeoutcomes.NudgeKindDiagnose, outcome, target.Snapshot().Title)
 }

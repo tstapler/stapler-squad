@@ -5,6 +5,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 // guidance_runtime_wiring.go binds the hook-question mirror, the dialog-gone
@@ -18,11 +19,11 @@ const (
 )
 
 // wireDialogCanary installs the canary once and returns it.
-func (s *SessionService) wireDialogCanary() *DialogMatchCanary {
+func (s *SessionService) wireDialogCanary() *questionkit.DialogMatchCanary {
 	if c := s.dialogCanary.Load(); c != nil {
 		return c
 	}
-	count := func(result DialogMatchResult, version string) {
+	count := func(result questionkit.DialogMatchResult, version string) {
 		if s.deliveryGate != nil {
 			s.deliveryGate.Metrics().Add(deliverygate.CounterQuestionDialogMatch, string(result), version)
 		}
@@ -31,7 +32,7 @@ func (s *SessionService) wireDialogCanary() *DialogMatchCanary {
 		(&EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), false, true)
 	}
-	c := NewDialogMatchCanary(nil, count, notify)
+	c := questionkit.NewDialogMatchCanary(nil, count, notify)
 	if !s.dialogCanary.CompareAndSwap(nil, c) {
 		return s.dialogCanary.Load()
 	}
@@ -41,7 +42,7 @@ func (s *SessionService) wireDialogCanary() *DialogMatchCanary {
 // SetGuidanceMirror installs the durable hook-question mirror: the router
 // re-registers an expired question through it, a terminal-answer receipt clears
 // through it, and a hook create that hits the cap re-verifies through it.
-func (s *SessionService) SetGuidanceMirror(m *GuidanceHookMirror) {
+func (s *SessionService) SetGuidanceMirror(m *questionkit.GuidanceHookMirror) {
 	if m != nil {
 		m.SetPaneCapture(s.PaneCapture)
 		m.SetCardRetirer(historyItemResolver{store: s.GetNotificationStore()}.ResolveGuidanceNotifications)
@@ -56,8 +57,8 @@ func (s *SessionService) PaneCapture(ctx context.Context, sessionUUID string) (s
 
 // ensureRegistered re-registers an expired hook question from its durable row,
 // through the explicit mirror when given and otherwise the installed one.
-func (s *SessionService) ensureRegistered(explicit *GuidanceHookMirror) func(context.Context, QuestionKey) bool {
-	return func(ctx context.Context, key QuestionKey) bool {
+func (s *SessionService) ensureRegistered(explicit *questionkit.GuidanceHookMirror) func(context.Context, questionkit.QuestionKey) bool {
+	return func(ctx context.Context, key questionkit.QuestionKey) bool {
 		m := explicit
 		if m == nil {
 			m = s.guidanceMirror.Load()
@@ -78,4 +79,9 @@ func (s *SessionService) deliveryProbes(acks *GuidanceAckDetector) DeliveryProbe
 		p.Unconfirmed = acks.Unconfirmed
 	}
 	return p
+}
+
+// GuidanceMirror returns the installed hook mirror, or nil before SetGuidanceMirror.
+func (s *SessionService) GuidanceMirror() *questionkit.GuidanceHookMirror {
+	return s.guidanceMirror.Load()
 }

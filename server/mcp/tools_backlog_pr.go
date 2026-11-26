@@ -13,7 +13,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -55,18 +54,18 @@ func (h *backlogHandlers) verifyPR(ctx context.Context, ref githubpkg.RepoRef, p
 	if h.verifyPRMatchesBranch != nil {
 		return h.verifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
 	}
-	return VerifyPRMatchesBranch(ctx, ref, prNumber, expectedBranch)
+	return VerifyPRMatchesBranch(ctx, githubOrUnavailable(h.github), ref, prNumber, expectedBranch)
 }
 
 // callerGitHubLogin resolves the GitHub login this server is authenticated
 // as on host ("" means github.com), via the overridable resolveCallerGitHubLogin
 // seam when set (host is ignored on that seam — tests only ever exercise
-// github.com), otherwise the real githubpkg.GetCurrentUserLogin.
+// github.com), otherwise the injected GitHub port.
 func (h *backlogHandlers) callerGitHubLogin(ctx context.Context, host string) (string, error) {
 	if h.resolveCallerGitHubLogin != nil {
 		return h.resolveCallerGitHubLogin(ctx)
 	}
-	return githubpkg.GetCurrentUserLogin(ctx, host)
+	return githubOrUnavailable(h.github).GetCurrentUserLogin(ctx, host)
 }
 
 // decideOverridePolicy is the pure decision function behind
@@ -148,11 +147,29 @@ func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *backlogdt
 	log.Info("report_pr_created.provenance_stamped", "item", item.ID, "pr_number", prNumber)
 }
 
+// recordOverrideBranch makes the PR's real head branch the calling work session's tracked branch
+// once the override path accepted it (the operator authored the PR), so ReconcilePRPending's
+// post-merge ownership check agrees with the attach-time check instead of parking the item as
+// merged_pr_unverified. Best-effort: the PR/item transition already succeeded.
+func (h *backlogHandlers) recordOverrideBranch(ctx context.Context, callerUUID, itemID, headBranch string) {
+	is, err := h.storage.GetItemSessionBySessionUUID(ctx, callerUUID)
+	if err != nil || is.BacklogItemID != itemID {
+		log.Warn("report_pr_created.override_branch_skipped", "item", itemID, "session", callerUUID, "err", err)
+		return
+	}
+	if err := h.storage.UpdateItemSessionBranch(ctx, is.ID, headBranch); err != nil {
+		log.Warn("report_pr_created.override_branch_failed", "item", itemID, "branch", headBranch, "err", err)
+	}
+}
+
 // reportPRCreatedTool is the registered report_pr_created handler: reportPRCreated
 // behind the identity gate, so callerUUID is the verified session credential
 // (ADR-007 rule 0), never the spoofable X-Stapler-Session-UUID claim.
 func (h *backlogHandlers) reportPRCreatedTool() mcpserver.ToolHandlerFunc {
-	gate := &callerIdentityGate{metrics: wakes.NewMetrics(), roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	gate := h.gate
+	if gate == nil { // only hand-built handlers (tests); NewCore always sets h.gate when storage is present
+		gate = &callerIdentityGate{roleOf: roleLookupFrom(h.storage.GetItemSessionBySessionUUID)}
+	}
 	return withCallerIdentityGate(gate, toolReportPRCreated, h.reportPRCreated)
 }
 
@@ -460,6 +477,10 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	log.InfoLog().Printf("[mcp:report_pr_created] session=%s item=%s PR #%d %s", callerUUID, itemID, prNumber, prURL)
 	if inItemRepo {
 		h.stampPRProvenance(ctx, item, repoRef, prNumber)
+	}
+
+	if inItemRepo && !verification.Matched && verification.ActualHeadBranch != "" {
+		h.recordOverrideBranch(ctx, callerUUID, itemID, verification.ActualHeadBranch)
 	}
 
 	if isReassignment || foreignRepo || !verification.Matched {

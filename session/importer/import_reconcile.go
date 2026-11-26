@@ -61,7 +61,7 @@ func ReconcileSuspendedProcesses(_ context.Context, suspended *SuspendedProcessS
 			// concern to resume/kill it via the normal confirm/cancel flow.
 			continue
 		}
-		if err := session.ResumeOriginalProcess(record.PID); err != nil {
+		if err := ResumeOriginalProcess(record.PID); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("reconcile suspended processes: failed to resume pid %d (instance %q): %w", record.PID, record.InstanceID, err)
 			}

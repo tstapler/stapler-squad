@@ -18,7 +18,7 @@ type NotificationPrefs struct {
 }
 
 // CallbackConfig holds the global singleton outbound-callback URLs fired by
-// server/services.CallbackDispatcher on the three lifecycle events FR7
+// server/services/webhooks.CallbackDispatcher on the three lifecycle events FR7
 // covers. Never echoed back in plaintext by any RPC (see
 // sessionv1.CallbackConfigProto, which reports booleans only) — same
 // masked-boolean-not-value shape as the (unimplemented)

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -74,8 +75,8 @@ func (c *crashLimiter) admit(title string) crashDecision {
 // The id carries the exit time so a resumed session that crashes again
 // re-fires (the notification store coalesces history by session and type).
 func NewSessionCrashEvent(uuid, title, exitReason string, exitedAt time.Time) *events.Event {
-	msg := fmt.Sprintf("Session %q crashed", sanitizeNotificationText(title))
-	if r := strings.TrimSpace(sanitizeNotificationText(exitReason)); r != "" {
+	msg := fmt.Sprintf("Session %q crashed", questionkit.SanitizeNotificationText(title))
+	if r := strings.TrimSpace(questionkit.SanitizeNotificationText(exitReason)); r != "" {
 		msg += ": " + truncateString(r, maxCrashReasonRunes)
 	}
 	return events.NewNotificationEvent(
@@ -90,7 +91,7 @@ func NewSessionCrashEvent(uuid, title, exitReason string, exitedAt time.Time) *e
 func newCrashSummaryEvent(d crashDecision) *events.Event {
 	titles := make([]string, len(d.Titles))
 	for i, t := range d.Titles {
-		titles[i] = sanitizeNotificationText(t)
+		titles[i] = questionkit.SanitizeNotificationText(t)
 	}
 	msg := fmt.Sprintf("%d more sessions crashed: %s", d.Folded, strings.Join(titles, ", "))
 	if d.More > 0 {

@@ -14,6 +14,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 // Prune audit outcomes and count keys (kind=prune lines carry counts only).
@@ -26,7 +28,7 @@ const (
 )
 
 // SetAuditSink wires the sink a prune apply appends its kind=prune line to.
-func (ns *NotificationService) SetAuditSink(sink *AuditSink) { ns.auditSink = sink }
+func (ns *NotificationService) SetAuditSink(sink *auditkit.AuditSink) { ns.auditSink = sink }
 
 func (ns *NotificationService) pruneClock() time.Time {
 	if ns.pruneNow != nil {
@@ -61,7 +63,7 @@ func (ns *NotificationService) PruneHiddenSessionNotifications(
 		return pruneDecision(resolver.ClassifyStored(r.SessionID, r.Metadata), r.SessionID)
 	}
 
-	var line AuditLine
+	var line auditkit.AuditLine
 	requested := false // the durable requested line is written
 	opts := notifications.PruneOptions{
 		Apply:                   msg.GetApply(),
@@ -71,7 +73,7 @@ func (ns *NotificationService) PruneHiddenSessionNotifications(
 	if opts.Apply {
 		opts.BeforeApply = func(p notifications.PrunePlan) error {
 			line = pruneAuditLine(facts, p, opts.IncludeUnreadActionable)
-			line.Phase = auditPhaseRequest
+			line.Phase = auditkit.AuditPhaseRequest
 			if err := ns.appendPruneRequest(ctx, line); err != nil {
 				return err
 			}
@@ -95,17 +97,17 @@ func (ns *NotificationService) PruneHiddenSessionNotifications(
 	return connect.NewResponse(pruneResponse(plan)), nil
 }
 
-func (ns *NotificationService) appendPruneRequest(ctx context.Context, line AuditLine) error {
+func (ns *NotificationService) appendPruneRequest(ctx context.Context, line auditkit.AuditLine) error {
 	if ns.auditSink == nil {
-		return fmt.Errorf("%w: no audit sink configured", ErrAuditFailed)
+		return fmt.Errorf("%w: no audit sink configured", auditkit.ErrAuditFailed)
 	}
 	return ns.auditSink.AppendBounded(ctx, line)
 }
 
 // appendPruneResult records the outcome after the delete; a fault here cannot
 // undo anything, so it only logs.
-func (ns *NotificationService) appendPruneResult(line AuditLine, outcome string) {
-	line.Phase, line.Outcome = auditPhaseResult, outcome
+func (ns *NotificationService) appendPruneResult(line auditkit.AuditLine, outcome string) {
+	line.Phase, line.Outcome = auditkit.AuditPhaseResult, outcome
 	if ns.auditSink == nil {
 		return
 	}
@@ -132,18 +134,18 @@ func pruneDecision(res deliverygate.RowResolution, rawID string) notifications.P
 
 // pruneAuditLine builds the kind=prune line: request facts, counts and flags,
 // no row content, title or session id.
-func pruneAuditLine(f steerRequestFacts, p notifications.PrunePlan, includeUnread bool) AuditLine {
+func pruneAuditLine(f steerRequestFacts, p notifications.PrunePlan, includeUnread bool) auditkit.AuditLine {
 	matched := len(p.Remove)
 	counts := p.ReasonCounts()
 	counts[pruneCountKeptUnread] = p.KeptUnreadActionable
 	counts[pruneCountUndeterminable] = p.Undeterminable
 	counts[pruneCountVisible] = p.Visible
-	return AuditLine{
-		Kind: auditKindPrune, ChangeID: uuid.NewString(),
-		MatchedCount: &matched, IncludeUnreadActionable: boolRef(includeUnread), Counts: counts,
+	return auditkit.AuditLine{
+		Kind: auditkit.AuditKindPrune, ChangeID: uuid.NewString(),
+		MatchedCount: &matched, IncludeUnreadActionable: flagsvc.BoolRef(includeUnread), Counts: counts,
 		Listener: f.refusal.Listener, PeerAddr: f.refusal.Peer, Host: f.refusal.Host, Origin: f.refusal.Origin,
 		UserAgent: f.userAgent, AuthMode: f.refusal.AuthMode,
-		PeerLoopback: boolRef(f.refusal.PeerLoopback), Proxied: boolRef(f.refusal.Proxied),
+		PeerLoopback: flagsvc.BoolRef(f.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.refusal.Proxied),
 	}
 }
 

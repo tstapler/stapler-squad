@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 func TestUnaryWsBridge_should_ClampClientDeadline_And_CancelHandlerCtx(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryMaxCallTimeout(40*time.Millisecond))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryMaxCallTimeout(40*time.Millisecond))
 	c := h.connect(nil)
 	// One call asks for an hour, one sends no deadline: the server clamp bounds both.
 	sendRequest(t, c, 1, listFilesMethod, unaryRequestMeta{TimeoutMs: 3_600_000}, mustProto(t, &sessionv1.ListFilesRequest{SessionId: "gate:clamp1"}))
@@ -29,7 +29,7 @@ func TestUnaryWsBridge_should_ClampClientDeadline_And_CancelHandlerCtx(t *testin
 }
 
 func TestUnaryWsBridge_should_RunMoreThanSixCallsConcurrently(t *testing.T) {
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	const n = 40
 	for i := 0; i < n; i++ {

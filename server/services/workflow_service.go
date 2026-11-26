@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"connectrpc.com/connect"
@@ -15,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -186,7 +186,7 @@ func resolveTriggerType(triggerType string, cronEnabled bool) string {
 }
 
 // encryptWebhookSecret encrypts a plaintext webhook/HMAC shared secret with the same
-// machine encryption key decryptWorkflowSecret (webhook_trigger_common.go) later
+// machine encryption key decryptWorkflowSecret (webhooktrigger/webhook_trigger_common.go) later
 // decrypts with — closing the gap left by Phase 1/2/3, which wrote/read
 // WebhookSecretEncrypted only via direct repository calls in tests, never via an RPC
 // (Phase 7 follow-up, Task 7.2).
@@ -201,17 +201,6 @@ func encryptWebhookSecret(secret string) (string, error) {
 		return "", fmt.Errorf("encrypt webhook secret: %w", err)
 	}
 	return encrypted, nil
-}
-
-// validateTargetDirectory checks that dir is an absolute path with no traversal components.
-func validateTargetDirectory(dir string) error {
-	if !filepath.IsAbs(dir) {
-		return errors.New("target_directory must be an absolute path")
-	}
-	if filepath.Clean(dir) != dir {
-		return errors.New("target_directory contains path traversal components")
-	}
-	return nil
 }
 
 // CreateWorkflow handles the CreateWorkflow RPC.
@@ -237,7 +226,7 @@ func (s *WorkflowService) CreateWorkflow(
 	if req.Msg.TargetDirectory == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target_directory is required"))
 	}
-	if err := validateTargetDirectory(req.Msg.TargetDirectory); err != nil {
+	if err := fsops.ValidateTargetDirectory(req.Msg.TargetDirectory); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	if req.Msg.CronExpression != "" {
@@ -304,7 +293,7 @@ func (s *WorkflowService) CreateWorkflow(
 		createInput.ArchiveAfterHours = &v
 	}
 	// Write-only webhook secret (Task 7.2): "" means no secret configured, matching
-	// decryptWorkflowSecret's existing "has no webhook secret configured" error path.
+	// webhooktrigger.decryptWorkflowSecret's existing "has no webhook secret configured" error path.
 	if req.Msg.WebhookSecret != "" {
 		encrypted, err := encryptWebhookSecret(req.Msg.WebhookSecret)
 		if err != nil {
@@ -353,7 +342,7 @@ func (s *WorkflowService) UpdateWorkflow(
 
 	// Validate target_directory if being updated.
 	if req.Msg.TargetDirectory != nil {
-		if err := validateTargetDirectory(*req.Msg.TargetDirectory); err != nil {
+		if err := fsops.ValidateTargetDirectory(*req.Msg.TargetDirectory); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 	}

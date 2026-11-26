@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
 )
 
 // DefaultRulePromptBuilder implements RulePromptBuilder.
@@ -16,7 +18,7 @@ type DefaultRulePromptBuilder struct{}
 // BuildSystemPrompt returns the system prompt for rule suggestion.
 // Includes a JSON schema of SuggestedRuleProto fields, existing rules as JSON,
 // 5 seed examples, pattern priority instructions, and a priority tier legend.
-func (b *DefaultRulePromptBuilder) BuildSystemPrompt(ctx RulePromptContext) string {
+func (b *DefaultRulePromptBuilder) BuildSystemPrompt(ctx anthropicwire.RulePromptContext) string {
 	var sb strings.Builder
 
 	sb.WriteString(`You are an expert security analyst helping configure auto-approval rules for an AI agent orchestration system called stapler-squad.
@@ -106,15 +108,15 @@ The array may contain 1–5 items. Example structure:
 // BuildUserPrompt returns the user prompt, formatted by source type.
 // Before including any CommandPreview, it applies a second-pass secret scan
 // and replaces positives with [REDACTED] (defense-in-depth, per FLAG-1).
-func (b *DefaultRulePromptBuilder) BuildUserPrompt(ctx RulePromptContext) string {
+func (b *DefaultRulePromptBuilder) BuildUserPrompt(ctx anthropicwire.RulePromptContext) string {
 	var sb strings.Builder
 
 	switch {
 	case ctx.CommandSample != "":
 		// COMMAND_SAMPLE source: focus on a single raw command.
 		cmd := ctx.CommandSample
-		if hit := ScanForSecrets(cmd); hit.Found {
-			cmd = redactedPrompt
+		if hit := secretscan.ScanForSecrets(cmd); hit.Found {
+			cmd = secretscan.RedactedPrompt
 		}
 		sb.WriteString("Analyze this specific command and propose 1 rule to auto-approve or auto-deny it appropriately:\n\n")
 		sb.WriteString("Command: ")
@@ -130,7 +132,7 @@ func (b *DefaultRulePromptBuilder) BuildUserPrompt(ctx RulePromptContext) string
 
 		// Apply filters.
 		if ctx.ToolNameFilter != "" || ctx.ProgramFilter != "" {
-			var filtered []AnalyticsGap
+			var filtered []anthropicwire.AnalyticsGap
 			for _, g := range gaps {
 				if ctx.ToolNameFilter != "" && g.ToolName != ctx.ToolNameFilter {
 					continue
@@ -163,8 +165,8 @@ func (b *DefaultRulePromptBuilder) BuildUserPrompt(ctx RulePromptContext) string
 				sb.WriteString("Representative commands:\n")
 				for _, cmd := range gap.RepresentativeCmds {
 					// Second-pass secret redaction (defense-in-depth).
-					if hit := ScanForSecrets(cmd); hit.Found {
-						cmd = redactedPrompt
+					if hit := secretscan.ScanForSecrets(cmd); hit.Found {
+						cmd = secretscan.RedactedPrompt
 					}
 					// Wrap in XML delimiters to prevent prompt injection from command content.
 					fmt.Fprintf(&sb, "  - <command>%s</command>\n", cmd)

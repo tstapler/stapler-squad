@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"os"
 	"path/filepath"
 
@@ -114,7 +115,7 @@ const (
 
 // CollectSnapshot gathers all diagnostic data into a DebugSnapshot.
 // Individual subsystem failures are recorded in Errors and do not abort the collection.
-func CollectSnapshot(ctx context.Context, note string, instances []*instance.Instance, approvalStore *ApprovalStore, logLines int) *DebugSnapshot {
+func CollectSnapshot(ctx context.Context, note string, instances []*instance.Instance, approvalStore *approvalkit.ApprovalStore, logLines int) *DebugSnapshot {
 	if logLines <= 0 {
 		logLines = defaultLogLines
 	}
@@ -274,7 +275,7 @@ func collectTmuxSnapshot(ctx context.Context, existingErrors []string) (TmuxSnap
 }
 
 // collectApprovalSnapshot captures the current pending approval state.
-func collectApprovalSnapshot(store *ApprovalStore) ApprovalSnapshot {
+func collectApprovalSnapshot(store *approvalkit.ApprovalStore) ApprovalSnapshot {
 	if store == nil {
 		return ApprovalSnapshot{}
 	}

@@ -18,7 +18,12 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -34,52 +39,52 @@ const (
 type fakeActionApprovals struct {
 	calls  atomic.Int32
 	last   ApprovalChoice
-	result ActionResult
+	result questionkit.ActionResult
 }
 
-func (f *fakeActionApprovals) ResolveApproval(_ context.Context, c ApprovalChoice) (ActionResult, error) {
+func (f *fakeActionApprovals) ResolveApproval(_ context.Context, c ApprovalChoice) (questionkit.ActionResult, error) {
 	f.calls.Add(1)
 	f.last = c
 	if f.result.Outcome == 0 {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	return f.result, nil
 }
 
 type fakeQuestionReplier struct {
-	route  answerRoute
+	route  flagsvc.AnswerRoute
 	known  bool
 	writes atomic.Int32
-	result ActionResult
+	result questionkit.ActionResult
 	last   atomic.Pointer[QuestionAnswer]
 }
 
-func (f *fakeQuestionReplier) RouteFor(string) (answerRoute, bool) { return f.route, f.known }
-func (f *fakeQuestionReplier) ReplyToQuestion(_ context.Context, in QuestionAnswer) (ActionResult, error) {
+func (f *fakeQuestionReplier) RouteFor(string) (flagsvc.AnswerRoute, bool) { return f.route, f.known }
+func (f *fakeQuestionReplier) ReplyToQuestion(_ context.Context, in QuestionAnswer) (questionkit.ActionResult, error) {
 	f.writes.Add(1)
 	f.last.Store(&in)
 	if f.result.Outcome == 0 {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	return f.result, nil
 }
 
 type fakeGuidanceAnswerer struct{ calls atomic.Int32 }
 
-func (f *fakeGuidanceAnswerer) AnswerGuidance(context.Context, string, string) (ActionResult, error) {
+func (f *fakeGuidanceAnswerer) AnswerGuidance(context.Context, string, string) (questionkit.ActionResult, error) {
 	f.calls.Add(1)
-	return applied(), nil
+	return questionkit.Applied(), nil
 }
 
 type fakeBacklogDecider struct {
 	calls  atomic.Int32
-	result ActionResult
+	result questionkit.ActionResult
 }
 
-func (f *fakeBacklogDecider) Decide(context.Context, BacklogDecision) (ActionResult, error) {
+func (f *fakeBacklogDecider) Decide(context.Context, BacklogDecision) (questionkit.ActionResult, error) {
 	f.calls.Add(1)
 	if f.result.Outcome == 0 {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	return f.result, nil
 }
@@ -116,7 +121,7 @@ type fakeActionFlags struct {
 }
 
 func (f fakeActionFlags) Inline(dp string) bool { return !f.off[dp] }
-func (f fakeActionFlags) Answer(answerRoute) bool {
+func (f fakeActionFlags) Answer(flagsvc.AnswerRoute) bool {
 	return !f.answerOff
 }
 
@@ -133,28 +138,28 @@ func (m *recordingMetrics) Record(s ActionSample) {
 
 type recordingAudit struct {
 	mu    sync.Mutex
-	lines []AuditLine
+	lines []auditkit.AuditLine
 	fail  bool
 }
 
-func (a *recordingAudit) Append(l AuditLine) error {
+func (a *recordingAudit) Append(l auditkit.AuditLine) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lines = append(a.lines, l)
 	return nil
 }
 
-func (a *recordingAudit) AppendBounded(_ context.Context, l AuditLine) error {
+func (a *recordingAudit) AppendBounded(_ context.Context, l auditkit.AuditLine) error {
 	if a.fail {
-		return ErrAuditFailed
+		return auditkit.ErrAuditFailed
 	}
 	return a.Append(l)
 }
 
-func (a *recordingAudit) snapshot() []AuditLine {
+func (a *recordingAudit) snapshot() []auditkit.AuditLine {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return append([]AuditLine(nil), a.lines...)
+	return append([]auditkit.AuditLine(nil), a.lines...)
 }
 
 type dispatchFixture struct {
@@ -171,13 +176,13 @@ type dispatchFixture struct {
 
 func newDispatchFixture() *dispatchFixture {
 	f := &dispatchFixture{
-		approvals: &fakeActionApprovals{}, questions: &fakeQuestionReplier{route: routeLiveKeystrokeHidden, known: true},
+		approvals: &fakeActionApprovals{}, questions: &fakeQuestionReplier{route: flagsvc.RouteLiveKeystrokeHidden, known: true},
 		guidance: &fakeGuidanceAnswerer{}, backlog: &fakeBacklogDecider{}, resolver: &fakeResolver{},
 		metrics: &recordingMetrics{}, audit: &recordingAudit{}, flags: &fakeActionFlags{off: map[string]bool{}},
 	}
 	f.d = NewNotificationActionDispatcher(ActionDelegates{
 		Approvals: f.approvals, Questions: f.questions, Guidance: f.guidance, Backlog: f.backlog, Resolver: f.resolver,
-	}, func() actionAudit { return f.audit })
+	}, func() actionAudit { return f.audit }, testFlagRegistry())
 	f.d.flags, f.d.metrics = f.flags, f.metrics
 	return f
 }
@@ -206,8 +211,8 @@ func answerReq(key string) *sessionv1.InvokeNotificationActionRequest {
 
 func localCtx(t *testing.T) context.Context {
 	t.Helper()
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	return stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	return StampedContext(t, &cfg, access.ListenerLocal, false, "localhost:8543", nil)
 }
 
 func TestInvokeNotificationAction_ShouldResolveOnce_WhenSameKeyAndPayloadRepeated(t *testing.T) {
@@ -235,10 +240,10 @@ func TestInvokeNotificationAction_ShouldReturnInvalid_WhenKeyReusedWithDifferent
 func TestInvokeNotificationAction_ShouldRetryAgain_WhenFirstAttemptWasNotCacheable(t *testing.T) {
 	t.Parallel()
 	f := newDispatchFixture()
-	f.approvals.result = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, "")
+	f.approvals.result = questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, "")
 	ctx := localCtx(t)
 	f.invoke(t, ctx, approveReq("k1"), nil)
-	f.approvals.result = ActionResult{}
+	f.approvals.result = questionkit.ActionResult{}
 	assert.Equal(t, outApplied, f.invoke(t, ctx, approveReq("k1"), nil).Outcome)
 	assert.EqualValues(t, 2, f.approvals.calls.Load())
 }
@@ -261,11 +266,11 @@ func TestInvokeNotificationAction_ShouldRejectMalformedRequests_WhenKeyKindOrTar
 func TestInvokeNotificationAction_ShouldReturnFlagOffWithZeroWrites_WhenAnswerStageOffOnVisibleSession(t *testing.T) {
 	t.Parallel()
 	f := newDispatchFixture()
-	f.questions.route = routeLiveKeystrokeVisible
+	f.questions.route = flagsvc.RouteLiveKeystrokeVisible
 	f.flags.answerOff = true
 	resp := f.invoke(t, localCtx(t), answerReq("k1"), nil)
 	assert.Equal(t, outFlagOff, resp.Outcome)
-	assert.Equal(t, flagOffMessage, resp.Detail)
+	assert.Equal(t, flagsvc.FlagOffMessage, resp.Detail)
 	assert.Zero(t, f.questions.writes.Load())
 }
 
@@ -276,8 +281,8 @@ func TestInvokeNotificationAction_ShouldReturnFlagOff_WhenActionScopeOffOrRemote
 	assert.Equal(t, outFlagOff, f.invoke(t, localCtx(t), approveReq("k1"), nil).Outcome)
 
 	g := newDispatchFixture()
-	g.flags.off[scopeChannelRemote] = true
-	remote := stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)
+	g.flags.off[flagsvc.ScopeChannelRemote] = true
+	remote := StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 	assert.Equal(t, outFlagOff, g.invoke(t, remote, approveReq("k1"), nil).Outcome)
 	assert.Zero(t, g.approvals.calls.Load())
 }
@@ -301,7 +306,7 @@ func TestInvokeNotificationAction_ShouldRetireDecisionNotifications_WhenBacklogD
 	assert.Equal(t, outApplied, f.invoke(t, localCtx(t), m, nil).Outcome)
 	assert.Equal(t, []string{"item1"}, f.resolver.items)
 
-	f.backlog.result = outcome(outResolved, "")
+	f.backlog.result = questionkit.Outcome(outResolved, "")
 	m.IdempotencyKey = "k2"
 	assert.Equal(t, outResolved, f.invoke(t, localCtx(t), m, nil).Outcome)
 	assert.Equal(t, []string{"item1"}, f.resolver.items, "an already-resolved decision does not re-retire")
@@ -316,7 +321,7 @@ func TestInvokeNotificationAction_ShouldAuditChannelAndCallerKind_WhenSPAHeaderP
 
 	lines := f.audit.snapshot()
 	require.Len(t, lines, 2)
-	assert.Equal(t, auditKindNotificationAction, lines[0].Kind)
+	assert.Equal(t, auditkit.AuditKindNotificationAction, lines[0].Kind)
 	assert.Equal(t, channelWebLocal, lines[0].Channel)
 	assert.Equal(t, callerOperatorUI, lines[0].CallerKind)
 	assert.Equal(t, channelUnknown, lines[1].Channel)
@@ -388,7 +393,7 @@ func TestActionIdempotency_ShouldEvictOldestKey_WhenOverCapacity(t *testing.T) {
 	for _, k := range []string{"a", "b", "c", "d"} {
 		f, role := c.begin(k, "h")
 		require.Equal(t, flightLeader, role)
-		c.settle(f, applied())
+		c.settle(f, questionkit.Applied())
 	}
 	assert.Equal(t, 3, c.len())
 	_, role := c.begin("a", "h")
@@ -398,8 +403,8 @@ func TestActionIdempotency_ShouldEvictOldestKey_WhenOverCapacity(t *testing.T) {
 // Delegate checks stay in force: a CI-blocked approval is INVALID without confirm.
 func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBlocksApproval(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
-	store := NewApprovalStore("")
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName, true))
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &instance.Instance{
 		Title: "session-X", UUID: "session-X", GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure,
@@ -475,7 +480,7 @@ func TestInvokeNotificationAction_ShouldRetireTheDecidedCard_WhenAnswerOrApprova
 func TestInvokeNotificationAction_ShouldKeepTheCard_WhenAnswerWasNotApplied(t *testing.T) {
 	t.Parallel()
 	f := newDispatchFixture()
-	f.questions.result = outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+	f.questions.result = questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
 
 	f.invoke(t, localCtx(t), answerReq("k-q"), nil)
 
@@ -490,7 +495,7 @@ func TestApprovalResolver_ShouldCarryTheStampedDecision_WhenAlreadyResolved(t *t
 		ID: "appr-1", SessionID: "session-X", NotificationType: 1, CreatedAt: time.Now(),
 		Metadata: map[string]string{"approval_id": "appr-1"},
 	}))
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	svc := NewApprovalService(store)
 	svc.SetNotificationStore(history)
 	require.NoError(t, store.Create(newTestPendingApproval("appr-1", "session-X", "Bash")))
@@ -518,15 +523,15 @@ func TestInvokeNotificationAction_ShouldPassConfirmToTheAnswerRouter_WhenRetryAn
 
 func TestInvokeNotificationAction_ShouldStoreAnswerRemotely_WhenRouteIsDurableRecord(t *testing.T) {
 	t.Parallel()
-	remote := stampedContext(t, nil, ListenerRemote, true, "onyx:8444", nil)
+	remote := StampedContext(t, nil, access.ListenerRemote, true, "onyx:8444", nil)
 
 	stored := newDispatchFixture()
-	stored.questions.route = routeDurableRecord
+	stored.questions.route = flagsvc.RouteDurableRecord
 	assert.Equal(t, outApplied, stored.invoke(t, remote, answerReq("k1"), nil).Outcome)
 	assert.EqualValues(t, 1, stored.questions.writes.Load(), "stored answer reached the replier")
 
 	live := newDispatchFixture()
-	live.flags.off[scopeChannelTierB] = true // production default: spikeS6TierBPassed is false
+	live.flags.off[flagsvc.ScopeChannelTierB] = true // production default: spikeS6TierBPassed is false
 	resp := live.invoke(t, remote, answerReq("k1"), nil)
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_FORBIDDEN, resp.Outcome)
 	assert.Zero(t, live.questions.writes.Load(), "live keystroke never reaches the pane remotely")

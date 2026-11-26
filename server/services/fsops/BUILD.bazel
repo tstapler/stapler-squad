@@ -1,0 +1,84 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "fsops",
+    srcs = [
+        "dup_fd_unix.go",
+        "dup_fd_windows.go",
+        "exec_unix.go",
+        "exec_windows.go",
+        "file_atomic.go",
+        "file_backend.go",
+        "file_backend_mem.go",
+        "file_backend_osroot.go",
+        "file_codec.go",
+        "file_inode_other.go",
+        "file_inode_unix.go",
+        "file_metrics.go",
+        "files_telemetry.go",
+        "fsops.go",
+        "mem_fixture.go",
+        "path_resolver.go",
+        "settings_file_atomic_write.go",
+        "shared.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/fsops",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/analytics",
+        "//server/services/internal/streammetrics",
+        "//session/domain",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ] + select({
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fsops",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "fsops_test",
+    srcs = [
+        "file_atomic_test.go",
+        "file_backend_test.go",
+        "file_codec_test.go",
+        "file_inode_unix_test.go",
+        "files_telemetry_test.go",
+        "kernel_test.go",
+        "path_resolver_test.go",
+        "resolver_golden_test.go",
+        "target_directory_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":fsops"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/fsops/fsopstest",
+        "//session/domain",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

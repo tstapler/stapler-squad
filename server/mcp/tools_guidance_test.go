@@ -28,7 +28,7 @@ func newTestGuidanceStorage(t *testing.T) *session.Storage {
 func TestCreateGuidanceRequest_should_CreatePendingRequest_When_QuestionTypeYesNo(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	callerUUID := uuid.New().String()
 	ctx := WithSessionUUID(context.Background(), callerUUID)
 
@@ -50,7 +50,7 @@ func TestCreateGuidanceRequest_should_CreatePendingRequest_When_QuestionTypeYesN
 func TestCreateGuidanceRequest_should_CreatePendingRequest_When_QuestionTypeMultipleChoice(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	callerUUID := uuid.New().String()
 	ctx := WithSessionUUID(context.Background(), callerUUID)
 
@@ -73,7 +73,7 @@ func TestCreateGuidanceRequest_should_CreatePendingRequest_When_QuestionTypeMult
 func TestCreateGuidanceRequest_should_CreatePendingRequest_When_QuestionTypeShortAnswer(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	callerUUID := uuid.New().String()
 	ctx := WithSessionUUID(context.Background(), callerUUID)
 
@@ -125,7 +125,7 @@ func TestParseGuidanceOptionsArg_should_ReturnEmpty_When_OptionsArgIsNotAnArray(
 func TestCreateGuidanceRequest_should_SucceedWithNoOptions_When_OptionsArgIsUnparseable(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	callerUUID := uuid.New().String()
 	ctx := WithSessionUUID(context.Background(), callerUUID)
 
@@ -148,7 +148,7 @@ func TestCreateGuidanceRequest_should_SucceedWithNoOptions_When_OptionsArgIsUnpa
 func TestCreateGuidanceRequest_should_ReturnError_When_ScopeInvalid(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	ctx := WithSessionUUID(context.Background(), uuid.New().String())
 
 	result, err := h.createGuidanceRequest(ctx, makeToolReq(map[string]interface{}{
@@ -164,7 +164,7 @@ func TestCreateGuidanceRequest_should_ReturnError_When_ScopeInvalid(t *testing.T
 func TestCreateGuidanceRequest_should_ReturnError_When_NoCallerSessionUUID(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 
 	result, err := h.createGuidanceRequest(context.Background(), makeToolReq(map[string]interface{}{
 		"scope":         "standalone",
@@ -181,7 +181,7 @@ func TestCreateGuidanceRequest_should_ReturnError_When_NoCallerSessionUUID(t *te
 func TestCreateGuidanceRequest_should_Succeed_When_BacklogItemScopeCallerIsLinked(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "guidance mcp test item"})
@@ -209,7 +209,7 @@ func TestCreateGuidanceRequest_should_Succeed_When_BacklogItemScopeCallerIsLinke
 func TestCreateGuidanceRequest_should_ReturnPermissionDenied_When_BacklogItemScopeCallerNotLinked(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	ctx := context.Background()
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "guidance mcp unlinked item"})
@@ -235,7 +235,7 @@ func TestCreateGuidanceRequest_should_ReturnPermissionDenied_When_BacklogItemSco
 func TestGetGuidanceRequest_should_RoundTrip_When_RequestWasJustCreated(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	ctx := WithSessionUUID(context.Background(), uuid.New().String())
 
 	created, err := h.createGuidanceRequest(ctx, makeToolReq(map[string]interface{}{
@@ -264,7 +264,7 @@ func TestGetGuidanceRequest_should_RoundTrip_When_RequestWasJustCreated(t *testi
 func TestGetGuidanceRequest_should_ReturnError_When_IdNotFound(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 
 	result, err := h.getGuidanceRequest(context.Background(), makeToolReq(map[string]interface{}{
 		"question_id": uuid.New().String(),
@@ -277,7 +277,7 @@ func TestGetGuidanceRequest_should_ReturnError_When_IdNotFound(t *testing.T) {
 func TestGetGuidanceRequest_should_ReturnError_When_QuestionIdMissing(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 
 	result, err := h.getGuidanceRequest(context.Background(), makeToolReq(map[string]interface{}{}))
 	require.NoError(t, err)
@@ -290,7 +290,7 @@ func TestGetGuidanceRequest_should_ReturnError_When_QuestionIdMissing(t *testing
 func TestGetGuidanceRequest_should_ReturnTheStoredAnswer_When_AnswerWasSavedForALaterResume(t *testing.T) {
 	t.Parallel()
 	storage := newTestGuidanceStorage(t)
-	h := &backlogHandlers{storage: storage}
+	h := &backlogHandlers{storage: storage, guidance: storage}
 	sessionUUID := uuid.New().String()
 	created, err := h.createGuidanceRequest(WithSessionUUID(context.Background(), sessionUUID), makeToolReq(map[string]interface{}{
 		"scope": "session", "question_text": "Which cache?", "question_type": "multiple-choice",

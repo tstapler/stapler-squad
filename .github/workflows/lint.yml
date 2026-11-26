@@ -167,7 +167,7 @@ jobs:
           skip-cache: true  # cached by setup-go-cached (main-written, daily key), not the action
           only-new-issues: false
 
-      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
       - name: Report CI budget exceeded (golangci-lint)
         if: always() && steps.golangci-lint.outcome == 'cancelled'
         run: |
@@ -218,6 +218,12 @@ jobs:
       - name: Import cycle check
         if: ${{ !cancelled() }}
         run: go build ./...
+
+      # Opt-in build tags (harness, live_github, ...) are invisible to go build/vet ./...;
+      # this keeps tagged files from rotting. Tag list is derived in the Makefile.
+      - name: Vet opt-in build tags
+        if: ${{ !cancelled() }}
+        run: make vet-tags
 
       - name: Check formatting (PR-changed files only)
         if: ${{ !cancelled() }}
@@ -274,7 +280,7 @@ jobs:
       # Soft-timeout wrapper (16m, below this job's hard timeout-minutes ceiling):
       # this is this job's longest-running step. The whole original step body is wrapped
       # unchanged in a function so `timeout` can bound it as a single command.
-      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
+      # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
       - name: ESLint (no-100vh, mobile regression rules)
         if: ${{ !cancelled() }}
         working-directory: web-app

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/steertext"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,7 +17,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/prwatch/inbox"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 const prwatchLeaderLockName = "prwatch.leader.lock"
@@ -58,7 +58,7 @@ func newPRWatchModule(w prwatchWiring) *prwatchModule {
 	status.SetSettings(s, w.Corrections)
 
 	login := prwatch.NewSelfLoginResolver(w.SelfLogin, w.Clock, w.Notifier, w.Log)
-	notes := prwatch.NewNotifications(w.Notifier, w.Clock, s, session.SanitizeUntrusted)
+	notes := prwatch.NewNotifications(w.Notifier, w.Clock, s, steertext.SanitizeUntrusted)
 	coalescer := prwatch.NewWindowCoalescer(w.Clock, s, counters)
 	followup := prwatch.NewFollowupObserver(w.Sessions, w.Clock, w.Log, s.FollowupObserve)
 	stranger := prwatch.NewStrangerTracker(notes, w.Clock, s.StrangerNoticeThreshold)
@@ -98,7 +98,7 @@ func reportPRWatchNonLoopback(w prwatchWiring) *prwatch.StatusTracker {
 	status.SetSettings(w.Settings, w.Corrections)
 	status.SetEnabled(true, 0)
 	status.SetInbox(prwatch.InboxStateNonLoopback, "non_loopback_url")
-	notes := prwatch.NewNotifications(w.Notifier, w.Clock, w.Settings, session.SanitizeUntrusted)
+	notes := prwatch.NewNotifications(w.Notifier, w.Clock, w.Settings, steertext.SanitizeUntrusted)
 	prwatch.NewInboxStateTracker(notes, w.Clock, w.Log, w.Settings).Observe(prwatch.InboxStateNonLoopback)
 	return status
 }

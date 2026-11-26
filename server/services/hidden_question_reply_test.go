@@ -14,7 +14,10 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -79,9 +82,9 @@ func newReplyEnv(t *testing.T) *replyEnv {
 }
 
 func (e *replyEnv) register(inst *instance.Instance, d panereply.QuestionDialog) string {
-	id := NewQuestionID()
-	e.fix.svc.PendingQuestions().Register(PendingQuestion{
-		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: QuestionToken(d.Question),
+	id := questionkit.NewQuestionID()
+	e.fix.svc.PendingQuestions().Register(questionkit.PendingQuestion{
+		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: questionkit.QuestionToken(d.Question),
 	})
 	return id
 }
@@ -107,7 +110,9 @@ func (e *replyEnv) counter(label string) uint64 {
 	return e.gate.Metrics().Value(deliverygate.CounterReply, label)
 }
 
-func replyLines(all []AuditLine) []AuditLine { return steerLines(all, auditKindReply) }
+func replyLines(all []auditkit.AuditLine) []auditkit.AuditLine {
+	return steerLines(all, auditkit.AuditKindReply)
+}
 
 // T-RP-02, T-RP-07, T-RP-10
 func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSessionHasASingleSelectQuestionAndTheDialogCloses(t *testing.T) {
@@ -120,14 +125,14 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	assert.Equal(t, []int{1}, e.pm.probed, "the fsynced requested line was durable when the digit was written, and the result line was not yet")
 	instance.AssertLeaseFree(t, e.inst)
 	assert.EqualValues(t, 1, e.counter("sent"))
-	_, still := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, still := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.False(t, still, "the answered question is consumed")
 
 	lines := replyLines(e.auditLines())
 	require.Len(t, lines, 2)
 	req, res := lines[0], lines[1]
-	assert.Equal(t, auditPhaseRequest, req.Phase)
-	assert.Equal(t, auditPhaseResult, res.Phase)
+	assert.Equal(t, auditkit.AuditPhaseRequest, req.Phase)
+	assert.Equal(t, auditkit.AuditPhaseResult, res.Phase)
 	assert.Equal(t, req.ChangeID, res.ChangeID)
 	assert.Equal(t, "sent", res.Outcome)
 	assert.Equal(t, replyStageDialogClosed, res.Stage)
@@ -137,8 +142,8 @@ func TestReply_ShouldClaimAuditThenWriteOneDigitOnceAndReportSent_WhenHiddenSess
 	assert.Equal(t, e.qid, req.QuestionID)
 	assert.Equal(t, "r-1", req.ReplyID)
 	assert.Equal(t, e.inst.UUID, req.SessionUUID)
-	assert.Equal(t, ListenerLocal, req.Listener)
-	assert.Equal(t, AuthModeNone, req.AuthMode)
+	assert.Equal(t, access.ListenerLocal, req.Listener)
+	assert.Equal(t, access.AuthModeNone, req.AuthMode)
 	assert.Equal(t, "localhost:8543", req.Host)
 	assert.Empty(t, req.MessageSHA256, "a digit is brute-forceable: no hash")
 	assert.Empty(t, req.MessagePreview)
@@ -200,7 +205,7 @@ func TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoP
 	})
 
 	// Every refusal left the question claimable and released the lease.
-	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
 	instance.AssertLeaseFree(t, e.inst)
 }
@@ -244,7 +249,7 @@ func TestReply_ShouldMakeInFlightReplyIdWaitForTheFirstResult_WhenTwoCallersSend
 	go func() { results <- e.replyOK("1", "r-flight") }()
 	<-e.pm.entered // the first caller is inside the write
 	go func() { results <- e.replyOK("1", "r-flight") }()
-	require.Eventually(t, func() bool { return e.fix.svc.replyState().flights.size() == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return e.fix.svc.replyState().flights.Size() == 1 }, time.Second, time.Millisecond)
 	close(e.pm.gate)
 
 	r1, r2 := <-results, <-results
@@ -292,7 +297,7 @@ func TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSec
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED, resp.Outcome)
 	assert.EqualValues(t, 4, resp.RetryAfterSeconds)
 	assert.Len(t, e.pm.writes(), 1)
-	_, claimable := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: q2})
+	_, claimable := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: q2})
 	assert.True(t, claimable, "rate limiting happens before the claim")
 
 	// A retry of the first id inside the window is the first result, not RATE_LIMITED.
@@ -302,7 +307,7 @@ func TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSec
 // T-RP-08: no audit, no write.
 func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWriteAuditAppendFails(t *testing.T) {
 	e := newReplyEnv(t)
-	e.mfs.failMkdir = errors.New("disk full")
+	e.mfs.FailMkdir = errors.New("disk full")
 
 	_, err := e.reply(e.inst.UUID, e.qid, "2", "r-audit")
 
@@ -310,12 +315,12 @@ func TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWrite
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
 	assert.Empty(t, e.pm.writes())
 	assert.EqualValues(t, 1, e.counter("audit_failed"))
-	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok, "the claim was released: Retry is safe")
 	instance.AssertLeaseFree(t, e.inst)
 
 	// With the sink back, the same reply_id attempts the write again.
-	e.mfs.failMkdir = nil
+	e.mfs.FailMkdir = nil
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("2", "r-audit").Outcome)
 	assert.Equal(t, []string{"2"}, e.pm.writes())
 }
@@ -344,7 +349,7 @@ func TestReply_ShouldReturnNotSentAndAllowRetry_WhenTheWriteProvablyWroteNothing
 
 	first := e.replyOK("2", "r-ns")
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, first.Outcome)
-	_, ok := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, ok := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, ok)
 
 	e.pm.mu.Lock()
@@ -362,7 +367,7 @@ func TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy(t *testing.T
 
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT, e.replyOK("1", "r-busy").Outcome)
 	assert.Empty(t, e.pm.writes())
-	_, claimable := e.fix.svc.PendingQuestions().Peek(QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
+	_, claimable := e.fix.svc.PendingQuestions().Peek(questionkit.QuestionKey{SessionUUID: e.inst.UUID, QuestionID: e.qid})
 	assert.True(t, claimable)
 }
 
@@ -397,7 +402,7 @@ func TestReply_ShouldReturnPermissionDeniedAndCountRefused_WhenAuthModeNoneAndPe
 	}
 	// A loopback peer behind a proxy header is remote too.
 	e.fix.svc.replyPeerAddr = func(connect.AnyRequest) string { return replyLoopbackPeer }
-	ctx := e.requestCtx(ListenerLocal, false, "localhost:8543", map[string]string{"X-Forwarded-For": "203.0.113.9"})
+	ctx := e.requestCtx(access.ListenerLocal, false, "localhost:8543", map[string]string{"X-Forwarded-For": "203.0.113.9"})
 	_, err := e.fix.svc.ReplyToPendingQuestion(ctx, connect.NewRequest(&sessionv1.ReplyToPendingQuestionRequest{
 		SessionId: e.inst.UUID, QuestionId: e.qid, ReplyText: "1", ReplyId: "r-proxy",
 	}))
@@ -410,7 +415,7 @@ func TestReply_ShouldReturnPermissionDeniedAndCountRefused_WhenAuthModeNoneAndPe
 // T-RP-21: the guards flag has no effect on Reply in either state.
 func TestReply_ShouldIgnoreTheGuardsFlag_WhenItIsOffAndWhenOn(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.guards = &UnaryGuardsFlag{}
+	e.fix.svc.guards = &access.UnaryGuardsFlag{}
 	e.fix.svc.guards.SetEnabled(false)
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("1", "r-g-off").Outcome)
 }

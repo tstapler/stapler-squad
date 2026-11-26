@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -45,9 +46,7 @@ func useSeamFake(t *testing.T) *seamFakeTymux {
 	t.Helper()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fake := &seamFakeTymux{}
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
-	t.Cleanup(func() { newTymuxSessionFn = orig })
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return fake })
 	return fake
 }
 
@@ -174,9 +173,7 @@ func (f *seamProbeTymux) StoredSessionLive() bool { return f.live }
 func TestSeam_ShadowLivenessUsesStoredDaemonSession(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	probe := &seamProbeTymux{live: true}
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return probe }
-	t.Cleanup(func() { newTymuxSessionFn = orig })
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return probe })
 	data := restoredPausedData(t, "shadow-live")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-90"
@@ -194,9 +191,7 @@ func TestSeam_ShadowLivenessUsesStoredDaemonSession(t *testing.T) {
 func TestSeam_IsBackendProcessAliveIgnoresStoredSessionOfUnrestoredView(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	probe := &seamProbeTymux{live: true}
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return probe }
-	t.Cleanup(func() { newTymuxSessionFn = orig })
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return probe })
 	data := restoredPausedData(t, "unrestored-stream")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-91"
@@ -223,9 +218,7 @@ func (f *failingStartTymux) GetPTY() (*os.File, error)      { return nil, errors
 func TestSeam_FailedStartOfUnrestoredRecordDoesNotKillStoredSession(t *testing.T) {
 	fake := &failingStartTymux{}
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
-	t.Cleanup(func() { newTymuxSessionFn = orig })
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return fake })
 	data := restoredPausedData(t, "failed-start-keeps-session")
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-80"
@@ -253,9 +246,7 @@ func (f *releasingTymux) ReleaseAdoptedSession() bool { f.released++; return tru
 func restoredTymuxWith(t *testing.T, fake tymux.TymuxManager, title string) *instance.Instance {
 	t.Helper()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
-	t.Cleanup(func() { newTymuxSessionFn = orig })
+	procbackend.SetTymuxManagerFactoryForTest(t, func() tymux.TymuxManager { return fake })
 	data := restoredPausedData(t, title)
 	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-81"

@@ -1,0 +1,62 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "forwardsync",
+    srcs = [
+        "backlog_github_forward_sync.go",
+        "backlog_github_progress_sync.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/forwardsync",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//log",
+        "//server/events",
+        "//server/services/featureflags",
+        "//server/services/flagsvc",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":forwardsync",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "forwardsync_test",
+    srcs = [
+        "backlog_github_forward_sync_test.go",
+        "backlog_github_progress_prs_test.go",
+        "backlog_github_progress_sync_test.go",
+        "backlog_linear_forward_sync_test.go",
+        "forwardsync_golden_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":forwardsync"],
+    deps = [
+        "//config",
+        "//server/events",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/hostclaim",
+        "//session/itemsources",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

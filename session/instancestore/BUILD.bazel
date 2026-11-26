@@ -1,0 +1,74 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "instancestore",
+    srcs = [
+        "artifacts.go",
+        "create.go",
+        "delete.go",
+        "mapper.go",
+        "reads.go",
+        "store.go",
+        "update.go",
+        "updaters.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/instancestore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:claudemetadata",
+        "//tools/bzl/ent:claudesession",
+        "//tools/bzl/ent:diffstats",
+        "//tools/bzl/ent:itemsession",
+        "//tools/bzl/ent:project",
+        "//tools/bzl/ent:session",
+        "//tools/bzl/ent:shell",
+        "//tools/bzl/ent:tag",
+        "//tools/bzl/ent:worktree",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":instancestore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "instancestore_test",
+    srcs = [
+        "commit_failure_test.go",
+        "create_delete_test.go",
+        "mapper_test.go",
+        "reads_test.go",
+        "update_test.go",
+        "updaters_test.go",
+    ],
+    embed = [":instancestore"],
+    deps = [
+        "//session/domain",
+        "//session/internal/entdbtest",
+        "//session/sessionpr",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:claudemetadata",
+        "//tools/bzl/ent:diffstats",
+        "//tools/bzl/ent:itemsession",
+        "//tools/bzl/ent:session",
+        "//tools/bzl/ent:sessionpr",
+        "//tools/bzl/ent:tag",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session's and server/services' Bazel-sandboxed source scanners.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

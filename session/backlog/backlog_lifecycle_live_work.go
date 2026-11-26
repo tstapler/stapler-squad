@@ -22,6 +22,8 @@ type liveWorkState struct {
 
 	refresher PRRowRefresher
 
+	heartbeatSource session.LiveSnapshotSource
+
 	firstHeld map[string]time.Time // item id -> first time the hold was observed
 	notified  map[string]bool      // item id -> max-hold notification already sent
 }

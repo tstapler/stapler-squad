@@ -20,12 +20,15 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlogaux"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/markerstore"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // resolveStuckOnManualTransition immediately resolves the durable stuck
@@ -119,7 +122,7 @@ func checkNoNewWaivers(incoming, existing domain.AcCriteriaJSON) error {
 	if incoming == "" {
 		return nil
 	}
-	return session.CheckNoNewAcWaivers(existing, incoming)
+	return backlogaux.CheckNoNewAcWaivers(existing, incoming)
 }
 
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.
@@ -163,14 +166,14 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (domain.AcCriteriaJSON, 
 // round-trip, not through BacklogService's constructor-injected cfg pointer.
 // Only ever runs at item creation, so it can never retroactively change an
 // already-created item's stored pipeline_mode.
-func defaultPipelineModeForNewItem(requested *string) string {
+func (s *BacklogService) defaultPipelineModeForNewItem(requested *string) string {
 	if requested != nil {
 		return *requested
 	}
-	if !services.SddDefaultPipelineEnabled() {
+	if !services.SddDefaultPipelineEnabled(s.flags) {
 		return ""
 	}
-	return session.DefaultSDDPipelineModeSlug
+	return pipelinemode.DefaultSDDPipelineModeSlug
 }
 
 // --- CreateBacklogItem ---
@@ -249,7 +252,7 @@ func (s *BacklogService) CreateBacklogItem(
 		AutoSpawnSession:       req.Msg.AutoSpawnSession,
 		AutoCreatePR:           req.Msg.AutoCreatePr,
 		AutoApprovePlan:        req.Msg.AutoApprovePlan,
-		PipelineMode:           defaultPipelineModeForNewItem(req.Msg.PipelineMode),
+		PipelineMode:           s.defaultPipelineModeForNewItem(req.Msg.PipelineMode),
 		Category:               category,
 		Notes:                  req.Msg.Notes,
 		CostBudgetThresholdUsd: req.Msg.CostBudgetThresholdUsd,
@@ -998,7 +1001,7 @@ func transitionConnectError(err error, itemID, what string) error {
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", itemID))
 	case errors.Is(err, domain.ErrPreconditionFailed):
 		return connect.NewError(connect.CodeAborted, err)
-	case isFailedPreconditionGuardError(err):
+	case isFailedPreconditionGuardError(err), errors.Is(err, backlogdto.ErrIntegrationCheckPending):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case isTransitionDenial(err):
 		return connect.NewError(connect.CodeInvalidArgument, err)
@@ -1096,7 +1099,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// their item is done/archived (see docs/tasks/workflow-history-and-archiving.md
 	// — this reuses that epic's ArchivedAt mechanism, extended to backlog work
 	// sessions which it originally excluded).
-	if session.IsTerminalStatus(to) {
+	if terminalstate.IsTerminalStatus(to) {
 		s.CleanupTerminalItem(session.WithCleanupPath(ctx, session.CleanupPathTransition), req.Msg.ItemId)
 	}
 

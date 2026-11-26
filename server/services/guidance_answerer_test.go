@@ -58,7 +58,7 @@ func TestAnswerAs_should_AuthorizeOnlyTheNamedSessionOrTheHuman(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			data, applied, err := svc.AnswerAs(ctx, tt.id, "answer", tt.who)
 			if !tt.ok {
-				require.ErrorIs(t, err, ErrAnswererForbidden)
+				require.ErrorIs(t, err, domain.ErrAnswererForbidden)
 				assert.False(t, applied)
 				return
 			}
@@ -151,4 +151,22 @@ func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *tes
 	_, applied, err = svc.AnswerAs(ctx, ask(1), domain.OwnerActionWaiveResponse, HumanAnswerer())
 	require.NoError(t, err)
 	assert.True(t, applied)
+}
+
+func TestAnswerAsSession_should_AnswerAsThatSession_When_ItIsTheNamedAnswerer(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	svc := NewGuidanceRequestService(storage, nil, nil)
+	ctx := context.Background()
+	peer := createPeerRequest(t, storage, "asker-a", "peer-b")
+
+	_, applied, err := svc.AnswerAsSession(ctx, peer.ID, "nope", "peer-c")
+	require.ErrorIs(t, err, domain.ErrAnswererForbidden)
+	assert.False(t, applied)
+
+	data, applied, err := svc.AnswerAsSession(ctx, peer.ID, "yes", "peer-b")
+	require.NoError(t, err)
+	assert.True(t, applied)
+	assert.Equal(t, "yes", data.Answer)
+	assert.Equal(t, "peer-b", data.AnswererSessionUUID)
 }

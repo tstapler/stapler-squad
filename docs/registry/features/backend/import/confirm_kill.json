@@ -5,7 +5,7 @@
   "method": "ConfirmKillExternalSession",
   "protoFile": "proto/session/v1/import.proto",
   "markerFound": true,
-  "handlerFile": "server/services/import_service.go",
+  "handlerFile": "server/services/importsvc/import_service.go",
   "tested": true,
   "testIds": [
     "TestImportService_ConfirmKillExternalSession_ReturnsInvalidArgument_When_InstanceIdEmpty",

@@ -225,7 +225,7 @@ func (s *BacklogService) TriggerSync(
 
 // Registry returns the plugin registry backing TriggerSync, or nil if none is
 // wired. Exposed so server.go can wire the GitHub forward-sync EventBus
-// subscriber (server/services/backlog_github_forward_sync.go) with the same
+// subscriber (server/services/forwardsync/backlog_github_forward_sync.go) with the same
 // registry TriggerSync uses, without needing its own copy of the dependency
 // graph that builds it (see server/dependencies.go's syncRegistry).
 func (s *BacklogService) Registry() *session.PluginRegistry {
@@ -330,7 +330,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
 		ExternalID:   strconv.Itoa(ref.IssueNumber),
 		ExternalURL:  issue.URL,
-		PipelineMode: defaultPipelineModeForNewItem(nil),
+		PipelineMode: s.defaultPipelineModeForNewItem(nil),
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create backlog item: %w", err))

@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/procbackend"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -68,7 +68,7 @@ func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
-			inst := instance.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
+			inst := instance.NewStartedInstanceForTest(t, "paint", procbackend.NewTymuxBackend(retainedPaintManager{}))
 			inst.Status = status
 			inst.Backend = domain.BackendTymux
 			frame, ok := fullStateFrame(context.Background(), inst)
@@ -184,4 +184,39 @@ func (c startedCounter) OnLifecycleEvent(e domain.LifecycleEvent, _ string) {
 	if e == domain.EventStarted {
 		c.n.Add(1)
 	}
+}
+
+// unwiredLaunchPM models a freshly created Instance whose first Start has not wired the launch
+// command yet: RestoreWithWorkDir must refuse (domain.ErrLaunchNotWired) instead of creating a
+// bare-shell session.
+type unwiredLaunchPM struct{ *unrestoredTymuxPM }
+
+func (p *unwiredLaunchPM) RestoreWithWorkDir(string) error {
+	p.restored.Add(1)
+	return domain.ErrLaunchNotWired
+}
+
+// Regression: an attach that races ahead of Start must report "not alive, retry after Start"
+// rather than failing the stream or creating a session that runs the default shell.
+func TestStreamPaths_should_NotFailOrAttach_When_RestoreRacesAheadOfFirstStart(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+
+	t.Run("ensureHubBackendAlive", func(t *testing.T) {
+		pm := &unwiredLaunchPM{&unrestoredTymuxPM{}}
+		inst := instance.NewStartedInstanceForTest(t, "unwired-hub", pm)
+
+		alive, err := h.ensureHubBackendAlive(inst, "sess")
+
+		require.NoError(t, err)
+		require.False(t, alive)
+		require.False(t, pm.attached.Load(), "no pane may be attached before Start wires the launch command")
+	})
+
+	t.Run("ensureControlModeStarted", func(t *testing.T) {
+		pm := &unwiredLaunchPM{&unrestoredTymuxPM{}}
+		inst := instance.NewStartedInstanceForTest(t, "unwired-control", pm)
+
+		require.NoError(t, h.ensureControlModeStarted(inst, "sess", &pumpTestController{}))
+		require.Equal(t, int32(1), pm.restored.Load())
+	})
 }

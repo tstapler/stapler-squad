@@ -113,7 +113,7 @@ func (i *Instance) kickOffClaudeVersionMismatchCheck() {
 		// Panic safety: this always runs as a detached goroutine, so an
 		// unrecovered panic here would crash the entire server process --
 		// mirrors this package's other fire-and-forget goroutines (e.g.
-		// AutonomousDriver.run in session/autonomous_driver.go).
+		// AutonomousDriver.run in session/autonomous/autonomous_driver.go).
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error("scroll_forward: claude version-mismatch check panicked (recovered)", "binary_path", binaryPath, "panic", r)

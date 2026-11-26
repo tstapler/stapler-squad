@@ -17,8 +17,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -53,7 +53,7 @@ type insightsDeletedCostLedgerReader interface {
 // same "nil means unavailable" idiom as RulesService's configStore/aiClient —
 // so tests that construct InsightsService without wiring it still work.
 type DismissedFindingsRepository interface {
-	DismissFinding(ctx context.Context, data session.DismissedFindingData) error
+	DismissFinding(ctx context.Context, data domain.DismissedFindingData) error
 	ListDismissedFindingIDs(ctx context.Context) (map[string]bool, error)
 }
 
@@ -756,7 +756,7 @@ func (s *InsightsService) DismissFinding(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("finding_id is required"))
 	}
 
-	err := s.dismissedFindings.DismissFinding(ctx, session.DismissedFindingData{
+	err := s.dismissedFindings.DismissFinding(ctx, domain.DismissedFindingData{
 		FindingID:      req.Msg.FindingId,
 		SessionID:      req.Msg.SessionId,
 		ConversationID: req.Msg.ConversationId,

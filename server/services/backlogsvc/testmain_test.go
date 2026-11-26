@@ -4,8 +4,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -13,5 +11,5 @@ import (
 // Claude CLI and state dir, a pre-seeded headless capability self-check (see svctest.Main), and a SessionDriver
 // leak check after the run. Nothing here depends on the services package's DNS seam.
 func TestMain(m *testing.M) {
-	os.Exit(svctest.Main(m, func() { featureflags.SetCurrent(services.FlagRegistry()) }))
+	os.Exit(svctest.Main(m, func() {}))
 }

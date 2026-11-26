@@ -140,7 +140,7 @@ counts what it would have dropped (`would_suppress`). Read from
 at startup and immediately by the `FlagObserver` call that
 `FeatureFlagService.UpdateFeatureFlag` makes after every persisted change).
 
-The flag is registered as a `featureflags.Spec` (`server/services/feature_flag_specs.go`), so it is settable through
+The flag is registered as a `featureflags.Spec` (`server/services/flagsvc/feature_flag_specs.go`), so it is settable through
 `UpdateFeatureFlag` and the Settings page:
 
 - **Enabling** returns `FailedPrecondition` ("stats writer not running") while
@@ -262,7 +262,7 @@ accumulator's last tick: an event within a minute of an hour boundary may land
 in the previous bucket.
 
 `<config dir>/delivery-gate-stats.json` (mode 0600; the test-mode directory when
-`STAPLER_SQUAD_TEST_DIR` is set) is written by `services.FileStatsStore`:
+`STAPLER_SQUAD_TEST_DIR` is set) is written by `gatestats.FileStatsStore`:
 pid-named temp file, `fsync`, rename, at most once a minute plus a final flush
 registered with `defer` at the top of `Server.Shutdown` and bounded by
 `StatsFlushTimeout` (5s). A crash loses at most the last minute. The schema has

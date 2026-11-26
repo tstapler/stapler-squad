@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -80,7 +82,7 @@ type WorkspaceService struct {
 	eventBus   *events.EventBus
 	liveFinder LiveInstanceFinder
 	// guards is the live hidden_session_readonly_guards value; nil means on.
-	guards GuardsFlag
+	guards access.GuardsFlag
 	// inFlightSwitches tracks session IDs currently undergoing a workspace switch.
 	// Prevents concurrent SwitchWorkspace RPCs on the same session from corrupting state.
 	inFlightSwitches sync.Map
@@ -115,7 +117,7 @@ func (ws *WorkspaceService) SetLiveFinder(f LiveInstanceFinder) {
 }
 
 // SetGuardsFlag injects the live read-only guards flag.
-func (ws *WorkspaceService) SetGuardsFlag(f GuardsFlag) {
+func (ws *WorkspaceService) SetGuardsFlag(f access.GuardsFlag) {
 	ws.guards = f
 }
 
@@ -166,7 +168,7 @@ func (ws *WorkspaceService) CheckWriteAccess(sessionID string) error {
 	if inst.IsArchived() {
 		return archivedSessionRefusal()
 	}
-	if _, err := AccessForUnary(inst, ws.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(inst, ws.guards).Writer(nil); err != nil {
 		return hiddenSessionRefusal()
 	}
 	return nil
@@ -215,7 +217,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 	if cachedStatus, ok := ws.freshVCSStatus(workDir); ok {
 		recordVCSOutcome(ctx, vcsOutcomeCacheHit)
 		span.SetAttributes(attribute.String("cache", "hit"))
-		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(cachedStatus)}), nil
+		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: searchrpc.VCSStatusToProto(cachedStatus)}), nil
 	}
 	// Stale-while-revalidate: a poller never waits on git for an entry that is merely
 	// past its TTL. StatusAsOf tells the UI how old the data is.
@@ -223,7 +225,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 		ws.refreshVCSStatusInBackground(ctx, instance, workDir)
 		recordVCSOutcome(ctx, vcsOutcomeStaleHit)
 		span.SetAttributes(attribute.String("cache", "stale"))
-		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(stale)}), nil
+		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: searchrpc.VCSStatusToProto(stale)}), nil
 	}
 	span.SetAttributes(attribute.String("cache", "miss"))
 
@@ -244,7 +246,7 @@ func (ws *WorkspaceService) GetVCSStatus(
 	} else {
 		recordVCSOutcome(ctx, vcsOutcomeComputed)
 	}
-	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: vcsStatusToProto(status)}), nil
+	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{VcsStatus: searchrpc.VCSStatusToProto(status)}), nil
 }
 
 // cachedAfter reports whether workDir has a cache entry computed after t.
@@ -571,7 +573,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 
 	// Every switch type types into or restarts the pane, so a hidden target is
 	// refused before the in-flight entry, the checkpoint or any git-side change.
-	if _, err := AccessForUnary(instance, ws.guards).Writer(nil); err != nil {
+	if _, err := access.AccessForUnary(instance, ws.guards).Writer(nil); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %q is a background session and is read-only: %w", req.Msg.Id, err))
 	}
@@ -668,119 +670,6 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		ChangesHandled:   result.ChangesHandled,
 		Session:          adapters.InstanceToProto(instance, nil),
 	}), nil
-}
-
-// ---------------------------------------------------------------------------
-// VCS conversion helpers
-// ---------------------------------------------------------------------------
-
-func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
-	if status == nil {
-		return nil
-	}
-
-	protoStatus := &sessionv1.VCSStatus{
-		Type:        vcsTypeToProto(status.Type),
-		Branch:      status.Branch,
-		HeadCommit:  status.HeadCommit,
-		Description: status.Description,
-		// #nosec G115 -- AheadBy/BehindBy are git/jj ahead-behind commit
-		// counts for one local branch, far below int32 range.
-		AheadBy: int32(status.AheadBy),
-		// #nosec G115 -- see AheadBy above.
-		BehindBy:     int32(status.BehindBy),
-		Upstream:     status.Upstream,
-		HasStaged:    status.HasStaged,
-		HasUnstaged:  status.HasUnstaged,
-		HasUntracked: status.HasUntracked,
-		HasConflicts: status.HasConflicts,
-		IsClean:      status.IsClean,
-	}
-
-	for _, f := range status.StagedFiles {
-		protoStatus.StagedFiles = append(protoStatus.StagedFiles, fileChangeToProto(f))
-	}
-	for _, f := range status.UnstagedFiles {
-		protoStatus.UnstagedFiles = append(protoStatus.UnstagedFiles, fileChangeToProto(f))
-	}
-	for _, f := range status.UntrackedFiles {
-		protoStatus.UntrackedFiles = append(protoStatus.UntrackedFiles, fileChangeToProto(f))
-	}
-	for _, f := range status.ConflictFiles {
-		protoStatus.ConflictFiles = append(protoStatus.ConflictFiles, fileChangeToProto(f))
-	}
-
-	for _, c := range status.Commits {
-		commit := &sessionv1.ShippedCommit{Sha: c.SHA, Summary: c.Summary, AuthorName: c.AuthorName}
-		if !c.AuthorAt.IsZero() {
-			commit.AuthoredAt = timestamppb.New(c.AuthorAt)
-		}
-		protoStatus.Commits = append(protoStatus.Commits, commit)
-	}
-	protoStatus.CommitsTruncated = status.CommitsTruncated
-	protoStatus.CommitsUnavailable = status.CommitsUnavailable
-	if status.AggregateDiffStat != nil {
-		protoStatus.AggregateDiffStat = &sessionv1.AggregateDiffStat{
-			// #nosec G115 -- diff stats for one local commit range, far below int32 range.
-			FilesChanged: int32(status.AggregateDiffStat.FilesChanged),
-			// #nosec G115 -- see FilesChanged above.
-			Additions: int32(status.AggregateDiffStat.Additions),
-			// #nosec G115 -- see FilesChanged above.
-			Deletions: int32(status.AggregateDiffStat.Deletions),
-		}
-	}
-	if !status.StatusAsOf.IsZero() {
-		protoStatus.StatusAsOf = timestamppb.New(status.StatusAsOf)
-	}
-
-	return protoStatus
-}
-
-func vcsTypeToProto(t vc.VCSType) sessionv1.VCSType {
-	switch t {
-	case vc.VCSGit:
-		return sessionv1.VCSType_VCS_TYPE_GIT
-	case vc.VCSJujutsu:
-		return sessionv1.VCSType_VCS_TYPE_JUJUTSU
-	default:
-		return sessionv1.VCSType_VCS_TYPE_UNSPECIFIED
-	}
-}
-
-func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
-	switch s {
-	case vc.FileModified:
-		return sessionv1.FileStatus_FILE_STATUS_MODIFIED
-	case vc.FileAdded:
-		return sessionv1.FileStatus_FILE_STATUS_ADDED
-	case vc.FileDeleted:
-		return sessionv1.FileStatus_FILE_STATUS_DELETED
-	case vc.FileRenamed:
-		return sessionv1.FileStatus_FILE_STATUS_RENAMED
-	case vc.FileCopied:
-		return sessionv1.FileStatus_FILE_STATUS_COPIED
-	case vc.FileUntracked:
-		return sessionv1.FileStatus_FILE_STATUS_UNTRACKED
-	case vc.FileIgnored:
-		return sessionv1.FileStatus_FILE_STATUS_IGNORED
-	case vc.FileConflict:
-		return sessionv1.FileStatus_FILE_STATUS_CONFLICT
-	default:
-		return sessionv1.FileStatus_FILE_STATUS_UNSPECIFIED
-	}
-}
-
-func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
-	return &sessionv1.FileChange{
-		Path:     f.Path,
-		Status:   fileStatusToProto(f.Status),
-		IsStaged: f.IsStaged,
-		OldPath:  f.OldPath,
-		// #nosec G115 -- per-file diff line counts, far below int32 range.
-		Additions: int32(f.Additions),
-		// #nosec G115 -- see Additions above.
-		Deletions: int32(f.Deletions),
-	}
 }
 
 // ListBranches returns the git branches for a given repository path.

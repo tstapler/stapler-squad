@@ -14,7 +14,7 @@ import (
 	"connectrpc.com/connect"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services/backlogflow"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -31,7 +31,7 @@ const (
 // response with protojson. MCP-only work here: argument clamping, sanitizing
 // untrusted text and error wording; no FlowSummary field is mapped.
 type flowHandlers struct {
-	svc          *backlogflow.BacklogFlowService
+	svc          FlowService
 	enabledCheck func() bool
 }
 
@@ -189,10 +189,17 @@ func flowReply[M any, PM interface {
 	return flowResult(PM(resp.Msg))
 }
 
+// flowJSONOptions is the protojson configuration for flow responses: snake_case
+// names and every field present. It must equal backlogflow.FlowJSONOptions, which
+// a test pins, so the RPC and MCP forms stay identical.
+func flowJSONOptions() protojson.MarshalOptions {
+	return protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}
+}
+
 // flowResult sanitizes and marshals a service response.
 func flowResult(msg proto.Message) *mcpgo.CallToolResult {
 	sanitizeFlowMessage(msg)
-	raw, merr := backlogflow.FlowJSONOptions().Marshal(msg)
+	raw, merr := flowJSONOptions().Marshal(msg)
 	if merr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("marshal flow response: %v", merr), "")
 	}

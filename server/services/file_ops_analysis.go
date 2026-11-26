@@ -6,13 +6,14 @@ import (
 	"path/filepath"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // fileSource names one resolved file well enough for a background pass to reopen
 // it after the request's root is closed, plus the validator the pass must match.
 type fileSource struct {
 	Dir      string
-	Resolved ResolvedPath
+	Resolved fsops.ResolvedPath
 	Key      analysisKey
 }
 
@@ -24,7 +25,7 @@ func newFileSource(rr *opsRequest, info os.FileInfo) fileSource {
 			Path:    filepath.Join(rr.Dir, string(rr.Resolved)),
 			Size:    info.Size(),
 			MtimeNs: info.ModTime().UnixNano(),
-			Inode:   fileInode(info),
+			Inode:   fsops.FileInode(info),
 		},
 	}
 }
@@ -80,6 +81,6 @@ func (o *FileOps) fillAnalysis(ctx context.Context, resp *sessionv1.StatFileResp
 	resp.Analysis = state
 	if wantSHA && state == analysisStateReady && fr.Size <= rangeHashCapBytes {
 		k := fr.Src.Key
-		resp.VersionToken = FileVersionToken{Size: k.Size, MtimeNs: k.MtimeNs, SHA256: a.SHA256}.String()
+		resp.VersionToken = fsops.FileVersionToken{Size: k.Size, MtimeNs: k.MtimeNs, SHA256: a.SHA256}.String()
 	}
 }

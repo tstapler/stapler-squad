@@ -1,0 +1,365 @@
+== publisher
+kind="status_transition" item=true delivered=1
+  type=backlog_item_changed kind=status_transition item=item-1/t-status_transition old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="status_transition" item=false delivered=1
+  type=backlog_item_changed kind=status_transition item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="verdict_recorded" item=true delivered=1
+  type=backlog_item_changed kind=verdict_recorded item=item-1/t-verdict_recorded old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="verdict_recorded" item=false delivered=1
+  type=backlog_item_changed kind=verdict_recorded item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="session_attached" item=true delivered=1
+  type=backlog_item_changed kind=session_attached item=item-1/t-session_attached old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="session_attached" item=false delivered=1
+  type=backlog_item_changed kind=session_attached item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="item_updated" item=true delivered=1
+  type=backlog_item_changed kind=item_updated item=item-1/t-item_updated old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="item_updated" item=false delivered=1
+  type=backlog_item_changed kind=item_updated item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="item_archived" item=true delivered=1
+  type=backlog_item_changed kind=item_archived item=item-1/t-item_archived old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="item_archived" item=false delivered=1
+  type=backlog_item_changed kind=item_archived item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="item_removed" item=true delivered=1
+  type=backlog_item_changed kind=item_removed item=item-1/t-item_removed old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="item_removed" item=false delivered=1
+  type=backlog_item_changed kind=item_removed item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="triage_progress_updated" item=true delivered=1
+  type=backlog_item_changed kind=triage_progress_updated item=item-1/t-triage_progress_updated old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="triage_progress_updated" item=false delivered=1
+  type=backlog_item_changed kind=triage_progress_updated item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="activity_note_added" item=true delivered=1
+  type=backlog_item_changed kind=activity_note_added item=item-1/t-activity_note_added old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="activity_note_added" item=false delivered=1
+  type=backlog_item_changed kind=activity_note_added item=nil old="review" new="done" fields=["title" "description"] session="sess-9" archived=2026-11-25T01:02:03.000000004Z removed="dup" verdict={ItemSessionID:is-1 OverallOutcome:pass PerCriterion: Summary:ok DiffHash: PromptHash: DiffTokenCount:7 DiffTruncated:false ReviewedCommitSha: OverrideBy: OverrideReason: OverrideAt:2026-11-25 01:02:03.000000004 +0000 UTC} claimant="host-1" note={ID:n-1 Message:note AuthorSessionUUID:u AuthorSessionTitle:T CreatedAt:2026-11-25 01:02:03.000000004 +0000 UTC}
+kind="not-a-real-kind" item=true delivered=0
+kind="not-a-real-kind" item=false delivered=0
+kind="" item=true delivered=0
+kind="" item=false delivered=0
+zero-change type=backlog_item_changed kind=item_updated item=z/ old="" new="" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+nil-bus, nil-receiver and closed-bus publishes returned without panic; stray=0
+bus A got 1, bus B got 0
+== debug-mutate
+GET /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PUT /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+DELETE /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PATCH /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+HEAD /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+OPTIONS /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+GET /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PUT /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+DELETE /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PATCH /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+HEAD /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+OPTIONS /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+GET /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PUT /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+DELETE /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PATCH /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+HEAD /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+OPTIONS /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+GET /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PUT /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+DELETE /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PATCH /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+HEAD /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+OPTIONS /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+GET /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PUT /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+DELETE /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+PATCH /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+HEAD /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+OPTIONS /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+POST /api/debug/backlog/mutate-unknown "{}" -> 404 ct="text/plain; charset=utf-8" allow="" body="404 page not found\n"
+POST /api/debug/backlog/mutate-create "" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: EOF\n"
+POST /api/debug/backlog/mutate-create "not json" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: invalid character 'o' in literal null (expecting 'u')\n"
+POST /api/debug/backlog/mutate-create "[]" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal array into Go value of type services.mutateCreateRequest\n"
+POST /api/debug/backlog/mutate-create "{}" -> 400 ct="text/plain; charset=utf-8" allow="" body="title is required\n"
+POST /api/debug/backlog/mutate-create "{\"itemId\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="title is required\n"
+POST /api/debug/backlog/mutate-create "{\"title\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="title is required\n"
+POST /api/debug/backlog/mutate-create "{\"unknownField\":1}" -> 400 ct="text/plain; charset=utf-8" allow="" body="title is required\n"
+POST /api/debug/backlog/mutate-create "{\"itemId\":5}" -> 400 ct="text/plain; charset=utf-8" allow="" body="title is required\n"
+POST /api/debug/backlog/mutate-transition "" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: EOF\n"
+POST /api/debug/backlog/mutate-transition "not json" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: invalid character 'o' in literal null (expecting 'u')\n"
+POST /api/debug/backlog/mutate-transition "[]" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal array into Go value of type services.mutateTransitionRequest\n"
+POST /api/debug/backlog/mutate-transition "{}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId and targetStatus are required\n"
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId and targetStatus are required\n"
+POST /api/debug/backlog/mutate-transition "{\"title\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId and targetStatus are required\n"
+POST /api/debug/backlog/mutate-transition "{\"unknownField\":1}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId and targetStatus are required\n"
+POST /api/debug/backlog/mutate-transition "{\"itemId\":5}" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal number into Go struct field mutateTransitionRequest.itemId of type string\n"
+POST /api/debug/backlog/mutate-update "" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: EOF\n"
+POST /api/debug/backlog/mutate-update "not json" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: invalid character 'o' in literal null (expecting 'u')\n"
+POST /api/debug/backlog/mutate-update "[]" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal array into Go value of type services.mutateUpdateRequest\n"
+POST /api/debug/backlog/mutate-update "{}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-update "{\"title\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-update "{\"unknownField\":1}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-update "{\"itemId\":5}" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal number into Go struct field mutateUpdateRequest.itemId of type string\n"
+POST /api/debug/backlog/mutate-archive "" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: EOF\n"
+POST /api/debug/backlog/mutate-archive "not json" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: invalid character 'o' in literal null (expecting 'u')\n"
+POST /api/debug/backlog/mutate-archive "[]" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal array into Go value of type services.mutateItemIDRequest\n"
+POST /api/debug/backlog/mutate-archive "{}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-archive "{\"itemId\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-archive "{\"title\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-archive "{\"unknownField\":1}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-archive "{\"itemId\":5}" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal number into Go struct field mutateItemIDRequest.itemId of type string\n"
+POST /api/debug/backlog/mutate-delete "" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: EOF\n"
+POST /api/debug/backlog/mutate-delete "not json" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: invalid character 'o' in literal null (expecting 'u')\n"
+POST /api/debug/backlog/mutate-delete "[]" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal array into Go value of type services.mutateItemIDRequest\n"
+POST /api/debug/backlog/mutate-delete "{}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-delete "{\"itemId\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-delete "{\"title\":\"\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-delete "{\"unknownField\":1}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId is required\n"
+POST /api/debug/backlog/mutate-delete "{\"itemId\":5}" -> 400 ct="text/plain; charset=utf-8" allow="" body="invalid request body: json: cannot unmarshal number into Go struct field mutateItemIDRequest.itemId of type string\n"
+  rows=0
+POST /api/debug/backlog/mutate-create "{\"title\":\"plain\"}" -> 200 ct="application/json" allow="" body="{itemId:<item1> publicId-present:true raw-has-publicId-key:true}"
+  rows=1
+  row <item1> status="idea" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+POST /api/debug/backlog/mutate-create "{\"title\":\"full\",\"description\":\"d\",\"status\":\"review\",\"priority\":1,\"repoPath\":\"/r\",\"acCriteria\":[\"one\",\"two\"]}" -> 200 ct="application/json" allow="" body="{itemId:<item2> publicId-present:true raw-has-publicId-key:true}"
+  rows=2
+  row <item1> status="idea" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+POST /api/debug/backlog/mutate-create "{\"title\":\"weird status\",\"status\":\"nonsense\",\"priority\":-2}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to create backlog item: failed to create backlog item: ent: validator failed for field \"BacklogItem.priority\": value out of range\n"
+  rows=2
+  row <item1> status="idea" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+POST /api/debug/backlog/mutate-create "{\"title\":\"done directly\",\"status\":\"done\",\"acCriteria\":[]}" -> 200 ct="application/json" allow="" body="{itemId:<item3> publicId-present:true raw-has-publicId-key:true}"
+POST /api/debug/backlog/mutate-create "{\"title\":\"unicode é世\",\"description\":\"line1\\nline2\",\"priority\":9999}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to create backlog item: failed to create backlog item: ent: validator failed for field \"BacklogItem.priority\": value out of range\n"
+  rows=3
+  row <item1> status="idea" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"in_progress\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="in_progress" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=status_transition item=<item1>/plain old="idea" new="in_progress" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"done\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="done" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=status_transition item=<item1>/plain old="in_progress" new="done" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"idea\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="idea" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=false
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=status_transition item=<item1>/plain old="done" new="idea" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"archived\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="archived" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_archived item=<item1>/plain old="" new="" fields=[] session="" archived=now removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"review\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="review" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=status_transition item=<item1>/plain old="archived" new="review" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"bogus\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="bogus" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=status_transition item=<item1>/plain old="review" new="bogus" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\",\"targetStatus\":\"pr_pending\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="full" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=status_transition item=<item1>/plain old="bogus" new="pr_pending" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"no-such-item\",\"targetStatus\":\"done\"}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to transition backlog item: not found: invalid id \"no-such-item\": invalid UUID length: 12\n"
+POST /api/debug/backlog/mutate-transition "{\"itemId\":\"<item1>\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId and targetStatus are required\n"
+POST /api/debug/backlog/mutate-transition "{\"targetStatus\":\"done\"}" -> 400 ct="text/plain; charset=utf-8" allow="" body="itemId and targetStatus are required\n"
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"<item2>\",\"title\":\"renamed\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="renamed" desc="d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_updated item=<item2>/renamed old="" new="" fields=["title"] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"<item2>\",\"description\":\"new desc\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="renamed" desc="new desc" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_updated item=<item2>/renamed old="" new="" fields=["description"] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"<item2>\",\"title\":\"both\",\"description\":\"both d\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="both" desc="both d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_updated item=<item2>/both old="" new="" fields=["title" "description"] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"<item2>\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="both" desc="both d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_updated item=<item2>/both old="" new="" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"<item2>\",\"title\":null,\"description\":null}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="both" desc="both d" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_updated item=<item2>/both old="" new="" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"<item2>\",\"description\":\"\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_updated item=<item2>/both old="" new="" fields=["description"] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-update "{\"itemId\":\"no-such-item\",\"title\":\"x\"}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to update backlog item: not found: invalid id \"no-such-item\": invalid UUID length: 12\n"
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="review" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=false
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+POST /api/debug/backlog/mutate-archive "{\"itemId\":\"<item2>\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="archived" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=true
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_archived item=<item2>/both old="" new="" fields=[] session="" archived=now removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-archive "{\"itemId\":\"<item2>\"}" -> 204 ct="" allow="" body=""
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="archived" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=true
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+  event type=backlog_item_changed kind=item_archived item=<item2>/both old="" new="" fields=[] session="" archived=now removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-archive "{\"itemId\":\"no-such-item\"}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to archive backlog item: not found: invalid id \"no-such-item\": invalid UUID length: 12\n"
+  rows=3
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="archived" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=true
+  row <item3> status="done" title="done directly" desc="" prio=3 repo="" ac= archivedAtSet=false
+POST /api/debug/backlog/mutate-delete "{\"itemId\":\"<item3>\"}" -> 204 ct="" allow="" body=""
+  rows=2
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="archived" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=true
+  event type=backlog_item_changed kind=item_removed item=<item3>/done directly old="" new="" fields=[] session="" archived=nil removed="" verdict=nil claimant="" note=nil
+POST /api/debug/backlog/mutate-delete "{\"itemId\":\"<item3>\"}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to delete backlog item: not found: backlog item <item3>\n"
+  rows=2
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="archived" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=true
+POST /api/debug/backlog/mutate-delete "{\"itemId\":\"no-such-item\"}" -> 500 ct="text/plain; charset=utf-8" allow="" body="failed to delete backlog item: not found: invalid id \"no-such-item\": invalid UUID length: 12\n"
+  rows=2
+  row <item1> status="pr_pending" title="plain" desc="" prio=3 repo="" ac= archivedAtSet=true
+  row <item2> status="archived" title="both" desc="" prio=1 repo="/r" ac=[{"index":0,"text":"one","status":"pending"},{"index":1,"text":"two","status":"pending"}] archivedAtSet=true
+direct HandleTransition GET -> 405
+direct HandleArchive GET -> 405
+POST /api/debug/backlog/mutate-create "{\"title\":\"x\",\"itemId\":\"y\",\"targetStatus\":\"done\"}" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+POST /api/debug/backlog/mutate-create "not json" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+GET /api/debug/backlog/mutate-create "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+POST /api/debug/backlog/mutate-transition "{\"title\":\"x\",\"itemId\":\"y\",\"targetStatus\":\"done\"}" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+POST /api/debug/backlog/mutate-transition "not json" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+GET /api/debug/backlog/mutate-transition "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+POST /api/debug/backlog/mutate-update "{\"title\":\"x\",\"itemId\":\"y\",\"targetStatus\":\"done\"}" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+POST /api/debug/backlog/mutate-update "not json" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+GET /api/debug/backlog/mutate-update "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+POST /api/debug/backlog/mutate-archive "{\"title\":\"x\",\"itemId\":\"y\",\"targetStatus\":\"done\"}" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+POST /api/debug/backlog/mutate-archive "not json" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+GET /api/debug/backlog/mutate-archive "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+POST /api/debug/backlog/mutate-delete "{\"title\":\"x\",\"itemId\":\"y\",\"targetStatus\":\"done\"}" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+POST /api/debug/backlog/mutate-delete "not json" -> 503 ct="text/plain; charset=utf-8" allow="" body="storage not available\n"
+GET /api/debug/backlog/mutate-delete "" -> 405 ct="text/plain; charset=utf-8" allow="" body="method not allowed\n"
+== headless
+nil pool:  end:code=unavailable msg="unavailable: headless pool is unavailable (claude binary not found)"
+allowed keys: "acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \"\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "custom": {text="reply-0" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0.25} end:ok
+key "triage":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \"triage\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "completion-review":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \"completion-review\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "CUSTOM":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \"CUSTOM\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key " custom":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \" custom\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "nope":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \"nope\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "review": {text="reply-1" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0.25} end:ok
+key "ac":  end:code=invalid_argument msg="invalid_argument: invalid feature_key \"ac\": must be one of acceptance-criteria, commit-message, custom, pr-description, review, summarize"
+key "summarize": {text="reply-2" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0.25} end:ok
+system_prompt 99999: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-3\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+user_prompt 99999: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-4\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+system_prompt 100000: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-5\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+user_prompt 100000: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-6\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+system_prompt 100001:  end:code=invalid_argument msg="invalid_argument: system_prompt exceeds maximum size of 100000 bytes"
+user_prompt 100001:  end:code=invalid_argument msg="invalid_argument: user_prompt exceeds maximum size of 100000 bytes"
+timeout 0: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-7\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+timeout -5: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-8\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+timeout 1: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-9\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+timeout 30: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-10\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+timeout 100000: {text="{\"type\":\"result\",\"session_id\":\"s1\",\"result\":\"reply-11\",\"total_cost_usd\":0.25}" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0} end:ok
+raw output "not json at all": {text="not json at all" done=false err=false msg="" cost=0} {text="" done=true err=true msg="stream-json: subprocess exited with no terminal result event" cost=0} end:ok
+raw output "{\"type\":\"result\",\"is_error\":true,\"result\":\"boom\"}": {text="" done=true err=true msg="claude reported error: boom" cost=0} end:ok
+raw output "": {text="" done=true err=true msg="stream-json: subprocess exited with no terminal result event" cost=0} end:ok
+raw output "{\"type\":\"result\",\"result\":\"\",\"total_cost_usd\":1.5}": {text="" done=true err=false msg="" cost=1.5} end:ok
+model override: {text="model reply" done=false err=false msg="" cost=0} {text="" done=true err=false msg="" cost=0.25} end:ok
+model override args: ["-p" "--output-format" "stream-json" "--verbose" "--system-prompt" "s" "--exclude-dynamic-system-prompt-sections" "--model" "opus"]
+start error:  end:code=internal msg="internal: headless call start: headless runner start: headless subprocess failed to start: spawn failed"
+runner calls=12
+  call 0 args=["-p" "--output-format" "stream-json" "--verbose" "--system-prompt" "sys" "--exclude-dynamic-system-prompt-sections"] stdin-len=5
+    stdin="hello"
+  call 1 args=["-p" "--output-format" "stream-json" "--verbose" "--system-prompt" "sys" "--exclude-dynamic-system-prompt-sections"] stdin-len=5
+    stdin="hello"
+  call 2 args=["-p" "--output-format" "stream-json" "--verbose" "--system-prompt" "sys" "--exclude-dynamic-system-prompt-sections"] stdin-len=5
+    stdin="hello"
+  call 3 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="u"
+  call 4 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=99999
+  call 5 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="u"
+  call 6 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=100000
+  call 7 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="t"
+  call 8 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="t"
+  call 9 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="t"
+  call 10 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="t"
+  call 11 args=["-p" "--resume" "<session-id>" "--exclude-dynamic-system-prompt-sections"] stdin-len=1
+    stdin="t"
+== llm-backend
+nil selector
+  get settings: default="" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get featureKeys: ["review" "summarize" "acceptance-criteria" "pr-description" "commit-message" "custom" "autonomous_fix" "autonomous_approval" "triage" "backlog-intent-parse" "session-completion-summary" "handoff-summary" "session-tagging" "unfinished-work-summary" "instance-resume" "rules-generation" "gate-custom-check"]
+  get backends=0
+selector with three backends
+  get settings: default="" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get featureKeys: ["review" "summarize" "acceptance-criteria" "pr-description" "commit-message" "custom" "autonomous_fix" "autonomous_approval" "triage" "backlog-intent-parse" "session-completion-summary" "handoff-summary" "session-tagging" "unfinished-work-summary" "instance-resume" "rules-generation" "gate-custom-check"]
+  get backend: [agy false false true false false]
+  get backend: [claude true true true true true]
+  get backend: [consolette false false false false false]
+  get backends=3
+update agy default: ok default="agy" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get settings: default="agy" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get featureKeys: ["review" "summarize" "acceptance-criteria" "pr-description" "commit-message" "custom" "autonomous_fix" "autonomous_approval" "triage" "backlog-intent-parse" "session-completion-summary" "handoff-summary" "session-tagging" "unfinished-work-summary" "instance-resume" "rules-generation" "gate-custom-check"]
+  get backend: [agy false false true false false]
+  get backend: [claude true true true true true]
+  get backend: [consolette false false false false false]
+  get backends=3
+update full: ok default="claude" perFeature=["review=agy"] consolette="http://127.0.0.1:1234" anthropic="https://example.com/v1" modelMaps=["agy{sonnet=b}" "gemini{haiku=g-flash,opus=g-pro}"]
+  get settings: default="claude" perFeature=["review=agy"] consolette="http://127.0.0.1:1234" anthropic="https://example.com/v1" modelMaps=["agy{sonnet=b}" "gemini{haiku=g-flash,opus=g-pro}"]
+  get featureKeys: ["review" "summarize" "acceptance-criteria" "pr-description" "commit-message" "custom" "autonomous_fix" "autonomous_approval" "triage" "backlog-intent-parse" "session-completion-summary" "handoff-summary" "session-tagging" "unfinished-work-summary" "instance-resume" "rules-generation" "gate-custom-check"]
+  get backend: [agy false false true false false]
+  get backend: [claude true true true true true]
+  get backend: [consolette false false false false false]
+  get backends=3
+update unknown default: code=invalid_argument msg="invalid_argument: unknown default backend \"nope\""
+update unknown feature: code=invalid_argument msg="invalid_argument: unknown feature key \"nope-feature\""
+update unknown backend for feature: code=invalid_argument msg="invalid_argument: unknown backend \"nope\" for feature \"review\""
+update bad consolette url: code=invalid_argument msg="invalid_argument: consolette base URL: \"ftp://x\" must be an absolute http(s) URL"
+update bad anthropic url: code=invalid_argument msg="invalid_argument: anthropic base URL: \"not a url\" must be an absolute http(s) URL"
+update unknown model map backend: code=invalid_argument msg="invalid_argument: model map for unknown backend \"nope\""
+update nil settings: ok default="" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get settings: default="" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get featureKeys: ["review" "summarize" "acceptance-criteria" "pr-description" "commit-message" "custom" "autonomous_fix" "autonomous_approval" "triage" "backlog-intent-parse" "session-completion-summary" "handoff-summary" "session-tagging" "unfinished-work-summary" "instance-resume" "rules-generation" "gate-custom-check"]
+  get backend: [agy false false true false false]
+  get backend: [claude true true true true true]
+  get backend: [consolette false false false false false]
+  get backends=3
+update reset: ok default="" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get settings: default="" perFeature=[] consolette="" anthropic="" modelMaps=[]
+  get featureKeys: ["review" "summarize" "acceptance-criteria" "pr-description" "commit-message" "custom" "autonomous_fix" "autonomous_approval" "triage" "backlog-intent-parse" "session-completion-summary" "handoff-summary" "session-tagging" "unfinished-work-summary" "instance-resume" "rules-generation" "gate-custom-check"]
+  get backend: [agy false false true false false]
+  get backend: [claude true true true true true]
+  get backend: [consolette false false false false false]
+  get backends=3
+BackendSettingsFromConfig {Default: PerFeature:map[] ConsoletteBaseURL: AnthropicBaseURL: ModelMaps:map[]} -> {Default: PerFeature:map[] ConsoletteBaseURL: AnthropicBaseURL: ModelMaps:map[]}
+BackendSettingsFromConfig {Default:claude PerFeature:map[a:b] ConsoletteBaseURL:c AnthropicBaseURL:d ModelMaps:map[x:map[y:z]]} -> {Default:claude PerFeature:map[a:b] ConsoletteBaseURL:c AnthropicBaseURL:d ModelMaps:map[x:map[y:z]]}

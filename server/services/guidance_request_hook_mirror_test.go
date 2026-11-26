@@ -18,6 +18,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
@@ -46,37 +47,36 @@ func (c *mirrorCounts) failures() []string {
 // mirrorFlagOn pins askuserquestion_structured on for tests that probe the mirror itself.
 func mirrorFlagOn() bool { return true }
 
-func newTestMirror(t *testing.T) (*GuidanceHookMirror, *session.Storage, *PendingQuestionStore, *mirrorCounts) {
+func newTestMirror(t *testing.T) (*questionkit.GuidanceHookMirror, *session.Storage, *questionkit.PendingQuestionStore, *mirrorCounts) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	pending := NewPendingQuestionStore(nil)
+	pending := questionkit.NewPendingQuestionStore(nil)
 	counts := &mirrorCounts{}
 	return newRealStoreMirror(storage, pending, counts), storage, pending, counts
 }
 
 // newRealStoreMirror lifts the 250 ms production bound: a race-instrumented
 // SQLite write under a parallel test run can exceed it, which is not what these tests probe.
-func newRealStoreMirror(storage *session.Storage, pending *PendingQuestionStore, counts *mirrorCounts) *GuidanceHookMirror {
-	m := NewGuidanceHookMirror(storage, pending, counts.onFailed, counts.onCleared)
-	m.bound = 10 * time.Second
-	m.enabled = mirrorFlagOn
+func newRealStoreMirror(storage *session.Storage, pending *questionkit.PendingQuestionStore, counts *mirrorCounts) *questionkit.GuidanceHookMirror {
+	m := questionkit.NewGuidanceHookMirror(storage, pending, counts.onFailed, counts.onCleared, mirrorFlagOn)
+	m.SetBound(10 * time.Second)
 	return m
 }
 
-func askedFromBody(t *testing.T, question string, labels ...string) AskedQuestion {
+func askedFromBody(t *testing.T, question string, labels ...string) questionkit.AskedQuestion {
 	t.Helper()
 	opts := make([]interface{}, len(labels))
 	for i, l := range labels {
 		opts[i] = map[string]interface{}{"label": l, "description": "d"}
 	}
-	return ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
+	return questionkit.ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
 		"question": question, "header": "Color", "multiSelect": false, "options": opts,
 	}}})
 }
 
-func mirrorReq(t *testing.T, callID, question string, replyable bool) HookMirrorRequest {
+func mirrorReq(t *testing.T, callID, question string, replyable bool) questionkit.HookMirrorRequest {
 	t.Helper()
-	return HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: callID, Asked: askedFromBody(t, question, "Red", "Green"), Replyable: replyable}
+	return questionkit.HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: callID, Asked: askedFromBody(t, question, "Red", "Green"), Replyable: replyable}
 }
 
 func guidanceRowOf(t *testing.T, s *session.Storage, id string) *domain.GuidanceRequestData {
@@ -132,11 +132,11 @@ func TestMirror_should_RedactSecretsInQuestionsJSON(t *testing.T) {
 	t.Parallel()
 	m, storage, _, _ := newTestMirror(t)
 	secret := "ghp_" + strings.Repeat("a", 36)
-	asked := ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
+	asked := questionkit.ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
 		"question": "Use token " + secret + "?", "header": "Tok", "multiSelect": false,
 		"options": []interface{}{map[string]interface{}{"label": "Yes", "description": "token " + secret}},
 	}}})
-	id, ok := m.Mirror(HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: "toolu_s", Asked: asked, Replyable: true})
+	id, ok := m.Mirror(questionkit.HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: "toolu_s", Asked: asked, Replyable: true})
 	require.True(t, ok)
 	row := guidanceRowOf(t, storage, id)
 	assert.NotContains(t, row.QuestionsJSON, secret)
@@ -146,7 +146,7 @@ func TestMirror_should_RedactSecretsInQuestionsJSON(t *testing.T) {
 
 // blockingMirrorStore blocks CreateMirroredGuidanceRequest until released.
 type blockingMirrorStore struct {
-	guidanceMirrorStore
+	questionkit.GuidanceMirrorStore
 	release chan struct{}
 	err     error
 }
@@ -164,22 +164,21 @@ func TestMirror_should_FailOpenWithinBound_WhenRepositoryBlocksOrErrors(t *testi
 		store  *blockingMirrorStore
 		reason string
 	}{
-		"blocks": {&blockingMirrorStore{release: make(chan struct{})}, mirrorFailTimeout},
-		"errors": {&blockingMirrorStore{err: errors.New("database is locked")}, mirrorFailError},
+		"blocks": {&blockingMirrorStore{release: make(chan struct{})}, questionkit.MirrorFailTimeout},
+		"errors": {&blockingMirrorStore{err: errors.New("database is locked")}, questionkit.MirrorFailError},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			counts := &mirrorCounts{}
-			m := NewGuidanceHookMirror(tc.store, NewPendingQuestionStore(nil), counts.onFailed, counts.onCleared)
-			m.enabled = mirrorFlagOn
+			m := questionkit.NewGuidanceHookMirror(tc.store, questionkit.NewPendingQuestionStore(nil), counts.onFailed, counts.onCleared, mirrorFlagOn)
 			if tc.store.release != nil {
 				t.Cleanup(func() { close(tc.store.release) })
 			}
 			// A short bound keeps the test fast; the store stays blocked until cleanup, so returning at all
 			// proves Mirror gave up at its bound. The wall-clock ceiling only catches a hang, not CI jitter.
 			const bound = 20 * time.Millisecond
-			m.bound = bound
+			m.SetBound(bound)
 			start := time.Now()
 			id, ok := m.Mirror(mirrorReq(t, "toolu_1", "Which color?", true))
 			assert.Less(t, time.Since(start), 100*bound)
@@ -192,28 +191,27 @@ func TestMirror_should_FailOpenWithinBound_WhenRepositoryBlocksOrErrors(t *testi
 
 func TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog(t *testing.T) {
 	t.Parallel()
-	m, _, _, _ := newTestMirror(t)
+	m, storage, _, _ := newTestMirror(t)
 	frame, err := os.ReadFile("../../session/testdata/reply_dialogs/question_single_select_3opts.txt")
 	require.NoError(t, err)
-	asked := ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
+	asked := questionkit.ParseAskUserQuestion(map[string]interface{}{"questions": []interface{}{map[string]interface{}{
 		"question": "Which color should the spike use?", "header": "Color", "multiSelect": false,
 		"options": []interface{}{
 			map[string]interface{}{"label": "Red"}, map[string]interface{}{"label": "Green"}, map[string]interface{}{"label": "Blue"},
 		},
 	}}})
-	id, ok := m.Mirror(HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: "toolu_1", Asked: asked, Replyable: true})
+	id, ok := m.Mirror(questionkit.HookMirrorRequest{SessionUUID: mirrorSession, HookCallID: "toolu_1", Asked: asked, Replyable: true})
 	require.True(t, ok)
 	_, viewOnly := m.Mirror(mirrorReq(t, "toolu_ro", "Read only?", false))
 	require.True(t, viewOnly)
 
-	restarted := NewPendingQuestionStore(nil) // the service restart: the in-memory cache is empty
-	m2 := NewGuidanceHookMirror(m.store, restarted, nil, nil)
-	m2.enabled = mirrorFlagOn
+	restarted := questionkit.NewPendingQuestionStore(nil) // the service restart: the in-memory cache is empty
+	m2 := questionkit.NewGuidanceHookMirror(storage, restarted, nil, nil, mirrorFlagOn)
 	n, err := m2.Rehydrate(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "the read_only row is not replyable")
 
-	q, found := restarted.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: id})
+	q, found := restarted.Peek(questionkit.QuestionKey{SessionUUID: mirrorSession, QuestionID: id})
 	require.True(t, found, "the card's question id is the row id")
 	assert.True(t, panereply.DialogMatch(string(frame), q.Dialog), "the same dialog still verifies")
 	other, err := os.ReadFile("../../session/testdata/reply_dialogs/question_wrapped_2opts.txt")
@@ -226,11 +224,11 @@ func TestEnsureRegistered_should_ReRegisterAnOpenRow_AfterTheCacheTTL(t *testing
 	storage := svctest.CreateTestStorage(t)
 	now := time.Now()
 	clock := func() time.Time { return now }
-	cache := NewPendingQuestionStore(clock)
+	cache := questionkit.NewPendingQuestionStore(clock)
 	m := newRealStoreMirror(storage, cache, &mirrorCounts{})
 	id, ok := m.Mirror(mirrorReq(t, "toolu_1", "Which color?", true))
 	require.True(t, ok)
-	key := QuestionKey{SessionUUID: mirrorSession, QuestionID: id}
+	key := questionkit.QuestionKey{SessionUUID: mirrorSession, QuestionID: id}
 	require.False(t, peeked(cache, key), "never registered by Mirror itself")
 
 	require.True(t, m.EnsureRegistered(context.Background(), key))
@@ -275,7 +273,7 @@ func TestMirror_should_HitTheCap_WhenNothingIsCleared(t *testing.T) {
 	}
 	_, ok := m.Mirror(mirrorReq(t, "toolu_5", "Question 5?", true))
 	assert.False(t, ok)
-	assert.Equal(t, []string{mirrorFailCapped}, counts.failures())
+	assert.Equal(t, []string{questionkit.MirrorFailCapped}, counts.failures())
 }
 
 func TestClearByHookCall_should_CancelOnlyThatCallsRow(t *testing.T) {
@@ -293,7 +291,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForHookSourceRows(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	svc := NewGuidanceRequestService(storage, bus, nil)
-	m := newRealStoreMirror(storage, NewPendingQuestionStore(nil), &mirrorCounts{})
+	m := newRealStoreMirror(storage, questionkit.NewPendingQuestionStore(nil), &mirrorCounts{})
 	id, ok := m.Mirror(mirrorReq(t, "toolu_1", "Which color?", true))
 	require.True(t, ok)
 	ctx := context.Background()
@@ -310,7 +308,7 @@ func TestNotifyAnswered_should_BeSuppressed_ForHookSourceRows(t *testing.T) {
 	}
 }
 
-func peeked(s *PendingQuestionStore, k QuestionKey) bool {
+func peeked(s *questionkit.PendingQuestionStore, k questionkit.QuestionKey) bool {
 	_, ok := s.Peek(k)
 	return ok
 }

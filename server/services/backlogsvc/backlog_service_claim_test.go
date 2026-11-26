@@ -28,34 +28,34 @@ const claimIssueURL = "https://github.com/acme/widgets/issues/42"
 
 // fakeClaimChecker returns a canned verdict and counts calls per path.
 type fakeClaimChecker struct {
-	verdict    services.ClaimVerdict
+	verdict    hostclaim.ClaimVerdict
 	err        error
 	liveCalls  atomic.Int32
 	localCalls atomic.Int32
 }
 
-func (f *fakeClaimChecker) CheckClaim(context.Context, string) (services.ClaimVerdict, error) {
+func (f *fakeClaimChecker) CheckClaim(context.Context, string) (hostclaim.ClaimVerdict, error) {
 	f.liveCalls.Add(1)
 	return f.verdict, f.err
 }
 
-func (f *fakeClaimChecker) CheckClaimLocalOnly(context.Context, string) (services.ClaimVerdict, error) {
+func (f *fakeClaimChecker) CheckClaimLocalOnly(context.Context, string) (hostclaim.ClaimVerdict, error) {
 	f.localCalls.Add(1)
 	return f.verdict, f.err
 }
 
 func (f *fakeClaimChecker) ListForeignClaims() []hostclaim.ClaimRecord {
 	f.localCalls.Add(1)
-	if f.err == nil && f.verdict.Kind == services.ClaimHeldByOther {
+	if f.err == nil && f.verdict.Kind == hostclaim.ClaimHeldByOther {
 		return []hostclaim.ClaimRecord{f.verdict.Record}
 	}
 	return nil
 }
 
-func heldByHostA(t *testing.T) services.ClaimVerdict {
+func heldByHostA(t *testing.T) hostclaim.ClaimVerdict {
 	t.Helper()
 	hostA := svctest.NewClaimTestIdentity(t)
-	return services.NewHeldByOtherVerdict(hostclaim.NewSignedClaimRecord(hostA, claimIssueURL, "ssq://hostA/backlog/v1/bl_1", time.Now()))
+	return hostclaim.NewHeldByOtherVerdict(hostclaim.NewSignedClaimRecord(hostA, claimIssueURL, "ssq://hostA/backlog/v1/bl_1", time.Now()))
 }
 
 func captureClaimLogs(t *testing.T) *bytes.Buffer {
@@ -153,7 +153,7 @@ func TestImportGitHubIssue_should_ReturnInvalidArgument_When_OverrideTrueWithRea
 func TestImportGitHubIssue_should_ProceedAndLogIndeterminate_When_ClaimCheckTimesOutAgainstAllPeers(t *testing.T) {
 	serveClaimIssue(t)
 	logs := captureClaimLogs(t)
-	svc := claimEnabledService(t, &fakeClaimChecker{verdict: services.NewIndeterminateVerdict()})
+	svc := claimEnabledService(t, &fakeClaimChecker{verdict: hostclaim.NewIndeterminateVerdict()})
 
 	resp, err := importClaimIssue(svc, false, "")
 
@@ -229,7 +229,7 @@ func TestCreateBacklogItem_should_CreateAndLogNlCreateClaimOverride_When_Overrid
 
 func TestCreateBacklogItem_should_ProceedAndLogIndeterminate_When_ClaimCheckTimesOutForChatCreatedItem(t *testing.T) {
 	logs := captureClaimLogs(t)
-	svc := claimEnabledService(t, &fakeClaimChecker{verdict: services.NewIndeterminateVerdict()})
+	svc := claimEnabledService(t, &fakeClaimChecker{verdict: hostclaim.NewIndeterminateVerdict()})
 
 	resp, err := createClaimTestItem(t, svc, false, "")
 
@@ -306,7 +306,7 @@ func newDequeueClaimService(t *testing.T, checker services.CrossHostClaimChecker
 }
 
 func TestDequeueNextQueuedItems_should_DequeueNormally_When_ClaimIndexHasNoConflictingEntry(t *testing.T) {
-	checker := &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()}
+	checker := &fakeClaimChecker{verdict: hostclaim.NewUnclaimedVerdict()}
 	svc, _, repoPath := newDequeueClaimService(t, checker)
 	itemID := createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 
@@ -503,7 +503,7 @@ func TestCheckCrossHostClaim_should_ReturnClaimWithHostAndLink_When_HeldByOther(
 }
 
 func TestCheckCrossHostClaim_should_UseOnlyLocalIndex_When_LocalOnlySet(t *testing.T) {
-	checker := &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()}
+	checker := &fakeClaimChecker{verdict: hostclaim.NewUnclaimedVerdict()}
 	svc := claimEnabledService(t, checker)
 
 	got := checkClaimRPC(t, svc, true)
@@ -515,7 +515,7 @@ func TestCheckCrossHostClaim_should_UseOnlyLocalIndex_When_LocalOnlySet(t *testi
 }
 
 func TestCheckCrossHostClaim_should_ReportUncheckedNeverClear_When_Indeterminate(t *testing.T) {
-	svc := claimEnabledService(t, &fakeClaimChecker{verdict: services.NewIndeterminateVerdict()})
+	svc := claimEnabledService(t, &fakeClaimChecker{verdict: hostclaim.NewIndeterminateVerdict()})
 
 	got := checkClaimRPC(t, svc, false)
 
@@ -578,7 +578,7 @@ func TestDequeueNextQueuedItems_should_ClearBlockedByClaimRow_When_ClaimNoLonger
 	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
 	require.Equal(t, 1, openClaimStuckRows(t, svc, itemID))
 
-	checker.verdict = services.NewUnclaimedVerdict()
+	checker.verdict = hostclaim.NewUnclaimedVerdict()
 	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
 
 	assert.Zero(t, openClaimStuckRows(t, svc, itemID))
@@ -603,4 +603,16 @@ func TestDequeueNextQueuedItems_should_KeepBlockedByClaimRow_When_ClaimStillHeld
 	require.NoError(t, svc.DequeueNextQueuedItems(context.Background()))
 
 	assert.Equal(t, 1, openClaimStuckRows(t, svc, itemID))
+}
+
+func TestLookupCrossHostClaim_should_ReturnDomainSentinelWithoutCheck_When_FeatureFlagOff(t *testing.T) {
+	checker := &fakeClaimChecker{verdict: heldByHostA(t)}
+	svc := claimEnabledService(t, checker)
+	svc.claimDedupFlag = func() bool { return false }
+
+	verdict, err := svc.LookupCrossHostClaim(context.Background(), claimIssueURL)
+
+	require.ErrorIs(t, err, domain.ErrCrossHostClaimDedupDisabled)
+	assert.Equal(t, hostclaim.NewUnclaimedVerdict(), verdict)
+	assert.Zero(t, checker.liveCalls.Load())
 }

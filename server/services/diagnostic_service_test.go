@@ -10,7 +10,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/diagnose"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -137,7 +137,7 @@ func TestEvaluateNudgeEligibility_should_DisallowNudge_When_TargetNotLive(t *tes
 }
 
 func TestBuildDiagnosePrompt_OffersResetRemediation_AndAllowListCarriesIt(t *testing.T) {
-	prompt := buildDiagnosePrompt(session.DiagnosticBundle{}, "", "pr_needs_fix", false, "no live target")
+	prompt := buildDiagnosePrompt(diagnose.DiagnosticBundle{}, "", "pr_needs_fix", false, "no live target")
 	assert.Contains(t, prompt, "diagnose_reset_remediation")
 	assert.Contains(t, prompt, `stuck_reason="pr_needs_fix"`)
 	assert.Contains(t, diagnosticSessionAllowedTools, "mcp__stapler-squad__diagnose_reset_remediation")

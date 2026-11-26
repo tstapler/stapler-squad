@@ -44,7 +44,7 @@ func TestChangelogRoutes_FlagGatesAPI(t *testing.T) {
 	}
 
 	s := &Server{mux: http.NewServeMux()}
-	s.registerChangelogHandlers()
+	s.registerChangelogHandlers(nil)
 
 	for _, path := range []string{"/api/changelog", "/api/update-check"} {
 		setFlag(false)

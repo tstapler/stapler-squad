@@ -40,6 +40,7 @@ var notTerminalWriteReasons = map[string]string{
 	"GuidanceRequestService.AnswerGuidanceRequest": `stores an answer for the triage pipeline; types into no pane`,
 	"HeadlessService.RunHeadlessCall":              `headless call, no pane`,
 	"TymuxRolloutService.ReplaceTymuxd":            `restarts the tymuxd process; panes are revived by the daemon, nothing is typed`,
+	"BacklogService.CreateEpicIntegrationChild":    `stores an idea item, its dependency edges and the epic's done gate (integration_child_id); types into no pane`,
 }
 
 // notTerminalWriteRPCs lists every other RPC, per service.
@@ -48,7 +49,7 @@ var notTerminalWriteRPCs = map[string][]string{
 	"BacklogService": {
 		"AddBacklogItemDependency", "ApprovePlan", "ArchiveBacklogItem", "AttachSessionToItem",
 		"BulkResetStuckRemediation", "CancelTriage", "CheckCrossHostClaim", "CreateBacklogItem",
-		"CreateBacklogItemFromChat", "CreateItemSource", "CreateLivenessDefinition", "CreatePipelineMode",
+		"CreateBacklogItemFromChat", "CreateEpicIntegrationChild", "CreateItemSource", "CreateLivenessDefinition", "CreatePipelineMode",
 		"CreateStage", "CreateStageTransition", "CreateTransitionGate", "DeleteBacklogItem", "DeleteItemSource",
 		"DeleteLivenessDefinition", "DeletePipelineMode", "DeleteStage", "DeleteStageTransition",
 		"DeleteTransitionGate", "DismissWorkflowSuggestion", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
@@ -135,7 +136,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"PickFanoutWinner", "PinSessionPullRequest", "RefreshSessionPullRequests", "DetachSessionPullRequest", "AttachSessionPullRequest", "DetachItemPullRequest", "ReclassifySessionTags", "ReloadClaudeSettingsRules", "RenameSession", "RescanSessionArtifacts", "ResolveApproval",
 		"ResolveDefaults", "RestartTmuxServer", "ResumeCrashedSession", "ResumeHibernatedSession", "RetrySession",
 		"RetrySessionCreation", "RevokeEgressConsent", "RunOneShot", "RunWorkflow", "SaveRulesToConfigFile",
-		"SearchClaudeHistory", "SearchContent", "SearchFiles", "SearchSessionArtifacts", "FindSessionsByPullRequest", "ListSessionArtifacts", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
+		"SearchClaudeHistory", "StreamSearchClaudeHistory", "SearchContent", "SearchFiles", "SearchSessionArtifacts", "FindSessionsByPullRequest", "ListSessionArtifacts", "SendNotification", "SetCaptureTap", "SetStreamHubGlobalOverride",
 		"SetStreamHubSessionOverride", "StatFile", "StopShell", "StreamTerminal", "SwitchDatabase",
 		"TestJulesConnection", "TestSlackWebhook", "UnarchiveSession", "UnpinSession", "UpdateBackgroundModels",
 		"UpdateCallbackConfig", "UpdateClaudeConfig", "UpdateFeatureFlag", "UpdateGlobalDefaults",

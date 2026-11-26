@@ -33,6 +33,7 @@ import (
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/pipelinemode"
 	"github.com/tstapler/stapler-squad/session/stagecfg"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -5812,7 +5813,7 @@ func TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementation
 		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     t.TempDir(),
-		PipelineMode: session.DefaultSDDPipelineModeSlug,
+		PipelineMode: pipelinemode.DefaultSDDPipelineModeSlug,
 	})
 	require.NoError(t, err)
 
@@ -5849,7 +5850,7 @@ func TestTriggerTriage_should_PersistPlanArtifactsPath_When_SDDImplementationDir
 		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     repoPath,
-		PipelineMode: session.DefaultSDDPipelineModeSlug,
+		PipelineMode: pipelinemode.DefaultSDDPipelineModeSlug,
 	})
 	require.NoError(t, err)
 
@@ -5902,7 +5903,7 @@ func TestTriggerTriage_should_UseFlatProjectRoot_When_SDDImplementationDirMissin
 		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     repoPath,
-		PipelineMode: session.DefaultSDDPipelineModeSlug,
+		PipelineMode: pipelinemode.DefaultSDDPipelineModeSlug,
 	})
 	require.NoError(t, err)
 
@@ -5951,7 +5952,7 @@ func TestTriggerTriage_should_PreserveEarlierPlanArtifactsPath_When_ReTriageWrit
 		Status:            string(domain.BacklogStatusIdea),
 		Priority:          3,
 		RepoPath:          t.TempDir(), // no project_plans/ here: this run writes nothing
-		PipelineMode:      session.DefaultSDDPipelineModeSlug,
+		PipelineMode:      pipelinemode.DefaultSDDPipelineModeSlug,
 		PlanArtifactsPath: earlierPlanDir,
 	})
 	require.NoError(t, err)

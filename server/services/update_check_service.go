@@ -9,27 +9,24 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/changelog"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 const (
-	// UpdateCheckFlagName is opt-in: the check contacts api.github.com.
-	UpdateCheckFlagName = "changelog:update-check"
-	// ChangelogFlagName gates the changelog route, API and update badge.
-	ChangelogFlagName = "changelog"
-
 	updateCheckMinInterval = 6 * time.Hour
 	updateCheckInitialWait = 30 * time.Second
 	updateCheckTick        = 15 * time.Minute
 )
 
 // ChangelogEnabled reports the changelog flag (default on) from cfg.
-func ChangelogEnabled(cfg *config.Config) bool {
-	return cfg.GetFeatureFlagWithDefault(ChangelogFlagName, FeatureFlagDefault(ChangelogFlagName))
+func ChangelogEnabled(cfg *config.Config, reg *featureflags.Registry) bool {
+	return flagsvc.FlagReader{Reg: reg}.Enabled(cfg, featureflags.ChangelogFlagName)
 }
 
 // UpdateCheckFlagEnabled reports the opt-in update-check flag (default off) from cfg.
-func UpdateCheckFlagEnabled(cfg *config.Config) bool {
-	return cfg.GetFeatureFlagWithDefault(UpdateCheckFlagName, FeatureFlagDefault(UpdateCheckFlagName))
+func UpdateCheckFlagEnabled(cfg *config.Config, reg *featureflags.Registry) bool {
+	return flagsvc.FlagReader{Reg: reg}.Enabled(cfg, featureflags.UpdateCheckFlagName)
 }
 
 // UpdateCheckResult is the JSON served by GET /api/update-check.

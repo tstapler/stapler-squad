@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 )
 
 // SessionArchiver soft-archives a session by UUID so it stops accumulating in the
@@ -169,7 +170,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			processed++
 		}
 		if clean && countsOK {
-			l.terminalSettled.Settle(settleKey, now, session.TerminalSweepSettleTTL)
+			l.terminalSettled.Settle(settleKey, now, terminalstate.TerminalSweepSettleTTL)
 		}
 	}
 	session.SetRuleLUnsettledItems(ruleLUnsettled)
@@ -224,7 +225,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 		// else waits for the TTL (a PR-held block is released promptly by the
 		// terminal listener, T5.4.3).
 		if countsOK && (outcome.Status != session.CleanupBlocked || !outcome.LiveOnly) {
-			l.terminalSettled.Settle(settleKey, now, session.TerminalSweepSettleTTL)
+			l.terminalSettled.Settle(settleKey, now, terminalstate.TerminalSweepSettleTTL)
 		}
 	}
 	if len(items) > 0 {

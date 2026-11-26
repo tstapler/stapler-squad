@@ -1,0 +1,69 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "webhooktrigger",
+    srcs = [
+        "generic_webhook_handler.go",
+        "github_webhook_handler.go",
+        "github_webhook_pr_fix.go",
+        "github_webhook_provenance.go",
+        "github_webhook_reopened.go",
+        "webhook_signature.go",
+        "webhook_trigger_common.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/webhooktrigger",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//log",
+        "//server/services/featureflags",
+        "//server/workflows",
+        "//session",
+        "//session/domain",
+        "//session/stagecfg",
+        "//telemetry",
+        "//tools/bzl/ent",
+        "@com_github_google_uuid//:uuid",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":webhooktrigger",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "webhooktrigger_test",
+    srcs = [
+        "generic_webhook_handler_test.go",
+        "github_webhook_handler_test.go",
+        "github_webhook_pr_fix_test.go",
+        "github_webhook_provenance_test.go",
+        "webhook_signature_test.go",
+    ],
+    embed = [":webhooktrigger"],
+    deps = [
+        "//github",
+        "//server/services/featureflags",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/hostclaim",
+        "//session/stagecfg",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:triggerfireevent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

@@ -158,8 +158,8 @@ var bypassInventory = []bypassSite{
 	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
 	gated("server/services/backlogsvc/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
 	gated("server/services/backlogsvc/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
-	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
-	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlogmisc/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlogmisc/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
 
 	// Gated, Story 1.5.7 (system writers in session).
 	gated("session/backlog_remediation.go", "Storage.redriveOne", 1, "GatedTransition as the recorded denied caller: autonomous_complete, maybe_trigger_triage or triage_complete (Story 1.5.8e)"),
@@ -556,9 +556,10 @@ var createInventory = []createSite{
 	{"server/mcp/tools_backlog_import_tracker.go", "backlogHandlers.importTrackerIssue", 1, classCreate, idleCreateReason},
 	{"server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.CreateBacklogItem", 1, classCreate, idleCreateReason + " (through its data literal)"},
 	{"server/services/backlogsvc/backlog_service_sync.go", "BacklogService.ImportGitHubIssue", 1, classCreate, idleCreateReason},
+	{"server/services/backlogsvc/backlog_service_epic.go", "BacklogService.createIntegrationFixChild", 1, classCreate, idleCreateReason + " (data literal sets no Status)"},
 	{"session/backlog_sync.go", "SyncLoop.SyncOne", 1, classCreateForwarder, "item comes from the source plugin's MapToBacklogItem (not resolvable here): the GitHub plugins set idea and the Jira and Linear plugins set no status"},
 
-	{"server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},
+	{"server/services/backlogmisc/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},
 	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.createSimpleBacklogItem", 1, classCreateDebug, debugCreateReason},
 	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeed", 1, classCreateDebug, debugCreateReason},
 	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedQueued", 1, classCreateDebug, debugCreateReason},

@@ -11,8 +11,10 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -26,7 +28,7 @@ import (
 func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 	t.Helper()
 	svctest.WithIsolatedStateDir(t)
-	svc := services.NewFeatureFlagService()
+	svc := flagsvc.NewFeatureFlagService()
 	return func(name string, on bool) {
 		t.Helper()
 		_, err := svc.UpdateFeatureFlag(context.Background(),
@@ -118,7 +120,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus domain.B
 	return f
 }
 
-func (f *charFixture) complete(outcome session.AutonomousDriverOutcome) {
+func (f *charFixture) complete(outcome autonomous.AutonomousDriverOutcome) {
 	f.svc.AutonomousSvc.OnAutonomousDriverComplete(f.title, outcome)
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/workspacepeers"
 )
 
 // addTestPeer creates a peer session sharing repoPath's workspace, with a goal set, for
@@ -26,7 +27,7 @@ func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 	require.NoError(t, storage.AddInstance(peer))
 	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "fix the widget loader", instance.GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
-	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
+	require.NoError(t, workspacepeers.New(storage).SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 }
 
 // TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_FlagEnabledAndPeerExists

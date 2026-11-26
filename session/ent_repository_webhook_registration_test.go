@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
 	"github.com/tstapler/stapler-squad/session/webhookstore"
 )
 
@@ -403,36 +404,6 @@ func TestReconcileWebhookRegistration_should_AllowOnlyOneWinner_When_DifferentRe
 	assert.Equal(t, []int{1, 1}, []int{w, g})
 }
 
-func TestIntegrationCredential_should_AuthenticateOnlyWhileActive_When_IssuedAndRevoked(t *testing.T) {
-	r := NewTestEntRepository(t)
-	ctx := context.Background()
-	info := IntegrationCredentialInfo{PrincipalID: "gh-signal", WorkspaceID: "ws-1", AllowedDirRoot: "/tmp/repo"}
-
-	token, err := r.IssueIntegrationCredential(ctx, info)
-	require.NoError(t, err)
-	assert.Contains(t, token, integrationTokenPrefix)
-
-	got, err := r.AuthenticateIntegrationToken(ctx, token)
-	require.NoError(t, err)
-	assert.Equal(t, info, *got)
-
-	stored, err := r.Client.IntegrationCredential.Query().Only(ctx)
-	require.NoError(t, err)
-	assert.NotContains(t, stored.TokenSha256, token, "the plaintext token must never be stored")
-
-	_, err = r.AuthenticateIntegrationToken(ctx, token+"x")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-	_, err = r.AuthenticateIntegrationToken(ctx, "")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-
-	_, err = r.IssueIntegrationCredential(ctx, info)
-	assert.ErrorIs(t, err, domain.ErrConflict, "re-issuing must not silently rotate an existing principal")
-
-	require.NoError(t, r.RevokeIntegrationCredential(ctx, "gh-signal"))
-	_, err = r.AuthenticateIntegrationToken(ctx, token)
-	assert.ErrorIs(t, err, domain.ErrNotFound)
-}
-
 // A constructor that sets Client but misses initStores would leave an embedded store
 // nil and panic only at the first call.
 func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(t *testing.T) {
@@ -450,5 +421,41 @@ func TestEntRepository_should_BuildEveryEmbeddedStore_When_ConstructedByAnyPath(
 				assert.False(t, v.Field(i).IsNil(), "%s: embedded %s is nil", name, v.Type().Field(i).Name)
 			}
 		}
+	}
+}
+
+// initStores must wire the Instances write ports on every constructor path: a nil port
+// panics only on the first Create or Update with a PR link or the first Delete of a UUID session.
+func TestEntRepository_should_WireInstanceWritePorts_When_ConstructedByAnyPath(t *testing.T) {
+	t.Parallel()
+	seeded := NewTestEntRepository(t)
+	fromClient := NewEntRepositoryFromClient(seeded.Client)
+	opened, err := NewEntRepository(WithDatabasePath(filepath.Join(t.TempDir(), "sessions.db")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = opened.Close() })
+
+	ref, err := domain.NewPRRef("", "own", "rep", 5)
+	require.NoError(t, err)
+	for name, repo := range map[string]*EntRepository{"seeded": seeded, "from-client": fromClient, "opened": opened} {
+		ctx := context.Background()
+		title, uuid := "ports-"+name, "uuid-ports-"+name
+		require.NoError(t, repo.Create(ctx, domain.InstanceData{Title: title, UUID: uuid, Path: "/p", Program: "claude",
+			PRs: []domain.PRView{{Ref: ref, Role: domain.PRRolePrimary, AttachSource: domain.AttachSourceCreatedFromURL}}}), name)
+		n, err := repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID(uuid)).Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, n, "%s: Create must write the PR link through the UpsertSessionPRSet port", name)
+
+		bare := domain.InstanceData{Title: "upd-" + name, UUID: "uuid-upd-" + name, Path: "/p", Program: "claude"}
+		require.NoError(t, repo.Create(ctx, bare), name)
+		bare.PRs = []domain.PRView{{Ref: ref, Role: domain.PRRolePrimary, AttachSource: domain.AttachSourceCreatedFromURL}}
+		require.NoError(t, repo.Update(ctx, bare), name)
+		n, err = repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID(bare.UUID)).Count(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 1, n, "%s: Update must write the PR link through the UpsertSessionPRSet port", name)
+
+		require.NoError(t, repo.Delete(ctx, title), name)
+		n, err = repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID(uuid)).Count(ctx)
+		require.NoError(t, err)
+		assert.Zero(t, n, "%s: Delete must remove the PR link through the DeleteOwnerPRRows port", name)
 	}
 }

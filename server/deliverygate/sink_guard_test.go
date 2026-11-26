@@ -47,13 +47,9 @@ var reviewedConsumers = map[finding]string{
 
 	// server/services references EventNotification (event_converter, producers),
 	// so every Subscribe there is listed; only WatchSessions forwards it.
-	"consumer: " + svcPkgPath + ".WatchSessions":                            "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
-	"consumer: " + svcPkgPath + ".StartBacklogGitHubForwardSyncSubscriber":  "subscribes for backlog item changes only; ignores notifications",
-	"consumer: " + svcPkgPath + ".StartBacklogGitHubProgressSyncSubscriber": "subscribes for backlog item changes only; ignores notifications",
-	"consumer: " + svcPkgPath + ".WatchUnfinishedWork":                      "converts only the unfinished-work event types (convertUnfinishedEvent); other types, notifications included, are dropped",
-	"consumer: " + svcPkgPath + ".watchWorkflows":                           "workflow stream; ignores notifications",
-	"consumer: " + svcPkgPath + ".start":                                    "completion reviewer; reacts only to backlog item done-transitions, ignores notifications",
-	"consumer: " + svcPkgPath + ".Run":                                      "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
+	"consumer: " + svcPkgPath + ".WatchSessions":  "forwards EventNotification to connected clients via event_converter (toasts); sits behind the bus publish filter",
+	"consumer: " + svcPkgPath + ".watchWorkflows": "workflow stream; ignores notifications",
+	"consumer: " + svcPkgPath + ".Run":            "guidance session reaper; reacts only to session deleted/archived events, ignores notifications",
 }
 
 // reviewedAppendCallers are the concrete NotificationHistoryStore.Append* call
@@ -64,10 +60,10 @@ var reviewedAppendCallers = map[finding]string{}
 // non-test server code. The legacy per-site notification checks were removed
 // in Story 2.9; a new entry needs a reason that is not "notification".
 var reviewedRawHiddenReads = map[finding]string{
-	"hidden: " + modulePath + "/server/services.instanceMatchesListFilters": "session-list include_hidden filtering, not notification delivery",
-	"hidden: " + modulePath + "/server/services.externalMatchesListFilters": "session-list include_hidden filtering for external sessions, not notification delivery",
-	"hidden: " + modulePath + "/server/services.WatchSessions":              "session-stream include_hidden filtering, not notification delivery",
-	"hidden: " + modulePath + "/server/services.isAutomationSession":        "automation-session classification",
+	"hidden: " + modulePath + "/server/services.instanceMatchesListFilters":    "session-list include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services.externalMatchesListFilters":    "session-list include_hidden filtering for external sessions, not notification delivery",
+	"hidden: " + modulePath + "/server/services.WatchSessions":                 "session-stream include_hidden filtering, not notification delivery",
+	"hidden: " + modulePath + "/server/services/searchrpc.isAutomationSession": "automation-session classification",
 }
 
 // scanResult holds the findings of one scan, by category.

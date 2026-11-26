@@ -102,7 +102,7 @@ func TestTransitionHandler_Enforce_OperatorOverrideBypassesGateAgentDoesNot(t *t
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "an unsatisfied operator gate denies")
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID), "an operator denial returns the error only")
 
-	_, err = svc.TransitionBacklogItemStatus(services.WithTransitionActor(ctx, instance.TriggeredByAgent), req(item.ID, "agent insists"))
+	_, err = svc.TransitionBacklogItemStatus(domain.WithTransitionActor(ctx, instance.TriggeredByAgent), req(item.ID, "agent insists"))
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "an agent never bypasses a Configured gate")
 	assert.Equal(t, string(domain.BacklogStatusReady), storedStatus(t, storage, item.ID))
 	rows := transitionDeniedRows(t, svc, item.ID)

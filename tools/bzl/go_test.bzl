@@ -6,6 +6,8 @@ load("@rules_go//go:def.bzl", _go_test = "go_test")
 _SIZES = {
     "server/services": ("enormous", 4),
     "session": ("large", 2),
+    # ~120 CPU-s of repo building: 30-123s on a quiet runner, over 300s when starved by a cold full-graph build (run 45484212458).
+    "session/unfinished": ("large", None),
 }
 
 # package -> SandboxClasses (Epic 0 census S8/S9 and test-exclusions.yaml) that make a result depend on the host.

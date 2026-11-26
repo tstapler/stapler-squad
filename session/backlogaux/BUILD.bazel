@@ -1,0 +1,56 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backlogaux",
+    srcs = [
+        "ac_reconcile.go",
+        "backlog_completion_review_context.go",
+        "backlog_intent.go",
+        "backlog_shared.go",
+        "budget_warning.go",
+        "headless_failure_capture.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/backlogaux",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backlogaux",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backlogaux_test",
+    srcs = [
+        "backlog_completion_review_context_test.go",
+        "backlog_helpers_test.go",
+        "backlog_intent_test.go",
+        "budget_warning_test.go",
+        "headless_failure_capture_test.go",
+    ],
+    embed = [":backlogaux"],
+    deps = [
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/instance",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by the Bazel-sandboxed source-scanning guard tests (tools/bzl/scandata).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

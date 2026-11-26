@@ -2,7 +2,7 @@ package workflowengine
 
 // workflow_stage_seed.go — boot-time, idempotent seed of the built-in 9-stage
 // workflow graph (BacklogStage + StageTransition rows). Mirrors
-// pipeline_mode_seed.go's create-if-missing discipline: an operator's later
+// session/pipelinemode/pipeline_mode_seed.go's create-if-missing discipline: an operator's later
 // hand-edit via Epic 2.3's CRUD surface must survive every subsequent server
 // restart, so this seed writes the built-in rows exactly once and never
 // touches them again. See Epic 2.2,

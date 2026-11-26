@@ -18,8 +18,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -35,13 +38,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/terminalstate"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -381,8 +385,8 @@ type ConnectRPCWebSocketHandler struct {
 	scrollbackManager *scrollback.ScrollbackManager
 
 	// External session support (for unified WebSocket streaming)
-	externalDiscovery   *session.ExternalSessionDiscovery
-	tmuxStreamerManager *session.ExternalTmuxStreamerManager
+	externalDiscovery   *external.ExternalSessionDiscovery
+	tmuxStreamerManager *external.ExternalTmuxStreamerManager
 
 	// ponytail: xsync.Map replaces map+RWMutex — markSnapshotDirty called per terminal frame
 	snapshotCache *xsync.Map[string, sessionSnapshot]
@@ -407,25 +411,29 @@ type ConnectRPCWebSocketHandler struct {
 	// tmuxSender is the one source of the tmux subprocess seam for every
 	// stream params struct this handler builds. Nil means the real
 	// implementation; tests inject a fake per handler.
-	tmuxSender services.TmuxInputSender
+	tmuxSender access.TmuxInputSender
+
+	// flags is the registry injected into the session service; nil falls back to the
+	// process registry when a flag is read (never at construction).
+	flags *featureflags.Registry
 }
 
 // writerFor returns the pane-write capability for a stream attached to
 // instance, or nil when the attach is read-only (a hidden session). Read-only
 // is decided server-side from the instance snapshot; the client's own
 // read-only flag is never consulted.
-func (h *ConnectRPCWebSocketHandler) writerFor(instance *instance.Instance) services.TerminalWriter {
+func (h *ConnectRPCWebSocketHandler) writerFor(instance *instance.Instance) access.TerminalWriter {
 	writer, _ := h.writerDecision(instance)
 	return writer
 }
 
 // writerDecision is writerFor plus whether a nil writer may become non-nil
 // later: true only when a tymux instance is not Active yet (see upgradableWriter).
-func (h *ConnectRPCWebSocketHandler) writerDecision(instance *instance.Instance) (writer services.TerminalWriter, upgradable bool) {
-	if blocked, recoverable := session.TerminalInputBlock(instance.Snapshot()); blocked {
+func (h *ConnectRPCWebSocketHandler) writerDecision(instance *instance.Instance) (writer access.TerminalWriter, upgradable bool) {
+	if blocked, recoverable := terminalstate.TerminalInputBlock(instance.Snapshot()); blocked {
 		return nil, recoverable
 	}
-	writer, err := services.AccessFor(instance).Writer(h.tmuxSender)
+	writer, err := access.AccessFor(instance).Writer(h.tmuxSender)
 	if err != nil {
 		log.Debug("[WebSocket] read-only attach: input, resize and scroll forwarding are dropped", "session", instance.GetTitle())
 		return nil, false
@@ -443,13 +451,18 @@ type controlModeStreamGeneration struct {
 
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
 // tmuxStreamerManager is required for ALL sessions (managed and external) since they all use tmux capture-pane polling
-func NewConnectRPCWebSocketHandler(sessionService *services.SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *session.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
+func NewConnectRPCWebSocketHandler(sessionService *services.SessionService, scrollbackManager *scrollback.ScrollbackManager, tmuxStreamerManager *external.ExternalTmuxStreamerManager) *ConnectRPCWebSocketHandler {
+	flags := sessionService.InjectedFlagRegistry()
+	if flags == nil {
+		flags = flagsvc.FlagRegistry() // no session service (tests); production always injects one
+	}
 	return &ConnectRPCWebSocketHandler{
 		sessionService:           sessionService,
 		scrollbackManager:        scrollbackManager,
 		tmuxStreamerManager:      tmuxStreamerManager,
 		snapshotCache:            xsync.NewMap[string, sessionSnapshot](),
 		activeControlModeStreams: xsync.NewMap[string, controlModeStreamGeneration](),
+		flags:                    flags,
 	}
 }
 
@@ -885,7 +898,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 // This enables the handler to discover and stream external sessions (via mux socket monitoring)
 // Note: tmuxStreamerManager is already set in constructor since ALL sessions use it
 func (h *ConnectRPCWebSocketHandler) SetExternalSessionSupport(
-	discovery *session.ExternalSessionDiscovery,
+	discovery *external.ExternalSessionDiscovery,
 ) {
 	h.externalDiscovery = discovery
 	log.Info("external session discovery enabled for ConnectRPC WebSocket handler")
@@ -1102,7 +1115,7 @@ type connectWebSocketStream struct {
 	listener string
 	// inputOnce guards input, the stream's lazily built input observability source.
 	inputOnce sync.Once
-	input     *services.InputSource
+	input     *access.InputSource
 	// latency labels the stream's latency observations (backend and listener); see terminal_latency.go.
 	latency streamLatency
 }
@@ -1316,7 +1329,9 @@ func (h *ConnectRPCWebSocketHandler) ensureControlModeStarted(instance *instance
 	if !handled && !instance.IsBackendProcessAlive() {
 		log.Info("[streamViaControlMode] session not alive, restoring before control mode", "session", sessionID)
 		workDir := instance.ActiveDir()
-		if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
+		if restoreErr := instance.RestoreProcess(workDir); errors.Is(restoreErr, domain.ErrLaunchNotWired) {
+			log.Info("[streamViaControlMode] restore skipped, instance start not wired yet", "session", sessionID)
+		} else if restoreErr != nil {
 			return handleTmuxRestoreFailure(instance, restoreErr)
 		}
 		// RestoreProcess returns nil even when the PTY attach failed; only mark a pane that is really attached.
@@ -1346,7 +1361,7 @@ func plausibleNudgeSize(cols, rows int) bool {
 // never redraws, leaving stale-dimension content that renders garbled in a
 // fresh xterm.js terminal. Runs unconditionally on every reconnect,
 // regardless of whether the browser's reported dimensions actually changed.
-func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer services.TerminalWriter, instance panePTY, sessionID string, streamGeneration int64, currentPaneReq *sessionv1.CurrentPaneRequest, quiescenceCh chan struct{}) {
+func (h *ConnectRPCWebSocketHandler) performInitialResizeNudge(writer access.TerminalWriter, instance panePTY, sessionID string, streamGeneration int64, currentPaneReq *sessionv1.CurrentPaneRequest, quiescenceCh chan struct{}) {
 	if writer == nil {
 		// Read-only attach: the nudge resizes the pane, which a viewer must never do.
 		return
@@ -1611,7 +1626,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	})
 
 	writer := h.writerFor(instance)
-	services.NoteOperatorOpen(instance)
+	questionkit.NoteOperatorOpen(instance)
 
 	h.performInitialResizeNudge(writer, instance, sessionID, streamGeneration, currentPaneReq, quiescenceCh)
 
@@ -1702,7 +1717,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
 			// Handle a mid-stream CurrentPaneRequest (e.g. a client-initiated resync) via the
 			// same shared helper the initial handshake and streamViaTmuxCapturePane use.
-			return answerCurrentPane(ctx, sessionID, instance, req, writer)
+			return h.currentPaneAnswerer(sessionID, instance, func() access.TerminalWriter { return writer })(ctx, req)
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -1726,7 +1741,7 @@ type resizeReq struct{ cols, rows int }
 // goroutine closure that captured too many locals to pass as bare parameters.
 type controlModeResizeCoalescerParams struct {
 	// writer is nil for a read-only attach; nothing is then resized.
-	writer         services.TerminalWriter
+	writer         access.TerminalWriter
 	stream         *connectWebSocketStream
 	instance       *instance.Instance
 	sessionID      string
@@ -2157,6 +2172,11 @@ func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Contex
 	restoreErr := instance.RestoreProcess(workDir)
 	restoreDur := time.Since(restoreStart)
 	termlat.Default.Record(termlat.StageAttachRestore, labels, restoreDur)
+	if errors.Is(restoreErr, domain.ErrLaunchNotWired) {
+		// A first Start is still in flight: report not-alive so ensureHubInstanceStarted waits for it.
+		log.Info("[streamViaHub] restore skipped, instance start not wired yet", "session", sessionID)
+		return false, nil
+	}
 	if restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
@@ -2266,7 +2286,7 @@ func sendHubStartFailedError(stream *connectWebSocketStream, sessionID string, h
 type hubSubscriberAttachment struct {
 	// writer is nil for a read-only attach: the subscriber is registered with a
 	// capability that casts no resize vote and sends no input.
-	writer          services.TerminalWriter
+	writer          access.TerminalWriter
 	stream          *connectWebSocketStream
 	instance        *instance.Instance
 	sessionID       string
@@ -2303,7 +2323,7 @@ func handshakeSize(req *sessionv1.CurrentPaneRequest) (cols, rows int, ok bool) 
 }
 
 // voteHandshakeSize casts the subscriber's resize vote from the handshake's target size.
-func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer services.TerminalWriter, req *sessionv1.CurrentPaneRequest) {
+func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer access.TerminalWriter, req *sessionv1.CurrentPaneRequest) {
 	cols, rows, ok := handshakeSize(req)
 	if !ok {
 		log.Warn("[streamViaHub] handshake missing dimensions, layout may be incorrect")
@@ -2313,7 +2333,7 @@ func voteHandshakeSize(connCtx context.Context, hub *streamhub.StreamHub, id str
 }
 
 // voteSize needs the pane writer as proof the subscriber may resize; a nil writer (read-only) casts no vote.
-func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer services.TerminalWriter, cols, rows int) {
+func voteSize(connCtx context.Context, hub *streamhub.StreamHub, id streamhub.SubscriberID, writer access.TerminalWriter, cols, rows int) {
 	if writer == nil {
 		return
 	}
@@ -2457,7 +2477,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 	stream.creation.Mark(stageHubCreate)
 
-	services.NoteOperatorOpen(instance)
+	questionkit.NoteOperatorOpen(instance)
 	upWriter, subscriberID, _ := h.attachUpgradableSubscriber(connCtx, hub, hubSubscriberAttachment{
 		stream:          stream,
 		instance:        instance,
@@ -2565,7 +2585,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 			})
 		},
 		onCurrentPaneRequest: func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
-			return answerCurrentPane(ctx, sessionID, instance, req, upWriter.Writer())
+			return h.currentPaneAnswerer(sessionID, instance, upWriter.Writer)(ctx, req)
 		},
 		resizeSettling: &resizeSettling,
 	})
@@ -2721,7 +2741,7 @@ type fastLaneStep struct {
 	ctx      context.Context
 	fastLane bool
 	// writer is nil for a read-only attach, which must never resize the pane.
-	writer services.TerminalWriter
+	writer access.TerminalWriter
 }
 
 func (s fastLaneStep) dims() (cols, rows int, err error) {
@@ -2733,7 +2753,7 @@ func (s fastLaneStep) dims() (cols, rows int, err error) {
 
 func (s fastLaneStep) resize(cols, rows int) error {
 	if s.writer == nil {
-		return services.ErrReadOnly
+		return access.ErrReadOnly
 	}
 	if s.fastLane {
 		return s.target.ResizePTYContext(s.ctx, cols, rows)
@@ -2760,7 +2780,7 @@ func (s fastLaneStep) capture() (streamhub.RawPaneContent, error) {
 type shellPanePTY struct {
 	session *tmux.TmuxSession
 	// writer is nil for a read-only attach; the resize methods then refuse.
-	writer services.TerminalWriter
+	writer access.TerminalWriter
 }
 
 func (p shellPanePTY) CapturePaneContentRaw() (streamhub.RawPaneContent, error) {
@@ -2777,7 +2797,7 @@ func (p shellPanePTY) GetPaneDimensionsPriority(ctx context.Context) (int, int, 
 }
 func (p shellPanePTY) ResizePTY(cols, rows int) error {
 	if p.writer == nil {
-		return services.ErrReadOnly
+		return access.ErrReadOnly
 	}
 	return p.session.SetWindowSize(cols, rows)
 }
@@ -2786,12 +2806,12 @@ func (p shellPanePTY) ResizePTY(cols, rows int) error {
 // *tmux.TmuxSession.SetWindowSize has no caller-overridable context either.
 func (p shellPanePTY) ResizePTYContext(ctx context.Context, cols, rows int) error {
 	if p.writer == nil {
-		return services.ErrReadOnly
+		return access.ErrReadOnly
 	}
 	done := make(chan error, 1)
 	go func() {
 		if p.writer == nil {
-			done <- services.ErrReadOnly
+			done <- access.ErrReadOnly
 			return
 		}
 		done <- p.session.SetWindowSize(cols, rows)
@@ -2838,23 +2858,35 @@ type ResyncOptions struct {
 	// Writer is the pane-write capability of the attach this resync answers.
 	// Nil (the zero value, and every read-only attach) means the request may
 	// only read: no resize, no SIGWINCH refresh nudge.
-	Writer services.TerminalWriter
+	Writer access.TerminalWriter
 }
 
 // currentResyncOptionsFor is currentResyncOptions plus the attach's writer.
-func currentResyncOptionsFor(writer services.TerminalWriter) ResyncOptions {
-	opts := currentResyncOptions()
+func currentResyncOptionsFor(flags *featureflags.Registry, writer access.TerminalWriter) ResyncOptions {
+	opts := currentResyncOptions(flags)
 	opts.Writer = writer
 	return opts
+}
+
+// resyncOptionsFor resolves a mid-stream resync's options against the handler's injected registry.
+func (h *ConnectRPCWebSocketHandler) resyncOptionsFor(writer access.TerminalWriter) ResyncOptions {
+	return currentResyncOptionsFor(h.flags, writer)
+}
+
+// resyncOptions resolves a mid-stream resync's options against the registry the stream was built with.
+func (p capturePaneStreamParams) resyncOptions() ResyncOptions {
+	return currentResyncOptionsFor(p.flags, p.writer)
 }
 
 // currentResyncOptions resolves the feature flags handleCurrentPaneRequest's callers
 // need to build a ResyncOptions, keeping the config.LoadConfig() lookups in one place
 // instead of duplicated across each of handleCurrentPaneRequest's call sites.
-func currentResyncOptions() ResyncOptions {
+//
+// flags is the injected registry and must be non-nil.
+func currentResyncOptions(flags *featureflags.Registry) ResyncOptions {
 	return ResyncOptions{
 		SkipStaleDimensionSlowPath: config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName),
-		UseFastLane:                config.LoadConfig().GetFeatureFlagWithDefault(featureflags.TerminalResyncExecGateFastLaneFlagName, services.FeatureFlagDefault(featureflags.TerminalResyncExecGateFastLaneFlagName)),
+		UseFastLane:                flags.Enabled(config.LoadConfig(), featureflags.TerminalResyncExecGateFastLaneFlagName),
 		EchoResyncID:               config.LoadConfig().GetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName),
 	}
 }
@@ -3081,10 +3113,10 @@ func resolveResyncID(sessionID string, req *sessionv1.CurrentPaneRequest, opts R
 type inputReadLoopParams struct {
 	// writer is nil for a read-only attach: Input and Resize frames are
 	// dropped here (debug-logged) before any handler sees them.
-	writer services.TerminalWriter
+	writer access.TerminalWriter
 	// currentWriter, when set, is consulted per frame instead of writer, so a
 	// read-only attach can upgrade mid-connection (see upgradableWriter).
-	currentWriter func() services.TerminalWriter
+	currentWriter func() access.TerminalWriter
 	// onDroppedResize, when set, is told of a resize frame dropped while read-only.
 	onDroppedResize func(cols, rows int)
 	stream          *connectWebSocketStream
@@ -3133,7 +3165,7 @@ func (p inputReadLoopParams) runSlowDroppable(fn func() error) error {
 	return nil
 }
 
-func (p inputReadLoopParams) activeWriter() services.TerminalWriter {
+func (p inputReadLoopParams) activeWriter() access.TerminalWriter {
 	if p.currentWriter != nil {
 		return p.currentWriter()
 	}
@@ -3278,7 +3310,7 @@ type AppScrollResult struct {
 type scrollbackRequestParams struct {
 	// writer is nil for a read-only attach: ForwardScroll types PageUp into the
 	// pane, so it is skipped and the tmux-native scrollback path answers.
-	writer          services.TerminalWriter
+	writer          access.TerminalWriter
 	instance        *instance.Instance
 	subscriberCount int
 	hub             *streamhub.StreamHub // nil on PathLegacyPerConnection
@@ -3470,10 +3502,31 @@ func handleCurrentPaneRequestFrame(
 	return nil
 }
 
+// resyncTarget is the pane a mid-stream resync answers against; *instance.Instance in production.
+type resyncTarget interface {
+	panePTY
+	IsBackendProcessAlive() bool
+}
+
+// currentPaneAnswerer builds the mid-stream current-pane handler for one stream; the writer is read per
+// request because an upgradable attach can gain write access mid-connection.
+func (h *ConnectRPCWebSocketHandler) currentPaneAnswerer(sessionID string, target resyncTarget, writer func() access.TerminalWriter) func(context.Context, *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+	return func(ctx context.Context, req *sessionv1.CurrentPaneRequest) (*sessionv1.TerminalOutput, error) {
+		return answerCurrentPane(ctx, sessionID, target, req, h.resyncOptionsFor(writer()))
+	}
+}
+
+// withStreamDeps fills the handler-owned dependencies of a capture-pane stream's params.
+func (h *ConnectRPCWebSocketHandler) withStreamDeps(p capturePaneStreamParams) capturePaneStreamParams {
+	p.scrollbackManager = h.scrollbackManager
+	p.flags = h.flags
+	return p
+}
+
 // answerCurrentPane answers a mid-stream current-pane request, tagging a NotFound as
 // errSessionGone only once the backend confirms the session is gone (a restarting daemon is not).
-func answerCurrentPane(ctx context.Context, sessionID string, instance *instance.Instance, req *sessionv1.CurrentPaneRequest, writer services.TerminalWriter) (*sessionv1.TerminalOutput, error) {
-	out, err := handleCurrentPaneRequest(ctx, sessionID, instance, req, currentResyncOptionsFor(writer))
+func answerCurrentPane(ctx context.Context, sessionID string, instance resyncTarget, req *sessionv1.CurrentPaneRequest, opts ResyncOptions) (*sessionv1.TerminalOutput, error) {
+	out, err := handleCurrentPaneRequest(ctx, sessionID, instance, req, opts)
 	if definitivelyGone(err, instance.IsBackendProcessAlive) {
 		return nil, wrapSessionGone(err)
 	}
@@ -3666,7 +3719,7 @@ type capturePaneTarget struct {
 // directly (never the parent's) and, since it has its own live PTY, is
 // treated like a managed session for capture/resize/redraw purposes even when
 // the parent Instance isn't managed.
-func resolveCapturePaneTarget(instance *instance.Instance, snap *domain.InstanceSnapshot, shellTmuxSessionName string, writer services.TerminalWriter) capturePaneTarget {
+func resolveCapturePaneTarget(instance *instance.Instance, snap *domain.InstanceSnapshot, shellTmuxSessionName string, writer access.TerminalWriter) capturePaneTarget {
 	isShellStream := shellTmuxSessionName != ""
 
 	var tmuxSessionName string
@@ -3703,7 +3756,7 @@ func resolveCapturePaneTarget(instance *instance.Instance, snap *domain.Instance
 // present) and forces a TUI redraw via a ±1 resize nudge, so the initial
 // capture-pane snapshot below reflects a freshly-drawn terminal state. Only
 // called for managed/shell targets, which have a live PTY to nudge.
-func forceCapturePaneRedrawNudge(stream *connectWebSocketStream, target panePTY, writer services.TerminalWriter) {
+func forceCapturePaneRedrawNudge(stream *connectWebSocketStream, target panePTY, writer access.TerminalWriter) {
 	if writer == nil {
 		return
 	}
@@ -3751,7 +3804,7 @@ func forceCapturePaneRedrawNudge(stream *connectWebSocketStream, target panePTY,
 // back to the streamer's cached snapshot on failure) or fetches from the
 // streamer (for an external session) the initial pane content, and sends it
 // to the client as the canonical initial snapshot.
-func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *instance.Instance, cpt capturePaneTarget, streamer *session.ExternalTmuxStreamer) error {
+func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *instance.Instance, cpt capturePaneTarget, streamer *external.ExternalTmuxStreamer) error {
 	var initialContent string
 	switch {
 	case cpt.effectiveManaged:
@@ -3787,7 +3840,7 @@ func sendCapturePaneInitialContent(stream *connectWebSocketStream, instance *ins
 
 // getOrCreateTmuxStreamer looks up or creates the *ExternalTmuxStreamer for
 // tmuxSessionName.
-func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName string) (*session.ExternalTmuxStreamer, error) {
+func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName string) (*external.ExternalTmuxStreamer, error) {
 	if h.tmuxStreamerManager == nil {
 		return nil, fmt.Errorf("tmux streamer manager not configured (required for capture-pane polling)")
 	}
@@ -3802,7 +3855,7 @@ func (h *ConnectRPCWebSocketHandler) getOrCreateTmuxStreamer(tmuxSessionName str
 // forwards each full-content update onto a buffered channel (dropping
 // content if the channel is full, to avoid blocking the streamer), and
 // returns that channel plus the consumer key for later RemoveConsumer.
-func registerCapturePaneConsumer(instance *instance.Instance, streamer *session.ExternalTmuxStreamer, sessionID string) (outputChan chan string, consumerKey string) {
+func registerCapturePaneConsumer(instance *instance.Instance, streamer *external.ExternalTmuxStreamer, sessionID string) (outputChan chan string, consumerKey string) {
 	outputChan = make(chan string, 100)
 	consumer := func(content string) {
 		instance.UpdateTerminalTimestamps(content, true)
@@ -3820,17 +3873,18 @@ func registerCapturePaneConsumer(instance *instance.Instance, streamer *session.
 type capturePaneStreamParams struct {
 	// writer is nil for a read-only attach; input, resize and the redraw nudge
 	// are then dropped and no tmux subprocess is ever started for this attach.
-	writer              services.TerminalWriter
+	writer              access.TerminalWriter
 	stream              *connectWebSocketStream
 	instance            *instance.Instance
 	snap                *domain.InstanceSnapshot
 	cpt                 capturePaneTarget
-	streamer            *session.ExternalTmuxStreamer
+	streamer            *external.ExternalTmuxStreamer
 	doneChan            chan struct{}
 	errChan             chan error
 	outputChan          chan string
 	paneCaptureSettling *atomic.Bool
 	scrollbackManager   *scrollback.ScrollbackManager
+	flags               *featureflags.Registry
 }
 
 // forwardCapturePaneOutput is streamViaTmuxCapturePane's Goroutine 1: forwards
@@ -3946,10 +4000,10 @@ func readOneCapturePaneFrame(p capturePaneStreamParams) bool {
 // handleCapturePaneInput counts one capture-pane input frame (path "capture") and forwards
 // it; forwarded is recorded only when the gates passed and the send-keys was issued.
 func handleCapturePaneInput(p capturePaneStreamParams, data []byte) {
-	src := p.stream.inputSource(services.PathCapture, p.cpt.sessionID)
-	services.RecordTerminalInput(src, data, services.StageReceived)
+	src := p.stream.inputSource(access.PathCapture, p.cpt.sessionID)
+	access.RecordTerminalInput(src, data, access.StageReceived)
 	if forwardCapturePaneInput(p, data) {
-		services.RecordTerminalInput(src, data, services.StageForwarded)
+		access.RecordTerminalInput(src, data, access.StageForwarded)
 	}
 }
 
@@ -3989,7 +4043,7 @@ func handleCapturePaneResize(p capturePaneStreamParams, targetCols, targetRows i
 	if p.cpt.effectiveManaged {
 		resizeManagedCapturePaneTarget(p, targetCols, targetRows)
 	} else {
-		p.writer.Sender().Resize(services.ExternalPaneTarget{Instance: p.instance, Snap: p.snap, TmuxSession: p.cpt.tmuxSessionName, SessionID: p.cpt.sessionID}, targetCols, targetRows)
+		p.writer.Sender().Resize(access.ExternalPaneTarget{Instance: p.instance, Snap: p.snap, TmuxSession: p.cpt.tmuxSessionName, SessionID: p.cpt.sessionID}, targetCols, targetRows)
 	}
 }
 
@@ -4027,7 +4081,7 @@ func handleCapturePaneCurrentPaneRequest(p capturePaneStreamParams, req *session
 		attribute.String("session_id", p.cpt.sessionID),
 		attribute.String("resync_id", req.GetResyncId()),
 	)
-	output, handleErr := handleCurrentPaneRequest(paneCtx, p.cpt.sessionID, p.cpt.target, req, currentResyncOptionsFor(p.writer))
+	output, handleErr := handleCurrentPaneRequest(paneCtx, p.cpt.sessionID, p.cpt.target, req, p.resyncOptions())
 	if handleErr != nil {
 		paneSpan.RecordError(handleErr)
 		log.Error("[streamViaTmuxCapture] failed to capture fresh pane content", "err", handleErr)
@@ -4054,7 +4108,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	snap := instance.Snapshot()
 	writer := h.writerFor(instance)
 	if shellTmuxSessionName == "" {
-		services.NoteOperatorOpen(instance)
+		questionkit.NoteOperatorOpen(instance)
 	}
 	cpt := resolveCapturePaneTarget(instance, snap, shellTmuxSessionName, writer)
 	sessionID := cpt.sessionID
@@ -4094,7 +4148,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	outputChan, consumerKey := registerCapturePaneConsumer(instance, streamer, sessionID)
 	defer streamer.RemoveConsumer(consumerKey)
 
-	cps := capturePaneStreamParams{
+	cps := h.withStreamDeps(capturePaneStreamParams{
 		writer:              writer,
 		stream:              stream,
 		instance:            instance,
@@ -4105,8 +4159,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		errChan:             errChan,
 		outputChan:          outputChan,
 		paneCaptureSettling: &paneCaptureSettling,
-		scrollbackManager:   h.scrollbackManager,
-	}
+	})
 	go forwardCapturePaneOutput(cps)
 	go runCapturePaneInputReadLoop(cps)
 

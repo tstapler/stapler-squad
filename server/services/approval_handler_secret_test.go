@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -24,7 +26,7 @@ func newTestHandlerWithAnalytics(t *testing.T) (*ApprovalHandler, *AnalyticsStor
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)
 
-	store := NewApprovalStore("")
+	store := approvalkit.NewApprovalStore("")
 	bus := events.NewEventBus(10)
 	h := NewApprovalHandler(store, nil, bus)
 	h.timeout = 50 * time.Millisecond // fast timeout for tests
@@ -94,7 +96,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	for _, e := range entries {
 		if e.SessionID == "session-1" {
 			found = true
-			assert.Equal(t, redactedSecret, e.CommandPreview,
+			assert.Equal(t, secretscan.RedactedSecret, e.CommandPreview,
 				"analytics entry must have redacted command, not the secret")
 			assert.NotContains(t, e.CommandPreview, "ghp_",
 				"raw GitHub token must not appear in analytics")

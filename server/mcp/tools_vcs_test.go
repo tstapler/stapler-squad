@@ -97,7 +97,7 @@ func TestGetSessionDiff(t *testing.T) {
 
 	inst := newVCSInstance("test-session", repoDir)
 	store := &stubStore{instances: []*instance.Instance{inst}}
-	vh := &vcsHandlers{store: store}
+	vh := &vcsHandlers{store: store, open: realWorktreeOpener}
 
 	req := makeToolReq(map[string]interface{}{"session_id": "test-session"})
 	result, err := vh.getSessionDiff(context.Background(), req)
@@ -136,7 +136,7 @@ func TestGetSessionDiffTruncation(t *testing.T) {
 
 	inst := newVCSInstance("test-session", repoDir)
 	store := &stubStore{instances: []*instance.Instance{inst}}
-	vh := &vcsHandlers{store: store}
+	vh := &vcsHandlers{store: store, open: realWorktreeOpener}
 
 	req := makeToolReq(map[string]interface{}{
 		"session_id": "test-session",
@@ -158,7 +158,7 @@ func TestGetSessionDiffTruncation(t *testing.T) {
 // session_id does not match any known session.
 func TestGetSessionDiffSessionNotFound(t *testing.T) {
 	store := &stubStore{}
-	vh := &vcsHandlers{store: store}
+	vh := &vcsHandlers{store: store, open: realWorktreeOpener}
 
 	req := makeToolReq(map[string]interface{}{"session_id": "ghost"})
 	result, err := vh.getSessionDiff(context.Background(), req)
@@ -183,7 +183,7 @@ func TestGetSessionDiffSessionNotFound(t *testing.T) {
 // success=false when the requested session does not exist (U-5.3 partial).
 func TestListSessionBranchesNotFound(t *testing.T) {
 	store := &stubStore{}
-	vh := &vcsHandlers{store: store}
+	vh := &vcsHandlers{store: store, open: realWorktreeOpener}
 
 	req := makeToolReq(map[string]interface{}{"session_id": "ghost"})
 	result, _ := vh.listSessionBranches(context.Background(), req)
@@ -197,7 +197,7 @@ func TestListSessionBranchesNotFound(t *testing.T) {
 // TestGetSessionDiffMissingSessionID verifies the error when session_id is omitted.
 func TestGetSessionDiffMissingSessionID(t *testing.T) {
 	store := &stubStore{}
-	vh := &vcsHandlers{store: store}
+	vh := &vcsHandlers{store: store, open: realWorktreeOpener}
 
 	req := makeToolReq(map[string]interface{}{})
 	result, err := vh.getSessionDiff(context.Background(), req)

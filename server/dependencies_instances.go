@@ -10,21 +10,26 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/driver"
+	"github.com/tstapler/stapler-squad/session/external"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/summaries"
+	"github.com/tstapler/stapler-squad/session/sweeper"
+	"github.com/tstapler/stapler-squad/session/tagpoller"
 )
 
 // wireLoadedInstances attaches the shared collaborators to every loaded instance and
 // registers the instance list with the pollers.
 func wireLoadedInstances(svc *ServiceDeps, instances []*instance.Instance, backlogLifecycleListener *backlog.BacklogLifecycleListener,
-	sessionSummaryGenerator *summaries.SessionSummaryGenerator, sessionTagPoller *session.SessionTagClassificationPoller) error {
+	sessionSummaryGenerator *summaries.SessionSummaryGenerator, sessionTagPoller *tagpoller.SessionTagClassificationPoller) error {
 	storage, reviewQueue, statusManager, reviewQueuePoller, eventBus := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.ReviewQueuePoller, svc.EventBus
 	// Step 5 (continued): wire dependencies to each instance
 	// inst.SetReviewQueue and inst.SetStatusManager are called per-instance in a loop;
@@ -80,19 +85,31 @@ func wireLoadedInstances(svc *ServiceDeps, instances []*instance.Instance, backl
 // startInstanceBootInit starts the heavy startup work (tmux starts, hot-restore
 // reconciliation, controllers, startup scan) on a background goroutine so the HTTP server
 // can bind immediately. Step order inside is load-bearing; see the step comments.
-func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
+// The returned stop cancels the remaining steps and waits for the goroutine to exit, so
+// an owner that tears down its state dir cannot be written into afterwards.
+// gate, nil in production, runs first inside the goroutine so a test can hold it at a known point.
+func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance, gate func()) (stop func()) {
 	storage, reviewQueue, statusManager, eventBus := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.EventBus
 	// Perform heavy initialization (tmux starting, controllers, scanning) in the background
 	// so the HTTP server can bind and start immediately.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
 				log.ErrorLog().Printf("[startup] panic in background init goroutine: %v", r)
 			}
 		}()
+		if gate != nil {
+			gate()
+		}
 		bootStartInstances(instances, eventBus)
 
 		bootHotRestoreLive(instances, eventBus)
+		if ctx.Err() != nil {
+			return
+		}
 
 		// Step 6c: Reconcile custom shells — rebuild in-memory state from ent for
 		// shells that were running when the server last shut down. Must run after
@@ -122,7 +139,7 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
 		if !config.IsIsolatedInstance() {
 			// minAge=0: safe only here, before any new session creation is possible
 			// in this startup sequence — see ReconcileOrphanedTmuxSessions' doc comment.
-			session.ReconcileOrphanedTmuxSessions(instances, 0)
+			sweeper.ReconcileOrphanedTmuxSessions(instances, 0)
 		}
 
 		// Step 6.5: Persist any auto-detected worktree info (must happen after Step 6)
@@ -148,19 +165,33 @@ func startInstanceBootInit(svc *ServiceDeps, instances []*instance.Instance) {
 			log.Warn("cdp: orphan cleanup failed (non-fatal)", "err", err)
 		}
 
+		if ctx.Err() != nil {
+			return
+		}
 		bootStartControllers(instances)
 
+		if ctx.Err() != nil {
+			return
+		}
 		bootResumeDrivers(instances)
 
 		// Step 7.6: Startup scan and orphaned approval sync
 		// Brief settling delay to allow controllers to initialize their terminal readers.
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
 		contentProvider := session.NewPollerContentProvider()
 		scanner := session.NewStartupScanner(statusManager, contentProvider)
-		scanner.SetOptionsSource(attentionOptionsSource)
+		scanner.SetOptionsSource(svc.AttentionOptions)
 		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // bootStartInstances is boot Step 6.
@@ -260,7 +291,7 @@ func bootResumeDrivers(instances []*instance.Instance) {
 		if status == domain.Paused || status == domain.Stopped || status == domain.Hibernated {
 			continue
 		}
-		session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
+		driver.StartSessionDriver(inst, inst.GetEffectiveRootDir())
 	}
 }
 
@@ -291,7 +322,7 @@ func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.Reac
 	// SetSharedBacklogConfig below. Wired to both the EntRepository (via
 	// Storage's forwarding setter, for on_session_complete/on_session_stale) and
 	// ReactiveQueueManager (for on_queue_item_created).
-	callbackDispatcher := services.NewCallbackDispatcher(cfg)
+	callbackDispatcher := webhooks.NewCallbackDispatcher(cfg)
 	storage.SetCallbackDispatcher(callbackDispatcher)
 	reactiveQueueMgr.SetCallbackDispatcher(callbackDispatcher)
 	// Share callbackDispatcher's live *config.Config instance (and its guarding
@@ -308,11 +339,11 @@ func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.Reac
 
 // wireExternalSessions builds external-session discovery and the external approval
 // monitor, bridging both into the review queue, pollers and persistence.
-func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinker, sessionTagPoller *session.SessionTagClassificationPoller,
-	backlogLifecycleListener *backlog.BacklogLifecycleListener, sessionSummaryGenerator *summaries.SessionSummaryGenerator) (*session.ExternalSessionDiscovery, *session.ExternalApprovalMonitor) {
+func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinker, sessionTagPoller *tagpoller.SessionTagClassificationPoller,
+	backlogLifecycleListener *backlog.BacklogLifecycleListener, sessionSummaryGenerator *summaries.SessionSummaryGenerator) (*external.ExternalSessionDiscovery, *external.ExternalApprovalMonitor) {
 	storage, reviewQueue, statusManager, reviewQueuePoller, eventBus, sessionService := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.ReviewQueuePoller, svc.EventBus, svc.SessionService
 	// Step 11: ExternalDiscovery with session-added/removed callbacks
-	externalDiscovery := session.NewExternalSessionDiscovery()
+	externalDiscovery := external.NewExternalSessionDiscovery()
 	externalDiscovery.OnSessionAdded(func(instance *instance.Instance) {
 		if gate := sessionService.DeliveryGate(); gate != nil {
 			gate.UpsertInstance(instance)
@@ -358,8 +389,8 @@ func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinke
 	})
 
 	// Step 12: ExternalApprovalMonitor — wire approval-to-review-queue bridge
-	externalApprovalMonitor := session.NewExternalApprovalMonitor()
-	externalApprovalMonitor.OnApproval(func(event *session.ExternalApprovalEvent) {
+	externalApprovalMonitor := external.NewExternalApprovalMonitor()
+	externalApprovalMonitor.OnApproval(func(event *external.ExternalApprovalEvent) {
 		if event == nil || event.Request == nil {
 			return
 		}
@@ -406,7 +437,7 @@ func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinke
 // unified session listing.
 func wireSessionServiceRuntime(sessionService *services.SessionService, reactiveQueueMgr *reviewqueue.ReactiveQueueManager,
 	historyLinker *importer.HistoryLinker, instances []*instance.Instance, scrollbackManager *scrollback.ScrollbackManager,
-	externalDiscovery *session.ExternalSessionDiscovery) error {
+	externalDiscovery *external.ExternalSessionDiscovery) error {
 	// Wire external discovery to SessionService for unified session listing
 	// (moved from server.go to keep all dependency wiring in BuildRuntimeDeps)
 

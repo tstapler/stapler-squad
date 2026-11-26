@@ -42,7 +42,7 @@ type InstanceStore interface {
 	ListInstanceData() ([]domain.InstanceData, error)
 	// FindInstanceDataByID finds the single InstanceData whose stable ID or title
 	// matches id via an indexed WHERE clause, rather than ListInstanceData() plus a
-	// linear scan. Returns ErrInstanceDataNotFound when no match exists.
+	// linear scan. Returns domain.ErrInstanceDataNotFound when no match exists.
 	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 	SaveInstances([]*instance.Instance) error
 	AddInstance(*instance.Instance) error
@@ -146,6 +146,11 @@ func (s *Storage) SetCallbackDispatcher(d backlogdto.CallbackDispatcher) {
 // (for example WireChainFirer).
 func (s *Storage) Repository() *EntRepository { return s.Repo }
 
+// ShellRepository and InitialPromptRepository expose the backing repository to registry.Store.
+func (s *Storage) ShellRepository() instance.ShellRepository { return s.Repo }
+
+func (s *Storage) InitialPromptRepository() instance.InitialPromptRepository { return s.Repo }
+
 // SaveInstances upserts each started instance into the repository.
 func (s *Storage) SaveInstances(instances []*instance.Instance) error {
 	return s.saveInstancesToRepo(instances)
@@ -174,8 +179,8 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *instance.Instanc
 	log.Debug("SaveInstances: converting instance",
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
 		"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
-	s.saved.persist(data, func(skip updateSkip) bool {
-		if err := s.Repo.updateSkipping(ctx, data, skip); err != nil {
+	s.saved.persist(data, func(skip domain.UpdateSkip) bool {
+		if err := s.Repo.UpdateSkipping(ctx, data, skip); err != nil {
 			// Not found → create it
 			if createErr := s.Repo.Create(ctx, data); createErr != nil {
 				log.Error("SaveInstances: failed to upsert instance",
@@ -200,7 +205,7 @@ func (s *Storage) LoadInstances() ([]*instance.Instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
 	}
-	s.hydrateSessionPRs(ctx, dataSlice)
+	s.HydrateSessionPRs(ctx, dataSlice)
 	instances := make([]*instance.Instance, 0, len(dataSlice))
 	for _, data := range dataSlice {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
@@ -295,13 +300,13 @@ func (s *Storage) applyBulkArtifacts(instances []*instance.Instance) {
 	}
 }
 
-// hydrateSessionPRs attaches each session's PR links to its InstanceData before
+// HydrateSessionPRs (exported only to satisfy registry.Store; not for general callers) attaches each session's PR links to its InstanceData before
 // the Instance (and so its first snapshot) is built: one bulk read of links+states
 // (and one of tombstones) instead of a query per session. A legacy PR number with
 // neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves
 // leave the legacy columns alone. If the bulk read fails, every legacy number is
 // treated as unrepresented (protected) rather than guessed at.
-func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
+func (s *Storage) HydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
 	uuids := make([]string, 0, len(rows))
 	for i := range rows {
 		if rows[i].UUID != "" {
@@ -363,20 +368,17 @@ func sortedByAttach(prs []domain.PRView) []domain.PRView {
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]domain.InstanceData, error) {
-	return s.Repo.ListWithOptions(context.Background(), LoadMinimal)
+	return s.Repo.ListWithOptions(context.Background(), domain.LoadMinimal)
 }
 
 // ListInstanceDataWithWorktree returns raw InstanceData with the Worktree edge eager-loaded.
 // Use this instead of ListInstanceData whenever a read-only pass needs Worktree.WorktreePath/
 // RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
-// ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
+// ListInstanceData uses domain.LoadMinimal, which never populates Worktree, so any such field will
 // silently read as its zero value under that call.
 func (s *Storage) ListInstanceDataWithWorktree() ([]domain.InstanceData, error) {
-	return s.Repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
+	return s.Repo.ListWithOptions(context.Background(), domain.LoadOptions{LoadWorktree: true})
 }
-
-// ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
-var ErrInstanceDataNotFound = errors.New("instance data not found")
 
 // ArchiveInstanceDataByID sets ArchivedAt and Status=Stopped directly in storage for a
 // session that is not (or is no longer) resident in the live in-memory instance registry
@@ -384,7 +386,7 @@ var ErrInstanceDataNotFound = errors.New("instance data not found")
 // server restart. This is the storage-only counterpart to Instance.SetArchivedAtIfNilAndStop,
 // used as ArchiveSessionByUUID's fallback so terminal-transition and safety-net archival
 // sweeps don't silently no-op just because a session isn't currently being polled. Read-
-// modify-write on the full InstanceData row (not a partial struct), so EntRepository.Update's
+// modify-write on the full InstanceData row (not a partial struct), so instancestore.Instances.Update's
 // guarded-optional-field pattern can't zero out fields this call didn't intend to touch.
 // Returns false (no error) if the session doesn't exist or is already archived, matching
 // SetArchivedAtIfNilAndStop's CAS semantics.
@@ -397,7 +399,7 @@ var ErrInstanceDataNotFound = errors.New("instance data not found")
 func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error) {
 	data, err := s.FindInstanceDataByID(id)
 	if err != nil {
-		if errors.Is(err, ErrInstanceDataNotFound) {
+		if errors.Is(err, domain.ErrInstanceDataNotFound) {
 			return false, nil
 		}
 		return false, err
@@ -424,9 +426,9 @@ func (s *Storage) ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map
 // FindInstanceDataByID finds the InstanceData whose stable ID or title matches id, via
 // an indexed WHERE clause (EntRepository.FindByIDWithOptions) rather than loading and
 // linear-scanning every session row — see that method's doc comment for the CPU-profile
-// finding that motivated this. Returns ErrInstanceDataNotFound when no match exists.
+// finding that motivated this. Returns domain.ErrInstanceDataNotFound when no match exists.
 func (s *Storage) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
-	return s.Repo.FindByIDWithOptions(context.Background(), id, LoadMinimal)
+	return s.Repo.FindByIDWithOptions(context.Background(), id, domain.LoadMinimal)
 }
 
 // ListInstanceIDs returns the stable ID (UUID if set, else Title) for every stored
@@ -446,16 +448,16 @@ func (s *Storage) ListInstanceIDs() ([]string, error) {
 // ListSessionRecords returns a snapshot of all sessions as SessionRecords,
 // for use by the tokens.Associator to match JSONL files to stapler-squad sessions.
 //
-// Uses LoadMinimal.WithTags() rather than plain ListInstanceData() (LoadMinimal):
+// Uses domain.LoadMinimal.WithTags() rather than plain ListInstanceData() (domain.LoadMinimal):
 // Tags is an eager-loaded ent edge (session/ent/schema/session.go), not a plain
-// column, so it comes back empty under LoadMinimal — see LoadOptions.LoadTags's
+// column, so it comes back empty under domain.LoadMinimal — see domain.LoadOptions.LoadTags's
 // doc comment and TestStorage_UpdateInstance's identical note.
 func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
 	// LoadWorktree so ActiveDir() below can resolve to the worktree path —
 	// Claude's JSONL ProjectPath is derived from the process cwd (the
 	// worktree), so matching against the identity Path orphans every
 	// worktree session's token records.
-	data, err := s.Repo.ListWithOptions(context.Background(), LoadOptions{LoadTags: true, LoadWorktree: true})
+	data, err := s.Repo.ListWithOptions(context.Background(), domain.LoadOptions{LoadTags: true, LoadWorktree: true})
 	if err != nil {
 		return nil
 	}
@@ -871,7 +873,7 @@ func (s *Storage) GetTaggingRuleFireCounts(ctx context.Context, since time.Time)
 }
 
 // DismissFinding persists a WasteFinding dismissal in the repository.
-func (s *Storage) DismissFinding(ctx context.Context, data DismissedFindingData) error {
+func (s *Storage) DismissFinding(ctx context.Context, data domain.DismissedFindingData) error {
 	return s.Repo.DismissFinding(ctx, data)
 }
 
@@ -881,33 +883,33 @@ func (s *Storage) ListDismissedFindingIDs(ctx context.Context) (map[string]bool,
 }
 
 // RecordAnalytics logs a classification decision to the repository.
-func (s *Storage) RecordAnalytics(ctx context.Context, data AnalyticsData) error {
+func (s *Storage) RecordAnalytics(ctx context.Context, data domain.AnalyticsData) error {
 	return s.Repo.RecordAnalytics(ctx, data)
 }
 
 // RecordAnalyticsBatch writes one atomic, idempotent analytics batch without
 // widening the broad Repository interface used by unrelated adapters.
-func (s *Storage) RecordAnalyticsBatch(ctx context.Context, batch []AnalyticsData) error {
+func (s *Storage) RecordAnalyticsBatch(ctx context.Context, batch []domain.AnalyticsData) error {
 	return s.Repo.RecordAnalyticsBatch(ctx, batch)
 }
 
 // ListAnalytics retrieves recent classification decisions from the repository.
-func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {
+func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]domain.AnalyticsData, error) {
 	return s.Repo.ListAnalytics(ctx, limit)
 }
 
 // ListAnalyticsSince retrieves analytics entries with created_at >= since.
-func (s *Storage) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error) {
+func (s *Storage) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]domain.AnalyticsData, error) {
 	return s.Repo.ListAnalyticsSince(ctx, since, limit)
 }
 
 // ListAnalyticsByProgramSince retrieves entries for a specific program since a time.
-func (s *Storage) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error) {
+func (s *Storage) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]domain.AnalyticsData, error) {
 	return s.Repo.ListAnalyticsByProgramSince(ctx, program, since, limit)
 }
 
 // GetSubcommandBreakdown returns per-(subcommand, decision) counts for a program.
-func (s *Storage) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {
+func (s *Storage) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]domain.SubcommandDecisionCount, error) {
 	return s.Repo.GetSubcommandBreakdown(ctx, program, since)
 }
 
@@ -917,7 +919,7 @@ func (s *Storage) ListRecentCommandsByProgram(ctx context.Context, program, subc
 }
 
 // GetSubcommandTrend returns raw analytics rows for (program, subcommand) since a time.
-func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error) {
+func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]domain.AnalyticsData, error) {
 	return s.Repo.GetSubcommandTrend(ctx, program, subcommand, since)
 }
 
@@ -1394,7 +1396,7 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 
 // GetItemSourceByID retrieves a single item source's domain data by UUID
 // string. Used by the GitHub forward-sync EventBus subscriber (see
-// server/services/backlog_github_forward_sync.go) to look up a backlog item's
+// server/services/forwardsync/backlog_github_forward_sync.go) to look up a backlog item's
 // source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
 // needing an *EntRepository handle of its own.
 func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*backlogdto.ItemSourceData, error) {
@@ -1638,6 +1640,11 @@ func (s *Storage) UpdateItemSessionFailureCapture(ctx context.Context, id string
 // records whether that cost is trustworthy. See EntRepository.UpdateItemSessionCost.
 func (s *Storage) UpdateItemSessionCost(ctx context.Context, id string, usd float64, priced bool) error {
 	return s.Repo.UpdateItemSessionCost(ctx, id, usd, priced)
+}
+
+// UpdateItemSessionBranch replaces an ItemSession's branch_name. See Backlog.UpdateItemSessionBranch.
+func (s *Storage) UpdateItemSessionBranch(ctx context.Context, id string, branch string) error {
+	return s.Repo.UpdateItemSessionBranch(ctx, id, branch)
 }
 
 // AddHeadlessCostBySessionUUID adds usd to the estimated_cost_usd of the ItemSession

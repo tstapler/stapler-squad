@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
+	"github.com/tstapler/stapler-squad/session/registry"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -56,7 +57,7 @@ func TestStreamTerminal_ShouldDropInputAndResizeForHiddenAndApplyForVisible_When
 	svc, srv := newBidiStreamTestServer(t)
 	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
-	svc.SetRegistry(session.NewRegistry(nil, svc.WireInstanceCallbacks))
+	svc.SetRegistry(registry.NewRegistry(nil, svc.WireInstanceCallbacks))
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)
 
 	spawn := func(hidden bool) *instance.Instance {

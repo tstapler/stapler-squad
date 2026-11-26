@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -22,8 +23,6 @@ const (
 	// MetaPeerTitle names the unresponsive answerer; the descriptor builder
 	// labels the answer action "Answer for {peer}" with it.
 	MetaPeerTitle = "peer_title"
-	// MetaGuidanceRequestID keys the descriptors of a notification to its request.
-	MetaGuidanceRequestID = metaGuidanceRequestID
 )
 
 const (
@@ -290,40 +289,40 @@ func reminderText(label string) string {
 }
 
 // CancelWake implements CancelDelegate for ACTION_KIND_CANCEL_WAKE.
-func (s *WakeTriggerService) CancelWake(ctx context.Context, wakeID string) (ActionResult, error) {
+func (s *WakeTriggerService) CancelWake(ctx context.Context, wakeID string) (questionkit.ActionResult, error) {
 	row, cancelled, err := s.cancelAny(ctx, wakeID)
 	switch {
 	case errors.Is(err, wakes.ErrWakeNotFound):
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "not found"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "not found"), nil
 	case err != nil:
-		return ActionResult{}, err
+		return questionkit.ActionResult{}, err
 	case cancelled:
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	detail := "already " + string(row.Status)
 	if row.Status == domain.WakeStatusDelivered && row.DeliveredAt != nil {
 		detail = "already fired at " + row.DeliveredAt.UTC().Format(time.RFC3339)
 	}
-	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, detail), nil
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, detail), nil
 }
 
 // CancelPeerHelp implements CancelDelegate for ACTION_KIND_CANCEL_PEER_HELP.
-func (s *WakeTriggerService) CancelPeerHelp(ctx context.Context, requestID string) (ActionResult, error) {
+func (s *WakeTriggerService) CancelPeerHelp(ctx context.Context, requestID string) (questionkit.ActionResult, error) {
 	if s.deps.Guidance == nil {
-		return notWired(), nil
+		return questionkit.NotWired(), nil
 	}
 	data, wasApplied, err := s.deps.Guidance.CancelPeerHelp(ctx, requestID)
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "not found"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "not found"), nil
 	case errors.Is(err, ErrNotPeerHelp):
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "not a peer help request"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "not a peer help request"), nil
 	case err != nil:
-		return ActionResult{}, err
+		return questionkit.ActionResult{}, err
 	case wasApplied:
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
-	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, s.alreadyEnded(data)), nil
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, s.alreadyEnded(data)), nil
 }
 
 func (s *WakeTriggerService) alreadyEnded(d *domain.GuidanceRequestData) string {

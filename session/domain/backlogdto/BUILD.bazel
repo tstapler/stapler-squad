@@ -13,6 +13,7 @@ go_library(
         "backlog_workflow_suggestion_data.go",
         "errors.go",
         "history.go",
+        "item_session_active.go",
         "open_stuck_state.go",
         "pipeline_mode.go",
         "review.go",
@@ -39,17 +40,24 @@ go_test(
     name = "backlogdto_test",
     srcs = [
         "backlog_item_id_test.go",
+        "item_session_active_test.go",
         "purity_test.go",
     ],
     embed = [":backlogdto"],
+    deps = [
+        "//session/domain",
+        "@com_github_stretchr_testify//assert",
+    ],
 )
 
-# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go).
+# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go)
+# and by server/services/backlogmisc's TestEveryBacklogKindMapped (backlog_hooks.go).
 filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = [
         "//server/services:__pkg__",
+        "//server/services/backlogmisc:__pkg__",
         "//session:__pkg__",
     ],
 )

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/driver"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -38,7 +39,7 @@ func LiveSessionDriverStacks() []string {
 	buf = buf[:runtime.Stack(buf, true)]
 	var stacks []string
 	for _, g := range strings.Split(string(buf), "\n\n") {
-		if strings.Contains(g, "session.StartSessionDriver.func") {
+		if strings.Contains(g, "/session/driver.StartSessionDriver.func") {
 			stacks = append(stacks, g)
 		}
 	}
@@ -70,7 +71,7 @@ var driverStartLog struct {
 
 func RecordSessionDriverStarts() {
 	driverStartLog.starts = map[*instance.Instance]string{}
-	session.SetSessionDriverStartHookForTest(func(inst *instance.Instance) {
+	driver.SetSessionDriverStartHookForTest(func(inst *instance.Instance) {
 		stack := make([]byte, 1<<14)
 		stack = stack[:runtime.Stack(stack, false)]
 		driverStartLog.mu.Lock()
@@ -85,7 +86,7 @@ func LeakedSessionDriverStarts() []string {
 	defer driverStartLog.mu.Unlock()
 	var leaked []string
 	for inst, rec := range driverStartLog.starts {
-		if session.SessionDriverRunningForTest(inst) {
+		if driver.SessionDriverRunningForTest(inst) {
 			leaked = append(leaked, rec)
 		}
 	}
