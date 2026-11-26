@@ -97,6 +97,7 @@ go_library(
         "notification_priority.go",
         "notification_prune.go",
         "notification_service.go",
+        "notification_text.go",
         "pane_reply_core.go",
         "pane_reply_sequence.go",
         "path_completion_service.go",

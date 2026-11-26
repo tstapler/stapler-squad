@@ -7,6 +7,7 @@ go_library(
         "external_pane_resize.go",
         "human_activity.go",
         "local_write_verdict.go",
+        "request_facts.go",
         "request_record.go",
         "session_nudge_guard.go",
         "terminal_access.go",
@@ -43,6 +44,7 @@ go_test(
         "decisions_golden_test.go",
         "human_activity_test.go",
         "local_write_verdict_test.go",
+        "request_facts_test.go",
         "session_nudge_guard_test.go",
         "terminal_access_test.go",
         "terminal_input_metrics_test.go",
@@ -62,6 +64,7 @@ go_test(
         "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel_sdk_metric//:metric",
         "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        "@org_golang_google_protobuf//types/known/emptypb",
     ],
 )
 

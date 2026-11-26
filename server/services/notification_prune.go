@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
@@ -57,7 +58,7 @@ func (ns *NotificationService) PruneHiddenSessionNotifications(
 	}
 
 	msg := req.Msg
-	facts := requestFactsOf(ctx, req)
+	facts := access.RequestFactsOf(ctx, req)
 	resolver := ns.deliveryGate.Resolver()
 	classify := func(r *notifications.NotificationRecord) notifications.PruneDecision {
 		return pruneDecision(resolver.ClassifyStored(r.SessionID, r.Metadata), r.SessionID)
@@ -134,7 +135,7 @@ func pruneDecision(res deliverygate.RowResolution, rawID string) notifications.P
 
 // pruneAuditLine builds the kind=prune line: request facts, counts and flags,
 // no row content, title or session id.
-func pruneAuditLine(f steerRequestFacts, p notifications.PrunePlan, includeUnread bool) auditkit.AuditLine {
+func pruneAuditLine(f access.SteerRequestFacts, p notifications.PrunePlan, includeUnread bool) auditkit.AuditLine {
 	matched := len(p.Remove)
 	counts := p.ReasonCounts()
 	counts[pruneCountKeptUnread] = p.KeptUnreadActionable
@@ -143,9 +144,9 @@ func pruneAuditLine(f steerRequestFacts, p notifications.PrunePlan, includeUnrea
 	return auditkit.AuditLine{
 		Kind: auditkit.AuditKindPrune, ChangeID: uuid.NewString(),
 		MatchedCount: &matched, IncludeUnreadActionable: flagsvc.BoolRef(includeUnread), Counts: counts,
-		Listener: f.refusal.Listener, PeerAddr: f.refusal.Peer, Host: f.refusal.Host, Origin: f.refusal.Origin,
-		UserAgent: f.userAgent, AuthMode: f.refusal.AuthMode,
-		PeerLoopback: flagsvc.BoolRef(f.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.refusal.Proxied),
+		Listener: f.Refusal.Listener, PeerAddr: f.Refusal.Peer, Host: f.Refusal.Host, Origin: f.Refusal.Origin,
+		UserAgent: f.UserAgent, AuthMode: f.Refusal.AuthMode,
+		PeerLoopback: flagsvc.BoolRef(f.Refusal.PeerLoopback), Proxied: flagsvc.BoolRef(f.Refusal.Proxied),
 	}
 }
 
@@ -163,14 +164,14 @@ func pruneResponse(p notifications.PrunePlan) *sessionv1.PruneHiddenSessionNotif
 
 // logPrune logs the removed (or would-be-removed) count and ids at INFO, grouped
 // by resolved session and kind, with the caller's remote address and listener.
-func logPrune(p notifications.PrunePlan, opts notifications.PruneOptions, f steerRequestFacts) {
+func logPrune(p notifications.PrunePlan, opts notifications.PruneOptions, f access.SteerRequestFacts) {
 	msg := "[NotificationHistory] prune dry run"
 	if p.Applied {
 		msg = "[NotificationHistory] prune applied"
 	}
 	log.Info(msg, "count", len(p.Remove), "ids", p.IDs(), "kept_unread_actionable", p.KeptUnreadActionable,
 		"undeterminable", p.Undeterminable, "include_unread_actionable", opts.IncludeUnreadActionable,
-		"backup", p.BackupPath, "peer_addr", f.refusal.Peer, "listener", f.refusal.Listener)
+		"backup", p.BackupPath, "peer_addr", f.Refusal.Peer, "listener", f.Refusal.Listener)
 	groups := map[string][]string{}
 	for _, r := range p.Remove {
 		key := fmt.Sprintf("%s id_form=%s reason=%s", r.Group, r.Form, r.Reason)
