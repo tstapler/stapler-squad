@@ -44,6 +44,7 @@ go_test(
         "inverted_index_test.go",
         "snippet_test.go",
         "sync_cancel_test.go",
+        "sync_perf_test.go",
         "tokenizer_artifact_test.go",
         "tokenizer_test.go",
     ],

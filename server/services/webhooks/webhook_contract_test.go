@@ -1,4 +1,4 @@
-package services
+package webhooks
 
 import (
 	"encoding/json"
@@ -20,7 +20,7 @@ type httpRecorder = httptest.ResponseRecorder
 // fixtures must equal what the server actually returns, so the contract cannot drift
 // from the implementation unnoticed.
 
-const contractDir = "../../contracts/webhook-management/v1"
+const contractDir = "../../../contracts/webhook-management/v1"
 
 func readContract(t *testing.T, rel string) []byte {
 	t.Helper()

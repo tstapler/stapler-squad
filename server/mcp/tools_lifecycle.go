@@ -320,6 +320,24 @@ func mcpSessionTypeToProto(sessionTypeStr string) (sessionv1.SessionType, error)
 // that slips past this pre-check (async-session-creation Epic 2.3, Story 2.3.1); a
 // SetTitleDirect caller has no such backstop, so callers of this helper on the rename
 // path must treat it as authoritative, not just a fast-path optimization.
+// renameStoredSession renames the live instance and its row, keyed on the old title.
+// A session with no row yet is only renamed in memory; the caller's save creates it.
+func renameStoredSession(store session.InstanceStore, inst *instance.Instance, title string) error {
+	oldTitle := inst.Title
+	inst.SetTitleDirect(title)
+	_, err := store.FindInstanceDataByID(oldTitle)
+	if errors.Is(err, domain.ErrInstanceDataNotFound) {
+		return nil
+	}
+	if err == nil {
+		err = store.UpdateInstanceMetadata(oldTitle, &title, nil, nil, nil)
+	}
+	if err != nil {
+		inst.SetTitleDirect(oldTitle)
+	}
+	return err
+}
+
 func titleCollisionResult(store session.InstanceStore, title string) *mcpgo.CallToolResult {
 	existing, err := store.ListInstanceData()
 	if err != nil {
@@ -596,7 +614,11 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 		if errRes := titleCollisionResult(lh.store, title); errRes != nil {
 			return errRes, nil
 		}
-		inst.SetTitleDirect(title)
+		// Rename the row under its old title first: SaveInstances below looks rows up by
+		// title and would otherwise create a second row, orphaning the original.
+		if err := renameStoredSession(lh.store, inst, title); err != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("rename: %v", err), ""), nil
+		}
 	}
 	if rawTags, ok := args["tags"]; ok {
 		var tags []string

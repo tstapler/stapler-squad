@@ -1,7 +1,8 @@
-package services
+package webhooks
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -364,6 +365,54 @@ func TestPinnedClientFor_should_ReturnBaseUnmodified_When_TransportIsCustomRound
 	base := &http.Client{Transport: &recordingRoundTripper{}}
 	client := pinnedClientFor(base, net.ParseIP("127.0.0.1"))
 	assert.Same(t, base, client, "a custom RoundTripper has no dial step to pin — base must be returned unmodified")
+}
+
+// The production constructor must wire the real SSRF check: every other delivery test swaps in a permissive stub.
+func TestNewCallbackDispatcher_should_RefuseLoopbackDelivery_When_UsingProductionWiring(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := NewCallbackDispatcher(&config.Config{})
+	for _, target := range []string{srv.URL, "http://169.254.169.254/", "http://10.0.0.1/"} {
+		_, err := d.validateURL(context.Background(), target)
+		assert.Error(t, err, target)
+	}
+
+	d.inFlight <- struct{}{}
+	d.deliver("session_complete", srv.URL, map[string]any{})
+	assert.Equal(t, int32(0), hits.Load(), "a loopback target must never be dialled")
+}
+
+// A failed send-time check aborts delivery: retrying would give a rebinding resolver more tries.
+func TestCallbackDispatcher_Deliver_should_NotRetry_When_SSRFValidationFails(t *testing.T) {
+	t.Parallel()
+	var hits, checks atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := testDispatcher(1, "session_complete", srv.URL)
+	// Rejects only the first check, so a retry would be allowed through to the server.
+	d.validateURL = func(ctx context.Context, rawURL string) (net.IP, error) {
+		if checks.Add(1) == 1 {
+			return nil, errors.New("callback host resolves to a disallowed address range")
+		}
+		return permissiveValidator(ctx, rawURL)
+	}
+
+	d.inFlight <- struct{}{}
+	d.deliver("session_complete", srv.URL, map[string]any{})
+
+	assert.Equal(t, int32(1), checks.Load(), "no second validation attempt")
+	assert.Equal(t, int32(0), hits.Load(), "nothing may be delivered")
+	assert.Empty(t, d.inFlight, "the slot must be released")
 }
 
 // TestCallbackDispatcher_Dispatch_NoopWhenFeatureFlagOff proves Task 8.2.1b's

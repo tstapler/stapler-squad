@@ -1,4 +1,4 @@
-package services
+package webhooks
 
 import (
 	"context"
@@ -42,7 +42,7 @@ func NewCallbackConfigService() *CallbackConfigService {
 // guarding mutex) that CallbackDispatcher.Dispatch reads callback URLs from —
 // see sharedCfg's doc comment for why this is needed. Called once from
 // server/dependencies.go with the exact same *config.Config pointer and
-// *sync.RWMutex passed to services.NewCallbackDispatcher /
+// *sync.RWMutex passed to webhooks.NewCallbackDispatcher /
 // CallbackDispatcher.ConfigMu.
 func (c *CallbackConfigService) SetSharedCallbackConfig(cfg *config.Config, mu *sync.RWMutex) {
 	c.sharedCfg = cfg
