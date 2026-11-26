@@ -43,6 +43,7 @@ alias(
 go_test(
     name = "gatestats_test",
     srcs = [
+        "gatestats_boundary_test.go",
         "gatestats_golden_test.go",
         "gatestats_response_test.go",
         "gatestats_store_test.go",
