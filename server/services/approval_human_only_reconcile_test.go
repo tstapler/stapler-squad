@@ -1,6 +1,7 @@
 package services
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -80,17 +81,20 @@ func TestReconcilePendingApprovals_should_HoldWhatTheHandlerQueuedForAHuman_When
 			h, store := newTestHandler(5 * time.Second)
 			h.SetClassifier(&countingClassifier{decision: tc.rules})
 			h.SetDomainChecker(newDomainChecker(5 * 24 * time.Hour))
-			answered := make(chan string, 1)
-			go func() {
-				answered <- decisionBehavior(t, postPermissionRequestWithCommand(t, h, "s", "Bash", tc.command))
-			}()
+			answered := make(chan *httptest.ResponseRecorder, 1)
+			go func() { answered <- postPermissionRequestWithCommand(t, h, "s", "Bash", tc.command) }()
 			require.NoError(t, testutil.WaitForCondition(func() bool { return len(store.ListAll()) == 1 }, testutil.FastWaitConfig()))
 
 			reconcileWithBashRule(t, store, classifier.AutoAllow)
 
 			require.Len(t, store.ListAll(), 1)
 			require.NoError(t, store.Resolve(store.ListAll()[0].ID, approvalkit.ApprovalDecision{Behavior: "deny"}))
-			assert.Equal(t, "deny", <-answered)
+			select {
+			case rr := <-answered:
+				assert.Equal(t, "deny", decisionBehavior(t, rr))
+			case <-time.After(10 * time.Second):
+				t.Fatal("the handler did not answer")
+			}
 		})
 	}
 }
