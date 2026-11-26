@@ -12,7 +12,7 @@ import (
 
 // newForwardSyncTestStorage creates a temporary ent-backed *session.Storage,
 // mirroring the pattern in backlog_service_triage_test.go /
-// backlog_item_event_publisher_test.go.
+// backlogmisc/backlog_item_event_publisher_test.go.
 func NewForwardSyncTestStorage(t *testing.T) *session.Storage {
 	t.Helper()
 	repo := session.NewTestEntRepository(t)

@@ -10,7 +10,7 @@ jest.mock("@/lib/api/transport", () => ({ getConnectTransport: jest.fn() }));
 jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 
 const root = { id: "opaque-id", root: "/protected", paths: ["/protected/repo"], sessionTitles: ["My session"], appConsented: false, outcome: "pending" };
-beforeEach(() => { jest.clearAllMocks(); mockStatus.mockResolvedValue({ enabled: true, roots: [root] }); mockContinue.mockResolvedValue({}); });
+beforeEach(() => { window.localStorage.clear(); jest.clearAllMocks(); mockStatus.mockResolvedValue({ enabled: true, roots: [root] }); mockContinue.mockResolvedValue({}); });
 
 it("explains enrichment before sending consent and supports deferring", async () => {
  render(<TCCEnrichmentBanner />);
@@ -106,4 +106,14 @@ it("re-checks a denied root through the consent RPC", async () => {
  render(<TCCEnrichmentBanner />);
  fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
  await waitFor(() => expect(mockContinue).toHaveBeenCalledWith({ rootId: "opaque-id" }));
+});
+
+it("persists 'Don't show again' across remounts", async () => {
+ const { unmount } = render(<TCCEnrichmentBanner />);
+ fireEvent.click(await screen.findByTestId("tcc-dismiss-forever"));
+ expect(screen.queryByTestId("tcc-enrichment-banner")).not.toBeInTheDocument();
+ unmount();
+ const { container } = render(<TCCEnrichmentBanner />);
+ await waitFor(() => expect(mockStatus).toHaveBeenCalledTimes(2));
+ expect(container).toBeEmptyDOMElement();
 });

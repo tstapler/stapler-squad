@@ -39,6 +39,7 @@ server/services/forwardsync !server/web
 server/services/piextension !server/web
 server/services/searchrpc !server/web
 server/services/adminmisc !server/web
+server/services/backlogmisc !server/web
 server/services/escapecode !server/web
 server/services/triggerlimit !server/web
 server/services/webhooks !server/web

@@ -14,7 +14,7 @@ import (
 // recordingItemChangePublisher is a minimal ItemChangePublisher test double
 // that records every call it receives, used to prove wiring reaches the
 // concrete *EntRepository without depending on the real event-bus adapter
-// (server/services.BacklogItemEventPublisher), which would introduce an
+// (server/services/backlogmisc.BacklogItemEventPublisher), which would introduce an
 // import of the session package back into itself.
 type recordingItemChangePublisher struct {
 	calls []backlogdto.BacklogItemChange
