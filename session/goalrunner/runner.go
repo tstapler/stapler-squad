@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -260,11 +261,10 @@ func Run(ctx context.Context, cfg Config) Outcome {
 	cfg = cfg.withDefaults()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, cfg.Binary, cfg.Args()...)
+	cmd := safeexec.CommandContextPG(runCtx, cfg.Binary, cfg.Args()...)
 	cmd.Dir = cfg.Dir
-	// Bounds Wait when a grandchild (Bash tool, hook) keeps the stdout pipe open
-	// after claude is killed; the grandchild itself is not killed.
-	cmd.WaitDelay = 5 * time.Second
+	// CommandContextPG kills claude's whole process group and sets WaitDelay, so a
+	// grandchild (Bash tool, hook) cannot hold the stdout pipe open after the kill.
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return Outcome{EndReason: EndError, Err: fmt.Errorf("goalrunner: stdout pipe: %w", err)}
