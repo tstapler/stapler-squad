@@ -38,6 +38,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/forwardsync"
+	"github.com/tstapler/stapler-squad/server/services/healthnotify"
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
@@ -1578,7 +1579,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// ACTIVE session crosses the configured stale threshold — see StaleSessionNotifier doc
 	// comment).
 	if deps.ReviewQueuePoller != nil {
-		staleNotifier := services.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		staleNotifier := healthnotify.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus,
+			healthnotify.Ports{DerivePriority: services.DerivePriority})
 		srv.goBackground(func() { staleNotifier.Start(serverCtx) })
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
@@ -1609,7 +1611,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// MemoryPressureNotifier doc comment). No-ops on non-Linux (telemetry.CgroupMemoryUsageRatio
 	// always reports unavailable there).
 	if deps.ReviewQueuePoller != nil {
-		memNotifier := services.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus)
+		memNotifier := healthnotify.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus,
+			healthnotify.Ports{DerivePriority: services.DerivePriority})
 		srv.goBackground(func() { memNotifier.Start(serverCtx) })
 		log.Info("Memory pressure notifier started")
 	}

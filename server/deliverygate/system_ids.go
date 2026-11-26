@@ -10,7 +10,7 @@ import "strings"
 var systemIDs = map[string]struct{}{
 	"fork-pressure":      {}, // server/server.go fork-pressure notifier
 	"tmux-server":        {}, // server/server.go tmux-server notifier
-	"system":             {}, // memory_pressure_notifier.go
+	"system":             {}, // healthnotify/memory_pressure_notifier.go
 	"backlog-quota-gate": {}, // quotaGateNotifierKey
 }
 

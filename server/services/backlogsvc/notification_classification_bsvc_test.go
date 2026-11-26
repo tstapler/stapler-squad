@@ -28,7 +28,7 @@ import (
 //     failed, Bounce cap exhausted, Review session ended without a verdict, Review item
 //     needs attention, Work session may be stuck, Triage may be stuck).
 //   - server/server_test.go for Fork Pressure / Tmux Server Recovered.
-//   - stale_session_notifier_test.go / memory_pressure_notifier_test.go for the other two
+//   - server/services/healthnotify (stale_session / memory_pressure tests) for the other two
 //     rows (Session went stale, Memory usage near limit), asserted alongside their
 //     existing fire/re-arm coverage rather than duplicated here.
 func TestNotificationPushGateClassification(t *testing.T) {
