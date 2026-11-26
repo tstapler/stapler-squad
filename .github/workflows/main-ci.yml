@@ -48,25 +48,15 @@ jobs:
     uses: ./.github/workflows/_prepare.yml
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # test-tmux / test-rest: the old single `test` job ran these as two
-  # sequential `go test` invocations inside one job (~13.3m combined,
-  # 2026-08-28 measurement: TMUX_TEST_PKGS ~6.0m, REST_TEST_PKGS ~7.3m). Split
-  # into two parallel jobs instead — full OS-level isolation, not just `-p`
-  # concurrency within one invocation, so the fan-out/flake concerns the
-  # comment on TMUX_TEST_PKGS below describes don't get worse; if anything
-  # they get less contended since REST_TEST_PKGS's -race suite is no longer
-  # sharing a runner's CPUs with TMUX_TEST_PKGS's real tmux subprocesses at
-  # all. `test` (below) merges both coverage profiles and runs the gate.
-  #
-  # Merging test/pty-race-regression/integration-coverage (now in nightly.yml) into one job was
-  # considered and rejected (plan.md Epic 3.5): they run in parallel today, and
-  # merging would serialize their combined runtime, hurting wall-clock
-  # time-to-green — this plan's actual success metric — for a total-compute
-  # win nobody asked for. Same reasoning applies to keeping test-tmux/test-rest
-  # split rather than reverting to one job.
+  # test-tmux / test-rest: two parallel jobs sharing the full -race suite; `test` below merges their
+  # coverage profiles. tools/ci/testshards assigns the packages (its last shard is a catch-all):
+  # test-tmux runs the real-tmux packages, then the "session-slice" shard in a second go test
+  # invocation; test-rest runs the rest. Shards rather than a third job: ci-job-budget.md caps a
+  # push to main at 20 concurrent jobs. The invocations stay sequential so the slice never
+  # competes with the tmux packages' subprocesses for CPU.
   # ─────────────────────────────────────────────────────────────────────────────
   test-tmux:
-    name: Test (session/tmux packages)
+    name: Test (tmux packages + session slice)
     runs-on: ubuntu-latest
     needs: prepare
     timeout-minutes: 20
@@ -118,8 +108,8 @@ jobs:
         run: |
           # -timeout=20m: explicit budget instead of relying on go test's silent 10m
           # default (see BUG-067). session, session/mux, and session/tmux fork real
-          # tmux subprocesses at high t.Parallel() fan-out, which is why they run as
-          # their own job rather than sharing a runner with REST_TEST_PKGS below.
+          # tmux subprocesses at high t.Parallel() fan-out, which is why the session slice
+          # runs in a second go test invocation after them instead of alongside.
           # They no longer need -p 1 against each other: the flake that justified it
           # was TestBuildClaudeCommand_LargePromptUsesTempFileNotInline overriding
           # promptArg's background cleanup delay to 10ms in a test that doesn't
@@ -130,18 +120,30 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           # On failure only the failed packages rerun, verbosely, for diagnostics: a second full pass
           # did not fit the budget and reported a test failure as CI-BUDGET-EXCEEDED.
-          run_test_suite() {
-            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions --jsonfile "$RUNNER_TEMP/go-test.json" -- -race -timeout=20m -coverprofile=coverage.tmux.out \
-              -covermode=atomic ./session ./session/mux ./session/tmux && return 0
+          # A failure in the first shard does not skip the second, though both share the 17m budget.
+          run_shard() {
+            PKGS="$(go run ./tools/ci/testshards "$1")" || { echo "::error::testshards $1 failed"; touch "$RUNNER_TEMP/tests-failed"; return 1; }
+            # PKGS is deliberately unquoted: one import path per line, each a separate argument.
+            # shellcheck disable=SC2086
+            TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format github-actions --jsonfile "$RUNNER_TEMP/go-test-$1.json" -- -race -timeout=20m -coverprofile="coverage.$1.part" \
+              -covermode=atomic $PKGS && return 0
             touch "$RUNNER_TEMP/tests-failed"
-            FAILED_PKGS="$(jq -r 'select(.Action == "fail" and .Test == null) | .Package' "$RUNNER_TEMP/go-test.json" | sort -u)"
+            FAILED_PKGS="$(jq -r 'select(.Action == "fail" and .Test == null) | .Package' "$RUNNER_TEMP/go-test-$1.json" | sort -u)"
             # shellcheck disable=SC2086
             [ -z "$FAILED_PKGS" ] || TMUX_BIN="$(pwd)/bin/tmux" gotestsum --format standard-verbose -- -race -timeout=20m $FAILED_PKGS
             return 1
           }
-          export -f run_test_suite
+          run_test_suite() {
+            rc=0
+            run_shard tmux || rc=1
+            run_shard session-slice || rc=1
+            [ "$rc" -eq 0 ] || return 1
+            head -n 1 coverage.tmux.part > coverage.tmux.out
+            tail -q -n +2 coverage.tmux.part coverage.session-slice.part >> coverage.tmux.out
+          }
+          export -f run_shard run_test_suite
           timeout 17m bash -c run_test_suite || {
-            if [ -e "$RUNNER_TEMP/tests-failed" ] || grep -qE '"Action":"(fail|build-fail)"' "$RUNNER_TEMP/go-test.json" 2>/dev/null; then echo "::error::'test-tmux' tests failed (see the failures above)"; exit 1; fi
+            if [ -e "$RUNNER_TEMP/tests-failed" ] || grep -qsE '"Action":"(fail|build-fail)"' "$RUNNER_TEMP"/go-test-*.json; then echo "::error::'test-tmux' tests failed (see the failures above)"; exit 1; fi
             echo "::error::CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget"; echo "CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: Upload tmux-group coverage
@@ -160,7 +162,7 @@ jobs:
   # test-rest's budget was raised 22m->30m (job timeout 25->35) on 2026-09-05
   # (PR #697), when any failure re-ran the entire suite against the same budget.
   test-rest:
-    name: Test (server/session/config packages)
+    name: Test (server and remaining packages)
     runs-on: ubuntu-latest
     needs: prepare
     timeout-minutes: 35
@@ -178,6 +180,7 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
+        id: go
         uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
@@ -217,8 +220,7 @@ jobs:
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           run_test_suite() {
-            ALL_PKGS="$(go list ./server/... ./session/... ./config/...)" || { echo "::error::go list failed"; touch "$RUNNER_TEMP/tests-failed"; return 1; }
-            REST_TEST_PKGS="$(grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$' <<<"$ALL_PKGS")"
+            REST_TEST_PKGS="$(go run ./tools/ci/testshards rest)" || { echo "::error::testshards rest failed"; touch "$RUNNER_TEMP/tests-failed"; return 1; }
             # REST_TEST_PKGS is deliberately unquoted below: it's a
             # newline/space-separated list of package paths that must
             # word-split into separate `go test` arguments.
@@ -243,6 +245,15 @@ jobs:
           name: coverage-rest
           path: coverage.rest.out
           retention-days: 1
+
+      - name: Save Go cache
+        if: ${{ steps.go.outputs.save == 'true' }}
+        timeout-minutes: 5
+        continue-on-error: true  # a failed save must not skip the coverage gate
+        uses: ./.github/actions/save-go-cache
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
 
       - name: Runner utilization report
         if: always()

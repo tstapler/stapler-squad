@@ -1,8 +1,8 @@
 name: 'Set up Go (main-written module + build cache)'
 description: >
-  actions/setup-go with its built-in cache turned off, replaced by cache-main-writes: the default
-  branch saves a dated entry (so the Go build cache actually refreshes), PRs restore the newest
-  one. Callers that should own an entry set save=true; everyone else shares it read-only.
+  actions/setup-go with its built-in cache turned off, replaced by a dated entry that only the default
+  branch writes. This action restores; the one writer job per family also ends with save-go-cache.
+  Sets GOFLAGS=-count=1 for the job so a restored build cache never replays old test results.
 
 inputs:
   go-version-file:
@@ -16,9 +16,17 @@ inputs:
   golangci-cache:
     description: "'true' also caches ~/.cache/golangci-lint in this entry (lint job)."
     default: 'false'
-  max-build-cache-mb:
-    description: On the writer, trim the restored GOCACHE to this many MB (oldest first) before the job adds to it.
-    default: '1500'
+
+outputs:
+  save:
+    description: "'true' when this job should end with save-go-cache (writer, default branch, no entry for today yet)."
+    value: ${{ steps.policy.outputs.save }}
+  cache-path:
+    description: Path list for save-go-cache; must match the restored one or the entry is never found.
+    value: ${{ steps.paths.outputs.cache-path }}
+  cache-key:
+    description: Today's key for this family.
+    value: ${{ steps.paths.outputs.cache-key }}
 
 runs:
   using: composite
@@ -29,41 +37,55 @@ runs:
         go-version-file: ${{ inputs.go-version-file }}
         cache: false
 
-    - name: Resolve Go cache paths
+    - name: Resolve Go cache paths and key
       id: paths
       shell: bash
+      env:
+        SCOPE: ${{ inputs.scope }}
+        GOLANGCI: ${{ inputs.golangci-cache }}
       run: |
+        image="${ImageOS:-unknown}"
+        arch="$(echo "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
+        prefix="go-$SCOPE-$image-$arch"
         {
-          echo "gocache=$(go env GOCACHE)"
-          echo "gomodcache=$(go env GOMODCACHE)"
-          echo "image=${ImageOS:-unknown}"
-          echo "arch=$(echo "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$image"
+          echo "arch=$arch"
+          echo "prefix=$prefix"
+          echo "cache-key=$prefix-$(date -u +%Y%m%d)"
+          # Order matches actions/setup-go (the cache version hashes the path list).
+          echo "cache-path<<PATHS"
+          go env GOMODCACHE
+          go env GOCACHE
+          if [ "$GOLANGCI" = "true" ]; then echo "~/.cache/golangci-lint"; fi
+          echo "PATHS"
         } >> "$GITHUB_OUTPUT"
-        if [ "${{ inputs.golangci-cache }}" = "true" ]; then
+        if [ "$GOLANGCI" = "true" ]; then
           echo "GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint" >> "$GITHUB_ENV"
         fi
+        echo "GOFLAGS=${GOFLAGS:+$GOFLAGS }-count=1" >> "$GITHUB_ENV"
 
+    # Restore only: actions/cache's post step gets the wrong inputs when nested two composites deep
+    # (actions/runner#2030), which is why nothing was ever saved through cache-main-writes here.
     - name: Restore Go caches
-      id: cache
-      uses: ./.github/actions/cache-main-writes
+      id: restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        write: ${{ inputs.save }}
-        rolling: 'true'
-        path: |
-          ${{ steps.paths.outputs.gomodcache }}
-          ${{ steps.paths.outputs.gocache }}
-          ${{ inputs.golangci-cache == 'true' && '~/.cache/golangci-lint' || '' }}
-        key: go-${{ inputs.scope }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.arch }}
-        # Path order matches actions/setup-go (cache version hashes it). The last line is the pre-policy setup-go key family: lets the first runs after this lands
-        # warm-start from main's old entry until main has saved a go-* one. Drop it afterwards.
+        path: ${{ steps.paths.outputs.cache-path }}
+        key: ${{ steps.paths.outputs.cache-key }}
+        # The last line is the pre-policy setup-go key family. Drop it once main has saved a go-* entry.
         restore-keys: |
-          go-${{ inputs.scope }}-${{ steps.paths.outputs.image }}-${{ steps.paths.outputs.arch }}-
+          ${{ steps.paths.outputs.prefix }}-
           setup-go-${{ runner.os }}-${{ steps.paths.outputs.arch }}-${{ steps.paths.outputs.image }}-go-
 
-    - name: Trim restored Go build cache (writer only)
-      if: steps.cache.outputs.writer == 'true'
+    - name: Decide whether this job saves
+      id: policy
       shell: bash
       env:
-        GOCACHE_DIR: ${{ steps.paths.outputs.gocache }}
-        MAX_MB: ${{ inputs.max-build-cache-mb }}
-      run: ./tools/ci/trim-go-cache.sh "$GOCACHE_DIR" "$MAX_MB"
+        WANT: ${{ inputs.save }}
+        HIT: ${{ steps.restore.outputs.cache-hit }}
+        DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+      run: |
+        save=false
+        if [ "$WANT" = "true" ] && [ "$GITHUB_REF" = "$DEFAULT_REF" ] && [ "$HIT" != "true" ]; then save=true; fi
+        echo "save=$save" >> "$GITHUB_OUTPUT"
+        echo "go cache: restore hit=${HIT:-false}, this job saves=$save"
