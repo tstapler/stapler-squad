@@ -208,7 +208,7 @@ func (h *ApprovalHandler) SetAutoApprovalLogger(l autoApprovalLogger) {
 
 // SetHeadlessPool injects a headless LLM pool for autonomous session approval.
 // When set and autonomousChecker returns true for a session, risky tool calls are sent to the
-// LLM for approval instead of the human review queue.
+// LLM for approval instead of the human review queue, except human-only escalations.
 func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 	h.headlessPool = pool
 }
@@ -560,7 +560,7 @@ createApproval:
 	denyIfUndecided := source == "pi" || (humanOnly && autonomous)
 
 	// Autonomous LLM approval: if the session is autonomous and a headless pool is configured,
-	// ask the LLM to approve or deny instead of queuing for human review.
+	// ask the LLM to approve or deny instead of queuing, unless the escalation is human-only.
 	if h.headlessPool != nil && autonomous && !humanOnly {
 		var sessionTail string
 		if h.queueChecker != nil && sessionID != "unknown" {
