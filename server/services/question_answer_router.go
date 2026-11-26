@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"slices"
+
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -194,7 +195,7 @@ func (r *AnswerRouter) writeVisible(ctx context.Context, inst *instance.Instance
 	}
 	res, _ := r.visible().Run(ctx, AnswerTargetVisible, replyInput{
 		sessionID: in.SessionID, sessionUUID: inst.GetStableID(), questionID: in.QuestionID, replyID: in.ReplyID, digit: digit,
-	}, inst, steerRequestFacts{refusal: refusal})
+	}, inst, access.SteerRequestFacts{Refusal: refusal})
 	if res.Err != nil {
 		return questionkit.ActionResult{}, res.Err
 	}

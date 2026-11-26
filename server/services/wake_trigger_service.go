@@ -19,13 +19,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// Notification metadata keys the peer-help escalation sets.
-const (
-	// MetaPeerTitle names the unresponsive answerer; the descriptor builder
-	// labels the answer action "Answer for {peer}" with it.
-	MetaPeerTitle = "peer_title"
-)
-
 const (
 	// missedListWindow bounds how long a missed trigger stays in the operator list.
 	missedListWindow = 7 * 24 * time.Hour

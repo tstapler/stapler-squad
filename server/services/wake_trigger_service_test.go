@@ -327,7 +327,7 @@ func TestGuidanceDescriptors_should_OfferCancelRequestWithConfirmAndPeerLabel_Wh
 		sources: DescriptorSources{Guidance: &fakeGuidance{open: map[string]OpenGuidance{"g1": {PeerHelp: true}}}},
 		flag:    func(string) bool { return true },
 	}
-	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1", MetaPeerTitle: "diagnose:abc"}}
+	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1", questionkit.MetaPeerTitle: "diagnose:abc"}}
 
 	b.Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
 
