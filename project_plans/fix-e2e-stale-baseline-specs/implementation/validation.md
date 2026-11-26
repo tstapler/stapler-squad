@@ -49,8 +49,8 @@ UX — no user-visible change; engineering — product edits limited to a test h
 - Input-drop, resync, resize, mobile overflow: 87 passes over `--repeat-each=3`.
 - New reset test fails against the unfixed stress loop (second run completed after 2993 ms).
 - `make ci` exit 0 (`GOTMPDIR` in `/var/tmp`; `/tmp` tmpfs filled during an earlier link).
-  `lint:duplicates`, `tsc`, eslint pass. `make ci` ran before the later review-note commits,
-  which touch only e2e specs and `TerminalStressTest.tsx` (`tsc`/eslint rerun for the latter).
+  Rerun on `bad0c94a9` (after the last merge and review-note commits): `make ci` and
+  `lint:duplicates` exit 0.
 - **Limit:** with the server resize call removed, the redraw e2e still passed in some runs because
   another in-flight snapshot restored the rows. The forced resize is asserted by
   `TerminalOutput.refit.test.tsx` (13 `TerminalOutput` suites, 209 tests pass).
