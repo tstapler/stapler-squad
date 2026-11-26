@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/gatestats"
 	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
@@ -373,15 +374,15 @@ func (ns *NotificationService) GetDeliveryGateStats(
 	if ns.deliveryGate == nil {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("delivery gate is not configured"))
 	}
-	view := gateStatsView{
+	view := gatestats.StatsView{
 		Snapshot:    ns.deliveryGate.StatsSnapshot(),
 		Series:      ns.deliveryGate.Metrics().Series(),
-		ExplicitOff: explicitOffScopes(),
+		ExplicitOff: gatestats.ExplicitOffScopes(),
 	}
 	if ns.statsFileStatus != nil {
 		view.File = ns.statsFileStatus()
 	}
-	return connect.NewResponse(buildGateStatsResponse(view)), nil
+	return connect.NewResponse(gatestats.BuildResponse(view)), nil
 }
 
 // ---------------------------------------------------------------------------
