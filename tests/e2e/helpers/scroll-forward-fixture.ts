@@ -62,7 +62,7 @@ export async function setAppScrollForwardFlag(request: APIRequestContext, enable
 
 /**
  * Pins sessionTitle onto PathLegacyPerConnection via the existing
- * SetStreamHubSessionOverride RPC (server/services/stream_hub_rollout_service.go),
+ * SetStreamHubSessionOverride RPC (server/services/streamhubrollout/stream_hub_rollout_service.go),
  * the "existing test hook for streaming-path selection" validation.md's
  * UX-AC-4 case 2 refers to.
  *

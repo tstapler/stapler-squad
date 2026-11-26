@@ -1,4 +1,4 @@
-package services
+package taggingrules
 
 import (
 	"context"
@@ -62,6 +62,12 @@ func NewTaggingRulesStore(storage *session.Storage) (*TaggingRulesStore, error) 
 		return nil, fmt.Errorf("tagging_rules_store: load from storage: %w", err)
 	}
 	return s, nil
+}
+
+// NewEmptyTaggingRulesStore returns a store with no rules loaded: the fallback for a caller
+// whose NewTaggingRulesStore failed.
+func NewEmptyTaggingRulesStore(storage *session.Storage) *TaggingRulesStore {
+	return &TaggingRulesStore{storage: storage}
 }
 
 // All returns tagging rule specs.

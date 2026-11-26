@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
@@ -87,7 +88,7 @@ type ApprovalHandler struct {
 	queueChecker        ReviewQueueChecker                    // optional: triggers immediate review queue check on new approval
 	classifier          classifier.Classifier                 // optional: auto-classify before escalating to manual review
 	analyticsStore      *AnalyticsStore                       // optional: record classification decisions
-	domainChecker       *DomainAgeChecker                     // optional: escalate requests to newly-registered domains
+	domainChecker       *domainage.DomainAgeChecker           // optional: escalate requests to newly-registered domains
 	notificationStamper approvalNotificationStamper           // optional: stamps approval outcomes on notification records
 	autoApprovalLog     autoApprovalLogger                    // optional: writes silent records for auto-approved/denied ops
 	timeout             time.Duration                         // default 4m; overridable in tests
@@ -185,7 +186,7 @@ func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *piextension.PiExtension
 }
 
 // SetDomainChecker injects a DomainAgeChecker for escalating requests to newly-registered domains.
-func (h *ApprovalHandler) SetDomainChecker(d *DomainAgeChecker) {
+func (h *ApprovalHandler) SetDomainChecker(d *domainage.DomainAgeChecker) {
 	h.domainChecker = d
 }
 
@@ -407,7 +408,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
 		if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
-			domains := ExtractDomainsFromCommand(cmd)
+			domains := domainage.ExtractDomainsFromCommand(cmd)
 			for _, domain := range domains {
 				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
 				if err != nil {

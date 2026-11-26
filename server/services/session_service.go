@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
 
 	"connectrpc.com/connect"
@@ -40,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/quota"
+	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -211,7 +213,7 @@ type SessionService struct {
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
 	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the
 	// pattern documented for rulesSvc's own nil-safe accessors below.
-	taggingRulesSvc *TaggingRulesService
+	taggingRulesSvc *taggingrules.TaggingRulesService
 	// taggingEngine is the same live engine taggingRulesSvc mutates on CRUD — injected into
 	// every Instance (wireCallbacks) so session/instance_actor_setters.go's reclassifyTagsLocked
 	// fixpoint hook has a real rule set to evaluate (session-classifier-pipeline Epic 3.3/Task
@@ -286,7 +288,7 @@ type SessionService struct {
 
 	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
 	// (terminal-multi-connection-streaming Story 3.3).
-	streamHubRolloutSvc *StreamHubRolloutService
+	streamHubRolloutSvc *streamhubrollout.StreamHubRolloutService
 
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
@@ -854,16 +856,16 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Instance construction by a later phase of this project (session-classifier-pipeline
 	// Phase 3) — constructing it here just gives TaggingRulesService's CRUD/rebuild
 	// plumbing a real engine to target ahead of that wiring.
-	taggingRulesStore, taggingRulesErr := NewTaggingRulesStore(concStorage)
+	taggingRulesStore, taggingRulesErr := taggingrules.NewTaggingRulesStore(concStorage)
 	if taggingRulesErr != nil {
 		log.Warn("failed to load tagging rules store, using empty store", "err", taggingRulesErr)
-		taggingRulesStore = &TaggingRulesStore{storage: concStorage}
+		taggingRulesStore = taggingrules.NewEmptyTaggingRulesStore(concStorage)
 	}
 	taggingEngine := classifier.NewTaggingEngine()
 	if userTaggingRules := taggingRulesStore.ToRules(); len(userTaggingRules) > 0 {
 		taggingEngine.AddRules(userTaggingRules)
 	}
-	taggingRulesSvc := NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
+	taggingRulesSvc := taggingrules.NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
 
 	// Determine the server process's own working directory for claude-settings
 	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
@@ -1011,7 +1013,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
-		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
+		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -1068,7 +1070,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// (see the Set* wiring doc comment above NewSessionService), so they are nil
 	// here at construction time.
 	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
-	svc.streamHubRolloutSvc = NewStreamHubRolloutService(svc.findInstance)
+	svc.streamHubRolloutSvc = streamhubrollout.NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)

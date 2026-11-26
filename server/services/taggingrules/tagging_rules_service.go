@@ -1,4 +1,4 @@
-package services
+package taggingrules
 
 import (
 	"context"
@@ -29,18 +29,24 @@ type TaggingRuleWithFireCount struct {
 	FireCount7d int `json:"fire_count_7d"`
 }
 
+// FireCounter is the one analytics query this package needs; server/services' *AnalyticsStore
+// satisfies it.
+type FireCounter interface {
+	GetTaggingRuleFireCounts(ctx context.Context, since time.Time) (map[string]int, error)
+}
+
 // TaggingRulesService rebuilds the live TaggingEngine after every CRUD mutation, mirroring
 // RulesService's CRUD subset. AI-suggestion authoring is out of scope for tagging rules
 // (see requirements.md's Out of Scope) — no promptBuilder/aiClient fields.
 type TaggingRulesService struct {
 	rulesStore     *TaggingRulesStore
 	engine         *classifier.TaggingEngine
-	analyticsStore *AnalyticsStore // nil = fire counts unavailable; ListTaggingRules defaults to 0
+	analyticsStore FireCounter // nil = fire counts unavailable; ListTaggingRules defaults to 0
 }
 
-// NewTaggingRulesService creates a TaggingRulesService. analyticsStore may be nil — see
-// TaggingRuleWithFireCount.FireCount7d's doc comment.
-func NewTaggingRulesService(rulesStore *TaggingRulesStore, engine *classifier.TaggingEngine, analyticsStore *AnalyticsStore) *TaggingRulesService {
+// NewTaggingRulesService creates a TaggingRulesService. analyticsStore may be a nil interface
+// (not a nil pointer) — see TaggingRuleWithFireCount.FireCount7d's doc comment.
+func NewTaggingRulesService(rulesStore *TaggingRulesStore, engine *classifier.TaggingEngine, analyticsStore FireCounter) *TaggingRulesService {
 	return &TaggingRulesService{
 		rulesStore:     rulesStore,
 		engine:         engine,

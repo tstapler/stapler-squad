@@ -5042,6 +5042,24 @@ func TestSessionService_ListTaggingRules_should_ReturnUpsertedRule_When_UpsertTa
 	assert.True(t, found, "expected a rule with output_tag=Hotfix in ListTaggingRules, got: %+v", listResp.Msg.GetRules())
 }
 
+// Pins the taggingrules.FireCounter wiring: the service must be built with the analytics store.
+func TestSessionService_ListTaggingRules_should_ReportFireCount_When_RuleFired(t *testing.T) {
+	t.Parallel()
+	storage := svctest.CreateTestStorage(t)
+	svc := NewSessionService(storage, events.NewEventBus(100))
+	t.Cleanup(func() { svc.Shutdown() })
+	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-tag-bugfix", time.Now()))
+
+	listResp, err := svc.ListTaggingRules(context.Background(), connect.NewRequest(&sessionv1.ListTaggingRulesRequest{}))
+	require.NoError(t, err)
+
+	fires := map[string]int32{}
+	for _, r := range listResp.Msg.GetRules() {
+		fires[r.GetId()] = r.GetFireCount_7D()
+	}
+	assert.Equal(t, int32(1), fires["seed-tag-bugfix"])
+}
+
 // TestSessionService_UpsertTaggingRule_should_ReturnValidationError_When_OutputTagEmpty
 // covers Story 5.2.1's validation acceptance criterion: an empty output_tag is rejected
 // with a client-visible error, not silently accepted.

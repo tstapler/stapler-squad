@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/completionreview"
 	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/escapecode"
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
@@ -1073,7 +1074,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetClassifier(deps.SessionService.GetClassifier())
 	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
-	approvalHandler.SetDomainChecker(services.NewDomainAgeChecker(true))
+	approvalHandler.SetDomainChecker(domainage.NewDomainAgeChecker(true))
 	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance
 	// deps.SlackNotifier constructed and wired into ReactiveQueueMgr, so
 	// GetDeliveryStatus() reflects sends from both trigger points.
