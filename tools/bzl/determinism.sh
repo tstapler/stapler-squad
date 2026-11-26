@@ -9,8 +9,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 bazel="${BAZEL:-bazel}"
 targets=("$@")
 ((${#targets[@]})) || targets=(//:stapler-squad)
-tmp="$(mktemp -d "${DETERMINISM_TMP:-${TMPDIR:-$HOME/.cache/tmp}}/determinism.XXXXXX")"
-trap 'rm -rf "$tmp"' EXIT
+scratch="${DETERMINISM_TMP:-${TMPDIR:-$HOME/.cache/tmp}}"
+mkdir -p "$scratch" # a fresh runner has no ~/.cache/tmp
+tmp="$(mktemp -d "$scratch/determinism.XXXXXX")"
+# Bazel leaves read-only directories in an output base; a failing cleanup must not change the exit status.
+trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp" || true' EXIT
 
 for n in 1 2; do
   "$bazel" --output_base="$tmp/ob$n" build --config=release --disk_cache= --remote_cache= \
