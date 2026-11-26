@@ -40,7 +40,7 @@ var notTerminalWriteReasons = map[string]string{
 	"GuidanceRequestService.AnswerGuidanceRequest": `stores an answer for the triage pipeline; types into no pane`,
 	"HeadlessService.RunHeadlessCall":              `headless call, no pane`,
 	"TymuxRolloutService.ReplaceTymuxd":            `restarts the tymuxd process; panes are revived by the daemon, nothing is typed`,
-	"BacklogService.CreateEpicIntegrationChild":    `stores an idea item and its dependency edges (the later auto-spawn is a new session); types into no pane`,
+	"BacklogService.CreateEpicIntegrationChild":    `stores an idea item, its dependency edges and the epic's done gate (integration_child_id); types into no pane`,
 }
 
 // notTerminalWriteRPCs lists every other RPC, per service.
