@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/paneactivity"
 	"github.com/tstapler/stapler-squad/session/workflowengine"
@@ -100,7 +101,7 @@ func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testin
 	const flag = "browser-passthrough"
 	const iterations = 50
 	flags := flagsvc.NewFeatureFlagService()
-	quota := NewQuotaSettingsService()
+	quotaSvc := quota.NewQuotaSettingsService()
 
 	errCh := make(chan error, 2*iterations)
 	var wg sync.WaitGroup
@@ -114,7 +115,7 @@ func TestFeatureFlagWrites_AndUpdateQuotaConfig_NoLostUpdate_UnderRace(t *testin
 	go func() {
 		defer wg.Done()
 		for i := 1; i <= iterations; i++ {
-			_, err := quota.UpdateQuotaConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{
+			_, err := quotaSvc.UpdateQuotaConfig(context.Background(), connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{
 				Settings: &sessionv1.QuotaSettings{Enabled: proto.Bool(i%2 == 0)},
 			}))
 			errCh <- err

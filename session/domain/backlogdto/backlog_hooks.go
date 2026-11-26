@@ -89,7 +89,7 @@ type ItemChangePublisher interface {
 
 // CallbackDispatcher fires an outbound HTTP callback for a named lifecycle event
 // (e.g. "session_complete", "session_stale", "queue_item_created" — see
-// server/services.CallbackDispatcher's Dispatch doc comment for the full event-type
+// server/services/webhooks.CallbackDispatcher's Dispatch doc comment for the full event-type
 // list and payload shapes). Implemented outside the session package because
 // server/services imports session, so the reverse import would be a cycle.
 //

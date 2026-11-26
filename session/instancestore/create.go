@@ -195,8 +195,35 @@ func setSessionCreateGitHubFields(sessionCreate *ent.SessionCreate, data domain.
 	if data.ArchivedAt != nil {
 		sessionCreate.SetArchivedAt(*data.ArchivedAt)
 	}
+	setSessionCreateLifecycleFields(sessionCreate, data)
 	if !data.CreationProgressUpdatedAt.IsZero() {
 		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
+	}
+}
+
+// setSessionCreateLifecycleFields keeps Create in step with Update: a row recreated by
+// an upsert fallback must not lose its workflow link or pause/exit state.
+func setSessionCreateLifecycleFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
+	if data.WorkflowID != "" {
+		sessionCreate.SetWorkflowID(data.WorkflowID)
+	}
+	if data.PauseReason != "" {
+		sessionCreate.SetPauseReason(data.PauseReason)
+	}
+	if data.ExitReason != "" {
+		sessionCreate.SetExitReason(data.ExitReason)
+	}
+	if !data.LastUserResponse.IsZero() {
+		sessionCreate.SetLastUserResponse(data.LastUserResponse)
+	}
+	if !data.ProcessingGraceUntil.IsZero() {
+		sessionCreate.SetProcessingGraceUntil(data.ProcessingGraceUntil)
+	}
+	if !data.LastPromptDetected.IsZero() {
+		sessionCreate.SetLastPromptDetected(data.LastPromptDetected)
+	}
+	if data.LastPromptSignature != "" {
+		sessionCreate.SetLastPromptSignature(data.LastPromptSignature)
 	}
 }
 

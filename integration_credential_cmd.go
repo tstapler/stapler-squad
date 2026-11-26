@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -75,7 +75,7 @@ func newIssueCredentialCmd() *cobra.Command {
 			}
 			defer repo.Close()
 
-			workspaceID := services.WebhookWorkspaceID(configDir)
+			workspaceID := webhooks.WebhookWorkspaceID(configDir)
 			token, err := repo.IssueIntegrationCredential(cmd.Context(), domain.IntegrationCredentialInfo{
 				PrincipalID: principal, WorkspaceID: workspaceID, AllowedDirRoot: allowedDir,
 			})

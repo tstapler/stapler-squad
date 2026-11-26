@@ -205,6 +205,7 @@ go_test(
         "//server/services/featureflags",
         "//server/services/flagsvc",
         "//server/services/internal/svctest",
+        "//server/services/quota",
         "//server/workflows",
         "//session",
         "//session/autonomous",

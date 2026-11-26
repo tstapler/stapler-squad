@@ -34,6 +34,18 @@ Let an agent on the same machine start sessions through the stapler-squad MCP se
 
 3. Call `create_session` (or `create_session_for_pr`). The result now includes `ui_url`, for example `https://ssq.example.com/?session=<stable id>`.
 
+## Open the UI through a reverse proxy
+
+A proxy on the same machine reaches `localhost:8543` with its own `Host` header, and the local listener's host guard answers `403 Forbidden` (log line `local listener request rejected ... reason=host_not_allowed`). List the proxy's hostname in `STAPLER_SQUAD_TRUSTED_PROXY_HOSTS` (comma-separated, set it like `STAPLER_SQUAD_PUBLIC_URL` above) and restart:
+
+```
+STAPLER_SQUAD_TRUSTED_PROXY_HOSTS=ssq.example.com
+```
+
+- Entries must be plain DNS names; schemes, ports, paths, wildcards, IP literals and `localhost` are rejected and logged.
+- The listener behind the proxy is unauthenticated, so the proxy must authenticate callers itself. Do not list a hostname that anyone untrusted can reach.
+- Requests that arrive with proxy headers are still refused for `Reply` (answering a session's question), which is the strictest write. Enable `require_local_auth` if you need it through the proxy.
+
 ## Behavior and limits
 
 - `ui_url` is omitted when the variable is unset, is not an `http(s)` URL, has no hostname, or contains credentials (`user:pass@`).

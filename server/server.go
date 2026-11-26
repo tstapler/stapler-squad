@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -106,6 +107,7 @@ type Server struct {
 	dispatchers                map[string]http.Handler                  // listener name -> dispatcher the unary WS bridge re-enters
 	httpsURL                   atomic.Pointer[string]                   // set when remote access is enabled
 	hostnames                  atomic.Pointer[[]string]                 // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	trustedProxyHosts          atomic.Pointer[[]string]                 // hostnames of a trusted same-box reverse proxy; see trusted_proxy_hosts.go
 	verifiedHostnames          atomic.Pointer[[]string]                 // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
 	origins                    []string                                 // allowed CORS origins
 	shutdownHooks              []func()                                 // called before HTTP server stops
@@ -954,7 +956,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// re-reads config.json each reconcile).
 	{
 		quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(
-			services.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
+			quota.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
 		log.Info("Registered QuotaService handler", "path", "/api"+quotaPath)
 	}
@@ -2030,9 +2032,9 @@ func (s *Server) GetVerifiedHostnames() []string {
 // construction are honored.
 func (s *Server) LocalWriteVerdictConfig() middleware.VerdictConfig {
 	return middleware.VerdictConfig{
-		VerifiedHosts:  s.GetVerifiedHostnames,
+		VerifiedHosts:  s.guardVerifiedHosts,
 		ListenAddr:     s.GetAddr,
-		AllowedOrigins: s.GetOrigins,
+		AllowedOrigins: s.guardOrigins,
 	}
 }
 
@@ -2122,7 +2124,8 @@ var localExemptPaths = []string{"/health"}
 
 func (s *Server) hostGuardConfig() middleware.HostGuardConfig {
 	return middleware.HostGuardConfig{
-		AllowedOrigins: s.GetOrigins,
+		AllowedOrigins: s.guardOrigins,
+		AllowedHosts:   s.trustedProxyHostList,
 		ExemptPaths:    localExemptPaths,
 	}
 }
@@ -2179,8 +2182,8 @@ func (s *Server) stampRequest(listener string, requiresAuth bool) func(http.Hand
 func (s *Server) probeGuardConfig() middleware.ProbeGuardConfig {
 	return middleware.ProbeGuardConfig{
 		LoopbackBound:  func() bool { return middleware.ListenAddrIsLoopback(s.GetAddr()) },
-		AllowedOrigins: s.GetOrigins,
-		AllowedHosts:   s.GetHostnames,
+		AllowedOrigins: s.guardOrigins,
+		AllowedHosts:   s.guardHosts,
 	}
 }
 

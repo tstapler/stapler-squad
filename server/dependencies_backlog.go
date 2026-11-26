@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -188,7 +189,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 // tracker plugin registry and key source the manual TriggerSync path shares.
 type backlogControl struct {
 	ctrl      *session.BacklogController
-	quotaGate *services.QuotaGate
+	quotaGate *quota.QuotaGate
 	registry  *session.PluginRegistry
 	keyFunc   func() ([]byte, error)
 }
@@ -226,7 +227,7 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 	if tokenStore != nil {
 		tokenStoreReader = tokenStore
 	}
-	quotaGate := services.NewQuotaGate(
+	quotaGate := quota.NewQuotaGate(
 		// config.LoadConfig() re-reads config.json from disk on every call
 		// (same pattern as flagsvc/feature_flag_service.go's GetFeatureFlags) — cfg
 		// here is the boot-time snapshot passed into BuildRuntimeDeps and is
@@ -238,9 +239,10 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 		sessionService,
 		backlogCtrl,
 		eventBus,
+		quota.Ports{DerivePriority: services.DerivePriority},
 	)
 	sessionService.SetQuotaGate(quotaGate)
-	services.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
+	quota.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
 	quotaGate.Reconcile(context.Background())
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.

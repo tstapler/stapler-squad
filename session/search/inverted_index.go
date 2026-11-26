@@ -44,6 +44,10 @@ type InvertedIndex struct {
 	AvgDocLength float64
 	// mu protects concurrent access to the index
 	mu sync.RWMutex
+	// totalLength is the running sum of DocLengths, so AvgDocLength stays O(1) to maintain.
+	// Unexported (not persisted): totalKnown is false after a gob load until first use.
+	totalLength int
+	totalKnown  bool
 }
 
 // NewInvertedIndex creates a new empty inverted index.
@@ -71,15 +75,11 @@ func (idx *InvertedIndex) AddDocument(docID int32, tokens []string, positions ma
 	}
 
 	// Update document count and length
+	idx.ensureTotalLengthLocked()
+	idx.totalLength += len(tokens) - idx.DocLengths[docID]
 	idx.TotalDocs++
 	idx.DocLengths[docID] = len(tokens)
-
-	// Recalculate average document length
-	totalLength := 0
-	for _, length := range idx.DocLengths {
-		totalLength += length
-	}
-	idx.AvgDocLength = float64(totalLength) / float64(idx.TotalDocs)
+	idx.updateAvgLocked()
 
 	// Add each unique term to the index
 	for term, freq := range termFreq {
@@ -198,69 +198,81 @@ func (idx *InvertedIndex) HasDocument(docID int32) bool {
 }
 
 // RemoveDocument removes a document from the index.
-// This is an expensive operation as it requires updating all posting lists.
+// Removing several? Use RemoveDocuments: each call walks every posting list.
 func (idx *InvertedIndex) RemoveDocument(docID int32) {
+	idx.RemoveDocuments([]int32{docID})
+}
+
+// RemoveDocuments removes a batch of documents in a single pass over the index.
+func (idx *InvertedIndex) RemoveDocuments(docIDs []int32) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// Check if document exists
-	if _, exists := idx.DocLengths[docID]; !exists {
+	idx.ensureTotalLengthLocked()
+	doomed := make(map[int32]struct{}, len(docIDs))
+	for _, id := range docIDs {
+		length, exists := idx.DocLengths[id]
+		if !exists {
+			continue
+		}
+		doomed[id] = struct{}{}
+		idx.totalLength -= length
+		idx.TotalDocs--
+		delete(idx.DocLengths, id)
+	}
+	if len(doomed) == 0 {
 		return
 	}
 
-	// Remove from all posting lists
-	termsToDelete := make([]string, 0)
 	for term, postingList := range idx.Index {
-		// Find the index of this docID in the posting list
-		docIndex := -1
-		for i, id := range postingList.DocIDs {
-			if id == docID {
-				docIndex = i
-				break
-			}
-		}
-
-		if docIndex >= 0 {
-			// Remove docIndex's positions from the flat slice, then shift every
-			// later offset left by the removed span's length.
-			start, end := postingList.PosOffsets[docIndex], postingList.PosOffsets[docIndex+1]
-			span := end - start
-			postingList.Positions = append(postingList.Positions[:start], postingList.Positions[end:]...)
-			postingList.PosOffsets = append(postingList.PosOffsets[:docIndex], postingList.PosOffsets[docIndex+1:]...)
-			for i := docIndex; i < len(postingList.PosOffsets); i++ {
-				postingList.PosOffsets[i] -= span
-			}
-
-			// Remove from posting list
-			postingList.DocIDs = append(postingList.DocIDs[:docIndex], postingList.DocIDs[docIndex+1:]...)
-			postingList.Frequency = append(postingList.Frequency[:docIndex], postingList.Frequency[docIndex+1:]...)
-
-			// Mark term for deletion if no documents contain it
-			if len(postingList.DocIDs) == 0 {
-				termsToDelete = append(termsToDelete, term)
-			}
+		postingList.remove(doomed)
+		if len(postingList.DocIDs) == 0 {
+			delete(idx.Index, term)
 		}
 	}
+	idx.updateAvgLocked()
+}
 
-	// Delete empty terms
-	for _, term := range termsToDelete {
-		delete(idx.Index, term)
+// remove compacts the posting list in place, dropping every document in doomed.
+func (p *PostingsList) remove(doomed map[int32]struct{}) {
+	kept, posEnd := 0, int32(0)
+	start := p.PosOffsets[0]
+	for i, id := range p.DocIDs {
+		// Carried across iterations because PosOffsets is rewritten behind (and up to) i+1.
+		end := p.PosOffsets[i+1]
+		if _, gone := doomed[id]; !gone {
+			copy(p.Positions[posEnd:], p.Positions[start:end])
+			p.DocIDs[kept] = id
+			p.Frequency[kept] = p.Frequency[i]
+			posEnd += end - start
+			kept++
+			p.PosOffsets[kept] = posEnd
+		}
+		start = end
 	}
+	p.DocIDs = p.DocIDs[:kept]
+	p.Frequency = p.Frequency[:kept]
+	p.PosOffsets = p.PosOffsets[:kept+1]
+	p.Positions = p.Positions[:posEnd]
+}
 
-	// Update document count and length tracking
-	delete(idx.DocLengths, docID)
-	idx.TotalDocs--
+func (idx *InvertedIndex) ensureTotalLengthLocked() {
+	if idx.totalKnown {
+		return
+	}
+	idx.totalLength = 0
+	for _, length := range idx.DocLengths {
+		idx.totalLength += length
+	}
+	idx.totalKnown = true
+}
 
-	// Recalculate average document length
+func (idx *InvertedIndex) updateAvgLocked() {
 	if idx.TotalDocs > 0 {
-		totalLength := 0
-		for _, length := range idx.DocLengths {
-			totalLength += length
-		}
-		idx.AvgDocLength = float64(totalLength) / float64(idx.TotalDocs)
-	} else {
-		idx.AvgDocLength = 0
+		idx.AvgDocLength = float64(idx.totalLength) / float64(idx.TotalDocs)
+		return
 	}
+	idx.AvgDocLength = 0
 }
 
 // Clear removes all documents and terms from the index.
@@ -272,6 +284,8 @@ func (idx *InvertedIndex) Clear() {
 	idx.DocLengths = make(map[int32]int)
 	idx.TotalDocs = 0
 	idx.AvgDocLength = 0
+	idx.totalLength = 0
+	idx.totalKnown = true
 }
 
 // GetAllTerms returns all terms in the index.

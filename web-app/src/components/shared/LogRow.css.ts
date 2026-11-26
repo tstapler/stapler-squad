@@ -1,6 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
-import { vars } from "@/styles/theme-contract.css";
+import { vars, zIndex } from "@/styles/theme-contract.css";
 
 // ---------------------------------------------------------------------------
 // T5: Log-level color recipe — WCAG AA compliant hardcoded values.
@@ -19,6 +19,16 @@ export const levelBadge = recipe({
     letterSpacing: "0.05em",
     minWidth: 44,
     textAlign: "center",
+    // Reset <button> chrome; the badge is a <button> only when it filters by level.
+    border: "none",
+    margin: 0,
+    cursor: "pointer",
+    lineHeight: "inherit",
+    touchAction: "manipulation",
+    "@media": {
+      // Coarse pointer: full 44px-tall tap target (WCAG 2.5.5), buttons only — plain-text badges stay compact.
+      "(pointer: coarse)": { selectors: { "button&": { minHeight: 44 } } },
+    },
   },
   variants: {
     level: {
@@ -43,6 +53,10 @@ export const rowTint = recipe({
     borderBottomColor: "rgba(255,255,255,0.06)",
     cursor: "pointer",
     minHeight: 28,
+    "@media": {
+      // WCAG 2.5.5 touch target; fine pointers keep the compact 28px row.
+      "(pointer: coarse)": { minHeight: 44 },
+    },
     // T2: eliminate iOS 300ms tap delay at the row level
     touchAction: "manipulation",
   },
@@ -81,7 +95,7 @@ export const gutterAbsolute = style({
   top: 0,
   bottom: 0,
   width: GUTTER_WIDTH_PX,
-  zIndex: 10,
+  zIndex: zIndex.raised,
   // Solid background occludes scrolling text beneath gutter
   backgroundColor: vars.color.background,
   display: "flex",
@@ -95,6 +109,10 @@ export const gutterAbsolute = style({
   "@media": {
     "(max-width: 380px)": {
       width: GUTTER_WIDTH_NARROW_PX,
+    },
+    // The 44px badge must fit the 44px narrow gutter, or its tap area overlaps the log text beside it.
+    "(max-width: 380px) and (pointer: coarse)": {
+      padding: "2px 0",
     },
   },
 });

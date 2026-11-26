@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,8 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -36,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -278,7 +282,7 @@ type SessionService struct {
 
 	// callbackConfigSvc handles GetCallbackConfig/UpdateCallbackConfig RPCs
 	// (webhook-triggers Phase 5, FR7).
-	callbackConfigSvc *CallbackConfigService
+	callbackConfigSvc *webhooks.CallbackConfigService
 
 	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
 	// (terminal-multi-connection-streaming Story 3.3).
@@ -342,7 +346,7 @@ type SessionService struct {
 	// headroom gate that pauses/resumes backlog automation. Late-wired via
 	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
 	// inside NewSessionService.
-	quotaGate *QuotaGate
+	quotaGate *quota.QuotaGate
 
 	// escapeEventsClient is the ent client for db/escape_events.db (escape analytics RPCs).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
@@ -1006,7 +1010,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		defaultsSvc:                 NewDefaultsService(),
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
-		callbackConfigSvc:           NewCallbackConfigService(),
+		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
 		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
