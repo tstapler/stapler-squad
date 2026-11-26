@@ -150,7 +150,8 @@
     "terminal-stress/ascii-video.spec.ts": 6,
     "terminal-stress/large-payload.spec.ts": 4
    },
-   "coveredBy1208": []
+   "coveredBy1208": [],
+   "resolved": "Fixed for #1182: flickering spec and rows deleted; other rows pass or skip on CI (see project_plans/fix-e2e-stale-baseline-specs). Left as fail: the ascii flickering and large-payload corrupt-state rows, outside this change."
   },
   {
    "id": "backlog-flows",
