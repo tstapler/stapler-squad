@@ -43,7 +43,8 @@ jobs:
         run: |
           bazel run --config=ci //:gazelle
           bazel mod tidy --lockfile_mode=update
-          make sync
+          # BUILD_SYSTEM=bazel: the default `make` path needs buf and bun, which this job does not install.
+          make sync BUILD_SYSTEM=bazel
 
       - name: Open or update the repair PR
         env:
