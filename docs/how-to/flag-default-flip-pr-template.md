@@ -15,7 +15,7 @@ Ready for review, not draft: PRs in this repository default to ready (`CLAUDE.md
 
 ## The one-line-PR rule
 
-Each default flip is its own PR containing exactly one change: the `Default` for one flag in `server/services/feature_flag_specs.go` (the `featureflags.Spec` entry (`Default` field)), plus the matching "Default:" sentence in that entry's `description`. No other code, no second flag, no refactor (plan Story 5.3 AC 4: "Default flips ... are separate one-line PRs after the operator's soak"). Reasons: a flip must revert cleanly, and the flag's audit trail should show one decision per PR.
+Each default flip is its own PR containing exactly one change: the `Default` for one flag in `server/services/flagsvc/feature_flag_specs.go` (the `featureflags.Spec` entry (`Default` field)), plus the matching "Default:" sentence in that entry's `description`. No other code, no second flag, no refactor (plan Story 5.3 AC 4: "Default flips ... are separate one-line PRs after the operator's soak"). Reasons: a flip must revert cleanly, and the flag's audit trail should show one decision per PR.
 
 Persisted explicit-false values survive a default flip (ADR-008, Context, citing the delivery-gate ADR-004), so a flip changes only instances that never set the flag. An operator who set the flag OFF explicitly keeps it OFF; record in the PR whether any such override is known.
 
@@ -64,7 +64,7 @@ Own criteria (`requirements.md`). Keep ON when, over the 14 days:
 - Open-on-row is reported, never a gate: ______
 - A failure of (i) flips the flag OFF (legacy selector) and files a defect: Defect link: ______
 
-This flag already defaults ON (`backgroundActivityFeedDefault` in `server/services/feature_flags_notification_actions.go`). A PR for it is a flip to OFF, or confirms the default; an OFF to ON flip after an explicit OFF is a loosening change and is audit-fsynced.
+This flag already defaults ON (`backgroundActivityFeedDefault` in `server/services/flagsvc/feature_flags_notification_actions.go`). A PR for it is a flip to OFF, or confirms the default; an OFF to ON flip after an explicit OFF is a loosening change and is audit-fsynced.
 
 ## Flag: `agent_wake_triggers` (per scope)
 

@@ -1,16 +1,20 @@
 package server
 
-import "github.com/tstapler/stapler-squad/server/services"
+import (
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/forwardsync"
+)
 
 // programCLIFlagProbeGate and githubProgressCommentsGate read their flag through the session service's
 // injected registry on every call, so a Settings toggle still applies with no restart.
 func programCLIFlagProbeGate(sessions *services.SessionService) func() bool {
-	return func() bool { return services.ProgramCLIFlagProbeEnabled(sessions.InjectedFlagRegistry()) }
+	return func() bool { return flagsvc.ProgramCLIFlagProbeEnabled(sessions.InjectedFlagRegistry()) }
 }
 
 func githubProgressCommentsGate(sessions *services.SessionService) func() bool {
-	return func() bool { return services.GitHubIssueProgressCommentsEnabled(sessions.InjectedFlagRegistry()) }
+	return func() bool { return forwardsync.GitHubIssueProgressCommentsEnabled(sessions.InjectedFlagRegistry()) }
 }
 
 // startProgressSyncSubscriber is a seam so a test can capture the gate wireDepsIntoServer hands the subscriber.
-var startProgressSyncSubscriber = services.StartBacklogGitHubProgressSyncSubscriber
+var startProgressSyncSubscriber = forwardsync.StartBacklogGitHubProgressSyncSubscriber

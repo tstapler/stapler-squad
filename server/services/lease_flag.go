@@ -8,12 +8,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-// terminalWriteLeaseFlagName is the feature flag behind the per-instance
-// terminal write lease (plan Story 5.0). Global only, default on, no env var.
-// Off makes every lease non-exclusive (the pre-lease behavior), so a lease
-// regression is reversible without a deploy.
-const terminalWriteLeaseFlagName = "terminal_write_lease"
-
 // terminalWriteLeaseAuditPolicy declares the off flip an escape hatch: it
 // loosens (it removes serialization) but it is persisted first and recorded
 // with only the fallback log record when the audit sink is down, never refused
@@ -38,6 +32,6 @@ func (c leaseFlagController) IsEnabled() bool              { return c.flag.Enabl
 // lease off; a missing or unreadable config keeps it on (fails closed).
 func (s *SessionService) wireLeaseFlag() {
 	flag := instance.DefaultLeaseFlag
-	flag.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(terminalWriteLeaseFlagName, true))
-	s.featureFlagSvc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: flag})
+	flag.SetEnabled(config.LoadConfig().GetFeatureFlagWithDefault(featureflags.TerminalWriteLeaseFlagName, true))
+	s.featureFlagSvc.SetFeatureController(featureflags.TerminalWriteLeaseFlagName, leaseFlagController{flag: flag})
 }

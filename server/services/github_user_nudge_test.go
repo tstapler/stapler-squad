@@ -15,6 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -38,7 +39,7 @@ type fakeNudger struct {
 	steers   []steerCall
 	outcome  SteerOutcome
 	err      error
-	guard    *SessionNudgeGuard
+	guard    *access.SessionNudgeGuard
 	inWrite  chan struct{} // closed on first write entry when non-nil
 	holdOpen chan struct{} // writes block until closed when non-nil
 	onSteer  func()
@@ -64,11 +65,11 @@ func (f *fakeNudger) SteerInstanceGuarded(_ context.Context, inst *instance.Inst
 	if f.guard != nil {
 		rel, g := f.guard.TryBegin(inst.GetStableID(), sig)
 		switch g {
-		case GuardBusy:
+		case access.GuardBusy:
 			return SteerGuardBusy, nil
-		case GuardDuplicate:
+		case access.GuardDuplicate:
 			return SteerDuplicate, nil
-		case GuardCoolingDown:
+		case access.GuardCoolingDown:
 			return SteerCoolingDown, nil
 		}
 		release = rel
@@ -456,7 +457,7 @@ func TestNudgeSessionForPR_should_ReturnDistinctNoControllerBusyDetailAndNotGene
 	writes := 0
 	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
 	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return nil }
-	fix.svc.guardedSteer.guard.now = newFakeNudgeClock().Now
+	fix.svc.guardedSteer.guard.SetClock(newFakeNudgeClock().Now)
 
 	f := newNudgeFixture(t)
 	f.svc.SetPRNudger(fix.svc)
@@ -519,7 +520,7 @@ func TestNudgeSessionForPR_should_ReturnNothingToFixWithZeroSteers_When_OnlyChan
 func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliveredOneBusyOnSimultaneousCalls(t *testing.T) {
 	f := newNudgeFixture(t)
 	guardClock := newFakeNudgeClock()
-	f.nudger.guard = &SessionNudgeGuard{now: guardClock.Now}
+	f.nudger.guard = access.NewSessionNudgeGuardWithClock(guardClock.Now)
 
 	first, err := f.call("fix-ci")
 	require.NoError(t, err)
@@ -532,7 +533,7 @@ func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliver
 
 	// Double-click race: the first call is held inside the write; the second arrives meanwhile.
 	g := newNudgeFixture(t)
-	g.nudger.guard = &SessionNudgeGuard{now: newFakeNudgeClock().Now}
+	g.nudger.guard = access.NewSessionNudgeGuardWithClock(newFakeNudgeClock().Now)
 	g.nudger.inWrite = make(chan struct{})
 	g.nudger.holdOpen = make(chan struct{})
 	done := make(chan *sessionv1.NudgeSessionForPRResponse, 1)
@@ -552,7 +553,7 @@ func TestNudgeSessionForPR_should_ReturnDuplicate20sAfterDelivery_And_OneDeliver
 
 func TestNudgeSessionForPR_should_WriteExactlyOnceThroughRealGuard_When_RealSessionNudgeGuardAndFakePRNudger(t *testing.T) {
 	f := newNudgeFixture(t)
-	f.nudger.guard = &SessionNudgeGuard{now: newFakeNudgeClock().Now}
+	f.nudger.guard = access.NewSessionNudgeGuardWithClock(newFakeNudgeClock().Now)
 
 	for i := 0; i < 3; i++ {
 		_, err := f.call("fix-ci")
@@ -573,7 +574,7 @@ func TestNudgeSessionForPR_should_ReturnFailedPreconditionWithZeroWrites_When_Pa
 	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return verifyErr }
 	fix.svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { writes++; return nil }
 	clk := newFakeNudgeClock()
-	fix.svc.guardedSteer.guard.now = clk.Now
+	fix.svc.guardedSteer.guard.SetClock(clk.Now)
 	f := newNudgeFixture(t)
 	f.svc.SetPRNudger(fix.svc)
 

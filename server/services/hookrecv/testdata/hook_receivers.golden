@@ -1,0 +1,1323 @@
+GET /api/hooks/stop body=empty hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/stop body=empty hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/stop body=small hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/stop body=small hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/stop body=badjson hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/stop body=badjson hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/stop body=big hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/stop body=big hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/stop body=exactcap hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/stop body=exactcap hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/stop body=empty hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/stop body=empty hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/stop body=small hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/stop body=small hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/stop body=badjson hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/stop body=badjson hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/stop body=big hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/stop body=big hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/stop body=exactcap hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/stop body=exactcap hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=empty hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=empty hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=small hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=small hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=badjson hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=badjson hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=big hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=big hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=exactcap hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/stop body=exactcap hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=empty hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=empty hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=small hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=small hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=badjson hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=badjson hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=big hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=big hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=exactcap hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/stop body=exactcap hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=empty hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=empty hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=small hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=small hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=badjson hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=badjson hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=big hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=big hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=exactcap hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/stop body=exactcap hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=small hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=small hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=big hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=big hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/pre-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=small hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=small hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=big hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=big hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/pre-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=small hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=small hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=big hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=big hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/pre-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=small hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=small hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=big hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=big hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/pre-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=small hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=small hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=big hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=big hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/pre-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=small hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=small hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=big hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=big hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=small hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=small hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=big hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=big hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=small hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=small hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=big hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=big hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=small hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=small hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=big hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=big hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=empty hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=empty hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=small hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=small hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=badjson hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=badjson hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=big hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=big hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=exactcap hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use body=exactcap hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=empty hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=empty hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=small hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=small hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=badjson hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=badjson hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=big hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=big hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=exactcap hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/prompt-submit body=exactcap hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=empty hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=empty hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=small hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=small hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=badjson hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=badjson hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=big hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=big hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=exactcap hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/prompt-submit body=exactcap hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=empty hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=empty hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=small hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=small hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=badjson hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=badjson hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=big hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=big hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=exactcap hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/prompt-submit body=exactcap hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=empty hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=empty hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=small hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=small hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=badjson hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=badjson hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=big hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=big hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=exactcap hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/prompt-submit body=exactcap hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=empty hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=empty hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=small hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=small hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=badjson hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=badjson hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=big hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=big hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=exactcap hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/prompt-submit body=exactcap hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=empty hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=empty hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=small hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=small hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=badjson hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=badjson hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=big hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=big hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=exactcap hdr=0 -> 200 headers=[] body=""
+GET /api/hooks/post-tool-use-drift-check body=exactcap hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=empty hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=empty hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=small hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=small hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=badjson hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=badjson hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=big hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=big hdr=2 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=exactcap hdr=0 -> 200 headers=[] body=""
+POST /api/hooks/post-tool-use-drift-check body=exactcap hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=empty hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=empty hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=small hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=small hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=badjson hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=badjson hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=big hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=big hdr=2 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=exactcap hdr=0 -> 200 headers=[] body=""
+PUT /api/hooks/post-tool-use-drift-check body=exactcap hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=empty hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=empty hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=small hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=small hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=badjson hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=badjson hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=big hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=big hdr=2 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=exactcap hdr=0 -> 200 headers=[] body=""
+DELETE /api/hooks/post-tool-use-drift-check body=exactcap hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=empty hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=empty hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=small hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=small hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=badjson hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=badjson hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=big hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=big hdr=2 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=exactcap hdr=0 -> 200 headers=[] body=""
+HEAD /api/hooks/post-tool-use-drift-check body=exactcap hdr=2 -> 200 headers=[] body=""
+GET /api/hooks/unknown body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/unknown body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/unknown body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/unknown body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/unknown body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/unknown body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/stop/ body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/stop/ body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/stop/ body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/stop/ body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/stop/ body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+GET /api/hooks/permission-request body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+POST /api/hooks/permission-request body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+PUT /api/hooks/permission-request body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+DELETE /api/hooks/permission-request body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=empty hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=empty hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=small hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=small hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=badjson hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=badjson hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=big hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=big hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=exactcap hdr=0 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+HEAD /api/hooks/permission-request body=exactcap hdr=2 -> 404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+post-tool-use/hdr-only -> 200 headers=[] body=""
+  observer calls: [{a Bash}]
+post-tool-use/hdr-only/no-observer -> 200 headers=[] body=""
+post-tool-use/body-only -> 200 headers=[] body=""
+  observer calls: [{a AskUserQuestion}]
+post-tool-use/body-only/no-observer -> 200 headers=[] body=""
+post-tool-use/both-hdr-wins -> 200 headers=[] body=""
+  observer calls: [{a Bash}]
+post-tool-use/both-hdr-wins/no-observer -> 200 headers=[] body=""
+post-tool-use/badjson -> 200 headers=[] body=""
+  observer calls: [{a }]
+post-tool-use/badjson/no-observer -> 200 headers=[] body=""
+post-tool-use/tool-not-string -> 200 headers=[] body=""
+  observer calls: [{a }]
+post-tool-use/tool-not-string/no-observer -> 200 headers=[] body=""
+post-tool-use/tool-null -> 200 headers=[] body=""
+  observer calls: [{a }]
+post-tool-use/tool-null/no-observer -> 200 headers=[] body=""
+post-tool-use/no-session -> 200 headers=[] body=""
+  observer calls: [{ Edit}]
+post-tool-use/no-session/no-observer -> 200 headers=[] body=""
+post-tool-use/empty-both -> 200 headers=[] body=""
+  observer calls: [{ }]
+post-tool-use/empty-both/no-observer -> 200 headers=[] body=""
+post-tool-use/truncated-past-cap -> 200 headers=[] body=""
+  observer calls: [{z }]
+post-tool-use/truncated-past-cap/no-observer -> 200 headers=[] body=""
+post-tool-use/tool-after-cap -> 200 headers=[] body=""
+  observer calls: [{z Late}]
+post-tool-use/tool-after-cap/no-observer -> 200 headers=[] body=""
+post-tool-use/array-body -> 200 headers=[] body=""
+  observer calls: [{z }]
+post-tool-use/array-body/no-observer -> 200 headers=[] body=""
+drift cwd=<REPO> behind=0 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=0 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=0 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=1 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=1 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=19 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=19 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=20 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=20 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=21 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=21 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch (feature-x) is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<REPO> branch=main
+drift cwd=<REPO> behind=500 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<REPO> behind=500 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=0 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=0 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=1 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=1 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=19 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=19 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=20 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=20 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=21 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=21 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=<PLAIN> branch=main
+drift cwd=<PLAIN> behind=500 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=<PLAIN> behind=500 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=0 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=0 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=1 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=1 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git commit -m \"x\"" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git push origin b" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git -C /w commit -m x" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git -c a=b push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git add -A && git commit -m x && git push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git add .; git commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git --git-dir /g commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git --no-pager commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git status\ngit push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="cat x || git push" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[] body=""
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=19 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=19 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 20 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=20 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=20 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 21 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=21 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=21 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git commit -m \"x\"" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git push origin b" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git status" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git -C /w commit -m x" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git -c a=b push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git add -A && git commit -m x && git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git add .; git commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git log | head && git diff" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="echo git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="GIT_AUTHOR_NAME=x git commit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git --git-dir /g commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git --no-pager commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git\ncommit" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git status\ngit push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="cat x || git push" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="   " -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git -C" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="ls -la" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git --work-tree /w --namespace n commit" -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 500 commits behind origin/main (steering threshold: 20 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn saw cwd=/nonexistent/worktree branch=main
+drift cwd=/nonexistent/worktree behind=500 cmd="git commit-tree abc" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift cwd=/nonexistent/worktree behind=500 cmd="git pushall" -> 200 headers=[] body=""
+  checkFn saw cwd= branch=
+drift raw=""(len 0) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="not json"(len 8) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{}"(len 2) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\"}"(len 20) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\"}"(len 31) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\",\"tool_input\":null}"(len 49) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\",\"tool_input\":\"git commit\"}"(len 57) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\",\"tool_input\":{\"command\":7}}"(len 58) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\",\"tool_input\":{}}"(len 47) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Edit\",\"cwd\":\"/c\",\"tool_input\":{\"command\":\"git "(len 69) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"bash\",\"cwd\":\"/c\",\"tool_input\":{\"command\":\"git "(len 69) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\",\"tool_input\":{\"command\":\"git "(len 69) -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 9 commits behind origin/main (steering threshold: 5 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+  checkFn calls=1
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":7}"(len 28) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit\"}}"(len 58) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"\",\"tool_input\":{\"command\":\"git pu"(len 65) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="[]"(len 2) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"(len 70000) -> 200 headers=[] body=""
+  checkFn calls=0
+drift raw="{\"tool_name\":\"Bash\",\"cwd\":\"/c\",\"tool_input\":{\"command\":\"git "(len 70078) -> 200 headers=[] body=""
+  checkFn calls=0
+drift threshold=0 behind=10 -> 200 headers=[] body=""
+drift threshold=-3 behind=10 -> 200 headers=[] body=""
+drift threshold=1 behind=10 -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 10 commits behind origin/main (steering threshold: 1 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+drift threshold=9 behind=10 -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 10 commits behind origin/main (steering threshold: 9 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+drift threshold=10 behind=10 -> 200 headers=[Content-Type=application/json] body="{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Branch drift check: your current branch is 10 commits behind origin/main (steering threshold: 10 commits). Unchecked drift is what causes review to block later (see BUG-044) — main sync becomes a hard precondition of review once a branch falls 50+ commits behind, at which point your diff can end up dominated by unrelated upstream changes instead of your own work. Catching it now, while you're still working, is far cheaper: consider running `git fetch origin \\u0026\\u0026 git merge origin/main` (resolving any conflicts before continuing) so your diff stays focused on this item's actual changes.\"}}\n"
+drift check error -> 200 headers=[] body=""
+drift zero-value receiver nil fn -> 200 headers=[] body=""
+drift SetDriftCheckFn(nil) -> 200 headers=[] body=""
+ratelimit default-interval-same step 0 cwd=/a -> 200 len(body)>0=true
+ratelimit default-interval-same step 1 cwd=/a -> 200 len(body)>0=false
+ratelimit default-interval-same step 2 cwd=/b -> 200 len(body)>0=true
+ratelimit default-interval-same step 3 cwd=/a -> 200 len(body)>0=false
+ratelimit default-interval-same step 4 cwd=/b -> 200 len(body)>0=false
+  ratelimit default-interval-same checkFn calls=[/a /b]
+ratelimit negative-interval step 0 cwd=/a -> 200 len(body)>0=true
+ratelimit negative-interval step 1 cwd=/a -> 200 len(body)>0=false
+  ratelimit negative-interval checkFn calls=[/a]
+ratelimit long-interval step 0 cwd=/a -> 200 len(body)>0=true
+ratelimit long-interval step 1 cwd=/a -> 200 len(body)>0=false
+ratelimit long-interval step 2 cwd=/b -> 200 len(body)>0=true
+ratelimit long-interval step 3 cwd=/b -> 200 len(body)>0=false
+  ratelimit long-interval checkFn calls=[/a /b]
+ratelimit tiny-interval step 0 cwd=/a -> 200 len(body)>0=true
+ratelimit tiny-interval step 1 cwd=/a -> 200 len(body)>0=true
+  ratelimit tiny-interval checkFn calls=[/a /a]
+burst checkFn calls=1

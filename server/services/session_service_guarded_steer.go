@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -75,7 +76,7 @@ func (o SteerOutcome) String() string {
 // guardedSteerState is SessionService's single field for guarded steering.
 // The nil hooks are production behavior; tests inject fakes and a clock.
 type guardedSteerState struct {
-	guard      SessionNudgeGuard
+	guard      access.SessionNudgeGuard
 	ready      func(*instance.Instance) notReadyReason
 	verifyPane func(context.Context, *instance.Instance) error
 	write      func(context.Context, *instance.Instance, string) error
@@ -125,11 +126,11 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instanc
 	id := inst.GetStableID()
 	release, outcome := s.guardedSteer.guard.TryBegin(id, sig)
 	switch outcome {
-	case GuardBusy:
+	case access.GuardBusy:
 		return SteerGuardBusy, nil
-	case GuardDuplicate:
+	case access.GuardDuplicate:
 		return SteerDuplicate, nil
-	case GuardCoolingDown:
+	case access.GuardCoolingDown:
 		return SteerCoolingDown, nil
 	}
 	// A panic in ready/verify/write must not leave the session GuardBusy
@@ -145,11 +146,11 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instanc
 
 	switch s.instanceReadyForSteer(inst) {
 	case notReadyNoStatusSource:
-		s.guardedSteer.guard.abandon(id)
+		s.guardedSteer.guard.Abandon(id)
 		abandoned = true
 		return SteerNoStatusSource, nil
 	case notReadyBusy:
-		s.guardedSteer.guard.abandon(id)
+		s.guardedSteer.guard.Abandon(id)
 		abandoned = true
 		return SteerBusy, nil
 	}
@@ -171,7 +172,7 @@ func (s *SessionService) SteerInstanceGuarded(ctx context.Context, inst *instanc
 		if errors.Is(err, instance.ErrLeaseBusy) {
 			// Another writer holds the pane: nothing reached it, so no failure
 			// cooldown (same as the not-ready paths above).
-			s.guardedSteer.guard.abandon(id)
+			s.guardedSteer.guard.Abandon(id)
 			abandoned = true
 			return SteerBusy, nil
 		}

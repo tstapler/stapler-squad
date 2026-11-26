@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
 type muxLogLine struct {
@@ -87,7 +87,7 @@ func newMuxCloseHarness(t *testing.T, d UnaryDispatchers, idle time.Duration, no
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 	t.Cleanup(cancel)
-	h.srv = httptest.NewUnstartedServer(services.WithRequestRecord(services.ListenerLocal, false)(bridge))
+	h.srv = httptest.NewUnstartedServer(access.WithRequestRecord(access.ListenerLocal, false)(bridge))
 	h.srv.Config.BaseContext = func(net.Listener) context.Context { return ctx }
 	h.srv.Start()
 	t.Cleanup(h.srv.Close)
@@ -107,7 +107,7 @@ func TestMuxSocketCloseLog_should_LogIdleTimeout_When_PeerGoesSilent(t *testing.
 	assert.Equal(t, "idle_timeout", line.attrs["reason"])
 	assert.NotNil(t, line.attrs["err"])
 	assert.Equal(t, "mux-close-test/1", line.attrs["user_agent"])
-	assert.Equal(t, services.ListenerLocal, line.attrs["listener"])
+	assert.Equal(t, access.ListenerLocal, line.attrs["listener"])
 	assert.NotEmpty(t, line.attrs["remote_addr"])
 }
 
@@ -175,7 +175,7 @@ func TestMuxSocketCloseLog_should_LogShutdownAtInfo_When_ServerContextCancelled(
 func TestMuxSocketCloseLog_should_PreferServerTeardownCause_When_WriterFailedFirst(t *testing.T) {
 	t.Parallel()
 	b := NewTerminalMuxBridge(echoServe, 1)
-	s := newMuxSocket(b, nil, httptest.NewRequest(http.MethodGet, "/", nil), services.ListenerLocal)
+	s := newMuxSocket(b, nil, httptest.NewRequest(http.MethodGet, "/", nil), access.ListenerLocal)
 	s.failTeardown(muxCloseWriteError)
 	s.failTeardown(muxCloseControlOverflow) // first cause wins
 	got := s.classifyReadError(context.Background(), assert.AnError)
@@ -281,7 +281,7 @@ func TestMuxBridge_should_LogOnceNotPerPane_When_SocketDropsWithManyStreams(t *t
 func TestMuxSocketClose_should_ClassifyWriteFailuresDeterministically(t *testing.T) {
 	t.Parallel()
 	newSock := func() *muxSocket {
-		return newMuxSocket(NewTerminalMuxBridge(echoServe, 1), nil, httptest.NewRequest(http.MethodGet, "/", nil), services.ListenerLocal)
+		return newMuxSocket(NewTerminalMuxBridge(echoServe, 1), nil, httptest.NewRequest(http.MethodGet, "/", nil), access.ListenerLocal)
 	}
 	peerErrs := map[string]error{
 		"reset":       &net.OpError{Op: "write", Err: syscall.ECONNRESET},

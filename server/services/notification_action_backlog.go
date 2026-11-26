@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -63,13 +64,13 @@ type backlogDecider struct{ BacklogDeciderDeps }
 // NewBacklogDecider builds the BacklogDecider over the existing RPCs.
 func NewBacklogDecider(d BacklogDeciderDeps) BacklogDecider { return backlogDecider{d} }
 
-func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (ActionResult, error) {
+func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (questionkit.ActionResult, error) {
 	status, err := b.Status.ItemStatus(ctx, d.ItemID)
 	if errors.Is(err, errItemNotFound) {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_gone"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_gone"}, nil
 	}
 	if err != nil {
-		return ActionResult{}, err
+		return questionkit.ActionResult{}, err
 	}
 	switch d.Choice {
 	case choiceAccept:
@@ -79,17 +80,17 @@ func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (ActionRe
 	case choiceMerge:
 		return b.merge(ctx, d, status)
 	}
-	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "unknown choice"), nil
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "unknown choice"), nil
 }
 
 // transition moves the item to target when it is in one of from. An item
 // already at target was decided by an earlier call.
-func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, current, target string, from ...string) (ActionResult, error) {
+func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, current, target string, from ...string) (questionkit.ActionResult, error) {
 	if current == target {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, current), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, current), nil
 	}
 	if !stringIn(from, current) {
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
 	}
 	ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
 	_, err := b.Transitions.TransitionBacklogItemStatus(ctx, connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
@@ -98,47 +99,47 @@ func (b backlogDecider) transition(ctx context.Context, d BacklogDecision, curre
 	return mapTransitionError(err)
 }
 
-func mapTransitionError(err error) (ActionResult, error) {
+func mapTransitionError(err error) (questionkit.ActionResult, error) {
 	if err == nil {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	switch connect.CodeOf(err) {
 	case connect.CodeFailedPrecondition, connect.CodeInvalidArgument:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	case connect.CodeNotFound:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_gone"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_gone"}, nil
 	}
-	return ActionResult{}, err
+	return questionkit.ActionResult{}, err
 }
 
 // merge merges the pull request of the item's newest work session. It needs the
 // operator's inline confirm (design/ux.md 2.4) and is skipped once the item is done.
-func (b backlogDecider) merge(ctx context.Context, d BacklogDecision, status string) (ActionResult, error) {
+func (b backlogDecider) merge(ctx context.Context, d BacklogDecision, status string) (questionkit.ActionResult, error) {
 	switch status {
 	case backlogStatusDone, backlogStatusArchived:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, status), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, status), nil
 	case backlogStatusReview, backlogStatusPRPending:
 	default:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "item_moved"}, nil
 	}
 	if !d.Confirm {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "merge needs confirmation"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "merge needs confirmation"), nil
 	}
 	sessionID, err := b.Sessions.LatestWorkSession(ctx, d.ItemID)
 	if err != nil {
-		return ActionResult{}, err
+		return questionkit.ActionResult{}, err
 	}
 	if sessionID == "" {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "the item has no work session to merge"), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "the item has no work session to merge"), nil
 	}
 	resp, err := b.Merger.MergePR(ctx, connect.NewRequest(&sessionv1.MergePRRequest{Id: sessionID, MergeMethod: sessionv1.MergeMethod_MERGE_METHOD_MERGE}))
 	if err != nil {
 		return mapTransitionError(err)
 	}
 	if !resp.Msg.GetSuccess() {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, resp.Msg.GetMessage()), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, resp.Msg.GetMessage()), nil
 	}
-	return applied(), nil
+	return questionkit.Applied(), nil
 }
 
 func stringIn(set []string, v string) bool {

@@ -21,7 +21,10 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/piextension"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -78,25 +81,25 @@ type headlessPoolApprover interface {
 // It blocks the HTTP connection open while waiting for the user's decision,
 // then returns the decision in the hookSpecificOutput JSON format.
 type ApprovalHandler struct {
-	store               *ApprovalStore
+	store               *approvalkit.ApprovalStore
 	storage             *session.Storage
 	eventBus            *events.EventBus
-	queueChecker        ReviewQueueChecker          // optional: triggers immediate review queue check on new approval
-	classifier          classifier.Classifier       // optional: auto-classify before escalating to manual review
-	analyticsStore      *AnalyticsStore             // optional: record classification decisions
-	domainChecker       *DomainAgeChecker           // optional: escalate requests to newly-registered domains
-	notificationStamper approvalNotificationStamper // optional: stamps approval outcomes on notification records
-	autoApprovalLog     autoApprovalLogger          // optional: writes silent records for auto-approved/denied ops
-	timeout             time.Duration               // default 4m; overridable in tests
-	headlessPool        headlessPoolApprover        // optional: LLM approval for autonomous sessions
-	autonomousChecker   func(string) bool           // optional: returns true if sessionID is an autonomous session
-	pollInterval        time.Duration               // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
-	liveFinder          LiveInstanceFinder          // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
-	slackNotifier       *SlackNotifier              // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
-	dashboardBaseURLFn  func() string               // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
-	piHealthTracker     *PiExtensionHealthTracker   // optional: records pi approval-extension health pings (pi-support Epic 4.2)
-	autoApprovedGate    AutoApprovedGate            // optional: drops hidden-session auto-allow history rows (nil = append all)
-	questions           questionWiring              // optional: Reply's pending-question registry and hook-proof verification
+	queueChecker        ReviewQueueChecker                    // optional: triggers immediate review queue check on new approval
+	classifier          classifier.Classifier                 // optional: auto-classify before escalating to manual review
+	analyticsStore      *AnalyticsStore                       // optional: record classification decisions
+	domainChecker       *DomainAgeChecker                     // optional: escalate requests to newly-registered domains
+	notificationStamper approvalNotificationStamper           // optional: stamps approval outcomes on notification records
+	autoApprovalLog     autoApprovalLogger                    // optional: writes silent records for auto-approved/denied ops
+	timeout             time.Duration                         // default 4m; overridable in tests
+	headlessPool        headlessPoolApprover                  // optional: LLM approval for autonomous sessions
+	autonomousChecker   func(string) bool                     // optional: returns true if sessionID is an autonomous session
+	pollInterval        time.Duration                         // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
+	liveFinder          LiveInstanceFinder                    // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
+	slackNotifier       *SlackNotifier                        // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	dashboardBaseURLFn  func() string                         // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
+	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
+	autoApprovedGate    AutoApprovedGate                      // optional: drops hidden-session auto-allow history rows (nil = append all)
+	questions           questionWiring                        // optional: Reply's pending-question registry and hook-proof verification
 }
 
 // AutoApprovedGate decides whether an auto-approved history row is recorded for
@@ -112,7 +115,7 @@ func (h *ApprovalHandler) SetAutoApprovedGate(g AutoApprovedGate) {
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
-func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
+func NewApprovalHandler(store *approvalkit.ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
 	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: prpoller.DefaultPRStatusPollerConfig().PollInterval}
 }
 
@@ -177,7 +180,7 @@ func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
 
 // SetPiExtensionHealthTracker injects a PiExtensionHealthTracker so
 // HandlePiExtensionLoaded has somewhere to record pings (pi-support Epic 4.2).
-func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *PiExtensionHealthTracker) {
+func (h *ApprovalHandler) SetPiExtensionHealthTracker(t *piextension.PiExtensionHealthTracker) {
 	h.piHealthTracker = t
 }
 
@@ -372,7 +375,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				for k, v := range payload.ToolInput {
 					sanitizedInput[k] = v
 				}
-				sanitizedInput["command"] = redactedSecret
+				sanitizedInput["command"] = secretscan.RedactedSecret
 				sanitizedPayload := payload
 				sanitizedPayload.ToolInput = sanitizedInput
 				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
@@ -589,7 +592,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	if classified {
 		riskLevel = riskLevelString(escalation.RiskLevel)
 	}
-	approval := &PendingApproval{
+	approval := &approvalkit.PendingApproval{
 		ID:                 approvalID,
 		SessionID:          sessionID,
 		ClaudeSessionID:    payload.SessionID,
@@ -627,9 +630,9 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	log.ForSession(sessionID).Info("[ApprovalHandler] waiting for decision", "approval_id", approvalID, "tool", payload.ToolName)
 
 	// Block until user decides, server times out, or connection closes
-	var decision ApprovalDecision
+	var decision approvalkit.ApprovalDecision
 	select {
-	case decision = <-approval.decisionCh:
+	case decision = <-approval.Decisions():
 		// User responded via ResolveApproval RPC
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval resolved", "approval_id", approvalID, "behavior", decision.Behavior)
 	case <-time.After(h.approvalTimeout()):
@@ -730,13 +733,13 @@ func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
 	return sessionID
 }
 
-func approvalNotificationTitle(approval *PendingApproval) string {
-	return fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
+func approvalNotificationTitle(approval *approvalkit.PendingApproval) string {
+	return fmt.Sprintf("Permission Required: %s", questionkit.SanitizeNotificationText(approval.ToolName))
 }
 
 // approvalNotificationMetadata is the display metadata of an approval's
 // notification: the id to resolve it by and the fields the card shows.
-func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
+func approvalNotificationMetadata(approval *approvalkit.PendingApproval) map[string]string {
 	metadata := map[string]string{
 		"approval_id": approval.ID,
 		"tool_name":   approval.ToolName,
@@ -766,7 +769,7 @@ func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
 
 // broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
 // The approval ID is passed in the notification metadata so the UI can resolve it.
-func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approval *approvalkit.PendingApproval) {
 	metadata := approvalNotificationMetadata(approval)
 
 	title := approvalNotificationTitle(approval)
@@ -809,7 +812,7 @@ const maxNotificationMessageLen = 120
 // stamps question_id, question_shape and question_options; every other question stamps
 // question_shape and reply_unavailable so the card says "Answer in the terminal".
 func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload, qa QuestionAttribution) {
-	asked := ParseAskUserQuestion(payload.ToolInput)
+	asked := questionkit.ParseAskUserQuestion(payload.ToolInput)
 	message := "Check the terminal to respond."
 	switch {
 	case asked.Question != "":
@@ -821,7 +824,7 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 	}
 	message, _ = secretscan.RedactSecrets(message)
 	meta := h.registerQuestion(sessionID, qa, asked, payload.ToolUseID)
-	logQuestionRegistered(sessionID, string(asked.Shape), meta[metaReplyUnavailable])
+	logQuestionRegistered(sessionID, string(asked.Shape), meta[questionkit.MetaReplyUnavailable])
 
 	event := events.NewNotificationEvent(
 		sessionID,
@@ -859,18 +862,6 @@ func truncateEscalationReason(s string) string {
 	return truncateString(s, maxEscalationReasonLen)
 }
 
-// sanitizeNotificationText strips newlines and non-printable characters from
-// user- or model-controlled strings before embedding them in OS notification
-// titles, preventing newline injection into the OS notification tray.
-func sanitizeNotificationText(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r < 32 {
-			return ' '
-		}
-		return r
-	}, s)
-}
-
 // approvalDetail extracts the human-meaningful part of a tool call — the full command
 // (including every sub-command of a compound &&/;/pipe chain, since this is the raw
 // string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
@@ -887,7 +878,7 @@ func approvalDetail(toolInput map[string]interface{}) string {
 }
 
 // buildApprovalMessage builds the human-readable message for an approval notification.
-func buildApprovalMessage(approval *PendingApproval) string {
+func buildApprovalMessage(approval *approvalkit.PendingApproval) string {
 	if detail := approvalDetail(approval.ToolInput); detail != "" {
 		return detail
 	}
@@ -986,7 +977,7 @@ func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message
 
 // StartExpirationCleanup starts a background goroutine that periodically removes expired approvals.
 // The goroutine stops when ctx is canceled.
-func StartExpirationCleanup(ctx context.Context, store *ApprovalStore, wg *sync.WaitGroup) {
+func StartExpirationCleanup(ctx context.Context, store *approvalkit.ApprovalStore, wg *sync.WaitGroup) {
 	wg.Go(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()

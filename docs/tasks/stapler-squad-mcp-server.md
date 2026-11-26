@@ -257,7 +257,7 @@ Story 2 depends on Story 1 because it requires the MCP server scaffolding, the `
 
 **Files (max 5)**:
 - `server/services/hook_injector.go` — new file: `InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error`; replaces and supersedes the narrow `InjectHookConfig` in `approval_handler.go`; `HookName` is a typed string enum
-- `server/services/hook_receivers.go` — new file: HTTP handlers for `/api/hooks/stop`, `/api/hooks/pre-tool-use`, `/api/hooks/post-tool-use`, `/api/hooks/prompt-submit`
+- `server/services/hookrecv/hook_receivers.go` — new file: HTTP handlers for `/api/hooks/stop`, `/api/hooks/pre-tool-use`, `/api/hooks/post-tool-use`, `/api/hooks/prompt-submit`
 - `server/server.go` — register new hook receiver routes
 
 **INVEST**:
@@ -657,7 +657,7 @@ server/mcp/
 server/services/
   mcp_injector.go    — InjectMCPConfig, RemoveMCPConfig
   hook_injector.go   — InjectHooksConfig, HookName enum; supersedes InjectHookConfig in approval_handler.go
-  hook_receivers.go  — HTTP handlers for /api/hooks/stop, /pre-tool-use, /post-tool-use, /prompt-submit
+  hookrecv/hook_receivers.go  — HTTP handlers for /api/hooks/stop, /pre-tool-use, /post-tool-use, /prompt-submit
 ```
 
 Modified files:

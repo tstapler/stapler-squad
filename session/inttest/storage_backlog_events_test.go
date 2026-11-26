@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -24,7 +24,7 @@ import (
 // session/backlogstore (Stories 2.2.3, 2.2.4, 2.2.5). It lives in the
 // external session_test package for the same reason
 // ent_repository_backlog_events_test.go does: these tests need to wire the
-// real server/services.BacklogItemEventPublisher adapter, which imports
+// real server/services/backlogmisc.BacklogItemEventPublisher adapter, which imports
 // session, so an internal `package session` test file cannot import it
 // without an import-cycle build error.
 
@@ -49,7 +49,7 @@ func TestCreateItemSession_should_publishSessionAttachedWithSessionID_When_Sessi
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -85,7 +85,7 @@ func TestUpdateItemSessionSessionUUID_should_notPublish_When_ItemSessionIDDoesNo
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -113,7 +113,7 @@ func TestDequeueSweep_should_publishTwoSessionAttachedEvents_When_CreateThenUpda
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -162,7 +162,7 @@ func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSa
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -210,7 +210,7 @@ func TestSaveReviewVerdict_should_notPublish_When_UnderlyingWriteFails(t *testin
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -241,7 +241,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -316,7 +316,7 @@ func TestUpdateItemSessionTriageResult_should_publishTriageProgressUpdated_When_
 	ctx := context.Background()
 
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -374,7 +374,7 @@ func TestUpdateItemSessionTriageResult_should_stillSucceed_When_OwningItemLookup
 
 	ctx := context.Background()
 	bus := pkgevents.NewEventBus(10)
-	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
+	repo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 

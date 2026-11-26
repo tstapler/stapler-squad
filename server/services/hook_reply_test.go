@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/hookipc"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -172,19 +173,19 @@ func TestHookReply_PreAnswer_ShouldRefuseASecondAnswer(t *testing.T) {
 func TestHookReply_ShouldStayClosedUnderProductionFlags_WhileS1IsNotRecorded(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
-	for _, sc := range []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply} {
-		require.NoError(t, cfg.SetFeatureFlagScope(askUserQuestionStructuredFlagName, sc, true))
+	for _, sc := range []string{flagsvc.ScopeStageRender, flagsvc.ScopeStageAnswer, flagsvc.ScopeStageHookReply} {
+		require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.AskUserQuestionStructuredFlagName, sc, true))
 	}
-	require.NoError(t, cfg.SetFeatureFlagScope(notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion, true))
+	require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopePrefixAction+flagsvc.ActionKindAnswerQuestion, true))
 	e := newHookReplyEnv(t)
-	e.resolver.flags = configActionFlags{ev: compiledFlagEvidence, fr: flagReader{testFlagRegistry()}}
+	e.resolver.flags = configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis")
 	_, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
 	require.NoError(t, err)
 
 	out := e.resolver.Reply(context.Background(), "s1", askToolInput("Which cache?", "Redis"))
 
-	if spikeS1HookReplyPassed {
+	if flagsvc.SpikeS1HookReplyPassed {
 		require.NotNil(t, out, "S1 is recorded and every stage is open")
 		return
 	}
@@ -193,17 +194,17 @@ func TestHookReply_ShouldStayClosedUnderProductionFlags_WhileS1IsNotRecorded(t *
 
 // HookReply_* from the plan: the end-to-end rung through the real flag chain.
 func TestHookReply_ShouldServeThroughTheRealFlagChain_WhenS1IsRecorded(t *testing.T) {
-	if !spikeS1HookReplyPassed {
+	if !flagsvc.SpikeS1HookReplyPassed {
 		t.Skip(skipUntilS1Reviewed)
 	}
 	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
-	for _, sc := range []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply} {
-		require.NoError(t, cfg.SetFeatureFlagScope(askUserQuestionStructuredFlagName, sc, true))
+	for _, sc := range []string{flagsvc.ScopeStageRender, flagsvc.ScopeStageAnswer, flagsvc.ScopeStageHookReply} {
+		require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.AskUserQuestionStructuredFlagName, sc, true))
 	}
-	require.NoError(t, cfg.SetFeatureFlagScope(notificationInlineActionsFlagName, scopePrefixAction+actionKindAnswerQuestion, true))
+	require.NoError(t, cfg.SetFeatureFlagScope(flagsvc.NotificationInlineActionsFlagName, flagsvc.ScopePrefixAction+flagsvc.ActionKindAnswerQuestion, true))
 	e := newHookReplyEnv(t)
-	e.resolver.flags = configActionFlags{ev: compiledFlagEvidence, fr: flagReader{testFlagRegistry()}}
+	e.resolver.flags = configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: flagsvc.FlagReader{Reg: testFlagRegistry()}}
 	id := e.openRow(t, "s1", "Which cache?", false, "Redis")
 	_, err := e.resolver.PreAnswer(context.Background(), id, "Redis")
 	require.NoError(t, err)

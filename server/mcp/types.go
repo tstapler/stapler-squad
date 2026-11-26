@@ -115,6 +115,10 @@ type GetLinkedItemResult struct {
 	ItemStatus string     `json:"item_status,omitempty"`
 	Role       string     `json:"role,omitempty"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
+	// LastProgressAt and HeartbeatAgeSeconds report when the server last observed
+	// progress (commit, progress note or live output); omitted until first observed.
+	LastProgressAt      *time.Time `json:"last_progress_at,omitempty"`
+	HeartbeatAgeSeconds *int64     `json:"heartbeat_age_seconds,omitempty"`
 }
 
 // Error code constants — machine-readable identifiers for all tool failures.

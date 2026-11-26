@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
+import { titleFirstLine } from "@/lib/pane/paneUtils";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useTrayDismissal } from "@/lib/hooks/useTrayDismissal";
 import {
@@ -68,7 +69,7 @@ export function SessionPickerDialog({ sessions, openSessionIds, onPick, onClose 
                 <li key={s.id} className={sheetItem}>
                   <button type="button" className={sheetRow} onClick={() => onPick(s.id)}>
                     {/* analytics-exempt */}
-                    <span className={sheetRowTitle}>{s.title.split("\n")[0].trim() || s.title}</span>
+                    <span className={sheetRowTitle}>{titleFirstLine(s.title)}</span>
                     {(meta || open) && (
                       <span className={sheetRowMeta}>{[meta, open ? "open in another pane — will move here" : ""].filter(Boolean).join(" · ")}</span>
                     )}

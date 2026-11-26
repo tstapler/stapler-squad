@@ -13,6 +13,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
@@ -30,8 +31,8 @@ func TestTCCEnrichmentRPC_ConsentAndUnknownRoot(t *testing.T) {
 	require.True(t, status.Msg.Enabled)
 	require.Len(t, status.Msg.Roots, 1)
 	require.False(t, status.Msg.Roots[0].AppConsented)
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	ctx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	ctx := StampedContext(t, &cfg, access.ListenerLocal, false, "localhost:8543", nil)
 	_, err = svc.ContinueTCCEnrichment(ctx, connect.NewRequest(&sessionv1.ContinueTCCEnrichmentRequest{RootId: "/arbitrary"}))
 	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 	_, err = svc.ContinueTCCEnrichment(context.Background(), connect.NewRequest(&sessionv1.ContinueTCCEnrichmentRequest{RootId: status.Msg.Roots[0].Id}))
@@ -73,8 +74,8 @@ func TestTCCEnrichmentRPC_UnparksOnlyConsentedRoots(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, id)
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	writeCtx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	writeCtx := StampedContext(t, &cfg, access.ListenerLocal, false, "localhost:8543", nil)
 	_, err := svc.ContinueTCCEnrichment(writeCtx, connect.NewRequest(&sessionv1.ContinueTCCEnrichmentRequest{RootId: id}))
 	require.NoError(t, err)
 	waitProbe := func() string {
@@ -184,8 +185,8 @@ func TestTCCEnrichmentRPC_EPERMIsStickyDeniedAndRecheckClearsIt(t *testing.T) {
 	require.Equal(t, "denied", f.root(t).Outcome)
 
 	f.err.Store(boxedErr{nil}) // user granted access
-	cfg := verdictServiceConfig("localhost:8543", nil)
-	ctx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	cfg := VerdictServiceConfig("localhost:8543", nil)
+	ctx := StampedContext(t, &cfg, access.ListenerLocal, false, "localhost:8543", nil)
 	_, err := f.svc.ContinueTCCEnrichment(ctx, connect.NewRequest(&sessionv1.ContinueTCCEnrichmentRequest{RootId: f.root(t).Id}))
 	require.NoError(t, err)
 	f.waitProbe(t)

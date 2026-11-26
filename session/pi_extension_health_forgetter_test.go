@@ -10,7 +10,7 @@ import (
 
 // TestDestroy_CallsPiExtensionHealthForgetter_ForPiSession covers the
 // pi-support Epic 4.2 MAJOR 1 fix: destroying a pi session must call the
-// wired forgetter (server/services.PiExtensionHealthTracker.Forget in
+// wired forgetter (server/services/piextension.PiExtensionHealthTracker.Forget in
 // production) with that session's stable ID, so its tracker entry doesn't
 // leak for the life of the process.
 func TestDestroy_CallsPiExtensionHealthForgetter_ForPiSession(t *testing.T) {

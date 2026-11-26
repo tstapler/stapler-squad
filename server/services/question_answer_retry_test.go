@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -31,7 +32,7 @@ func (e *routerEnv) answeredThenShowing(title string, state domain.DeliveryState
 	return inst, pm, qid
 }
 
-func (e *routerEnv) retryAnyway(inst *instance.Instance, qid string) ActionResult {
+func (e *routerEnv) retryAnyway(inst *instance.Instance, qid string) questionkit.ActionResult {
 	e.t.Helper()
 	res, err := e.router.ReplyToQuestion(e.localCtx(), QuestionAnswer{
 		SessionID: inst.UUID, QuestionID: qid, OptionLabel: replyColorLabel, ReplyID: "r-" + uuid.NewString(), Confirm: true,

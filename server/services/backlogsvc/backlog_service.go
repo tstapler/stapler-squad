@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -152,6 +153,10 @@ type BacklogService struct {
 	// live feature-flag read (tests only).
 	claimWiring    atomic.Pointer[claimWiring]
 	claimDedupFlag func() bool
+	// epicIntegrationFlag overrides the epic_integration_child_enabled read; tests only.
+	epicIntegrationFlag func() bool
+	// integrationFailMu serializes OnIntegrationChildFailed (rare; one global lock is enough).
+	integrationFailMu sync.Mutex
 
 	// spawnInFlight is a per-backlog-item "at most one work-session spawn in
 	// flight" set, keyed by item ID, storing struct{} — the same LoadOrStore/
@@ -573,7 +578,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		sourceBackend:        storage,
 		sessionCreator:       creator,
 		cfg:                  cfg,
-		flags:                services.FlagRegistry(),
+		flags:                flagsvc.FlagRegistry(),
 		engine:               engine,
 		pipelineEngine:       pipelineEngine,
 		pipelineModeRepo:     pipelineModeRepo,
@@ -957,9 +962,11 @@ type triageResultJSON struct {
 // BuildStageConfigSnapshotFallback has nothing to reconstruct from.
 func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:       item.ID,
-		PublicId: item.PublicIDRaw,
-		Title:    item.Title,
+		Id:                 item.ID,
+		PublicId:           item.PublicIDRaw,
+		IsIntegrationChild: item.IsIntegrationChild,
+		IntegrationChildId: item.IntegrationChildID,
+		Title:              item.Title,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:   int32(item.Priority),
 		Status:     string(item.Status),
@@ -1053,6 +1060,8 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.Workflow
 	p := &sessionv1.BacklogItem{
 		WorkflowSuggestions: workflowSuggestionsToProto(backlogstore.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
 		Id:                  item.ID,
+		IsIntegrationChild:  item.IsIntegrationChild,
+		IntegrationChildId:  item.IntegrationChildID,
 		Title:               item.Title,
 		Description:         item.Description,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))

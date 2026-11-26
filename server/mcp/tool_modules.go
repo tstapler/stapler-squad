@@ -214,6 +214,6 @@ func newGitHubModule(prCache UserPRSource, store session.InstanceStore, svc Sess
 		return nil
 	}
 	return toolModuleFunc(func(s *mcpserver.MCPServer) {
-		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc, createLimiter: createLimiter})
+		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store, svc: svc, createLimiter: createLimiter, publicURL: publicURLFromEnv()})
 	})
 }

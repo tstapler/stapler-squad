@@ -9,7 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -47,7 +47,7 @@ func sumWithReason(t *testing.T, name, reason string) int64 {
 
 func TestUnaryWsBridge_should_RecordCallDuration(t *testing.T) {
 	before := histogramCount(t, "ws_unary_call_duration")
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	sendListFiles(t, c, 1, "timed")
 	require.Equal(t, "ok:timed", decodeListFiles(t, readFrame(t, c)).BasePath)
@@ -95,7 +95,7 @@ func TestUnaryWsBridge_should_CountConnectionOpenAndPeerClose(t *testing.T) {
 
 func TestUnaryWsBridge_should_RecordPingRTT(t *testing.T) {
 	before := histogramCount(t, "ws_unary_ping_rtt")
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, time.Second))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, time.Second))
 	c := h.connect(nil)
 	go func() { // the client's default ping handler answers with a pong while it reads
 		for {
@@ -109,7 +109,7 @@ func TestUnaryWsBridge_should_RecordPingRTT(t *testing.T) {
 
 func TestUnaryWsBridge_should_IgnoreForgedPongPayload(t *testing.T) {
 	before := histogramCount(t, "ws_unary_ping_rtt")
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryKeepalive(time.Hour, time.Hour)) // the server never pings
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryKeepalive(time.Hour, time.Hour)) // the server never pings
 	c := h.connect(nil)
 	for _, payload := range []string{"1", "-5", "99999999999999999999", "not-a-number"} {
 		require.NoError(t, c.WriteControl(websocket.PongMessage, []byte(payload), time.Now().Add(time.Second)))
@@ -121,7 +121,7 @@ func TestUnaryWsBridge_should_IgnoreForgedPongPayload(t *testing.T) {
 
 func TestUnaryWsBridge_should_LabelProtocolClose(t *testing.T) {
 	before := sumWithReason(t, "ws_unary_connections_closed_total", "protocol")
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	require.NoError(t, c.WriteMessage(websocket.TextMessage, []byte("hi")))
 	require.NoError(t, c.SetReadDeadline(time.Now().Add(readWait)))
@@ -134,7 +134,7 @@ func TestUnaryWsBridge_should_LabelProtocolClose(t *testing.T) {
 
 func TestUnaryWsBridge_should_LabelReadErrorClose(t *testing.T) {
 	before := sumWithReason(t, "ws_unary_connections_closed_total", "read_error")
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	c := h.connect(nil)
 	_ = c.UnderlyingConn().Close() // abrupt TCP close: no close frame
 	assert.Eventually(t, func() bool {
@@ -144,7 +144,7 @@ func TestUnaryWsBridge_should_LabelReadErrorClose(t *testing.T) {
 
 func TestUnaryWsBridge_should_LabelPongTimeoutAsReadError(t *testing.T) {
 	before := sumWithReason(t, "ws_unary_connections_closed_total", "read_error")
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, 40*time.Millisecond))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryKeepalive(5*time.Millisecond, 40*time.Millisecond))
 	c := h.connect(nil)
 	c.SetPingHandler(func(string) error { return nil }) // never answer pings
 	go func() {
@@ -161,7 +161,7 @@ func TestUnaryWsBridge_should_LabelPongTimeoutAsReadError(t *testing.T) {
 
 func TestUnaryWsBridge_should_LabelServerContextEndAsShutdown(t *testing.T) {
 	before := sumWithReason(t, "ws_unary_connections_closed_total", "shutdown")
-	h := newBridgeHarness(t, services.ListenerLocal)
+	h := newBridgeHarness(t, access.ListenerLocal)
 	_ = h.connect(nil)
 	h.cancel()
 	assert.Eventually(t, func() bool {
@@ -171,7 +171,7 @@ func TestUnaryWsBridge_should_LabelServerContextEndAsShutdown(t *testing.T) {
 
 func TestUnaryWsBridge_should_RecordEachPingOnlyOnce_When_PongIsReplayed(t *testing.T) {
 	before := histogramCount(t, "ws_unary_ping_rtt")
-	h := newBridgeHarness(t, services.ListenerLocal, WithUnaryKeepalive(100*time.Millisecond, time.Hour))
+	h := newBridgeHarness(t, access.ListenerLocal, WithUnaryKeepalive(100*time.Millisecond, time.Hour))
 	c := h.connect(nil)
 	var answered atomic.Bool
 	c.SetPingHandler(func(payload string) error {

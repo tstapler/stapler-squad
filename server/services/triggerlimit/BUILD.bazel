@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "triggerlimit",
+    srcs = ["trigger_rate_limiter.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/triggerlimit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_x_time//rate",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":triggerlimit",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "triggerlimit_test",
+    srcs = [
+        "trigger_rate_limiter_golden_test.go",
+        "trigger_rate_limiter_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":triggerlimit"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_time//rate",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

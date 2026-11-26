@@ -32,7 +32,7 @@ const (
 	// the generic hooks a manually-created session opts into. Scoped strictly to
 	// autonomous backlog work sessions — see spawnSessionAfterGates in
 	// server/services/backlog_service_triage.go, the only call site that injects
-	// it, and hook_receiver_drift.go for the receiver. Fires the same branch-drift
+	// it, and hookrecv/hook_receiver_drift.go for the receiver. Fires the same branch-drift
 	// check that gates review (BUG-044) right after every git commit/push, so an
 	// autonomous session notices and can self-correct immediately instead of only
 	// learning about drift from a review verdict hours or days later.

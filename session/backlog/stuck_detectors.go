@@ -38,6 +38,7 @@ func (l *BacklogLifecycleListener) defaultStuckDetectors() []StuckDetector {
 		// sees fresh data rather than lagging a full tick behind (BUG-047).
 		funcStuckDetector{"work_commit_refresh", func(ctx context.Context, _ *session.EntRepository) {
 			l.refreshWorkSessionGitActivity(ctx)
+			l.refreshWorkSessionHeartbeat(ctx)
 		}},
 		// Flag in_progress work sessions that have gone quiet for too long. Detection +
 		// notification only — a slow-but-alive agent should not be force-stopped.

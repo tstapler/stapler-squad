@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -288,7 +289,7 @@ func (s *SessionService) GetSession(
 // workspacepeers.Lister.BlockForPath, shared with BacklogService's initialPromptFor so the
 // two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return WorkspacePeersBlockFor(ctx, s.concStorage, repoPath)
+	return flagsvc.WorkspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // ─── Batch Session Creation ───────────────────────────────────────────────────

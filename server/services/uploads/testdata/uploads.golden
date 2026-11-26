@@ -1,0 +1,1249 @@
+== session/method/GET
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(0)
+
+== session/method/PUT
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(0)
+
+== session/method/DELETE
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(0)
+
+== session/method/HEAD
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(0)
+
+== session/not-multipart
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="bad multipart form\n"
+  tree(0)
+
+== session/no-content-type
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="bad multipart form\n"
+  tree(0)
+
+== session/missing-session-id
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="session_id is required\n"
+  tree(0)
+
+== session/missing-file
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file field required: http: no such file\n"
+  tree(0)
+
+== session/empty-file
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="uploaded file is empty\n"
+  tree(0)
+
+== session/unknown-session
+  status=404 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="session not found\n"
+  tree(0)
+
+== session/by-title
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-a.png\",\"filename\":\"<TS>-<RND>-a.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.png 600 512 dd275b72e103
+== session/no-path
+  status=422 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="session has no working directory\n"
+  tree(0)
+
+== session/path-missing-on-disk
+  status=422 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="session working directory is not accessible\n"
+  tree(0)
+
+== session/uploads-is-file
+  status=500 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="failed to create uploads directory\n"
+  tree(1)
+  file /uploads 600 1 2d711642b726
+== session/load-error
+  status=500 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="internal error\n"
+  tree(0)
+
+== session/filename/0
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-photo.jpg\",\"filename\":\"<TS>-<RND>-photo.jpg\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-photo.jpg 600 512 6c452774e761
+== session/filename/1
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-passwd\",\"filename\":\"<TS>-<RND>-passwd\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-passwd 600 512 6c452774e761
+== session/filename/2
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-x.png\",\"filename\":\"<TS>-<RND>-x.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-x.png 600 512 6c452774e761
+== session/filename/3
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-a_b.png\",\"filename\":\"<TS>-<RND>-a_b.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a_b.png 600 512 6c452774e761
+== session/filename/4
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-nul_x00.png\",\"filename\":\"<TS>-<RND>-nul_x00.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-nul_x00.png 600 512 6c452774e761
+== session/filename/5
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file field required: http: no such file\n"
+  tree(0)
+
+== session/filename/6
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-upload\",\"filename\":\"<TS>-<RND>-upload\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-upload 600 512 6c452774e761
+== session/filename/7
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-upload\",\"filename\":\"<TS>-<RND>-upload\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-upload 600 512 6c452774e761
+== session/filename/8
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-dir\",\"filename\":\"<TS>-<RND>-dir\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-dir 600 512 6c452774e761
+== session/filename/9
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg\",\"filename\":\"<TS>-<RND>-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg 600 512 6c452774e761
+== session/filename/10
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-a.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"filename\":\"<TS>-<RND>-a.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 600 512 6c452774e761
+== session/filename/11
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-éééééééééééééééééééééééééééééééééééééééééééééééé\\ufffd.go\",\"filename\":\"<TS>-<RND>-éééééééééééééééééééééééééééééééééééééééééééééééé\\ufffd.go\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-éééééééééééééééééééééééééééééééééééééééééééééééé�.go 600 512 6c452774e761
+== session/filename/12
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-evil.php.png\",\"filename\":\"<TS>-<RND>-evil.php.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-evil.php.png 600 512 6c452774e761
+== session/filename/13
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-.hidden\",\"filename\":\"<TS>-<RND>-.hidden\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-.hidden 600 512 6c452774e761
+== session/filename/14
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-no-ext\",\"filename\":\"<TS>-<RND>-no-ext\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-no-ext 600 512 6c452774e761
+== session/filename/15
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-UPPER.PNG\",\"filename\":\"<TS>-<RND>-UPPER.PNG\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-UPPER.PNG 600 512 6c452774e761
+== session/filename/16
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-sp ace.png\",\"filename\":\"<TS>-<RND>-sp ace.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-sp ace.png 600 512 6c452774e761
+== session/filename/17
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-x_ny.png\",\"filename\":\"<TS>-<RND>-x_ny.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-x_ny.png 600 512 6c452774e761
+== session/content/jpeg
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 512 6c452774e761
+== session/content/png
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 512 dd275b72e103
+== session/content/gif
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 512 e3bfb00a8284
+== session/content/webp
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 512 ff08349508ad
+== session/content/text
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 15 6676033e8e12
+== session/content/one-byte
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 1 4bf5122f3445
+== session/content/512
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 512 076a27c79e5a
+== session/content/513
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 513 8ae7498b01f4
+== session/content/exact-10MB
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 10485760 448c5a66d3f3
+== session/content/10MB+1
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-f.bin\",\"filename\":\"<TS>-<RND>-f.bin\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-f.bin 600 10485761 00af83c095c7
+== session/content/10MB+100k
+  status=413 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file too large (max 10 MB)\n"
+  tree(0)
+
+== session/finder-hit
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<EXTRA>/uploads/<TS>-<RND>-a.png\",\"filename\":\"<TS>-<RND>-a.png\"}\n"
+  tree(0)
+
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.png 600 512 dd275b72e103
+== session/finder-miss
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-a.png\",\"filename\":\"<TS>-<RND>-a.png\"}\n"
+  tree(2)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.png 600 512 dd275b72e103
+== session/repeat/0
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-same.png\",\"filename\":\"<TS>-<RND>-same.png\"}\n"
+  tree(3)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.png 600 512 dd275b72e103
+  file /uploads/<TS>-<RND>-same.png 600 512 dd275b72e103
+== session/repeat/1
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-same.png\",\"filename\":\"<TS>-<RND>-same.png\"}\n"
+  tree(4)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.png 600 512 dd275b72e103
+  file /uploads/<TS>-<RND>-same.png 600 512 dd275b72e103
+  file /uploads/<TS>-<RND>-same.png 600 513 ab652c6f6bc6
+== session/repeat/2
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/uploads/<TS>-<RND>-same.png\",\"filename\":\"<TS>-<RND>-same.png\"}\n"
+  tree(5)
+  dir  /uploads 750
+  file /uploads/<TS>-<RND>-a.png 600 512 dd275b72e103
+  file /uploads/<TS>-<RND>-same.png 600 512 dd275b72e103
+  file /uploads/<TS>-<RND>-same.png 600 513 ab652c6f6bc6
+  file /uploads/<TS>-<RND>-same.png 600 514 9a9a817dbf72
+== backlog/method/GET
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /att 750
+== backlog/method/PUT
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /att 750
+== backlog/method/DELETE
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /att 750
+== backlog/not-multipart
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="bad multipart form\n"
+  tree(1)
+  dir  /att 750
+== backlog/missing-file
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file field required: http: no such file\n"
+  tree(1)
+  dir  /att 750
+== backlog/empty-file
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="uploaded file is empty\n"
+  tree(1)
+  dir  /att 750
+== backlog/dir-removed
+  status=500 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="failed to save file\n"
+  tree(0)
+
+== backlog/content/png
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.png\",\"filename\":\"<TS>-<RND>-evil.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.png 600 512 dd275b72e103
+== backlog/content/jpeg
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.jpg\",\"filename\":\"<TS>-<RND>-evil.jpg\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.jpg 600 512 6c452774e761
+== backlog/content/gif
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.gif\",\"filename\":\"<TS>-<RND>-evil.gif\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.gif 600 512 e3bfb00a8284
+== backlog/content/webp
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.webp\",\"filename\":\"<TS>-<RND>-evil.webp\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.webp 600 512 ff08349508ad
+== backlog/content/svg
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: text/plain; charset=utf-8 (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== backlog/content/html
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: text/html; charset=utf-8 (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== backlog/content/text
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: text/plain; charset=utf-8 (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== backlog/content/pdf
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: application/pdf (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== backlog/content/bmp
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: image/bmp (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== backlog/content/php-in-png-name
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: text/plain; charset=utf-8 (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== backlog/content/png-header-then-html
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.png\",\"filename\":\"<TS>-<RND>-evil.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.png 600 530 6873c7c5647e
+== backlog/content/exact-10MB
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.png\",\"filename\":\"<TS>-<RND>-evil.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.png 600 10485760 8d7f4ef1583d
+== backlog/content/10MB+1
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.png\",\"filename\":\"<TS>-<RND>-evil.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.png 600 10485761 a0c05396445f
+== backlog/content/10MB+100k
+  status=413 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file too large (max 10 MB)\n"
+  tree(1)
+  dir  /att 750
+== backlog/filename/0
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-photo.png\",\"filename\":\"<TS>-<RND>-photo.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-photo.png 600 512 dd275b72e103
+== backlog/filename/1
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-passwd.png\",\"filename\":\"<TS>-<RND>-passwd.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-passwd.png 600 512 dd275b72e103
+== backlog/filename/2
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-x.png\",\"filename\":\"<TS>-<RND>-x.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-x.png 600 512 dd275b72e103
+== backlog/filename/3
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-a_b.png\",\"filename\":\"<TS>-<RND>-a_b.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-a_b.png 600 512 dd275b72e103
+== backlog/filename/4
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-nul_x00.png\",\"filename\":\"<TS>-<RND>-nul_x00.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-nul_x00.png 600 512 dd275b72e103
+== backlog/filename/5
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file field required: http: no such file\n"
+  tree(1)
+  dir  /att 750
+== backlog/filename/6
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-upload.png\",\"filename\":\"<TS>-<RND>-upload.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-upload.png 600 512 dd275b72e103
+== backlog/filename/7
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-upload.png\",\"filename\":\"<TS>-<RND>-upload.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-upload.png 600 512 dd275b72e103
+== backlog/filename/8
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-dir.png\",\"filename\":\"<TS>-<RND>-dir.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-dir.png 600 512 dd275b72e103
+== backlog/filename/9
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png\",\"filename\":\"<TS>-<RND>-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png 600 512 dd275b72e103
+== backlog/filename/10
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-a.png\",\"filename\":\"<TS>-<RND>-a.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-a.png 600 512 dd275b72e103
+== backlog/filename/11
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-éééééééééééééééééééééééééééééééééééééééééééééééé\\ufffd.png\",\"filename\":\"<TS>-<RND>-éééééééééééééééééééééééééééééééééééééééééééééééé\\ufffd.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-éééééééééééééééééééééééééééééééééééééééééééééééé�.png 600 512 dd275b72e103
+== backlog/filename/12
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-evil.php.png\",\"filename\":\"<TS>-<RND>-evil.php.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-evil.php.png 600 512 dd275b72e103
+== backlog/filename/13
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-.png\",\"filename\":\"<TS>-<RND>-.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-.png 600 512 dd275b72e103
+== backlog/filename/14
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-no-ext.png\",\"filename\":\"<TS>-<RND>-no-ext.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-no-ext.png 600 512 dd275b72e103
+== backlog/filename/15
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-UPPER.png\",\"filename\":\"<TS>-<RND>-UPPER.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-UPPER.png 600 512 dd275b72e103
+== backlog/filename/16
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-sp ace.png\",\"filename\":\"<TS>-<RND>-sp ace.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-sp ace.png 600 512 dd275b72e103
+== backlog/filename/17
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-x_ny.png\",\"filename\":\"<TS>-<RND>-x_ny.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-x_ny.png 600 512 dd275b72e103
+== workflow/png
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/att/<TS>-<RND>-plan.png\",\"filename\":\"<TS>-<RND>-plan.png\"}\n"
+  tree(2)
+  dir  /att 750
+  file /att/<TS>-<RND>-plan.png 600 512 dd275b72e103
+== workflow/svg
+  status=415 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="unsupported file type: text/plain; charset=utf-8 (only PNG, JPEG, GIF, and WebP images are allowed)\n"
+  tree(1)
+  dir  /att 750
+== workflow/get
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /att 750
+== ctor/uncreatable
+  err="cannot create attachment dir \"<DIR>/f/sub\": mkdir <DIR>/f: not a directory"
+  err="cannot create attachment dir \"<DIR>/f/sub\": mkdir <DIR>/f: not a directory"
+== file/method/GET
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /paste 700
+== file/method/PUT
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /paste 700
+== file/method/DELETE
+  status=405 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="method not allowed\n"
+  tree(1)
+  dir  /paste 700
+== file/invalid-json
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="invalid JSON body\n"
+  tree(1)
+  dir  /paste 700
+== file/empty-body
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="invalid JSON body\n"
+  tree(1)
+  dir  /paste 700
+== file/json-array
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="invalid JSON body\n"
+  tree(1)
+  dir  /paste 700
+== file/no-data
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="data is required\n"
+  tree(1)
+  dir  /paste 700
+== file/empty-data
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="data is required\n"
+  tree(1)
+  dir  /paste 700
+== file/bad-base64
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="invalid base64 data\n"
+  tree(1)
+  dir  /paste 700
+== file/newline-data
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file data is empty\n"
+  tree(1)
+  dir  /paste 700
+== file/unpadded-base64
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="invalid base64 data\n"
+  tree(1)
+  dir  /paste 700
+== file/trailing-json
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 5 2cf24dba5fb0
+== file/size/exact-20MB
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 20971520 fc19374aafc9
+== file/size/20MB+1
+  status=413 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="file exceeds 20 MB limit\n"
+  tree(1)
+  dir  /paste 700
+== file/size/body-over-reader-cap
+  status=400 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="invalid JSON body\n"
+  tree(1)
+  dir  /paste 700
+== file/mime/0
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/mime/1
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/mime/2
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/mime/3
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/mime/4
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/mime/5
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.jpg\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.jpg 600 7 239f59ed55e7
+== file/mime/6
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.jpg\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.jpg 600 7 239f59ed55e7
+== file/mime/7
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.gif\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.gif 600 7 239f59ed55e7
+== file/mime/8
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.webp\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.webp 600 7 239f59ed55e7
+== file/mime/9
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.svg\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.svg 600 7 239f59ed55e7
+== file/mime/10
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bmp\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bmp 600 7 239f59ed55e7
+== file/mime/11
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.tiff\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.tiff 600 7 239f59ed55e7
+== file/mime/12
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ico\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ico 600 7 239f59ed55e7
+== file/mime/13
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ico\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ico 600 7 239f59ed55e7
+== file/mime/14
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.txt\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.txt 600 7 239f59ed55e7
+== file/mime/15
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.html\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.html 600 7 239f59ed55e7
+== file/mime/16
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.css\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.css 600 7 239f59ed55e7
+== file/mime/17
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.js\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.js 600 7 239f59ed55e7
+== file/mime/18
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ts\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ts 600 7 239f59ed55e7
+== file/mime/19
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.py\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.py 600 7 239f59ed55e7
+== file/mime/20
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.go\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.go 600 7 239f59ed55e7
+== file/mime/21
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.rs\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.rs 600 7 239f59ed55e7
+== file/mime/22
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.c\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.c 600 7 239f59ed55e7
+== file/mime/23
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.cpp\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.cpp 600 7 239f59ed55e7
+== file/mime/24
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.java\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.java 600 7 239f59ed55e7
+== file/mime/25
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.rb\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.rb 600 7 239f59ed55e7
+== file/mime/26
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.sh\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.sh 600 7 239f59ed55e7
+== file/mime/27
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.xml\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.xml 600 7 239f59ed55e7
+== file/mime/28
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.csv\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.csv 600 7 239f59ed55e7
+== file/mime/29
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.md\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.md 600 7 239f59ed55e7
+== file/mime/30
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.json\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.json 600 7 239f59ed55e7
+== file/mime/31
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.js\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.js 600 7 239f59ed55e7
+== file/mime/32
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ts\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ts 600 7 239f59ed55e7
+== file/mime/33
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.xml\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.xml 600 7 239f59ed55e7
+== file/mime/34
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.yaml\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.yaml 600 7 239f59ed55e7
+== file/mime/35
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.yaml\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.yaml 600 7 239f59ed55e7
+== file/mime/36
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.toml\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.toml 600 7 239f59ed55e7
+== file/mime/37
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.pdf\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.pdf 600 7 239f59ed55e7
+== file/mime/38
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.doc\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.doc 600 7 239f59ed55e7
+== file/mime/39
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.docx\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.docx 600 7 239f59ed55e7
+== file/mime/40
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.xls\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.xls 600 7 239f59ed55e7
+== file/mime/41
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.xlsx\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.xlsx 600 7 239f59ed55e7
+== file/mime/42
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.zip\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.zip 600 7 239f59ed55e7
+== file/mime/43
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.gz\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.gz 600 7 239f59ed55e7
+== file/mime/44
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.gz\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.gz 600 7 239f59ed55e7
+== file/mime/45
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.tar\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.tar 600 7 239f59ed55e7
+== file/mime/46
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bz2\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bz2 600 7 239f59ed55e7
+== file/mime/47
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.7z\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.7z 600 7 239f59ed55e7
+== file/mime/48
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.rar\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.rar 600 7 239f59ed55e7
+== file/mime/49
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/mime/50
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/mime/51
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/mime/52
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/mime/53
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/0/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/0/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/0/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/1/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.gz\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.gz 600 7 239f59ed55e7
+== file/origname/1/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.gz\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.gz 600 7 239f59ed55e7
+== file/origname/1/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/2/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/2/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/2/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/3/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/3/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/3/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/4/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bashrc\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bashrc 600 7 239f59ed55e7
+== file/origname/4/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bashrc\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bashrc 600 7 239f59ed55e7
+== file/origname/4/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/5/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/5/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/5/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/6/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.sh\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.sh 600 7 239f59ed55e7
+== file/origname/6/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.sh\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.sh 600 7 239f59ed55e7
+== file/origname/6/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/7/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/7/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/7/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/8/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.shrm\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.shrm 600 7 239f59ed55e7
+== file/origname/8/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.shrm\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.shrm 600 7 239f59ed55e7
+== file/origname/8/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/9/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ab\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ab 600 7 239f59ed55e7
+== file/origname/9/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ab\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ab 600 7 239f59ed55e7
+== file/origname/9/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/10/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/10/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/10/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/11/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.go\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.go 600 7 239f59ed55e7
+== file/origname/11/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.go\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.go 600 7 239f59ed55e7
+== file/origname/11/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/12/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/12/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.bin\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.bin 600 7 239f59ed55e7
+== file/origname/12/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/13/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.tar\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.tar 600 7 239f59ed55e7
+== file/origname/13/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.tar\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.tar 600 7 239f59ed55e7
+== file/origname/13/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/14/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.go\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.go 600 7 239f59ed55e7
+== file/origname/14/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.go\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.go 600 7 239f59ed55e7
+== file/origname/14/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/15/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.a\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.a 600 7 239f59ed55e7
+== file/origname/15/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.a\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.a 600 7 239f59ed55e7
+== file/origname/15/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/origname/16/no-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ab\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ab 600 7 239f59ed55e7
+== file/origname/16/unknown-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.ab\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.ab 600 7 239f59ed55e7
+== file/origname/16/known-mime
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.png\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.png 600 7 239f59ed55e7
+== file/plain-text
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.txt\"}\n"
+  tree(2)
+  dir  /paste 700
+  file /paste/paste-<RND>.txt 600 1 2d711642b726
+== file/uncreatable-dir
+  status=500 headers=[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff]
+  body="failed to save file\n"
+== file/startup-eviction
+  status=200 headers=[Content-Type=application/json]
+  body="{\"path\":\"<DIR>/paste/paste-<RND>.txt\"}\n"
+  tree(5)
+  dir  /paste 700
+  dir  /paste/olddir 700
+  file /paste/fresh-a 600 7 2e5d7134b14c
+  file /paste/fresh-b 600 7 4636fdeeedd7
+  file /paste/paste-<RND>.txt 600 1 2d711642b726

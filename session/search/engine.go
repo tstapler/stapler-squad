@@ -485,6 +485,12 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 		return result, nil
 	}
 
+	// After the rebuild branch: a cancelled rebuild must clear the metadata (see
+	// buildIndexLocked), so only the incremental path may return early.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Compute what changed
 	added, updated, removed := e.computeChangesLocked(history)
 
@@ -501,7 +507,7 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 	// Process additions
 	for _, entry := range added {
 		if err := ctx.Err(); err != nil {
-			e.refreshAggregatesLocked() // keep counts and avg doc length true to the partial index
+			e.finalizeCancelledIncrementalLocked()
 			return nil, err
 		}
 		docCount, err := e.indexSessionLocked(history, entry)
@@ -523,7 +529,7 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 	// Process updates (re-index modified sessions)
 	for _, entry := range updated {
 		if err := ctx.Err(); err != nil {
-			e.refreshAggregatesLocked() // keep counts and avg doc length true to the partial index
+			e.finalizeCancelledIncrementalLocked()
 			return nil, err
 		}
 		if meta, ok := e.syncMetadata.Sessions[entry.ID]; ok {
@@ -562,6 +568,15 @@ func (e *SearchEngine) IncrementalSyncContext(ctx context.Context, history *clau
 
 	result.SyncDuration = time.Since(startTime)
 	return result, nil
+}
+
+// finalizeCancelledIncrementalLocked keeps the totals true to the partial index
+// and stamps LastIncrementalSync to record that a pass ran, even if cancelled
+// before its first change.
+// Must be called with lock held.
+func (e *SearchEngine) finalizeCancelledIncrementalLocked() {
+	e.refreshAggregatesLocked()
+	e.syncMetadata.LastIncrementalSync = time.Now()
 }
 
 // refreshAggregatesLocked recomputes the session/document totals and the

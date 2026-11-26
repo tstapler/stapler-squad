@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -21,7 +22,7 @@ type guardedSteerRecorder struct {
 }
 
 func (r *guardedSteerRecorder) install(svc *SessionService, ready notReadyReason, clk *svctest.FakeGuardClock) {
-	svc.guardedSteer.guard.now = clk.Now
+	svc.guardedSteer.guard.SetClock(clk.Now)
 	svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return ready }
 	svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error {
 		r.order = append(r.order, "verify")
@@ -93,7 +94,7 @@ func TestSteerInstanceGuarded_should_WriteZeroBytesAndNotRecord_When_PaneOwnersh
 	// Identity fixed: a retry of the same signature delivers exactly once after the 10s cooldown.
 	rec.verifyErr = nil
 	rec.order = nil
-	svc.guardedSteer.guard.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 11, 0, time.UTC) }
+	svc.guardedSteer.guard.SetClock(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 11, 0, time.UTC) })
 	out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	require.NoError(t, err)
 	assert.Equal(t, SteerDelivered, out)
@@ -154,7 +155,7 @@ func TestSteerInstanceGuarded_should_ReturnGuardBusyOrDuplicateWithoutWrite_When
 	assert.Equal(t, 1, rec.writes)
 
 	release, g := svc.guardedSteer.guard.TryBegin(inst.GetStableID(), "sigZ")
-	require.Equal(t, GuardOK, g)
+	require.Equal(t, access.GuardOK, g)
 	defer release(false)
 	out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigB", "msg")
 	require.NoError(t, err)

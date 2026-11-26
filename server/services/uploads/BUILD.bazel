@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "uploads",
+    srcs = [
+        "backlog_attachment_upload_handler.go",
+        "image_upload_handler.go",
+        "session_image_upload_handler.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/uploads",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session",
+        "//session/instance",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":uploads",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "uploads_test",
+    srcs = [
+        "backlog_attachment_upload_handler_test.go",
+        "image_upload_handler_test.go",
+        "session_image_upload_handler_test.go",
+        "upload_golden_test.go",
+        "uploads_branches_test.go",
+        "uploads_hardening_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":uploads"],
+    deps = [
+        "//session/domain",
+        "//session/instance",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

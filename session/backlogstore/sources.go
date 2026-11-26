@@ -254,7 +254,7 @@ func (b *Backlog) CreateSourceSyncEvent(ctx context.Context, sourceID string, cu
 
 // RecordSourceSyncFailure persists a zero-item sync-history row recording a
 // forward-sync failure (e.g. the forward-sync EventBus subscriber's CloseIssue
-// call erroring — see server/services/backlog_github_forward_sync.go), so the
+// call erroring — see server/services/forwardsync/backlog_github_forward_sync.go), so the
 // failure is queryable via ListSourceSyncEvents / the Settings UI's row-level
 // warning (Story 4.3.2) instead of only appearing in server logs. Mirrors
 // CreateSourceSyncEvent's error-message convention used by SyncOne's own

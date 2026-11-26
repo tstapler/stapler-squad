@@ -1,0 +1,232 @@
+# circuit breaker
+preexisting-breakers=0
+empty GET -> 200 headers[Content-Type=application/json] body="{\"breakers\":[]}\n"
+empty POST -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method not allowed\n"
+empty PUT -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method not allowed\n"
+empty DELETE -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method not allowed\n"
+empty HEAD -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method not allowed\n"
+empty OPTIONS -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method not allowed\n"
+empty PATCH -> 405 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method not allowed\n"
+other path -> 404 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="404 page not found\n"
+one closed -> 200 headers[Content-Type=application/json] body="{\"breakers\":[{\"key\":\"gold-b/git-diff\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}}]}\n"
+closed with one failure (sorted by key) -> 200 headers[Content-Type=application/json] body="{\"breakers\":[{\"key\":\"gold-a/git-status\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/git-diff\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/tmux-capture-pane\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}}]}"
+mixed states (sorted by key) -> 200 headers[Content-Type=application/json] body="{\"breakers\":[{\"key\":\"gold-a/git-log\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:35Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/git-status\",\"state\":\"OPEN\",\"consecutive_failures\":4,\"consecutive_open_trips\":2,\"effective_recovery_timeout_seconds\":25,\"last_state_change\":\"2020-01-02T02:04:35Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/tmux-send-keys\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/git-diff\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/tmux-capture-pane\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}}]}"
+half-open during probe (sorted by key) -> 200 headers[Content-Type=application/json] body="{\"breakers\":[{\"key\":\"gold-a/git-log\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:35Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/git-status\",\"state\":\"OPEN\",\"consecutive_failures\":4,\"consecutive_open_trips\":2,\"effective_recovery_timeout_seconds\":25,\"last_state_change\":\"2020-01-02T02:04:35Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/tmux-send-keys\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/git-diff\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/tmux-capture-pane\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-c/tmux-kill-session\",\"state\":\"HALF-OPEN\",\"consecutive_failures\":2,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}}]}"
+after successful probe (sorted by key) -> 200 headers[Content-Type=application/json] body="{\"breakers\":[{\"key\":\"gold-a/git-log\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:35Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/git-status\",\"state\":\"OPEN\",\"consecutive_failures\":4,\"consecutive_open_trips\":2,\"effective_recovery_timeout_seconds\":25,\"last_state_change\":\"2020-01-02T02:04:35Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/tmux-send-keys\",\"state\":\"CLOSED\",\"consecutive_failures\":1,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/git-diff\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/tmux-capture-pane\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:05Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-c/tmux-kill-session\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}}]}"
+after reset-all (sorted by key) -> 200 headers[Content-Type=application/json] body="{\"breakers\":[{\"key\":\"gold-a/git-log\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/git-status\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-a/tmux-send-keys\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/git-diff\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-b/tmux-capture-pane\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}},{\"key\":\"gold-c/tmux-kill-session\",\"state\":\"CLOSED\",\"consecutive_failures\":0,\"consecutive_open_trips\":0,\"effective_recovery_timeout_seconds\":10,\"last_state_change\":\"2020-01-02T02:04:45Z\",\"config\":{\"failure_threshold\":2,\"recovery_timeout_seconds\":10,\"max_recovery_timeout_seconds\":25}}]}"
+# client logs
+method GET -> 405 headers[Allow=POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+method PUT -> 405 headers[Allow=POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+method DELETE -> 405 headers[Allow=POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+method PATCH -> 405 headers[Allow=POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+method HEAD -> 405 headers[Allow=POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+empty body -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+bad json -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+wrong type -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+null entries -> 204 headers[] body=""
+no entries -> 204 headers[] body=""
+mixed batch -> 204 headers[] body=""
+mixed batch logs:
+  level=WARN msg=a source=client window=w1 session=s1 url=/p user_agent=UA client_time=2020-09-13T12:26:40.123Z
+  level=ERROR msg=b source=client window=w1 session=s1 url=https://x/y user_agent=UA stack="line1\nline2"
+  level=ERROR msg="" source=client window=w1 session=s1 url="" user_agent=UA
+long fields -> 204 headers[] body=""
+long fields logs:
+  level=ERROR msg=éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…[truncated] source=client window=wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww…[truncated] session=ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss…[truncated] url=/ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp…[truncated] user_agent=uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu…[truncated] stack=éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…[truncated]
+multibyte window -> 204 headers[] body=""
+multibyte window logs:
+  level=WARN msg=m source=client window=éééééééééééééééééééééééééééééééé…[truncated] session="" url="" user_agent=""
+stripQuery: "/a" "/a" "" "" "/a"
+truncate: "abc" "ab…[truncated]" "a…[truncated]" "…[truncated]" ""
+oversized body -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+at-cap len=262144 cap=262144
+body exactly at cap -> 204 headers[] body=""
+body one over cap -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+constants: body=262144 batch=100 field=4096 budget=600 interval=1m0s
+oversized batch capped at 100 -> 204 headers[] body=""
+batch 2 -> 204 headers[] body=""
+batch 3 -> 204 headers[] body=""
+batch 4 -> 204 headers[] body=""
+batch 5 -> 204 headers[] body=""
+batch 6 -> 204 headers[] body=""
+budget exhausted -> 429 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="client log budget exceeded\n"
+debug entries cost nothing when exhausted -> 204 headers[] body=""
+empty batch when exhausted -> 204 headers[] body=""
+logs after exhaustion=0 bytes
+one ns before reset -> 429 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="client log budget exceeded\n"
+exactly at reset -> 204 headers[] body=""
+fill 0 -> 204 headers[] body=""
+fill 1 -> 204 headers[] body=""
+fill 2 -> 204 headers[] body=""
+fill 3 -> 204 headers[] body=""
+50 of remaining 100 -> 204 headers[] body=""
+51 would exceed: whole batch rejected -> 429 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="client log budget exceeded\n"
+50 fits exactly -> 204 headers[] body=""
+one more rejected -> 429 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="client log budget exceeded\n"
+# log level
+state[start] runtime=INFO packages=[]
+get -> 200 headers[Content-Type=application/json] body="{\"level\":\"INFO\"}\n"
+method PUT -> 405 headers[Allow=GET, HEAD, POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+method DELETE -> 405 headers[Allow=GET, HEAD, POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+method PATCH -> 405 headers[Allow=GET, HEAD, POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+get head -> 200 headers[Content-Type=application/json] body="{\"level\":\"INFO\"}\n"
+set 0 {"level":"debug"} -> 200 headers[Content-Type=application/json] body="{\"level\":\"DEBUG\"}\n"
+state[after set 0] runtime=DEBUG packages=[]
+set 1 {"level":"WARNING"} -> 200 headers[Content-Type=application/json] body="{\"level\":\"WARNING\"}\n"
+state[after set 1] runtime=WARNING packages=[]
+set 2 {"level":"warn"} -> 200 headers[Content-Type=application/json] body="{\"level\":\"WARNING\"}\n"
+state[after set 2] runtime=WARNING packages=[]
+set 3 {"level":"nonsense"} -> 200 headers[Content-Type=application/json] body="{\"level\":\"INFO\"}\n"
+state[after set 3] runtime=INFO packages=[]
+set 4 {"level":""} -> 200 headers[Content-Type=application/json] body="{\"level\":\"INFO\"}\n"
+state[after set 4] runtime=INFO packages=[]
+set 5 {} -> 200 headers[Content-Type=application/json] body="{\"level\":\"INFO\"}\n"
+state[after set 5] runtime=INFO packages=[]
+set 6 { -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+state[after set 6] runtime=INFO packages=[]
+set 7  -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body\n"
+state[after set 7] runtime=INFO packages=[]
+set 8 {"level":"error"} -> 200 headers[Content-Type=application/json] body="{\"level\":\"ERROR\"}\n"
+state[after set 8] runtime=ERROR packages=[]
+set 9 {"level":"fatal"} -> 200 headers[Content-Type=application/json] body="{\"level\":\"FATAL\"}\n"
+state[after set 9] runtime=FATAL packages=[]
+global logs:
+  level=INFO msg="runtime log level changed via debug API" level=DEBUG
+  level=INFO msg="runtime log level changed via debug API" level=WARNING
+  level=INFO msg="runtime log level changed via debug API" level=WARNING
+  level=INFO msg="runtime log level changed via debug API" level=INFO
+  level=INFO msg="runtime log level changed via debug API" level=INFO
+  level=INFO msg="runtime log level changed via debug API" level=INFO
+  level=INFO msg="runtime log level changed via debug API" level=ERROR
+  level=INFO msg="runtime log level changed via debug API" level=FATAL
+packages empty -> 200 headers[Content-Type=application/json] body="[]\n"
+packages PUT -> 405 headers[Allow=DELETE, GET, HEAD, POST;Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="Method Not Allowed\n"
+pkg set 0 {"package":"session/tmux","level":"DEBUG"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"session/tmux\",\"level\":\"DEBUG\"}\n"
+state[after pkg set 0] runtime=INFO packages=[session/tmux=DEBUG]
+pkg set 1 {"package":"session/tmux","level":"error"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"session/tmux\",\"level\":\"ERROR\"}\n"
+state[after pkg set 1] runtime=INFO packages=[session/tmux=ERROR]
+pkg set 2 {"package":"session/tmux/sub","level":"warn"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"session/tmux/sub\",\"level\":\"WARNING\"}\n"
+state[after pkg set 2] runtime=INFO packages=[session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 3 {"package":"a","level":"INFO"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"a\",\"level\":\"INFO\"}\n"
+state[after pkg set 3] runtime=INFO packages=[a=INFO session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 4 {"package":"server/auth","level":"ERROR"} -> 403 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="cannot raise server/auth above WARNING via the per-package API — it carries a security-relevant audit trail; use the global log level instead\n"
+state[after pkg set 4] runtime=INFO packages=[a=INFO session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 5 {"package":"server/auth","level":"fatal"} -> 403 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="cannot raise server/auth above WARNING via the per-package API — it carries a security-relevant audit trail; use the global log level instead\n"
+state[after pkg set 5] runtime=INFO packages=[a=INFO session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 6 {"package":"server/auth","level":"WARNING"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"server/auth\",\"level\":\"WARNING\"}\n"
+state[after pkg set 6] runtime=INFO packages=[a=INFO server/auth=WARNING session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 7 {"package":"server/auth","level":"info"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"server/auth\",\"level\":\"INFO\"}\n"
+state[after pkg set 7] runtime=INFO packages=[a=INFO server/auth=INFO session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 8 {"package":"server/auth/passkey","level":"ERROR"} -> 403 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="cannot raise server/auth/passkey above WARNING via the per-package API — it carries a security-relevant audit trail; use the global log level instead\n"
+state[after pkg set 8] runtime=INFO packages=[a=INFO server/auth=INFO session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 9 {"package":"server/auth/passkey","level":"debug"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"server/auth/passkey\",\"level\":\"DEBUG\"}\n"
+state[after pkg set 9] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 10 {"package":"server/authx","level":"ERROR"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"server/authx\",\"level\":\"ERROR\"}\n"
+state[after pkg set 10] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 11 {"package":"server","level":"ERROR"} -> 200 headers[Content-Type=application/json] body="{\"package\":\"server\",\"level\":\"ERROR\"}\n"
+state[after pkg set 11] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 12 {"package":"","level":"INFO"} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\",\"level\":\"...\"}\n"
+state[after pkg set 12] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 13 {"level":"INFO"} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\",\"level\":\"...\"}\n"
+state[after pkg set 13] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 14 {"package":"x","level":"bogus"} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid level — want one of DEBUG, INFO, WARNING, ERROR, FATAL\n"
+state[after pkg set 14] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 15 {"package":"x"} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid level — want one of DEBUG, INFO, WARNING, ERROR, FATAL\n"
+state[after pkg set 15] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 16 {"package":"x","level":""} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid level — want one of DEBUG, INFO, WARNING, ERROR, FATAL\n"
+state[after pkg set 16] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 17 { -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\",\"level\":\"...\"}\n"
+state[after pkg set 17] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 18  -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\",\"level\":\"...\"}\n"
+state[after pkg set 18] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 19 [] -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\",\"level\":\"...\"}\n"
+state[after pkg set 19] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg set 20 {"package":"pppppppppppppppppppppppppppppppppppppppppppppppp... -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\",\"level\":\"...\"}\n"
+state[after pkg set 20] runtime=INFO packages=[a=INFO server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+packages sorted -> 200 headers[Content-Type=application/json] body="[{\"package\":\"a\",\"level\":\"INFO\"},{\"package\":\"server\",\"level\":\"ERROR\"},{\"package\":\"server/auth\",\"level\":\"INFO\"},{\"package\":\"server/auth/passkey\",\"level\":\"DEBUG\"},{\"package\":\"server/authx\",\"level\":\"ERROR\"},{\"package\":\"session/tmux\",\"level\":\"ERROR\"},{\"package\":\"session/tmux/sub\",\"level\":\"WARNING\"}]\n"
+package set logs:
+  level=INFO msg="per-package log level changed via debug API" package=session/tmux level=DEBUG remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=session/tmux level=ERROR remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=session/tmux/sub level=WARNING remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=a level=INFO remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=server/auth level=WARNING remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=server/auth level=INFO remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=server/auth/passkey level=DEBUG remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=server/authx level=ERROR remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level changed via debug API" package=server level=ERROR remote_addr=192.0.2.1:1234
+pkg clear 0 {"package":"a"} -> 204 headers[] body=""
+state[after pkg clear 0] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 1 {"package":"a"} -> 204 headers[] body=""
+state[after pkg clear 1] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 2 {"package":"nope"} -> 204 headers[] body=""
+state[after pkg clear 2] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 3 {"package":""} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\"}\n"
+state[after pkg clear 3] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 4 {} -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\"}\n"
+state[after pkg clear 4] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 5 { -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\"}\n"
+state[after pkg clear 5] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 6  -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\"}\n"
+state[after pkg clear 6] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 7 {"package":"pppppppppppppppppppppppppppppppppppppppppppppppp... -> 400 headers[Content-Type=text/plain; charset=utf-8;X-Content-Type-Options=nosniff] body="invalid JSON body — want {\"package\":\"...\"}\n"
+state[after pkg clear 7] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING session/tmux=ERROR]
+pkg clear 8 {"package":"session/tmux","level":"ignored"} -> 204 headers[] body=""
+state[after pkg clear 8] runtime=INFO packages=[server/auth/passkey=DEBUG server/auth=INFO server/authx=ERROR server=ERROR session/tmux/sub=WARNING]
+packages after clear -> 200 headers[Content-Type=application/json] body="[{\"package\":\"server\",\"level\":\"ERROR\"},{\"package\":\"server/auth\",\"level\":\"INFO\"},{\"package\":\"server/auth/passkey\",\"level\":\"DEBUG\"},{\"package\":\"server/authx\",\"level\":\"ERROR\"},{\"package\":\"session/tmux/sub\",\"level\":\"WARNING\"}]\n"
+package clear logs:
+  level=INFO msg="per-package log level override cleared via debug API" package=a remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level override cleared via debug API" package=a remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level override cleared via debug API" package=nope remote_addr=192.0.2.1:1234
+  level=INFO msg="per-package log level override cleared via debug API" package=session/tmux remote_addr=192.0.2.1:1234
+constants: bodycap=4096 audit=[server/auth] levels=6
+isAuditSensitive("server/auth")=true
+isAuditSensitive("server/auth/x")=true
+isAuditSensitive("server/authx")=false
+isAuditSensitive("server")=false
+isAuditSensitive("")=false
+isAuditSensitive("x/server/auth")=false
+# tymux rollout
+get[initial] rehearsal=<unset> 2a00
+get[daemon direction 1] rehearsal=<unset> 2a160801108080401a05312e302e302205312e312e302801
+get[daemon direction 2] rehearsal=<unset> 2a160801108080401a05312e302e302205312e312e302802
+get[daemon direction 3] rehearsal=<unset> 2a160801108080401a05312e302e302205312e312e302803
+get[daemon direction 99] rehearsal=<unset> 2a140801108080401a05312e302e302205312e312e30
+get[pid overflow] rehearsal=<unset> 2a0b1080808080f8ffffffff01
+setGlobal[true] rehearsal=<unset> 2001
+setGlobal[false] rehearsal=<unset> 2000
+get[after global false] rehearsal=<unset> 20002a00
+setGlobal[clear] rehearsal=<unset> 
+setSession[b true] rehearsal=<unset> 1a050a01621001
+setSession[a false] rehearsal=<unset> 1a030a01611a050a01621001
+setSession[c true] rehearsal=<unset> 1a030a01611a050a016210011a050a01631001
+setSession[b clear] rehearsal=<unset> 1a030a01611a050a01631001
+setSession[missing clear] rehearsal=<unset> 1a030a01611a050a01631001
+setSession[empty name] rehearsal=<unset> 1a0210011a030a01611a050a01631001
+setSession[empty name clear] rehearsal=<unset> 1a030a01611a050a01631001
+get[after sessions] rehearsal=<unset> 1a030a01611a050a016310012a00
+rehearsal rehearsal=<set> 1a030a01611a050a01631001
+get[after rehearsal] rehearsal=<set> 1a030a01611a050a016310012a00
+replace[allow=false err=<nil>] -> rehearsal=<set> 1a030a01611a050a016310012a14080110071a05322e302e302205322e302e302801 gotAllow=false
+replace[allow=false err=plain] -> code=internal msg="internal: plain" gotAllow=false
+replace[allow=false err=tymux: replacing the daemon would interrupt live sessions] -> code=failed_precondition msg="failed_precondition: tymux: replacing the daemon would interrupt live sessions" gotAllow=false
+replace[allow=false err=tymux: daemon refused the graceful handoff] -> code=failed_precondition msg="failed_precondition: tymux: daemon refused the graceful handoff" gotAllow=false
+replace[allow=false err=tymux: graceful handoff is not available in this build] -> code=failed_precondition msg="failed_precondition: tymux: graceful handoff is not available in this build" gotAllow=false
+replace[allow=false err=tymux: graceful handoff could not be verified] -> code=aborted msg="aborted: tymux: graceful handoff could not be verified" gotAllow=false
+replace[allow=false err=wrapped: tymux: daemon refused the graceful handoff] -> code=failed_precondition msg="failed_precondition: wrapped: tymux: daemon refused the graceful handoff" gotAllow=false
+replace[allow=false err=wrapped: tymux: graceful handoff could not be verified] -> code=aborted msg="aborted: wrapped: tymux: graceful handoff could not be verified" gotAllow=false
+replace[allow=true err=<nil>] -> rehearsal=<set> 1a030a01611a050a016310012a14080110071a05322e302e302205322e302e302801 gotAllow=true
+replace[allow=true err=plain] -> code=internal msg="internal: plain" gotAllow=true
+replace[allow=true err=tymux: replacing the daemon would interrupt live sessions] -> code=failed_precondition msg="failed_precondition: tymux: replacing the daemon would interrupt live sessions" gotAllow=true
+replace[allow=true err=tymux: daemon refused the graceful handoff] -> code=failed_precondition msg="failed_precondition: tymux: daemon refused the graceful handoff" gotAllow=true
+replace[allow=true err=tymux: graceful handoff is not available in this build] -> code=failed_precondition msg="failed_precondition: tymux: graceful handoff is not available in this build" gotAllow=true
+replace[allow=true err=tymux: graceful handoff could not be verified] -> code=aborted msg="aborted: tymux: graceful handoff could not be verified" gotAllow=true
+replace[allow=true err=wrapped: tymux: daemon refused the graceful handoff] -> code=failed_precondition msg="failed_precondition: wrapped: tymux: daemon refused the graceful handoff" gotAllow=true
+replace[allow=true err=wrapped: tymux: graceful handoff could not be verified] -> code=aborted msg="aborted: wrapped: tymux: graceful handoff could not be verified" gotAllow=true
+setSession[a clear] rehearsal=<set> 1a050a01631001
+setSession[c clear] rehearsal=<set> 
+http get json -> 200 content-type=application/json body={"rollbackRehearsalCompletedAt":"<ts>","daemon":{}}
+http set global json -> 200 content-type=application/json body={"rollbackRehearsalCompletedAt":"<ts>","globalOverride":true}
+http set global clear json -> 200 content-type=application/json body={"rollbackRehearsalCompletedAt":"<ts>"}
+http replace refused json -> 400 content-type=application/json body={"code":"failed_precondition","message":"tymux: replacing the daemon would interrupt live sessions"}
+http bad body json -> 400 content-type=application/json body={"code":"invalid_argument","message":"<unmarshal error>"}
+http GET not allowed -> 405 headers[Allow=POST] body=""

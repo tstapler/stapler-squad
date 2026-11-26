@@ -66,3 +66,25 @@ const TerminalResyncBatchingFlagName = "terminal:resync-batching"
 // documentation and
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
 const TerminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+
+// GithubIssueProgressCommentsFlagName gates the in_progress and review comments on the linked GitHub issue.
+const GithubIssueProgressCommentsFlagName = "github_issue_progress_comments"
+
+// UpdateCheckFlagName is opt-in: the check contacts api.github.com.
+const UpdateCheckFlagName = "changelog:update-check"
+
+// ChangelogFlagName gates the changelog route, API and update badge.
+const ChangelogFlagName = "changelog"
+
+const CompletionReviewerFlagName = "backlog:completion-reviewer"
+
+// TerminalWriteLeaseFlagName is the flag behind the per-instance terminal write lease (global only, default on).
+const TerminalWriteLeaseFlagName = "terminal_write_lease"
+
+// HiddenSessionReadonlyGuardsFlagName is the live escape hatch for the unary write guards (global only, default on).
+const HiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
+
+const HiddenSessionReplyFlagName = "hidden_session_reply"
+
+// EpicIntegrationChildFlagName gates auto-creation of an epic's integration child.
+const EpicIntegrationChildFlagName = "epic_integration_child_enabled"

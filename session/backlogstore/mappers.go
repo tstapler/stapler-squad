@@ -3,6 +3,8 @@ package backlogstore
 import (
 	"encoding/json"
 
+	"github.com/google/uuid"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -176,6 +178,9 @@ func BacklogItemToData(item *ent.BacklogItem) backlogdto.BacklogItemData {
 		WorkflowSuggestions:             item.WorkflowSuggestions,
 		ShippedSnapshotCaptureFailed:    item.ShippedSnapshotCaptureFailed,
 		ReworkCapOverride:               item.ReworkCapOverride,
+		IsIntegrationChild:              item.IsIntegrationChild,
+		IntegrationChildID:              uuidPtrString(item.IntegrationChildID),
+		IntegrationFixCount:             item.IntegrationFixCount,
 		CostBudgetThresholdUsd:          item.CostBudgetThresholdUsd,
 		NextWorkflowID:                  item.NextWorkflowID,
 		ChainFired:                      item.ChainFired,
@@ -227,4 +232,11 @@ func BacklogItemToData(item *ent.BacklogItem) backlogdto.BacklogItemData {
 		}
 	}
 	return data
+}
+
+func uuidPtrString(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return id.String()
 }

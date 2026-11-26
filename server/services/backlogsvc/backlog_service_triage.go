@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
@@ -63,7 +64,7 @@ func (s *BacklogService) initialPromptFor(ctx context.Context, item *backlogdto.
 // workspacepeers.Lister.BlockForPath, shared with SessionService.CreateSession so the two
 // callers can't drift on how the nudge is built.
 func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return services.WorkspacePeersBlockFor(ctx, s.storage, repoPath)
+	return flagsvc.WorkspacePeersBlockFor(ctx, s.storage, repoPath)
 }
 
 // triagePromptFor returns s.pipelineEngine.TriagePromptFor(...) when pipelineEngine is
@@ -1907,6 +1908,11 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return fmt.Errorf("load item: %w", err)
 	}
 	if s.heldByTransitionDenial(ctx, "AutoReopenAfterFailedReview", item) {
+		return nil
+	}
+	// A FAIL verdict on an epic's integration child is a failing end-to-end check: attribute it to a
+	// sibling (fix child) or escalate to the epic's owner instead of blindly reworking the check itself.
+	if item.IsIntegrationChild && s.handleIntegrationCheckFailure(ctx, item) {
 		return nil
 	}
 

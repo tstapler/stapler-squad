@@ -11,6 +11,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/queue"
 
@@ -25,7 +27,7 @@ const ciConclusionFailure = "failure"
 
 // ApprovalService handles Claude Code hook approval RPCs.
 type ApprovalService struct {
-	approvalStore      *ApprovalStore
+	approvalStore      *approvalkit.ApprovalStore
 	notificationStore  approvalNotificationStamper // optional; nil-safe
 	eventBus           *events.EventBus            // optional; nil-safe; broadcasts resolution to connected clients
 	liveFinder         LiveInstanceFinder          // optional; nil-safe — CI status for the block-on-red guard (not persisted, see plan.md's Implementation Deviations)
@@ -33,7 +35,7 @@ type ApprovalService struct {
 }
 
 // NewApprovalService creates an ApprovalService with the given ApprovalStore.
-func NewApprovalService(store *ApprovalStore) *ApprovalService {
+func NewApprovalService(store *approvalkit.ApprovalStore) *ApprovalService {
 	return &ApprovalService{approvalStore: store}
 }
 
@@ -118,7 +120,7 @@ func (as *ApprovalService) resolveApproval(ctx context.Context, approvalID, deci
 			fmt.Errorf("approval %s has a human decision in flight", approvalID))
 	}
 
-	decision := ApprovalDecision{
+	decision := approvalkit.ApprovalDecision{
 		Behavior: decisionStr,
 		Message:  message,
 	}
@@ -134,7 +136,7 @@ func (as *ApprovalService) resolveApproval(ctx context.Context, approvalID, deci
 	// reviewer explicitly overrides (Story 2.2.4). The lookup itself always runs (its
 	// result is what the override log line reports); only the early-return decision is
 	// conditional on overrideCIBlock.
-	if decisionStr == "allow" && config.LoadConfig().GetFeatureFlag(blockApprovalOnCIFailureFlagName) && as.liveFinder != nil {
+	if decisionStr == "allow" && config.LoadConfig().GetFeatureFlag(flagsvc.BlockApprovalOnCIFailureFlagName) && as.liveFinder != nil {
 		if inst := as.liveFinder.FindLiveInstance(sessionID); inst != nil {
 			// Read via Snapshot(), not raw fields: PRStatusPoller mutates these same
 			// fields on its own goroutine under inst.mu (session/instance.go's mu doc
@@ -254,7 +256,7 @@ func (as *ApprovalService) IsApprovalPending(approvalID string) bool {
 
 // ListPendingApprovalsInternal returns all pending approvals for internal Go
 // callers (rule-reconciliation) that don't need ConnectRPC proto marshaling.
-func (as *ApprovalService) ListPendingApprovalsInternal() []*PendingApproval {
+func (as *ApprovalService) ListPendingApprovalsInternal() []*approvalkit.PendingApproval {
 	return as.approvalStore.ListAll()
 }
 
@@ -263,7 +265,7 @@ func (as *ApprovalService) ListPendingApprovals(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListPendingApprovalsRequest],
 ) (*connect.Response[sessionv1.ListPendingApprovalsResponse], error) {
-	var approvals []*PendingApproval
+	var approvals []*approvalkit.PendingApproval
 	if req.Msg.SessionId != nil && *req.Msg.SessionId != "" {
 		approvals = as.approvalStore.GetBySession(*req.Msg.SessionId)
 	} else {
@@ -319,7 +321,7 @@ func (as *ApprovalService) advanceCollapsedRow(decidedID, sessionID string) bool
 	if !ok || sessionID == "" {
 		return false
 	}
-	var next *PendingApproval
+	var next *approvalkit.PendingApproval
 	for _, a := range as.approvalStore.GetBySession(sessionID) {
 		if a.ID != decidedID && (next == nil || !a.CreatedAt.Before(next.CreatedAt)) {
 			next = a

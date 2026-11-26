@@ -1,0 +1,54 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "remote",
+    srcs = ["remote_service.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/remote",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//session/sshremote",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@org_golang_x_crypto//ssh",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":remote",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "remote_test",
+    srcs = [
+        "branches_test.go",
+        "golden_test.go",
+        "remote_service_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":remote"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session/sshremote",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_gliderlabs_ssh//:ssh",
+        "@com_github_stretchr_testify//require",
+        "@com_github_zalando_go_keyring//:go-keyring",
+        "@org_golang_x_crypto//ssh",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

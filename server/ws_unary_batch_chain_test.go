@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 )
 
@@ -101,7 +101,7 @@ func TestBatchChain_should_RejectUnauthenticatedBatches_When_AuthIsRequired(t *t
 }
 
 func TestBatchChain_should_RejectTheBatch_When_SessionHasExpired(t *testing.T) {
-	h := newChainHarness(t, chainCase{"local-auth", services.ListenerLocal, true})
+	h := newChainHarness(t, chainCase{"local-auth", access.ListenerLocal, true})
 	h.validator.expired.Store(true)
 	status, _ := h.postBatch(t, true, batchCallFor(t, 1, chainListFiles, &sessionv1.ListFilesRequest{SessionId: "x"}))
 

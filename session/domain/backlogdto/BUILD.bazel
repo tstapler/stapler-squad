@@ -50,12 +50,14 @@ go_test(
     ],
 )
 
-# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go).
+# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go)
+# and by server/services/backlogmisc's TestEveryBacklogKindMapped (backlog_hooks.go).
 filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = [
         "//server/services:__pkg__",
+        "//server/services/backlogmisc:__pkg__",
         "//session:__pkg__",
     ],
 )

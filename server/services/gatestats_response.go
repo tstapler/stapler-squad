@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 )
 
 // gateStatsView is everything GetDeliveryGateStats reports, gathered once.
@@ -30,7 +31,7 @@ func explicitOffScopes() []string {
 	if v, ok := cfg.GetFeatureFlagOverride(config.HiddenSessionGateFeatureFlag); ok && !v {
 		out = append(out, "global")
 	}
-	for _, k := range explicitOffKinds(cfg) {
+	for _, k := range flagsvc.ExplicitOffKinds(cfg) {
 		out = append(out, deliverygate.ScopeOf(k))
 	}
 	return out

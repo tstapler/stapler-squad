@@ -6,7 +6,7 @@
   "httpMethod": "POST",
   "httpPath": "/api/v1/upload-backlog-attachment",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_attachment_upload_handler.go",
+  "handlerFile": "server/services/uploads/backlog_attachment_upload_handler.go",
   "tested": true,
   "testIds": [
     "TestBacklogAttachmentUpload_PNG_Success",

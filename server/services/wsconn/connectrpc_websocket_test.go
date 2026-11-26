@@ -3001,7 +3001,7 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 // project (Epics 3.2, 4.1, 4.2, 5.1, 5.2, 6.1, 8.3). Epic 8.1's job is to prove all seven
 // compose correctly, so the round-trip and spot-check tests below need the complete set in
 // one place rather than each hand-rolling its own (partial, driftable) list. All seven have
-// named Go constants (see feature_flag_service.go); three of them
+// named Go constants (see flagsvc/feature_flag_service.go); three of them
 // (terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName,
 // terminalResyncBatchingFlagName) are pure client-side concerns with no Go production call
 // site to share the constant with, but are still named for consistency and so this list and

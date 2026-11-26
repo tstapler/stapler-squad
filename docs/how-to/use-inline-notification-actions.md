@@ -16,7 +16,7 @@ If you rely on being paged, test your Slack and web-push setup yourself.
 ## Flags
 
 Four flags control the feature. A flip applies at once, with no restart
-(`server/services/feature_flag_specs.go`, the `featureflags.Spec` entries).
+(`server/services/flagsvc/feature_flag_specs.go`, the `featureflags.Spec` entries).
 
 | Flag | Default | What it turns on |
 |---|---|---|
@@ -27,7 +27,7 @@ Four flags control the feature. A flip applies at once, with no restart
 
 With `notification_inline_actions` off, every row reduces to Open session and the
 older approve and deny path still works. An action refused for a flag returns the copy
-"This action is turned off. Open session." (`server/services/feature_flags_notification_actions.go`,
+"This action is turned off. Open session." (`server/services/flagsvc/feature_flags_notification_actions.go`,
 `flagOffMessage`).
 
 ### Flip a flag
@@ -46,7 +46,7 @@ Turning a flag on is audited and is refused while the audit sink is down
 (`notificationActionsFlagAuditPolicy`). Turning it off is not refused.
 
 Two stages stay closed whatever you set, because the code gates them on a spike result
-that is not recorded yet (`server/services/feature_flags_notification_actions.go`):
+that is not recorded yet (`server/services/flagsvc/feature_flags_notification_actions.go`):
 
 - `stage:hook_reply` needs `spikeS1HookReplyPassed`, currently `false`.
 - `channel:remote:tierB` needs `spikeS6TierBPassed`, currently `false`.
@@ -118,7 +118,7 @@ For a running session the card shows the delivery state
 | Sent - waiting for the agent | Keys were written. |
 | Sent, but the agent hasn't confirmed yet. Open session. | Unconfirmed. The row stays in Needs you until the agent confirms, you mark it handled, or the session ends. |
 | Not sent. Nothing was typed into the session. Retry | The write failed before the first key. Retry is safe. |
-| Not sent: someone is typing in that session. Retry when they are done. | You or another person typed in that pane within the last 5 s (`humanActiveWindow`, `server/services/human_activity.go`). |
+| Not sent: someone is typing in that session. Retry when they are done. | You or another person typed in that pane within the last 5 s (`humanActiveWindow`, `server/services/access/human_activity.go`). |
 | Sent, but we couldn't confirm it arrived. Check the session before retrying. | A key may have landed. No Retry. |
 | Sent, but the question is still showing. Check the session before retrying. | The dialog was still on screen after 60 s. Retry sits behind "Retry anyway?". |
 | Part of your answer was sent, then the prompt changed. Open session to finish. | A multi-key answer stopped part way. No Retry. |

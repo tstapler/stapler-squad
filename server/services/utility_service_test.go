@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -21,7 +22,7 @@ import (
 // --------------------------------------------------------------------------
 
 func setupUtilityService() *UtilityService {
-	return NewUtilityService(NewApprovalStore(""))
+	return NewUtilityService(approvalkit.NewApprovalStore(""))
 }
 
 func setupUtilityServiceWithPollerFixture() (*UtilityService, *session.ReviewQueuePoller) {

@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -83,7 +83,7 @@ func NewTerminalMuxBridge(serve muxServeFunc, poolSize int, opts ...TerminalMuxO
 	b := &TerminalMuxBridge{
 		serve: serve, sockets: map[*muxSocket]struct{}{}, stallTimeout: defaultMuxStallTimeout,
 		readIdle: muxReadIdle, now: time.Now, logf: logMuxAt,
-		policies: map[string]func(*http.Request) bool{services.ListenerLocal: loopbackOriginAllowed},
+		policies: map[string]func(*http.Request) bool{access.ListenerLocal: loopbackOriginAllowed},
 	}
 	b.poolSize.Store(int32(poolSize))
 	for _, o := range opts {
@@ -148,7 +148,7 @@ func (b *TerminalMuxBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Warn("[TerminalMux] upgrade failed", "err", err)
 		return
 	}
-	rec, _ := services.RequestRecordFrom(r.Context())
+	rec, _ := access.RequestRecordFrom(r.Context())
 	s := newMuxSocket(b, conn, r, rec.Listener)
 	b.mu.Lock()
 	b.sockets[s] = struct{}{}
@@ -164,12 +164,12 @@ func (b *TerminalMuxBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // admit applies the same gates as /api/ws/unary: a known listener, authenticated remote
 // access, and a per-listener origin rule (the primary CSWSH control on the remote listener).
 func (b *TerminalMuxBridge) admit(w http.ResponseWriter, r *http.Request) bool {
-	rec, ok := services.RequestRecordFrom(r.Context())
+	rec, ok := access.RequestRecordFrom(r.Context())
 	if !ok || rec.Listener == "" {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return false
 	}
-	if rec.Listener == services.ListenerRemote && rec.AuthMode != services.AuthModeRequired {
+	if rec.Listener == access.ListenerRemote && rec.AuthMode != access.AuthModeRequired {
 		http.Error(w, "authentication required", http.StatusForbidden)
 		return false
 	}

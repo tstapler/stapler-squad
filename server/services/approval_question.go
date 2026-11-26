@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
@@ -17,12 +18,8 @@ import (
 
 // Notification metadata keys of a question notification.
 const (
-	metaQuestionID = "question_id"
-	// metaGuidanceRequestID is the durable GuidanceRequest row mirrored for the question.
-	metaGuidanceRequestID = "guidance_request_id"
-	metaQuestionShape     = "question_shape"
-	metaQuestionOptions   = "question_options"
-	metaReplyUnavailable  = "reply_unavailable"
+	metaQuestionShape   = "question_shape"
+	metaQuestionOptions = "question_options"
 	// metaQuestionPending is how many questions of the session were asked together
 	// with this one (PendingQuestionStore.PendingCount): above 1 the card cannot
 	// know which one is on screen. Unlike the notification's occurrence count it
@@ -33,25 +30,27 @@ const (
 
 // questionWiring is the optional Reply dependencies of an ApprovalHandler.
 type questionWiring struct {
-	store *PendingQuestionStore
+	store *questionkit.PendingQuestionStore
 	// proofs verifies sender proofs; nil falls back to DefaultHookProofs().
 	proofs *HookProofs
 	// unreplyable counts a question registered not replyable, by cause.
 	unreplyable func(cause string)
 	// mirror writes the durable GuidanceRequest row; nil disables mirroring.
-	mirror *GuidanceHookMirror
+	mirror *questionkit.GuidanceHookMirror
 	// sessionLive reports whether uuid is a known session; nil consults storage.
 	sessionLive func(uuid string) bool
 }
 
 // SetQuestionRegistry wires the pending-question store and the unreplyable
 // counter. Without it questions raise their toast and register nothing.
-func (h *ApprovalHandler) SetQuestionRegistry(store *PendingQuestionStore, unreplyable func(cause string)) {
+func (h *ApprovalHandler) SetQuestionRegistry(store *questionkit.PendingQuestionStore, unreplyable func(cause string)) {
 	h.questions.store, h.questions.unreplyable = store, unreplyable
 }
 
 // SetGuidanceMirror wires the durable hook-question mirror.
-func (h *ApprovalHandler) SetGuidanceMirror(m *GuidanceHookMirror) { h.questions.mirror = m }
+func (h *ApprovalHandler) SetGuidanceMirror(m *questionkit.GuidanceHookMirror) {
+	h.questions.mirror = m
+}
 
 // SetHookProofs overrides the proofs used to verify the sender header.
 func (h *ApprovalHandler) SetHookProofs(p *HookProofs) { h.questions.proofs = p }
@@ -110,10 +109,10 @@ func (h *ApprovalHandler) attributeQuestion(r *http.Request, headerResolvedID st
 
 // registerQuestion parses the payload, registers a replyable entry when the
 // proof verified and the shape is single, and returns the notification metadata.
-func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribution, asked AskedQuestion, hookCallID string) map[string]string {
+func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribution, asked questionkit.AskedQuestion, hookCallID string) map[string]string {
 	meta := map[string]string{metaQuestionShape: string(asked.Shape)}
 	cause := qa.cause
-	if asked.Shape != QuestionShapeSingle {
+	if asked.Shape != questionkit.QuestionShapeSingle {
 		cause = replyCauseShape
 	}
 	if cause == "" && h.questions.store == nil {
@@ -123,13 +122,13 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribut
 	tabbed := qa.cause == "" && asked.Tabbed
 	mirrorID := h.mirrorQuestion(sessionID, hookCallID, asked, cause == "" || tabbed)
 	if mirrorID != "" {
-		meta[metaGuidanceRequestID] = mirrorID
+		meta[questionkit.MetaGuidanceRequestID] = mirrorID
 		if tabbed {
-			meta[metaQuestionID] = mirrorID
+			meta[questionkit.MetaQuestionID] = mirrorID
 		}
 	}
 	if cause != "" {
-		meta[metaReplyUnavailable] = cause
+		meta[questionkit.MetaReplyUnavailable] = cause
 		if h.questions.unreplyable != nil {
 			h.questions.unreplyable(cause)
 		}
@@ -141,20 +140,20 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribut
 	}
 	labels, err := json.Marshal(asked.Labels)
 	if err != nil {
-		meta[metaReplyUnavailable] = replyCauseShape
+		meta[questionkit.MetaReplyUnavailable] = replyCauseShape
 		return meta
 	}
-	id := NewQuestionID()
+	id := questionkit.NewQuestionID()
 	if mirrorID != "" {
 		id = mirrorID // the durable row id survives a restart, so a rendered card keeps addressing it
 	}
-	pending := h.questions.store.Register(PendingQuestion{
+	pending := h.questions.store.Register(questionkit.PendingQuestion{
 		QuestionID:  id,
 		SessionUUID: sessionID,
 		Dialog:      panereply.QuestionDialog{Question: asked.Question, Header: asked.Header, Labels: asked.Labels},
-		Token:       QuestionToken(asked.Question),
+		Token:       questionkit.QuestionToken(asked.Question),
 	})
-	meta[metaQuestionID] = id
+	meta[questionkit.MetaQuestionID] = id
 	meta[metaQuestionPending] = strconv.Itoa(pending)
 	meta[metaQuestionOptions] = string(labels)
 	return meta
@@ -162,7 +161,7 @@ func (h *ApprovalHandler) registerQuestion(sessionID string, qa QuestionAttribut
 
 // mirrorQuestion writes the durable row and returns its id, or "" when mirroring
 // is off, the session has no UUID or the write failed (fail open).
-func (h *ApprovalHandler) mirrorQuestion(sessionID, hookCallID string, asked AskedQuestion, replyable bool) string {
+func (h *ApprovalHandler) mirrorQuestion(sessionID, hookCallID string, asked questionkit.AskedQuestion, replyable bool) string {
 	if h.questions.mirror == nil || !h.questions.mirror.Enabled() {
 		return ""
 	}
@@ -170,7 +169,7 @@ func (h *ApprovalHandler) mirrorQuestion(sessionID, hookCallID string, asked Ask
 	if sessionUUID == "" {
 		return ""
 	}
-	id, _ := h.questions.mirror.Mirror(HookMirrorRequest{
+	id, _ := h.questions.mirror.Mirror(questionkit.HookMirrorRequest{
 		SessionUUID: sessionUUID, HookCallID: hookCallID, Asked: asked, Replyable: replyable,
 	})
 	return id

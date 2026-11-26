@@ -14,7 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
 const askQuestionBody = `{"tool_name":"AskUserQuestion","cwd":"/work","tool_input":{"questions":[{"question":"Which color should the spike use?","header":"Color","options":[{"label":"Red","description":"r"},{"label":"Green","description":"g"}],"multiSelect":false}]}}`
@@ -22,7 +24,7 @@ const askQuestionBody = `{"tool_name":"AskUserQuestion","cwd":"/work","tool_inpu
 type questionHarness struct {
 	t      *testing.T
 	h      *ApprovalHandler
-	store  *PendingQuestionStore
+	store  *questionkit.PendingQuestionStore
 	proofs *HookProofs
 	events <-chan *events.Event
 	causes []string
@@ -34,10 +36,10 @@ func newQuestionHarness(t *testing.T) *questionHarness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ch, _ := bus.Subscribe(ctx)
-	h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
+	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
 	proofs, err := NewHookProofs(t.TempDir())
 	require.NoError(t, err)
-	q := &questionHarness{t: t, h: h, store: NewPendingQuestionStore(nil), proofs: proofs, events: ch}
+	q := &questionHarness{t: t, h: h, store: questionkit.NewPendingQuestionStore(nil), proofs: proofs, events: ch}
 	h.SetHookProofs(proofs)
 	h.SetQuestionRegistry(q.store, func(cause string) { q.causes = append(q.causes, cause) })
 	h.questions.sessionLive = func(id string) bool { return id == "sess-uuid" || id == "other-uuid" }
@@ -69,13 +71,13 @@ func TestBroadcastQuestionNotification_ShouldReadQuestionsArrayAndStampQuestionI
 	assert.Equal(t, "sess-uuid", ev.SessionID, "a verified proof's UUID is the attribution; the title header is ignored")
 	md := ev.NotificationMetadata
 	assert.Equal(t, "single", md[metaQuestionShape])
-	assert.Len(t, md[metaQuestionID], 32, "128 random bits")
+	assert.Len(t, md[questionkit.MetaQuestionID], 32, "128 random bits")
 	var labels []string
 	require.NoError(t, json.Unmarshal([]byte(md[metaQuestionOptions]), &labels))
 	assert.Equal(t, []string{"Red", "Green"}, labels)
-	assert.NotContains(t, md, metaReplyUnavailable)
+	assert.NotContains(t, md, questionkit.MetaReplyUnavailable)
 
-	got, ok := q.store.Peek(QuestionKey{SessionUUID: "sess-uuid", QuestionID: md[metaQuestionID]})
+	got, ok := q.store.Peek(questionkit.QuestionKey{SessionUUID: "sess-uuid", QuestionID: md[questionkit.MetaQuestionID]})
 	require.True(t, ok)
 	assert.Equal(t, "Color", got.Dialog.Header)
 	assert.Equal(t, []string{"Red", "Green"}, got.Dialog.Labels)
@@ -97,8 +99,8 @@ func TestBroadcastQuestionNotification_ShouldStampPendingCountOfLiveQuestions_No
 
 	// Both answered through Reply (consumed): the next question is alone again.
 	for _, ev := range []*events.Event{first, second} {
-		claim, res := q.store.Claim(QuestionKey{SessionUUID: "sess-uuid", QuestionID: ev.NotificationMetadata[metaQuestionID]})
-		require.Equal(t, ClaimOK, res)
+		claim, res := q.store.Claim(questionkit.QuestionKey{SessionUUID: "sess-uuid", QuestionID: ev.NotificationMetadata[questionkit.MetaQuestionID]})
+		require.Equal(t, questionkit.ClaimOK, res)
 		q.store.Consume(claim)
 	}
 	third := q.post(askQuestionBody, headers)
@@ -122,8 +124,8 @@ func TestHookProof_ShouldRegisterNothingReplyable_WhenProofIsMissingInvalidOrFor
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ev := q.post(askQuestionBody, tc.headers)
-			assert.Equal(t, tc.cause, ev.NotificationMetadata[metaReplyUnavailable])
-			assert.NotContains(t, ev.NotificationMetadata, metaQuestionID)
+			assert.Equal(t, tc.cause, ev.NotificationMetadata[questionkit.MetaReplyUnavailable])
+			assert.NotContains(t, ev.NotificationMetadata, questionkit.MetaQuestionID)
 			assert.Equal(t, "Claude has a question", ev.NotificationTitle, "the toast is still raised")
 		})
 	}
@@ -132,7 +134,7 @@ func TestHookProof_ShouldRegisterNothingReplyable_WhenProofIsMissingInvalidOrFor
 	// A valid proof for a session that is not known is bad_proof too.
 	unknown := q.proofs.HeaderValue("not-a-session")
 	ev := q.post(askQuestionBody, map[string]string{hookProofHeader: unknown})
-	assert.Equal(t, replyCauseBadProof, ev.NotificationMetadata[metaReplyUnavailable])
+	assert.Equal(t, replyCauseBadProof, ev.NotificationMetadata[questionkit.MetaReplyUnavailable])
 	assert.Zero(t, q.store.Len())
 }
 
@@ -151,8 +153,8 @@ func TestBroadcastQuestionNotification_ShouldMarkMultiOrUnknownShapeNotReplyable
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
 			ev := q.post(body, proof)
-			assert.Equal(t, replyCauseShape, ev.NotificationMetadata[metaReplyUnavailable])
-			assert.NotContains(t, ev.NotificationMetadata, metaQuestionID)
+			assert.Equal(t, replyCauseShape, ev.NotificationMetadata[questionkit.MetaReplyUnavailable])
+			assert.NotContains(t, ev.NotificationMetadata, questionkit.MetaQuestionID)
 		})
 	}
 	assert.Zero(t, q.store.Len())

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -15,7 +16,7 @@ type NotificationActionWiring struct {
 	// Cancels backs CANCEL_WAKE and CANCEL_PEER_HELP (optional).
 	Cancels CancelDelegate
 	// Mirror re-registers an expired hook question from its durable row (optional).
-	Mirror *GuidanceHookMirror
+	Mirror *questionkit.GuidanceHookMirror
 }
 
 // WireNotificationActions installs the descriptor builder on notification

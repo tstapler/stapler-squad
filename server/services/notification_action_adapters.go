@@ -7,6 +7,10 @@ import (
 	"connectrpc.com/connect"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -18,37 +22,37 @@ import (
 // the CI-red guard, notification stamping and event broadcast.
 type approvalServiceAdapter struct {
 	svc   *ApprovalService
-	store *ApprovalStore
+	store *approvalkit.ApprovalStore
 }
 
 // NewApprovalResolver adapts ApprovalService to ApprovalResolver.
-func NewApprovalResolver(svc *ApprovalService, store *ApprovalStore) ApprovalResolver {
+func NewApprovalResolver(svc *ApprovalService, store *approvalkit.ApprovalStore) ApprovalResolver {
 	return approvalServiceAdapter{svc: svc, store: store}
 }
 
-func (a approvalServiceAdapter) ResolveApproval(ctx context.Context, c ApprovalChoice) (ActionResult, error) {
+func (a approvalServiceAdapter) ResolveApproval(ctx context.Context, c ApprovalChoice) (questionkit.ActionResult, error) {
 	decision := "deny"
 	if c.Allow {
 		decision = "allow"
 	}
 	_, err := a.svc.resolveApproval(ctx, c.ApprovalID, decision, c.Reason, c.Override, resolutionSourceHuman)
 	if err == nil {
-		return applied(), nil
+		return questionkit.Applied(), nil
 	}
 	switch connect.CodeOf(err) {
 	case connect.CodeNotFound:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.decision(c.ApprovalID)), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.decision(c.ApprovalID)), nil
 	case connect.CodeFailedPrecondition:
 		// Still pending: the CI-red guard blocked it ("Approve anyway" needs confirm).
 		// Gone: a rule auto-resolved it while the operator looked.
 		if _, pending := a.store.Get(c.ApprovalID); pending {
-			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+			return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 		}
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.decision(c.ApprovalID)), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, a.decision(c.ApprovalID)), nil
 	case connect.CodeInvalidArgument, connect.CodeAborted:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}
-	return ActionResult{}, err
+	return questionkit.ActionResult{}, err
 }
 
 // decision is the stamped outcome of an already-resolved approval ("allow",
@@ -71,26 +75,26 @@ func NewGuidanceAnswerer(svc *GuidanceRequestService) GuidanceAnswerer {
 	return guidanceServiceAdapter{svc}
 }
 
-func (a guidanceServiceAdapter) AnswerGuidance(ctx context.Context, requestID, answer string) (ActionResult, error) {
+func (a guidanceServiceAdapter) AnswerGuidance(ctx context.Context, requestID, answer string) (questionkit.ActionResult, error) {
 	resp, err := a.svc.AnswerGuidanceRequest(ctx, connect.NewRequest(&sessionv1.AnswerGuidanceRequestRequest{Id: requestID, Answer: answer}))
 	if err != nil {
 		switch connect.CodeOf(err) {
 		case connect.CodeNotFound:
-			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
+			return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, ""), nil
 		case connect.CodeInvalidArgument:
-			return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
+			return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 		}
-		return ActionResult{}, err
+		return questionkit.ActionResult{}, err
 	}
 	if !resp.Msg.GetApplied() {
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, resp.Msg.GetRequest().GetAnswer()), nil
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, resp.Msg.GetRequest().GetAnswer()), nil
 	}
-	return applied(), nil
+	return questionkit.Applied(), nil
 }
 
 // pendingQuestionPeeker reads one registered question.
 type pendingQuestionPeeker interface {
-	Peek(QuestionKey) (PendingQuestion, bool)
+	Peek(questionkit.QuestionKey) (questionkit.PendingQuestion, bool)
 }
 
 // replyFunc is the existing hidden-session reply handler.
@@ -106,31 +110,31 @@ func optionDigit(labels []string, label string) string {
 	return ""
 }
 
-func mapReplyOutcome(r *sessionv1.ReplyToPendingQuestionResponse) ActionResult {
+func mapReplyOutcome(r *sessionv1.ReplyToPendingQuestionResponse) questionkit.ActionResult {
 	return mapReplyOutcomeValue(r.GetOutcome(), r.GetRetryAfterSeconds())
 }
 
-func mapReplyOutcomeValue(o sessionv1.ReplyOutcome, retryAfter int32) ActionResult {
+func mapReplyOutcomeValue(o sessionv1.ReplyOutcome, retryAfter int32) questionkit.ActionResult {
 	switch o {
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT:
-		return applied()
+		return questionkit.Applied()
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE, "")
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE, "")
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_replaced"}
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_replaced"}
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED:
-		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, RetryAfter: retryAfter}
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, RetryAfter: retryAfter}
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagOffMessage)
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage)
 	case sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT,
 		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_HIDDEN,
 		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING,
 		sessionv1.ReplyOutcome_REPLY_OUTCOME_UNSPECIFIED:
-		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
 	}
-	return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
 }
 
 // inProcessPeer lets the interim adapter call the reply handler in process: a
@@ -168,13 +172,13 @@ func (s *SessionService) WireAnswerRouter(d AnswerRouterDeps) *AnswerRouter {
 	}
 	r := &AnswerRouter{
 		sessions: s.answerSessions(), questions: s.replyState().store, hidden: s.ReplyToPendingQuestion,
-		visible: s.paneReplyCore, guard: NewHumanActiveGuard(defaultHumanActivity, tmux.ListClientActivity),
-		flags: configActionFlags{ev: compiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
+		visible: s.paneReplyCore, guard: access.NewHumanActiveGuard(access.DefaultHumanActivity(), tmux.ListClientActivity),
+		flags: configActionFlags{ev: flagsvc.CompiledFlagEvidence, fr: s.flagReader()}, rows: d.Rows, acks: d.Acks,
 	}
 	r.ensure = s.ensureRegistered(d.Mirror)
 	store := s.replyState().store
-	r.reopen = func(q PendingQuestion) {
-		store.Forget(QuestionKey{SessionUUID: q.SessionUUID, QuestionID: q.QuestionID})
+	r.reopen = func(q questionkit.PendingQuestion) {
+		store.Forget(questionkit.QuestionKey{SessionUUID: q.SessionUUID, QuestionID: q.QuestionID})
 		store.Register(q)
 	}
 	return r

@@ -7,6 +7,24 @@ import { SessionService, type TCCEnrichmentRoot } from "@/gen/session/v1/session
 import { getConnectTransport } from "@/lib/api/transport";
 import { SystemBanner } from "@/components/ui/SystemBanner";
 
+const DISMISSED_KEY = "ssq.tcc-enrichment.dismissed";
+
+function loadDismissed(): Set<string> {
+  try {
+    return new Set<string>(JSON.parse(window.localStorage.getItem(DISMISSED_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistDismissed(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(DISMISSED_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Storage unavailable: dismissal lasts for this page load only.
+  }
+}
+
 function useTCCEnrichment() {
   const client = useMemo(() => createClient(SessionService, getConnectTransport()), []);
   const acknowledged = useRef(new Set<string>());
@@ -58,7 +76,15 @@ function useTCCEnrichment() {
 export function TCCEnrichmentBanner() {
   const { roots, busy, errors, proceed } = useTCCEnrichment();
   const [deferred, setDeferred] = useState<Set<string>>(new Set());
-  return <>{roots.filter((root) => !deferred.has(root.id) && !(root.appConsented && root.outcome === "completed")).map((root) => (
+  const [dismissed, setDismissed] = useState<Set<string>>(loadDismissed);
+  // Keyed by id+outcome so a changed outcome (e.g. error -> denied) re-surfaces the banner.
+  const dismissKey = (root: TCCEnrichmentRoot) => `${root.id}:${root.appConsented}:${root.outcome}`;
+  const dismissForever = (key: string) => setDismissed((current) => {
+    const next = new Set(current).add(key);
+    persistDismissed(next);
+    return next;
+  });
+  return <>{roots.filter((root) => !deferred.has(root.id) && !dismissed.has(dismissKey(root)) && !(root.appConsented && root.outcome === "completed")).map((root) => (
     <SystemBanner
       key={root.id}
       id="tcc-enrichment-consent"
@@ -77,6 +103,7 @@ export function TCCEnrichmentBanner() {
         ...(root.appConsented && root.outcome === "denied" ? [{ label: "Check again", onClick: () => { void proceed(root.id); }, disabled: busy !== null }] : []),
         ...(!root.appConsented ? [{ label: "Continue to macOS permission request", onClick: () => { void proceed(root.id); }, disabled: busy !== null }] : []),
         { label: "Not now", onClick: () => setDeferred((current) => new Set(current).add(root.id)), disabled: busy === root.id },
+        { label: "Don't show again", onClick: () => dismissForever(dismissKey(root)), disabled: busy === root.id, testId: "tcc-dismiss-forever" },
       ]}
     />
   ))}</>;

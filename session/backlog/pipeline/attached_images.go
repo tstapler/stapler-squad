@@ -17,7 +17,7 @@ import (
 // unescaped, so one level of balanced parens is allowed inside the path.
 var attachedImageRe = regexp.MustCompile(`!\[[^\n]*?\]\(/api/local/serve(/(?:[^()\s]|\([^()\s]*\))+)\)`)
 
-// attachedImageExts mirrors the types backlog_attachment_upload_handler.go accepts.
+// attachedImageExts mirrors the types server/services/uploads/backlog_attachment_upload_handler.go accepts.
 var attachedImageExts = map[string]bool{".png": true, ".jpg": true, ".gif": true, ".webp": true}
 
 // WriteDescriptionSection is the single place a backlog item's description is

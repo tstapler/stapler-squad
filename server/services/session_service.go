@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,9 +26,16 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/anthropicwire"
+	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/auditkit"
+	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/federation"
+	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -107,7 +115,7 @@ type SessionService struct {
 
 	// guards is the live hidden_session_readonly_guards value the unary handlers
 	// read through AccessForUnary; the zero value is "on".
-	guards *UnaryGuardsFlag
+	guards *access.UnaryGuardsFlag
 	// guardBypass counts and rate-limits the guards-off bypass writes.
 	guardBypass guardBypassState
 	// reply is the Reply machinery (pending questions, idempotency, limiters,
@@ -132,8 +140,8 @@ type SessionService struct {
 	guidanceAcks *GuidanceAckDetector
 	hookReply    atomic.Pointer[hookReplyResolver]
 	// dialogCanary and guidanceMirror are installed after construction (Story 3.3).
-	dialogCanary   atomic.Pointer[DialogMatchCanary]
-	guidanceMirror atomic.Pointer[GuidanceHookMirror]
+	dialogCanary   atomic.Pointer[questionkit.DialogMatchCanary]
+	guidanceMirror atomic.Pointer[questionkit.GuidanceHookMirror]
 	ackCancel      context.CancelFunc
 	ackDone        chan struct{}
 
@@ -187,7 +195,7 @@ type SessionService struct {
 
 	// Extracted domain services.
 	reviewQueueSvc  *ReviewQueueService
-	searchSvc       *SearchService
+	searchSvc       *searchrpc.SearchService
 	githubSvc       *GitHubService
 	workspaceSvc    *WorkspaceService
 	configSvc       *ConfigService
@@ -215,7 +223,7 @@ type SessionService struct {
 	historyLinker *importer.HistoryLinker
 
 	// approvalStore holds pending Claude Code hook approval requests.
-	approvalStore *ApprovalStore
+	approvalStore *approvalkit.ApprovalStore
 
 	// deleteSessionCleanupTimeout bounds DeleteSession's cleanup-timeout warning;
 	// see defaultDeleteSessionCleanupTimeout's doc comment. Overridable via
@@ -292,7 +300,7 @@ type SessionService struct {
 	prCreationSvc *PRCreationService
 
 	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
-	featureFlagSvc *FeatureFlagService
+	featureFlagSvc *flagsvc.FeatureFlagService
 
 	// terminalSvc handles GetTerminalSnapshot/WriteToSession RPCs.
 	terminalSvc *TerminalService
@@ -717,7 +725,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 // so it can be unit-tested directly without needing config.IsTestMode() to be false.
 func loadClaudeSettingsRulesAtStartup(classifierObj *classifier.RuleBasedClassifier, cwd string, eventBus *events.EventBus) {
 	var claudeSettingsRules []classifier.Rule
-	for _, result := range LoadClaudeSettingsRulesDetailed(cwd) {
+	for _, result := range claudesettings.LoadClaudeSettingsRulesDetailed(cwd) {
 		claudeSettingsRules = append(claudeSettingsRules, result.Rules...)
 	}
 	if len(claudeSettingsRules) == 0 {
@@ -810,7 +818,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	} else {
 		log.Warn("failed to get config dir for approval persistence", "err", configErr)
 	}
-	approvalStore := NewApprovalStore(approvalFilePath)
+	approvalStore := approvalkit.NewApprovalStore(approvalFilePath)
 	reviewQueueSvc := NewReviewQueueService(reviewQueue, concStorage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
@@ -874,11 +882,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
 	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
 	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
-	var promptBuilder RulePromptBuilder
-	var aiClientImpl AIClient
+	var promptBuilder anthropicwire.RulePromptBuilder
+	var aiClientImpl anthropicwire.AIClient
 	{
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if c, backend := NewBestAvailableAIClient(apiKey, knownCLIAgents); c != nil {
+		if c, backend := anthropicwire.NewBestAvailableAIClient(apiKey, anthropicwire.KnownCLIAgents); c != nil {
 			promptBuilder = &DefaultRulePromptBuilder{}
 			aiClientImpl = c
 			log.Info("[SessionService] AI rule generation enabled", "backend", backend)
@@ -886,12 +894,12 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, WrapRulesAIClient(aiClientImpl))
+	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, anthropicwire.WrapRulesAIClient(aiClientImpl))
 
 	// Wire the claude-settings file watcher: fsnotify-driven or manually-triggered
 	// (ReloadClaudeSettingsRules RPC) reloads both flow through this one callback, which
 	// hot-swaps the classifier's claude-settings rules and emits a visible reload event.
-	claudeSettingsWatcher := NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
+	claudeSettingsWatcher := claudesettings.NewClaudeSettingsWatcher(cwd, func(rules []classifier.Rule, origin string, notify bool) {
 		rulesSvc.rebuildClaudeSettingsRules(rules)
 		log.Info("[ClaudeSettingsWatcher] reloaded claude-settings rules", "rule_count", len(rules), "origin", origin)
 		// notify is false for Start()'s initial priming reload — the operator already saw a
@@ -963,11 +971,11 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// h2 connection they leave in the shared transport pool shows up as a leaked
 	// goroutine in whichever goleak-checked test runs next.
 	if !config.IsTestMode() {
-		capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
-		capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("anthropic", anthropicwire.NewAnthropicLimitsClient(credChain, ""))
+		capacityMonitor.RegisterClient("google", anthropicwire.NewGeminiLimitsClient(credChain, ""))
 	}
 
-	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
+	if anthropicClient, ok := aiClientImpl.(*anthropicwire.AnthropicAIClient); ok {
 		anthropicClient.OnResponseHeaders = func(h http.Header) {
 			capacityMonitor.UpdateFromResponseHeaders("anthropic", h)
 		}
@@ -980,7 +988,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		concStorage:                 concStorage,
 		eventBus:                    eventBus,
 		reviewQueueSvc:              reviewQueueSvc,
-		searchSvc:                   NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		searchSvc:                   searchrpc.NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:                   NewGitHubService(concStorage),
 		workspaceSvc:                workspaceSvc,
 		configSvc:                   NewConfigService(),
@@ -1004,7 +1012,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
 		artifactSvc:                 &ArtifactService{},
-		featureFlagSvc:              NewFeatureFlagService(),
+		featureFlagSvc:              flagsvc.NewFeatureFlagService(),
 		terminalSvc:                 NewTerminalService(),
 		promptStore:                 newPromptStore(),
 		capacityMonitor:             capacityMonitor,
@@ -1016,13 +1024,13 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	capacityMonitor.sessionSwitcher = svc
 	capacityMonitor.poller = svc
 
-	svc.guards = &UnaryGuardsFlag{}
+	svc.guards = &access.UnaryGuardsFlag{}
 	svc.terminalSvc.SetGuardsFlag(svc.guards)
 	if concStorage != nil {
 		svc.terminalSvc.SetNudgeRecorder(concStorage)
 	}
 	workspaceSvc.SetGuardsFlag(svc.guards)
-	var linkLookup itemSessionLookup
+	var linkLookup questionkit.ItemSessionLookup
 	if concStorage != nil {
 		linkLookup = concStorage
 	}
@@ -1141,7 +1149,7 @@ func newGatedSessionService(storage session.InstanceStore, flags *featureflags.R
 	eventBus := events.NewEventBus(100)
 	eventBus.SetPublishFilter(gate.PublishFilter())
 	svc := NewSessionService(storage, eventBus)
-	svc.featureFlagSvc = NewFeatureFlagServiceWithRegistry(flags)
+	svc.featureFlagSvc = flagsvc.NewFeatureFlagServiceWithRegistry(flags)
 	svc.fileSvc.SetFlagRegistry(flags)
 	svc.deliveryGate = gate
 	svc.notificationSvc.SetDeliveryGate(gate)
@@ -1149,7 +1157,7 @@ func newGatedSessionService(storage session.InstanceStore, flags *featureflags.R
 	svc.wireLeaseFlag()
 	svc.wireGuardsFlag()
 	svc.wireReplyFlag()
-	wireNotificationActionFlags(svc.featureFlagSvc)
+	flagsvc.WireNotificationActionFlags(svc.featureFlagSvc)
 	return svc
 }
 
@@ -1176,37 +1184,39 @@ func (s *SessionService) wireGateFlag(gate *deliverygate.Gate) {
 		return ""
 	})
 	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, func(cfg *config.Config) string {
-		return s.flagReader().globalOffStatusDetail(cfg)
+		return s.flagReader().GlobalOffStatusDetail(cfg)
 	})
-	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, kindOffStatusDetail)
-	sink := NewAuditSink(config.GetConfigDir,
-		WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
+	ff.AddConfigStatusDetailSource(config.HiddenSessionGateFeatureFlag, flagsvc.KindOffStatusDetail)
+	sink := auditkit.NewAuditSink(config.GetConfigDir,
+		auditkit.WithAuditDegradedCounter(func(mode string) { gate.Metrics().Add(deliverygate.CounterAuditDegraded, mode) }))
 	s.notificationSvc.SetAuditSink(sink)
 	ff.SetAudit(sink, map[string]featureflags.FlagAuditPolicy{
-		config.HiddenSessionGateFeatureFlag: {}, // every gate flip takes the non-blocking path
-		terminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
-		hiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
-		hiddenSessionReplyFlagName:          replyFlagAuditPolicy,
+		config.HiddenSessionGateFeatureFlag:              {}, // every gate flip takes the non-blocking path
+		featureflags.TerminalWriteLeaseFlagName:          terminalWriteLeaseAuditPolicy,
+		featureflags.HiddenSessionReadonlyGuardsFlagName: guardsFlagAuditPolicy,
+		featureflags.HiddenSessionReplyFlagName:          replyFlagAuditPolicy,
 	})
-	ff.MergeAuditPolicies(notificationActionsFlagAuditPolicies())
-	ff.MergeAuditPolicies(sessionMultiPRFlagAuditPolicies())
+	ff.MergeAuditPolicies(flagsvc.NotificationActionsFlagAuditPolicies())
+	ff.MergeAuditPolicies(flagsvc.SessionMultiPRFlagAuditPolicies())
 }
 
 // flagReader reads flag decisions through this service's registry.
 // NewSessionService starts on the default FlagRegistry; newGatedSessionService swaps in the injected one.
-func (s *SessionService) flagReader() flagReader { return flagReader{reg: s.InjectedFlagRegistry()} }
+func (s *SessionService) flagReader() flagsvc.FlagReader {
+	return flagsvc.FlagReader{Reg: s.InjectedFlagRegistry()}
+}
 
 // InjectedFlagRegistry returns the registry the flag service was built with; nil only for a nil receiver.
 func (s *SessionService) InjectedFlagRegistry() *featureflags.Registry {
 	if s == nil {
 		return nil
 	}
-	return s.featureFlagSvc.injected()
+	return s.featureFlagSvc.InjectedRegistry()
 }
 
 // FeatureFlagRegistry returns the registry the flag service resolves flags against.
 func (s *SessionService) FeatureFlagRegistry() *featureflags.Registry {
-	return s.featureFlagSvc.reg()
+	return s.featureFlagSvc.Registry()
 }
 
 // DeliveryGate returns the delivery gate, or nil when the service was built

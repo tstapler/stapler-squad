@@ -47,7 +47,7 @@ attachMobileInput(container, { ...opts, onAnomaly: telemetry.onAnomaly, onDiagno
 
 | Flag | Default | Notes |
 |---|---|---|
-| `mobile_input_layer` | on (server default in `server/services/feature_flag_service.go`; client constant `MOBILE_INPUT_LAYER_DEFAULT` in `flagStore.ts` must equal it, a test asserts it) | Rollback-only kill switch, live-settable in the feature-flag panel with per-scope override. Off falls back to the plain terminal, and ghostty is then not used on Android phones. Affects only the Android class. |
+| `mobile_input_layer` | on (server default in `server/services/flagsvc/feature_flag_service.go`; client constant `MOBILE_INPUT_LAYER_DEFAULT` in `flagStore.ts` must equal it, a test asserts it) | Rollback-only kill switch, live-settable in the feature-flag panel with per-scope override. Off falls back to the plain terminal, and ghostty is then not used on Android phones. Affects only the Android class. |
 | `mobile_input_queue` | off | Queue keystrokes while disconnected and send on reconnect **(planned, PR-B)**. Needs the layer flag. |
 | `mobile_input_diagnostics` | off | The full diagnostics sheet **(planned, PR-C)**. The minimal `?inputdebug=1` panel is not behind it. |
 | `mobile_input_compose` | off | Compose box for longer input **(planned)**. |
@@ -66,7 +66,7 @@ Open any page with `?mobile_input=0` (force off) or `?mobile_input=1` (force on)
 
 ## Input sites and the `received` / `forwarded` stages
 
-The server counts every input frame at its entry path (`server/services/terminal_input_metrics.go`, sites in `terminal_input_sites.go`). `received` is recorded at the entry, before the read-only and permission gates. `forwarded` is recorded when the gates passed and the write was issued, so `received - forwarded` means "denied before the write", never "this path does not record forwarded".
+The server counts every input frame at its entry path (`server/services/access/terminal_input_metrics.go`, sites in `terminal_input_sites.go`). `received` is recorded at the entry, before the read-only and permission gates. `forwarded` is recorded when the gates passed and the write was issued, so `received - forwarded` means "denied before the write", never "this path does not record forwarded".
 
 | `path` label | Entry function | `forwarded` recorded | Gates before it |
 |---|---|---|---|
