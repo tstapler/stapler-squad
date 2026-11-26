@@ -133,34 +133,38 @@ describe("useHistoryFullTextSearch streaming (flag history_search_streaming)", (
     expect(mockSearchClaudeHistory).not.toHaveBeenCalled();
   });
 
-  it("useHistoryFullTextSearch_should_ShowFirstBatchWithin200ms_And_NeverClearList_When_LaterBatchesArrive", async () => {
+  it("useHistoryFullTextSearch_should_ShowFirstBatchWithoutAnyTimerAdvance_And_NeverClearList_When_LaterBatchesArrive", async () => {
     mockStreamingFlag = true;
     let releaseSecond!: () => void;
     const gate = new Promise<void>((r) => { releaseSecond = r; });
-    let firstYieldAt = 0;
     mockStreamSearchClaudeHistory.mockImplementation(async function* () {
-      firstYieldAt = performance.now();
       yield { results: [result("a")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: false, indexWarming: false };
       await gate;
       yield { results: [result("b")], totalMatches: 2, queryTimeMs: 1n, hasMore: false, isFinal: true, indexWarming: false };
     });
 
+    jest.useFakeTimers();
     const { result: hook } = renderHook(() => useHistoryFullTextSearch({ autoSearch: false }));
     const seen: number[] = [];
     let done!: Promise<void>;
     act(() => { done = hook.current.search({ query: "x" }); });
 
-    await waitFor(() => expect(hook.current.results).toHaveLength(1));
-    const renderedAfterMs = performance.now() - firstYieldAt;
-    seen.push(hook.current.results.length);
-    // Second batch is still gated, so the first batch is visible before the stream completes.
-    expect(hook.current.loading).toBe(true);
-    expect(renderedAfterMs).toBeLessThan(200);
+    try {
+      // Only microtasks are flushed; no timer is advanced, so a debounce/throttle/timeout
+      // between the first yield and the render would leave results empty here.
+      for (let i = 0; i < 20; i++) await act(async () => { await Promise.resolve(); });
+      expect(hook.current.results).toHaveLength(1);
+      seen.push(hook.current.results.length);
+      // Second batch is still gated, so the first batch is visible before the stream completes.
+      expect(hook.current.loading).toBe(true);
 
-    releaseSecond();
-    await act(async () => { await done; });
-    seen.push(hook.current.results.length);
-    expect(seen).toEqual([1, 2]);
+      releaseSecond();
+      await act(async () => { await done; });
+      seen.push(hook.current.results.length);
+      expect(seen).toEqual([1, 2]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("useHistoryFullTextSearch_should_ExposeIndexWarmingUntilResultsArrive_When_ColdStartStream", async () => {

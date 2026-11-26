@@ -16,6 +16,7 @@ import { getPrimaryCardAction } from "@/lib/backlog/itemActions";
 import { BlockerChip } from "./BlockerChip";
 import { DependencyChip } from "./DependencyChip";
 import { DuplicatePendingBadge } from "./DuplicatePendingBadge";
+import { IntegrationCheckBadge } from "./IntegrationCheckBadge";
 import { ClaimChip } from "./ClaimChip";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { safeExternalHref } from "./externalRef";
@@ -227,6 +228,7 @@ export const BacklogItemCard = memo(function BacklogItemCard({
         <span className={styles.statusLabel} data-testid="backlog-item-card-status">
           {getStatusLabel(item.status)}
         </span>
+        {item.isIntegrationChild && <IntegrationCheckBadge />}
         {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
       </div>
 

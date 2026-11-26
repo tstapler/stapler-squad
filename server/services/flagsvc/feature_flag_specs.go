@@ -22,6 +22,10 @@ var coreFlagSpecTable = []featureflags.Spec{
 		Description: "Comment on the linked GitHub issue when a backlog item starts work (in_progress, naming the host) and when it opens a PR (review). The done-transition close comment is not gated by this flag. Default: off.",
 	},
 	{
+		Name:        featureflags.EpicIntegrationChildFlagName,
+		Description: "Epic integration child: when an epic's planning completes, auto-create a last child that depends on every sibling, runs the epic's end-to-end check, and gates the epic's done transition. Flip on once the Epic items parent-child edge is live. Default: off.",
+	},
+	{
 		Name:        featureflags.ChangelogFlagName,
 		Description: "Built-in changelog: the /changelog page, GET /api/changelog, and the update badge. Turn off to hide all three. Default: on.",
 		Default:     true,

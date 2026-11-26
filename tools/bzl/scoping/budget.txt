@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # A row is either the exact measured value or the initial value rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered
 # (lowering needs no raise line, and neither does a new row); raising one needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`). A row set to the exact measured value has no slack, so unrelated work that lands in the package will need a raise line.
-session files=47 loc=9442 imports=50
+session files=47 loc=9451 imports=50
 # INTERIM (owner-approved cap exception, W3): the Instance family moved here whole; it is decomposed under 10k LOC in a later track, then this row drops to the standard cap.
 session/instance files=89 loc=24186 imports=42
 session/procbackend files=9 loc=2214 imports=10
@@ -20,7 +20,7 @@ session/analyticsstore files=1 loc=271 imports=5
 session/instancestore files=8 loc=1596 imports=11
 session/domain files=49 loc=6008 imports=0
 session/sessionpr files=6 loc=1900 imports=14
-session/backlogstore files=31 loc=5956 imports=21
+session/backlogstore files=33 loc=6358 imports=21
 session/claudectl files=3 loc=1400 imports=9
 session/claudectl/claudectltest files=1 loc=45 imports=3
 session/panereply files=6 loc=1303 imports=7
@@ -51,7 +51,7 @@ server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
 server/services/wsconn files=23 loc=9770 imports=29
-server/services/backlogsvc files=37 loc=15639 imports=40
+server/services/backlogsvc files=41 loc=16482 imports=42
 server/services/internal/svctest files=36 loc=1582 imports=23
 server/services/sessionbundle files=4 loc=862 imports=9
 server/services/devtools files=4 loc=501 imports=4
@@ -63,7 +63,7 @@ server/services/unfinishedwork files=1 loc=715 imports=12
 server/services/importsvc files=1 loc=454 imports=9
 server/services/federation files=6 loc=955 imports=6
 session/domain/backlogdto files=16 loc=1555 imports=2
-server/services/featureflags files=4 loc=204 imports=2
+server/services/featureflags files=4 loc=207 imports=2
 server/services/secretscan files=2 loc=107 imports=0
 server/services/credkit files=2 loc=589 imports=3
 server/services/anthropicwire files=6 loc=824 imports=7
