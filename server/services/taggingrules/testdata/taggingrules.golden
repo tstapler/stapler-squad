@@ -27,13 +27,13 @@ compiled: 4 rules
   id="u-empty-req" name="empty req" prio=-5 enabled=false source="seed" n=- b=- p=- g=- req=[]string{} out="E"
   id="u-min" name="min v2" prio=0 enabled=true source="" n=- b=- p=- g=- req=[]string(nil) out="Min2"
 db: 4 rows err=<nil>
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"u-empty-req","Name":"empty req","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"E","Priority":-5,"Enabled":false,"Source":"seed","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"seed-lookalike","Name":"lookalike","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"x","Priority":0,"Enabled":false,"Source":"user","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"u-min","Name":"min v2","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"Min2","Priority":0,"Enabled":true,"Source":"","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"u-full","Name":"Full v2","NamePattern":"^n","BranchPattern":"^b/","PathPattern":"/p/","ProgramPattern":"cla.de","RequiredTags":[],"OutputTag":"Full","Priority":99,"Enabled":true,"Source":"user","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
 All returns a copy: true
 delete unknown err="tagging rule \"nope\": tagging rule not found" validation=false notfound=true
@@ -45,11 +45,11 @@ after delete: 3 specs
   {"id":"u-empty-req","name":"empty req","output_tag":"E","priority":-5,"enabled":false,"source":"seed","created_at":"2024-03-02T01:00:00.123456Z"}
   {"id":"u-min","name":"min v2","output_tag":"Min2","priority":0,"enabled":true,"source":"","created_at":"2024-03-02T01:00:00.123456Z"}
 db after delete: 3 rows err=<nil>
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"u-empty-req","Name":"empty req","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"E","Priority":-5,"Enabled":false,"Source":"seed","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"seed-lookalike","Name":"lookalike","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"x","Priority":0,"Enabled":false,"Source":"user","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
-  updatedSet=true
+  createdSet=true updatedSet=true
   {"RuleID":"u-min","Name":"min v2","NamePattern":"","BranchPattern":"","PathPattern":"","ProgramPattern":"","RequiredTags":[],"OutputTag":"Min2","Priority":0,"Enabled":true,"Source":"","CreatedAt":"0001-01-01T00:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z"}
 reload err=<nil>
 reloaded: 5 specs

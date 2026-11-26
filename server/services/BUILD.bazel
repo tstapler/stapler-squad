@@ -544,6 +544,7 @@ go_test(
         "session_service_stream_terminal_readonly_test.go",
         "session_service_stream_terminal_remote_test.go",
         "session_service_stream_terminal_test.go",
+        "session_service_tagging_wiring_test.go",
         "session_service_test.go",
         "session_service_update_steer_test.go",
         "session_service_wiring_test.go",

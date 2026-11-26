@@ -87,12 +87,12 @@ func (tr *transcript) rows(label string, storage *session.Storage) {
 	rows, err := storage.AllTaggingRules(context.Background())
 	tr.line("%s: %d rows err=%s", label, len(rows), goldenErr(err))
 	for _, r := range rows {
+		tr.line("  createdSet=%t updatedSet=%t", !r.CreatedAt.IsZero(), !r.UpdatedAt.IsZero())
 		if r.CreatedAt.Year() != goldenCreatedAt.Year() {
 			r.CreatedAt = time.Time{}
 		} else {
 			r.CreatedAt = r.CreatedAt.UTC()
 		}
-		tr.line("  updatedSet=%t", !r.UpdatedAt.IsZero())
 		r.UpdatedAt = time.Time{}
 		b, err := json.Marshal(r)
 		if err != nil {
