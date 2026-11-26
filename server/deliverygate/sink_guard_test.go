@@ -309,6 +309,25 @@ func TestSinkGuard_ShouldRequireAllowlistReason_WhenNotifierImplEventNotificatio
 	assertCovered(t, "NotificationHistoryStore.Append* caller", res.appendCallers, reviewedAppendCallers)
 }
 
+// A package in notificationPackages has every Subscribe listed even though it
+// never names events.EventNotification.
+func TestSinkGuard_ShouldListSubscribe_WhenPackageIsDeclaredNotificationHandling(t *testing.T) {
+	if !notificationPackages[svcPkgPath+"/notify"] {
+		t.Error("server/services/notify must stay in notificationPackages")
+	}
+	quiet := modulePath + "/server/deliverygate/testdata/sinkfixture/quiet"
+	pkgs := loadPackages(t, "./server/deliverygate/testdata/sinkfixture/quiet")
+	want := finding("consumer: " + quiet + ".Listen")
+	if got := scan(t, pkgs, false).consumers; got[want] {
+		t.Fatalf("fixture must not be found by the EventNotification rule alone: %v", sortedKeys(got))
+	}
+	notificationPackages[quiet] = true
+	defer delete(notificationPackages, quiet)
+	if got := scan(t, pkgs, false).consumers; !got[want] {
+		t.Errorf("scan missed %s; found %v", want, sortedKeys(got))
+	}
+}
+
 // T-MX-07: raw session.Instance.Hidden reads in server non-test code are
 // allowlisted; none of the remaining readers is notification-related.
 func TestRawHiddenReads_ShouldOnlyAppearInAllowlist_WhenScanningServerNonTestFiles(t *testing.T) {

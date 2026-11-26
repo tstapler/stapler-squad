@@ -73,7 +73,7 @@ var (
 )
 
 // ActionPolicies has exactly one row per ActionKind. ANSWER_QUESTION is listed
-// at its live_keystroke tier; a durable-record answer is Tier A (answerTier).
+// at its live_keystroke tier; a durable-record answer is Tier A (AnswerTier).
 var ActionPolicies = map[sessionv1.ActionKind]actionPolicy{
 	sessionv1.ActionKind_ACTION_KIND_OPEN:             policyTierA,
 	sessionv1.ActionKind_ACTION_KIND_APPROVE:          policyTierA,

@@ -96,7 +96,7 @@ type ApprovalHandler struct {
 	autonomousChecker   func(string) bool                     // optional: returns true if sessionID is an autonomous session
 	pollInterval        time.Duration                         // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
 	liveFinder          LiveInstanceFinder                    // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
-	slackNotifier       *notify.SlackNotifier                 // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	slackNotifier       *notify.SlackNotifier                 // optional: notifies a configured Slack webhook about new pending approvals; concrete type, no interface
 	dashboardBaseURLFn  func() string                         // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 	autoApprovedGate    AutoApprovedGate                      // optional: drops hidden-session auto-allow history rows (nil = append all)
@@ -851,7 +851,7 @@ func truncateEscalationReason(s string) string {
 
 // resolveSessionID returns the stable session ID (UUID) for a given raw header
 // value and cwd. It tries the header first (matching by title or UUID via
-// stableIDForData/matchesIDData), then falls back to cwd prefix matching.
+// notify.StableIDForData/MatchesIDData), then falls back to cwd prefix matching.
 // Uses ListInstanceData to avoid constructing Instance objects and spawning
 // tmux subprocesses for every stopped session.
 func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {

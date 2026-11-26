@@ -58,7 +58,7 @@ func StableIDForData(d domain.InstanceData) string {
 // tmux session name (prefix + sanitized title). The tmux-name branch requires a
 // non-empty TmuxPrefix to avoid a title-only match that would bypass UUID lookup.
 //
-// TODO: move stableIDForData and matchesIDData to session.InstanceData methods so
+// TODO: move StableIDForData and MatchesIDData to session.InstanceData methods so
 // the matching semantics are colocated with the type they operate on.
 func MatchesIDData(d domain.InstanceData, id string) bool {
 	if d.UUID != "" && d.UUID == id {

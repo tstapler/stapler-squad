@@ -30,6 +30,7 @@ func TestPackageDirection_should_NotImportServicesOrMCP(t *testing.T) {
 
 	for _, forbidden := range []string{
 		modulePath + "/server/services",
+		modulePath + "/server/services/notify",
 		modulePath + "/server/mcp",
 		modulePath + "/server/wakes",
 		modulePath + "/github",

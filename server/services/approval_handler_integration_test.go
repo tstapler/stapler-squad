@@ -589,7 +589,7 @@ func TestResolveSessionID_UnknownReturnsEmpty(t *testing.T) {
 }
 
 // TestMatchesIDData_TmuxNameBranch verifies that when a session has a non-empty
-// TmuxPrefix, matchesIDData matches the computed tmux session name
+// TmuxPrefix, notify.MatchesIDData matches the computed tmux session name
 // (prefix + sanitized title), and that an empty TmuxPrefix does NOT match via
 // that branch (preventing title-only bypass of UUID resolution).
 func TestMatchesIDData_TmuxNameBranch(t *testing.T) {

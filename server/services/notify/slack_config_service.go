@@ -32,7 +32,7 @@ type SlackConfigService struct {
 
 // NewSlackConfigService creates a SlackConfigService backed by the given
 // SlackNotifier (used for GetDeliveryStatus and, for TestSlackWebhook, the
-// shared postToSlack helper — both types live in package services).
+// shared postToSlack helper — both types live in package notify).
 func NewSlackConfigService(n *SlackNotifier) *SlackConfigService {
 	return &SlackConfigService{SlackNotifier: n}
 }
