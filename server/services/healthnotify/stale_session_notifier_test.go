@@ -1,4 +1,4 @@
-package services
+package healthnotify
 
 import (
 	"context"
@@ -13,13 +13,11 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
-	"github.com/tstapler/stapler-squad/session/queue"
 )
 
-// newStaleTestInstance builds a bare *session.Instance for StaleSessionNotifier tests.
+// newStaleTestInstance builds a bare *instance.Instance for StaleSessionNotifier tests.
 // lastMeaningfulOutput is written through both the plain field and SyncAtomicTimestamps()
 // so GetTimeSinceLastMeaningfulOutput()'s fast (atomic-shadow) path reflects it immediately,
 // mirroring the pattern session/review_queue_poller_test.go's makeAcknowledgedInstance uses.
@@ -43,13 +41,26 @@ func setLastMeaningfulOutput(inst *instance.Instance, t time.Time) {
 	inst.SyncAtomicTimestamps()
 }
 
-// newTestNotifierPoller builds a ReviewQueuePoller pre-loaded with instances, for
-// StaleSessionNotifier tests that only need GetInstances() -- never Start()ed, so no
-// polling goroutine or tmux/status-manager dependency is required.
-func newTestNotifierPoller(instances ...*instance.Instance) *session.ReviewQueuePoller {
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), nil, nil)
-	poller.SetInstances(instances)
-	return poller
+// newTestNotifierPoller serves instances as the notifiers' InstancePoller.
+func newTestNotifierPoller(instances ...*instance.Instance) *svctest.MockInstancePoller {
+	return &svctest.MockInstancePoller{Instances: instances}
+}
+
+// testPorts mirrors services.DerivePriority, which the leaf cannot import;
+// server/health_notifiers_wiring_test.go pins the production wiring.
+func testPorts() Ports {
+	return Ports{DerivePriority: func(urgent, important bool) int32 {
+		switch {
+		case urgent && important:
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT)
+		case important:
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH)
+		case urgent:
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM)
+		default:
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW)
+		}
+	}}
 }
 
 // writeStaleSessionConfig writes a minimal config.json under dir with the given
@@ -104,7 +115,7 @@ func TestStaleSessionNotifier_checkAll_should_FireExactlyOnce_When_SessionStaysS
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 
 	notifier.checkAll()
 	ev := drainOneNotification(t, ch)
@@ -130,7 +141,7 @@ func TestStaleSessionNotifier_checkAll_should_ReArm_When_SessionRecoversAndGoesS
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 
 	// First stale episode.
 	notifier.checkAll()
@@ -159,7 +170,7 @@ func TestStaleSessionNotifier_checkAll_should_NotNotify_When_SessionIsNotActive(
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 	notifier.checkAll()
 	assertNoNotification(t, ch)
 }
@@ -176,7 +187,7 @@ func TestStaleSessionNotifier_checkAll_should_NotNotify_When_NotifyEnabledIsFals
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 	notifier.checkAll()
 	assertNoNotification(t, ch)
 }
@@ -194,7 +205,7 @@ func TestStaleSessionNotifier_checkAll_should_ObserveConfigChange_When_ConfigFil
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 
 	notifier.checkAll()
 	assertNoNotification(t, ch)
@@ -219,7 +230,7 @@ func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenRes
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 
 	// First stale episode.
 	notifier.checkAll()
@@ -266,7 +277,7 @@ func TestStaleSessionNotifier_checkAll_should_FireOnceOnceEnabled_When_NotifyWas
 	defer cancel()
 	ch, _ := bus.Subscribe(ctx)
 
-	notifier := NewStaleSessionNotifier(poller, bus)
+	notifier := NewStaleSessionNotifier(poller, bus, testPorts())
 
 	// notify_enabled is false when the session first crosses threshold -- no notification,
 	// and (per the fix) no dedup entry should be recorded either.

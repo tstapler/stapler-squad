@@ -1,4 +1,6 @@
-package services
+// Package healthnotify holds the periodic operator-health notifiers: stale sessions and
+// cgroup memory pressure. Both only publish to the event bus.
+package healthnotify
 
 import (
 	"context"
@@ -11,7 +13,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -22,6 +23,28 @@ import (
 // overhead of the review queue poller's own multi-second cadence -- this sweeper only reads
 // in-memory instance state (GetStatus/GetTimeSinceLastMeaningfulOutput), no I/O.
 const staleSessionNotifierCheckInterval = 60 * time.Second
+
+// InstancePoller is the notifiers' view of the live sessions.
+type InstancePoller interface {
+	GetInstances() []*instance.Instance
+}
+
+// Ports are the hub functions the notifiers need.
+type Ports struct {
+	// DerivePriority maps the (urgent, important) axes to a NotificationPriority value.
+	// Nil is a wiring bug: the constructors log it and notify at unspecified priority.
+	DerivePriority func(urgent, important bool) int32
+}
+
+func (p Ports) orUnspecified() Ports {
+	if p.DerivePriority == nil {
+		log.Error("healthnotify: Ports.DerivePriority is not wired; notifications publish at unspecified priority")
+		p.DerivePriority = func(bool, bool) int32 {
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_UNSPECIFIED)
+		}
+	}
+	return p
+}
 
 // StaleSessionNotifier is a small, independent, periodic sweeper that fires an
 // edge-triggered, self-clearing notification the first time an ACTIVE session crosses the
@@ -36,8 +59,9 @@ const staleSessionNotifierCheckInterval = 60 * time.Second
 // dedup state with any of them. It exists purely to raise an operator-facing notification
 // event, not to change queue membership or backlog lifecycle state.
 type StaleSessionNotifier struct {
-	poller   *session.ReviewQueuePoller
+	poller   InstancePoller
 	eventBus *events.EventBus
+	ports    Ports
 
 	mu sync.Mutex
 	// notifiedSessions tracks sessions that have already fired an ACTUAL notification for
@@ -59,10 +83,11 @@ type StaleSessionNotifier struct {
 // dependency is optional in production, but a nil eventBus is tolerated (notify becomes a
 // no-op) so this can be safely constructed before the event bus exists during startup
 // wiring.
-func NewStaleSessionNotifier(poller *session.ReviewQueuePoller, eventBus *events.EventBus) *StaleSessionNotifier {
+func NewStaleSessionNotifier(poller InstancePoller, eventBus *events.EventBus, ports Ports) *StaleSessionNotifier {
 	return &StaleSessionNotifier{
 		poller:           poller,
 		eventBus:         eventBus,
+		ports:            ports.orUnspecified(),
 		notifiedSessions: make(map[string]time.Time),
 	}
 }
@@ -149,7 +174,7 @@ func (n *StaleSessionNotifier) notify(inst *instance.Instance, idle time.Duratio
 	n.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, inst.Title, uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		DerivePriority(false, false), // urgent, important — routine self-monitoring telemetry, not actionable on its own
+		n.ports.DerivePriority(false, false), // urgent, important — routine self-monitoring telemetry, not actionable on its own
 		"Session went stale",
 		fmt.Sprintf("%s has produced no output for %s.", inst.Title, idle.Round(time.Second)),
 		map[string]string{"session_id": sessionID, "reason": "stale"},

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
 
 	"connectrpc.com/connect"
@@ -287,7 +288,7 @@ type SessionService struct {
 
 	// streamHubRolloutSvc handles the stream-hub staged-rollout RPCs
 	// (terminal-multi-connection-streaming Story 3.3).
-	streamHubRolloutSvc *StreamHubRolloutService
+	streamHubRolloutSvc *streamhubrollout.StreamHubRolloutService
 
 	// launcherPresetsSvc handles the GetLauncherPresets RPC.
 	launcherPresetsSvc *LauncherPresetsService
@@ -1012,7 +1013,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
-		streamHubRolloutSvc:         NewStreamHubRolloutService(nil),
+		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
 		launcherPresetsSvc:          NewLauncherPresetsService(),
 		projectSvc:                  NewProjectService(concStorage),
 		checkpointSvc:               NewCheckpointService(storage, eventBus),
@@ -1069,7 +1070,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// (see the Set* wiring doc comment above NewSessionService), so they are nil
 	// here at construction time.
 	svc.prCreationSvc = NewPRCreationService(storage, eventBus, svc.headlessPool, svc.backlogLifecycleListener, svc.findInstance)
-	svc.streamHubRolloutSvc = NewStreamHubRolloutService(svc.findInstance)
+	svc.streamHubRolloutSvc = streamhubrollout.NewStreamHubRolloutService(svc.findInstance)
 
 	// Wire the autonomous orchestration service with a storage getter closure.
 	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)

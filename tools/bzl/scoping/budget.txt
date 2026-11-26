@@ -46,11 +46,11 @@ session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/internal/procbackendtest files=6 loc=571 imports=5
 session/prpoller files=7 loc=2080 imports=8
-server/services files=164 loc=46733 imports=98
+server/services files=161 loc=46093 imports=100
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=143 imports=3
-server/services/wsconn files=23 loc=9770 imports=29
+server/services/wsconn files=23 loc=9771 imports=30
 server/services/backlogsvc files=41 loc=16482 imports=42
 server/services/internal/svctest files=36 loc=1582 imports=23
 server/services/sessionbundle files=4 loc=862 imports=9
@@ -113,3 +113,6 @@ server/services/gatestats files=6 loc=568 imports=5
 server/services/backlogmisc files=4 loc=599 imports=10
 server/services/quota files=3 loc=811 imports=9
 server/services/taggingrules files=2 loc=554 imports=5
+server/services/healthnotify files=2 loc=382 imports=7
+server/services/streamhubrollout files=1 loc=170 imports=4
+server/services/domainage files=1 loc=229 imports=1

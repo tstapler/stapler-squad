@@ -122,9 +122,9 @@ func BenchmarkGogitstoreSoakUnderSustainedLoad(b *testing.B) {
 		buildPackedFixture(b, mainDir, 25)
 		wts := []string{mainDir}
 		for w := 0; w < worktreesPerRepo; w++ {
-			wtDir := filepath.Join(root, fmt.Sprintf("repo%d-wt%d", i, w))
-			addWorktree(b, mainDir, wtDir, fmt.Sprintf("wt-%d-%d", i, w))
-			wts = append(wts, wtDir)
+			name := fmt.Sprintf("repo%d-wt%d", i, w)
+			// addWorktree creates the worktree in its own temp dir and returns that path.
+			wts = append(wts, addWorktree(b, mainDir, name, fmt.Sprintf("wt-%d-%d", i, w)))
 		}
 		repos[i] = repoInfo{mainDir: mainDir, worktrees: wts}
 	}

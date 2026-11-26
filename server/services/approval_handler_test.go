@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
+	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -407,10 +408,8 @@ func TestHandlePermissionRequest_EscalationReason_DomainAge(t *testing.T) {
 	t.Parallel()
 	h, store := newTestHandler(5 * time.Second)
 
-	checker := NewDomainAgeChecker(true)
-	checker.httpClient = &http.Client{
-		Transport: &fakeRDAPTransport{registeredAt: time.Now().Add(-5 * 24 * time.Hour)},
-	}
+	checker := domainage.NewDomainAgeChecker(true)
+	checker.SetTransport(&fakeRDAPTransport{registeredAt: time.Now().Add(-5 * 24 * time.Hour)})
 	h.SetDomainChecker(checker)
 
 	var captured approvalkit.PendingApproval
