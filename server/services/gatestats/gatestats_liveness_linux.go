@@ -1,6 +1,6 @@
 //go:build linux
 
-package services
+package gatestats
 
 import (
 	"os"

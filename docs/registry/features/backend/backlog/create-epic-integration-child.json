@@ -1,0 +1,17 @@
+{
+  "id": "backlog:create-epic-integration-child",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "CreateEpicIntegrationChild",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlogsvc/backlog_service_epic_rpc.go",
+  "tested": true,
+  "testIds": [
+    "TestCreateEpicIntegrationChild_should_ReturnItem_When_FlagOnAndE2EAC",
+    "TestCreateEpicIntegrationChild_should_ReturnFailedPrecondition_When_FlagOff",
+    "TestCreateEpicIntegrationChild_should_ReturnFailedPrecondition_When_NoE2ECommand",
+    "TestCreateEpicIntegrationChild_should_ReturnInvalidArgument_When_TooManySiblings"
+  ],
+  "lastModified": "2026-11-25T18:56:46.954026695-08:00"
+}
