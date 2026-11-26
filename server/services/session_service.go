@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
+	"github.com/tstapler/stapler-squad/server/services/taggingrules"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -207,7 +208,7 @@ type SessionService struct {
 	// (Phase 5 of the session-classifier-pipeline project). nil-safe: those RPC handlers
 	// guard with `if s.taggingRulesSvc == nil` and return CodeUnimplemented, mirroring the
 	// pattern documented for rulesSvc's own nil-safe accessors below.
-	taggingRulesSvc *TaggingRulesService
+	taggingRulesSvc *taggingrules.TaggingRulesService
 	// taggingEngine is the same live engine taggingRulesSvc mutates on CRUD — injected into
 	// every Instance (wireCallbacks) so session/instance_actor_setters.go's reclassifyTagsLocked
 	// fixpoint hook has a real rule set to evaluate (session-classifier-pipeline Epic 3.3/Task
@@ -850,16 +851,16 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	// Instance construction by a later phase of this project (session-classifier-pipeline
 	// Phase 3) — constructing it here just gives TaggingRulesService's CRUD/rebuild
 	// plumbing a real engine to target ahead of that wiring.
-	taggingRulesStore, taggingRulesErr := NewTaggingRulesStore(concStorage)
+	taggingRulesStore, taggingRulesErr := taggingrules.NewTaggingRulesStore(concStorage)
 	if taggingRulesErr != nil {
 		log.Warn("failed to load tagging rules store, using empty store", "err", taggingRulesErr)
-		taggingRulesStore = &TaggingRulesStore{storage: concStorage}
+		taggingRulesStore = taggingrules.NewEmptyTaggingRulesStore(concStorage)
 	}
 	taggingEngine := classifier.NewTaggingEngine()
 	if userTaggingRules := taggingRulesStore.ToRules(); len(userTaggingRules) > 0 {
 		taggingEngine.AddRules(userTaggingRules)
 	}
-	taggingRulesSvc := NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
+	taggingRulesSvc := taggingrules.NewTaggingRulesService(taggingRulesStore, taggingEngine, analyticsStore)
 
 	// Determine the server process's own working directory for claude-settings
 	// project-level scope. Empty cwd makes LoadClaudeSettingsRulesDetailed skip
