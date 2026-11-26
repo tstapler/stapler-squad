@@ -124,6 +124,8 @@ type InstanceData struct {
 	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
 	// Tmux session prefix for isolation
 	TmuxPrefix string `json:"tmux_prefix,omitempty"`
+	// TmuxTitle is the title the tmux session name derives from after a rename; see TmuxNameTitle.
+	TmuxTitle string `json:"tmux_title,omitempty"`
 	// Tmux server socket name for isolation (used with tmux -L flag)
 	TmuxServerSocket string `json:"tmux_server_socket,omitempty"`
 	// TymuxSessionID is the tymuxd session id this Instance owns. Restore adopts

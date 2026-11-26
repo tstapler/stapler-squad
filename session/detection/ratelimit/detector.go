@@ -78,7 +78,7 @@ var quotaKeywords = []string{"usage limit", "rate limit", "quota"}
 
 // maybeLogUndetectedWording logs a warning, once per session, if output contains a
 // generic quota/limit keyword that none of the configured rate-limit regex patterns
-// matched. Downstream consumers (e.g. server/services/quota_gate.go's hard/reactive
+// matched. Downstream consumers (e.g. server/services/quota/quota_gate.go's hard/reactive
 // override signal) depend entirely on this package's regex set to observe rate-limit
 // events — a wording variant Anthropic ships later that the regex set misses would
 // otherwise silently defeat that dependent behavior with no signal anything is wrong.

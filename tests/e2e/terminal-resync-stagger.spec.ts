@@ -96,6 +96,7 @@ test.describe('terminal-resync-stagger', () => {
   test('staggerCoordinator_should_FireResyncImmediatelyWithNoJitter_When_StaggerFlagOff', async ({ page }) => {
     const consoleMessages: string[] = [];
     page.on('console', (msg) => consoleMessages.push(msg.text()));
+    await page.clock.install();
 
     const shellTabs = await openSessionDetailView(page);
     await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 8000 });
@@ -117,24 +118,36 @@ test.describe('terminal-resync-stagger', () => {
       expect(connected).toBe(true);
     }).toPass({ timeout: 15000, intervals: [200] });
 
-    const messagesBeforeTrigger = consoleMessages.length;
-
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-      document.dispatchEvent(new Event('visibilitychange'));
-      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-      document.dispatchEvent(new Event('visibilitychange'));
-      window.dispatchEvent(new Event('focus'));
-    });
-
-    // A resync must actually fire (proves the trigger worked at all) — logged
-    // synchronously inside the `fire` closure regardless of stagger state.
+    // The delayed post-connection resize stamps "synced now" and requests pane content; wait for it so
+    // it does not land between the clock jump and the trigger below.
     await expect(async () => {
-      const fired = consoleMessages
+      const resized = consoleMessages.findIndex((m) => m.includes('Post-connection resize sync'));
+      expect(resized).toBeGreaterThanOrEqual(0);
+      expect(consoleMessages.slice(resized).some((m) => m.includes('Requesting fresh pane content'))).toBe(true);
+    }).toPass({ timeout: 10000, intervals: [200] });
+
+    const messagesBeforeTrigger = consoleMessages.length;
+    const fired = () =>
+      consoleMessages
         .slice(messagesBeforeTrigger)
         .some((m) => m.includes('[resync]') && m.includes('trigger=visibility-or-focus'));
-      expect(fired).toBe(true);
-    }).toPass({ timeout: 4000, intervals: [200] });
+
+    // A resync must actually fire (proves the trigger worked at all). It is skipped while the last sync is
+    // under 60s old or output arrived in the last 5s, so each attempt moves the clock further past both:
+    // a late pane reply stamped with the advanced time cannot block the next attempt.
+    let ahead = 0;
+    await expect(async () => {
+      ahead += 90_000;
+      await page.clock.setSystemTime(Date.now() + ahead);
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('focus'));
+      });
+      await expect.poll(fired, { timeout: 1500 }).toBe(true);
+    }).toPass({ timeout: 10000 });
 
     // The deterministic "no jitter" check: with the flag off,
     // useResyncStaggerQueue never instantiates a scheduler, so

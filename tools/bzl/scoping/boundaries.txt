@@ -45,6 +45,7 @@ server/services/triggerlimit !server/web
 server/services/webhooks !server/web
 server/services/questionkit !server/web
 server/services/gatestats !server/web
+server/services/quota !server/web
 session/ptyio !server
 session/ptydiscovery !server
 session/hostclaim !server
@@ -115,3 +116,4 @@ session/jsonmigrate !server
 session/jsonmigrate !github
 session/workspacepeers !server
 session/backlogaux !server
+server/services/taggingrules !server/web

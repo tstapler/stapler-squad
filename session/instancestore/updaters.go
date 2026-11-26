@@ -225,6 +225,16 @@ func (i *Instances) UpdateLastViewed(ctx context.Context, title string, t time.T
 // Note is set whenever non-nil (including ""), since an empty note is a meaningful cleared
 // state, not "unset" — same asymmetry as Update's unconditional SetNote(data.Note).
 func (i *Instances) UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error {
+	if newTitle != nil && *newTitle != "" && *newTitle != currentTitle {
+		// The running tmux session keeps the name it was created with.
+		if err := i.client.Session.Update().
+			Where(session.Title(currentTitle), session.Or(session.TmuxTitleIsNil(), session.TmuxTitle(""))).
+			SetTmuxTitle(currentTitle).
+			Exec(ctx); err != nil {
+			return fmt.Errorf("failed to pin tmux title: %w", err)
+		}
+	}
+
 	update := i.client.Session.Update().
 		Where(session.Title(currentTitle)).
 		SetUpdatedAt(time.Now())
