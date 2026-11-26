@@ -230,8 +230,10 @@ export function TerminalStressTest() {
     // Clear terminal
     terminal.clear();
 
-    // Create abort controller
-    abortControllerRef.current = new AbortController();
+    // The loop holds its own signal: stopTest nulls the ref, so reading through it would never stop.
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const { signal } = controller;
 
     // Get config
     const config = customConfig || TEST_PRESETS[selectedPreset];
@@ -249,18 +251,23 @@ export function TerminalStressTest() {
     let lastRenderTime = 0;
     let totalBytesGenerated = 0;
 
+    const publishProgress = (elapsed: number) =>
+      setProgress({
+        elapsed,
+        framesGenerated: generator.getSequence(),
+        bytesGenerated: totalBytesGenerated,
+      });
+
     // Use requestAnimationFrame for proper vsync and frame timing
     const runLoop = (currentTime: number) => {
-      if (abortControllerRef.current?.signal.aborted) {
-        setStatus('completed');
-        updateMetrics();
-        return;
-      }
+      // stopTest/resetTest already set status and metrics.
+      if (signal.aborted) return;
 
       const elapsed = currentTime - startTime;
       if (elapsed >= durationMs) {
         setStatus('completed');
         updateMetrics();
+        publishProgress(elapsed);
         return;
       }
 
@@ -276,11 +283,7 @@ export function TerminalStressTest() {
 
         // Update progress (batch updates to reduce React overhead)
         if (frameTimesRef.current.length % 5 === 0) {
-          setProgress({
-            elapsed,
-            framesGenerated: generator.getSequence(),
-            bytesGenerated: totalBytesGenerated,
-          });
+          publishProgress(elapsed);
         }
       }
 

@@ -8,6 +8,7 @@ import { SessionClient } from './helpers/session-client';
 import { baseUrl } from './helpers/base-url';
 
 const BASE_URL = baseUrl();
+const REDRAW_BUTTON = /^Redraw terminal/;
 
 /**
  * Open a session's terminal view and ensure the toolbar is expanded.
@@ -35,7 +36,7 @@ test.describe('terminal resize', () => {
     const opened = await openTerminalView(page);
     test.skip(!opened, 'No session available in test server');
 
-    await expect(page.getByRole('button', { name: 'Resize terminal' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: REDRAW_BUTTON })).toBeVisible({ timeout: 5000 });
   });
 
   test('clicking resize shows then hides the resizing overlay', async ({ page }) => {
@@ -48,7 +49,7 @@ test.describe('terminal resize', () => {
     // Resizing overlay must NOT be visible before clicking
     await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached();
 
-    await page.getByRole('button', { name: 'Resize terminal' }).click();
+    await page.getByRole('button', { name: REDRAW_BUTTON }).click();
 
     // Overlay appears (RESIZING state) then disappears (STABLE state)
     // Waiting for absence with a generous timeout covers slow CI environments
@@ -61,7 +62,7 @@ test.describe('terminal resize', () => {
 
     await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
 
-    await page.getByRole('button', { name: 'Resize terminal' }).click();
+    await page.getByRole('button', { name: REDRAW_BUTTON }).click();
 
     // After the resize cycle completes the terminal must still be connected
     await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached({ timeout: 10000 });
@@ -101,10 +102,9 @@ test.describe('terminal resize', () => {
     );
 
     const client = new SessionClient(BASE_URL);
-    const session = await client.createIdleSession(
-      `e2e-resize-${Date.now()}`,
-      '/tmp',
-    );
+    const title = `e2e-resize-${Date.now()}`;
+    const session = await client.createIdleSession(title, '/tmp');
+    await client.waitForSessionsActive([title]);
 
     await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
@@ -116,13 +116,20 @@ test.describe('terminal resize', () => {
 
     await expect(page.getByText('Connected')).toBeVisible({ timeout: 20000 });
 
+    // The duplicate check is meaningless on an empty terminal: wait for the shell prompt.
+    const renderedRows = async () =>
+      (await page.locator('.xterm-rows > div').allInnerTexts()).filter((r) => r.trim() !== '').length;
+    await expect.poll(renderedRows, { timeout: 10000 }).toBeGreaterThan(0);
+
     // Capture terminal rows before resize
     const rowsBefore = await page.locator('.xterm-rows > div').allInnerTexts();
     const nonBlankBefore = rowsBefore.filter(r => r.trim() !== '');
 
     // Trigger resize
-    await page.getByRole('button', { name: 'Resize terminal' }).click();
+    await page.getByRole('button', { name: REDRAW_BUTTON }).click();
     await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached({ timeout: 10000 });
+
+    await expect.poll(renderedRows, { timeout: 10000 }).toBeGreaterThan(0);
 
     // Capture terminal rows after resize
     const rowsAfter = await page.locator('.xterm-rows > div').allInnerTexts();

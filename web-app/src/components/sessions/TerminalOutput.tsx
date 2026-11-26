@@ -853,17 +853,16 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // so tests/e2e/input-drop-badge.spec.ts exercises the badge's rendering/
   // announcement/dismiss behavior via this harmless, additive test seam
   // instead of the full reconnect path (Stories 2.1/2.2 already have direct
-  // Jest coverage of the drop mechanism itself). Gated on NODE_ENV (matching
-  // the existing dev-only-hook convention in WebVitalsReporter.tsx /
-  // rpcTiming.ts) so this unauthenticated, script-callable surface is never
-  // attached in a production bundle — Next.js statically inlines
-  // `process.env.NODE_ENV` at build time, so the production build tree-shakes
-  // this block out entirely rather than merely no-op'ing it at runtime.
+  // Jest coverage of the drop mechanism itself). e2e runs the production
+  // bundle, so there it needs the runtime opt-in `window.__E2E_HOOKS__`, which
+  // the spec sets before page load; it can only raise this badge.
   useEffect(() => {
-    if (typeof window === "undefined" || process.env.NODE_ENV === "production") return;
-    (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped = reportDroppedInput;
+    if (typeof window === "undefined") return;
+    const hooks = window as unknown as { __E2E_HOOKS__?: boolean; __e2eTriggerInputDropped?: (count: number) => void };
+    if (process.env.NODE_ENV === "production" && hooks.__E2E_HOOKS__ !== true) return;
+    hooks.__e2eTriggerInputDropped = reportDroppedInput;
     return () => {
-      delete (window as unknown as { __e2eTriggerInputDropped?: (count: number) => void }).__e2eTriggerInputDropped;
+      delete hooks.__e2eTriggerInputDropped;
     };
   }, [reportDroppedInput]);
 
