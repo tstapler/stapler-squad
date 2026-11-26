@@ -344,7 +344,7 @@ func titleCollisionResult(store session.InstanceStore, title string) *mcpgo.Call
 		return errResult(ErrInternalError, fmt.Sprintf("load sessions: %v", err), "")
 	}
 	for _, data := range existing {
-		if data.Title == title {
+		if data.ClaimsTitle(title) {
 			return errResult(ErrInvalidArgument, fmt.Sprintf("session with title %q already exists", title),
 				"Choose a different title.")
 		}

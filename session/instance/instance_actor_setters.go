@@ -579,6 +579,7 @@ func (i *Instance) SetAutoYes(v bool) {
 
 func setTitleDirectLocked(s *instanceState, title string) {
 	s.inst.mu.Lock()
+	s.inst.pinTmuxTitleLocked()
 	s.inst.Title = title
 	reclassifyTagsLocked(s, s.inst.taggingEngine)
 	snap := BuildSnapshot(s.inst)

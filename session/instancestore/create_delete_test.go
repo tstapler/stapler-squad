@@ -41,7 +41,7 @@ func fullCreateData(t *testing.T) domain.InstanceData {
 		SessionType: domain.SessionType("new_worktree"),
 		GitHubPRURL: "https://github.com/own/rep/pull/9", GitHubPRNumber: 9, GitHubPRStatusTerminal: true,
 		GitHubOwner: "own", GitHubRepo: "rep", GitHubHost: "github.com",
-		TmuxPrefix: "pfx", Backend: domain.ProcessManagerBackend("tymux"), TymuxSessionID: "ty-1",
+		TmuxPrefix: "pfx", TmuxTitle: "named-after", Backend: domain.ProcessManagerBackend("tymux"), TymuxSessionID: "ty-1",
 		LastTerminalUpdate: at(4), LastMeaningfulOutput: at(5), LastOutputSignature: "sig",
 		LastAddedToQueue: at(6), LastViewed: at(7), LastAcknowledged: at(8),
 		MCPServerURL: "http://mcp", OneShot: true, Hidden: true, ArchivedAt: &archived,

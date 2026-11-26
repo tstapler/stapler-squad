@@ -65,6 +65,10 @@ func (Session) Fields() []ent.Field {
 			Optional(),
 		field.String("tmux_prefix").
 			Optional(),
+		// tmux_title is the title the live tmux session was named after, set when a
+		// rename leaves it behind. Empty means the current title.
+		field.String("tmux_title").
+			Optional(),
 		field.String("backend").
 			Optional().
 			Default("").

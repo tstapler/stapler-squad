@@ -1285,7 +1285,7 @@ func (h *ConnectRPCWebSocketHandler) resolveControlModeOwnershipOrJoinHub(stream
 	}
 	// Always derive via the canonical sanitizer, never by hand-concatenating prefix+title —
 	// a raw title containing spaces would target a session name that was never created (#162).
-	tmuxSessionName = tmux.NewSessionName(snap.Title, tmuxPrefix).String()
+	tmuxSessionName = tmux.NewSessionName(snap.TmuxNameTitle(), tmuxPrefix).String()
 
 	if _, lockErr := streamhub.AcquireOwnershipLock(tmuxSessionName).ResolveExpecting(false, streamhub.PathLegacyPerConnection); lockErr != nil {
 		log.Info("[streamViaControlMode] ownership resolved to hub-owned path concurrently, joining it instead of proceeding as an independent legacy owner",
@@ -2436,7 +2436,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 
 	snap := instance.Snapshot()
 	sessionID := snap.Title
-	tmuxSessionName := services.StreamHubSessionKey(snap.Title, snap.TmuxPrefix)
+	tmuxSessionName := services.StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
 
 	log.Info("[streamViaHub] starting", "session", sessionID, "tmux", tmuxSessionName, "backend", snap.Backend)
 
@@ -3731,7 +3731,7 @@ func resolveCapturePaneTarget(instance *instance.Instance, snap *domain.Instance
 	default:
 		// Always via the canonical sanitizer (see #162 — raw concatenation targets
 		// a session name that was never actually created whenever the title has spaces).
-		tmuxSessionName = services.StreamHubSessionKey(snap.Title, snap.TmuxPrefix)
+		tmuxSessionName = services.StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
 	}
 
 	// target is where pane capture/resize/dimension calls are actually sent: the

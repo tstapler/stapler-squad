@@ -828,10 +828,10 @@ func (i *Instance) wireTmuxSession(command launchcmd.LaunchCommand) {
 		var session *tmux.TmuxSession
 		if snap.TmuxServerSocket != "" {
 			// nil registry: a reconnect loop on isolated sockets causes intermittent "exit status 1".
-			session = tmux.NewTmuxSessionWithServerSocket(snap.Title, program, tmuxPrefix, snap.TmuxServerSocket,
+			session = tmux.NewTmuxSessionWithServerSocket(snap.TmuxNameTitle(), program, tmuxPrefix, snap.TmuxServerSocket,
 				append([]tmux.TmuxSessionOption{tmux.WithRegistry(nil)}, opts...)...)
 		} else {
-			session = tmux.NewTmuxSessionWithPrefix(snap.Title, program, tmuxPrefix, opts...)
+			session = tmux.NewTmuxSessionWithPrefix(snap.TmuxNameTitle(), program, tmuxPrefix, opts...)
 		}
 		if extraEnv := i.buildExtraEnv(); len(extraEnv) > 0 {
 			session.SetExtraEnv(extraEnv)
@@ -869,7 +869,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	// ProcessManager via the same factory CreateSession uses.
 	newPM, err := newProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{
 		Backend:      backendOverride,
-		SessionName:  i.Title,
+		SessionName:  i.Snapshot().TmuxNameTitle(),
 		Program:      ShellString(command),
 		Command:      command,
 		Prefix:       tmuxPrefix,

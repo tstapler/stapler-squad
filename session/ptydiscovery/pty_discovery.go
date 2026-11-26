@@ -488,7 +488,7 @@ func (pd *PTYDiscovery) discoverSquadPTYsWithCache(paneInfoMap map[string]paneEn
 		if instance.Status != domain.Active {
 			continue
 		}
-		tmuxName := tmux.ToStaplerSquadTmuxName(instance.Title)
+		tmuxName := tmux.ToStaplerSquadTmuxName(instance.Snapshot().TmuxNameTitle())
 		if paneInfoMap == nil {
 			continue
 		}

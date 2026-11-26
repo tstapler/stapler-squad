@@ -131,7 +131,7 @@ func (s *SessionService) checkTitleConflictAndLoadExisting(msg *sessionv1.Create
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list instances: %w", err))
 	}
 	for _, data := range existing {
-		if data.Title == msg.Title {
+		if data.ClaimsTitle(msg.Title) {
 			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", msg.Title))
 		}
 	}

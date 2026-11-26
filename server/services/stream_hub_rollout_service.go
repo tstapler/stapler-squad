@@ -164,5 +164,5 @@ func StreamHubSessionKey(title, tmuxPrefix string) string {
 // hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
 func TmuxSessionNameForStreamPath(instance *instance.Instance) string {
 	snap := instance.Snapshot()
-	return StreamHubSessionKey(snap.Title, snap.TmuxPrefix)
+	return StreamHubSessionKey(snap.TmuxNameTitle(), snap.TmuxPrefix)
 }

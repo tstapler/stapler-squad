@@ -950,7 +950,7 @@ func matchesIDData(d domain.InstanceData, id string) bool {
 	}
 	// Derive via the canonical sanitizer rather than re-implementing it here —
 	// a hand-rolled copy silently drifts from tmux.NewSessionName's rules (#162).
-	return tmux.NewSessionName(d.Title, d.TmuxPrefix).String() == id
+	return tmux.NewSessionName(d.TmuxNameTitle(), d.TmuxPrefix).String() == id
 }
 
 // writeDeferDecision returns an empty HTTP 200 with no body.
