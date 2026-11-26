@@ -137,3 +137,17 @@ func (f *claimFixture) write(t *testing.T, uuid, content string, age time.Durati
 func stampedEntry(ts time.Time) string {
 	return `{"type":"queue-operation","timestamp":"` + ts.UTC().Format(time.RFC3339Nano) + `"}` + "\n"
 }
+
+// Resuming the newest conversation in a shared directory attached several sessions to
+// another session's conversation.
+func TestTryExtract_SharedDirectoryWithSeveralCandidates_StaysUnlinked(t *testing.T) {
+	t.Parallel()
+	f := newClaimFixture(t, "/repo/extract")
+	f.write(t, claimOther, "{}", 2*time.Second)
+	f.write(t, claimSibling, "{}", time.Second)
+
+	inst := extractFixtureInstance(f, "/repo/extract", func(i *Instance) { i.EverHadConversationHistory = true })
+	inst.TryExtractConversationUUID()
+
+	assert.Empty(t, extractedUUID(inst))
+}
