@@ -286,6 +286,7 @@ go_test(
         "analytics_escape_rollup_test.go",
         "analytics_escape_service_test.go",
         "analytics_store_test.go",
+        "approval_fail_closed_test.go",
         "approval_handler_gate_test.go",
         "approval_handler_integration_test.go",
         "approval_handler_remote_relay_test.go",

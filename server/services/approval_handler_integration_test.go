@@ -168,28 +168,6 @@ func TestApprovalFlow_Timeout(t *testing.T) {
 	}
 }
 
-// TestApprovalFlow_ParseError verifies that an unparseable payload auto-allows
-// (so Claude Code is never blocked by a server-side error).
-func TestApprovalFlow_ParseError(t *testing.T) {
-	t.Parallel()
-	h, _ := newTestHandler(5 * time.Second)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/hooks/permission-request", bytes.NewReader([]byte("not-json")))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CS-Session-ID", "test-session")
-
-	rr := httptest.NewRecorder()
-	h.HandlePermissionRequest(rr, req)
-
-	var resp hookDecisionResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if resp.HookSpecificOutput.Decision.Behavior != "allow" {
-		t.Errorf("expected auto-allow on parse error, got %q", resp.HookSpecificOutput.Decision.Behavior)
-	}
-}
-
 // TestApprovalFlow_MethodNotAllowed verifies that non-POST requests are rejected.
 func TestApprovalFlow_MethodNotAllowed(t *testing.T) {
 	t.Parallel()
