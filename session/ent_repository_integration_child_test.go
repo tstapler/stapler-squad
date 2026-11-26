@@ -109,7 +109,7 @@ func TestIntegrationChild_should_BlockEpicDone_UntilChildResolved(t *testing.T) 
 	require.NoError(t, err)
 }
 
-func TestIntegrationChild_should_KeepBlockingEpicDone_When_ChildArchived(t *testing.T) {
+func TestIntegrationChild_should_UnblockEpicDone_When_ChildArchived(t *testing.T) {
 	t.Parallel()
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
@@ -121,7 +121,7 @@ func TestIntegrationChild_should_KeepBlockingEpicDone_When_ChildArchived(t *test
 	_, err = repo.RawArchiveBacklogItem(ctx, child.ID, nil, "test", "")
 	require.NoError(t, err)
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, epic.ID, domain.BacklogStatusDone, nil, "test")
-	require.ErrorIs(t, err, backlogdto.ErrIntegrationCheckPending, "an archived child never passed the e2e check")
+	require.NoError(t, err, "AC3: an archived integration child unblocks the epic")
 }
 
 func TestIntegrationChild_should_Reject_When_NoSiblingsOrSiblingMissing(t *testing.T) {

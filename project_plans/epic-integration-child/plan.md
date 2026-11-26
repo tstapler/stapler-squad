@@ -101,3 +101,7 @@ func AttributeIntegrationFailure(ctx, epicID, integrationSessionID string) (sibl
 1. **Trigger point**: The `OnEpicPlanningComplete` hook needs to fire after epic planning creates all children. The prerequisite "Epic items" feature must define an observable event for this — confirm the hook point exists before Phase 2.
 2. **Fix-child dependency chain**: When a fix child is created and succeeds, should the integration child automatically retry? Or require a manual re-queue? Recommend: auto-retry via `next_workflow_id` chain on fix child `done`.
 3. **Multiple failure rounds**: Cap fix-child creation attempts at `rework_cap_override` to prevent unbounded escalation chains.
+
+## Reconciliation (review round: PARTIAL)
+
+`integrationGate` previously passed only on `done`, contradicting AC3 and Task 1.3 ("done or archived"). Now it passes on `done` or `archived`; archiving the integration child is the owner's unblock path for a stuck child. The epic UI still labels an archived child "Integration Failed" (not a pass) while the done gate is open.

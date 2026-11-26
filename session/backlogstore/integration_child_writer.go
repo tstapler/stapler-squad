@@ -65,8 +65,8 @@ func (b *Backlog) integrationGate(ctx context.Context, epic *ent.BacklogItem) er
 		}
 		return fmt.Errorf("check integration child of %s: %w", epic.ID, err)
 	}
-	// Only done is a passing e2e check: an archived child never ran (or abandoned) the check.
-	if child.Status != string(domain.BacklogStatusDone) {
+	// AC3: the epic unblocks once the child is done or archived (archived is the escape hatch for an abandoned check).
+	if st := child.Status; st != string(domain.BacklogStatusDone) && st != string(domain.BacklogStatusArchived) {
 		return fmt.Errorf("%w: integration child %s is %s", backlogdto.ErrIntegrationCheckPending, child.ID, child.Status)
 	}
 	return nil
