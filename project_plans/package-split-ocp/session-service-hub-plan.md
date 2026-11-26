@@ -402,6 +402,8 @@ The actions and questions knot was not in the logic. Most of the 27 symbols from
 - SC1 fix: move the session classification (`answerSessions`) into the package behind `FindInstance`, so phases and `routedSession` stop being shared with the hub.
 - Re-key: `.claude/rules/noarchivedrevival.md` text and `tools/lint/noarchivedrevival` (`question_answer_router.go`; add the file that receives the classification, since it is what reads `IsArchived`), `terminal_write_ui_exceptions_test.go` (`pane_reply_core.go` rows), sinkguard pins (`make test-delivery-guards`), `terminal_writer_constructors_test.go`, `docs/explanation/askuserquestion-answer-routing.md` paths.
 
+**Outside the three packages:** `claim_checker` (245 lines; importers `backlogsvc` and the root `main`) has no symbol edge to the approval files and can move as its own leaf in any wave. `hook_status_service` waits for Stage 5. Test files that use more than one group, so each wave has to split or re-home them: `hook_reply_test`, `question_answer_router_test`, `question_answer_retry_test`, `question_tabbed_integration_test`, `notification_action_service_test`, `notification_action_group_test`, `notification_quality_metrics_test`, `feature_flags_reader_threading_test`.
+
 **Characterization tests added in wave 1** (they must move with their packages and keep passing): `approval_precedence_test.go` (which decision source wins; one decision under an allow/deny race; hook dedupe) and `question_answer_router_precedence_test.go` (archived never typed into for any status; suspended stores on the resume route; one winner when answers or hooks race).
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
