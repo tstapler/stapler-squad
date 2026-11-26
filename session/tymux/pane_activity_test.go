@@ -287,3 +287,62 @@ func TestResetPaneActivity_should_Send_When_NoHintWasRequestedMeanwhile(t *testi
 
 	assert.Equal(t, []sentHint{{testPaneID, qos.ActivityNormal}}, sender.calls())
 }
+
+// probeGatedTransport holds GetServerInfo (the capability probe SetPaneActivity runs while it owns
+// activity.mu) until released, so a test can interleave Start's session-cache step with it.
+type probeGatedTransport struct {
+	*fakeTransport
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *probeGatedTransport) GetServerInfo(ctx context.Context, req *connect.Request[v1.GetServerInfoRequest]) (*connect.Response[v1.ServerInfo], error) {
+	close(p.entered)
+	<-p.release
+	return p.fakeTransport.GetServerInfo(ctx, req)
+}
+
+// Regression: cacheFromSession took activity.mu (via resetPaneActivityAsync) while holding s.mu,
+// and SetPaneActivity takes s.mu.RLock while holding activity.mu, an ABBA deadlock that wedged a
+// live session's RestartSession behind GetSessionIdentifier's RLock.
+func TestCacheFromSession_should_NotDeadlock_When_ASetPaneActivityIsInFlight(t *testing.T) {
+	resetClaims(t)
+	dir := t.TempDir()
+	gated := &probeGatedTransport{
+		fakeTransport: &fakeTransport{capabilities: []string{capPaneActivityHint}},
+		entered:       make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+	sess := NewTymuxGRPCSession(gated).(*tymuxGRPCSession)
+	var sender paneActivitySender = &fakeActivitySender{}
+	sess.activity.sender.Store(&sender)
+	sess.mu.Lock()
+	sess.paneID = testPaneID // the in-flight hint gets past the pane check and wants s.mu.RLock
+	sess.mu.Unlock()
+
+	hintDone := make(chan error, 1)
+	go func() { hintDone <- sess.SetPaneActivity(context.Background(), qos.ActivityInteractive) }()
+	<-gated.entered // the hint now owns activity.mu
+
+	cacheDone := make(chan error, 1)
+	go func() {
+		cacheDone <- sess.cacheFromSession(fakeSession(testSessionID, testPaneID, dir, v1.Liveness_LIVENESS_LIVE))
+	}()
+	require.Eventually(t, func() bool { // cacheFromSession holds s.mu, or already wrote its state and left
+		if !sess.mu.TryRLock() {
+			return true
+		}
+		defer sess.mu.RUnlock()
+		return sess.sessionID == testSessionID
+	}, 5*time.Second, time.Millisecond)
+	close(gated.release)
+
+	for name, ch := range map[string]chan error{"SetPaneActivity": hintDone, "cacheFromSession": cacheDone} {
+		select {
+		case err := <-ch:
+			require.NoError(t, err, name)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s deadlocked: lock order s.mu -> activity.mu vs activity.mu -> s.mu", name)
+		}
+	}
+}
