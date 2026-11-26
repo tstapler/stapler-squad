@@ -242,7 +242,7 @@ type replyInput struct {
 
 // Run is the leader's path: limiters, claim, audit, lease, write. cache is
 // true when the result must be returned to a Retry instead of attempted again.
-func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyInput, inst *instance.Instance, facts steerRequestFacts) (res questionkit.ReplyOutcomeResult, cache bool) {
+func (c *PaneReplyCore) Run(ctx context.Context, target AnswerTarget, in replyInput, inst *instance.Instance, facts access.SteerRequestFacts) (res questionkit.ReplyOutcomeResult, cache bool) {
 	key := questionkit.QuestionKey{SessionUUID: in.sessionUUID, QuestionID: in.questionID}
 	done := func(o sessionv1.ReplyOutcome) questionkit.ReplyOutcomeResult {
 		c.count(replyOutcomeLabel(o))
@@ -359,7 +359,7 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim questio
 
 // ---- audit and metrics ----
 
-func (c *PaneReplyCore) auditLine(in replyInput, claim questionkit.PendingQuestionClaim, inst *instance.Instance, facts steerRequestFacts) auditkit.AuditLine {
+func (c *PaneReplyCore) auditLine(in replyInput, claim questionkit.PendingQuestionClaim, inst *instance.Instance, facts access.SteerRequestFacts) auditkit.AuditLine {
 	q := claim.Question()
 	idx := int(in.digit - '0')
 	label := ""
@@ -370,9 +370,9 @@ func (c *PaneReplyCore) auditLine(in replyInput, claim questionkit.PendingQuesti
 		Kind: auditkit.AuditKindReply, ChangeID: uuid.NewString(),
 		SessionUUID: q.SessionUUID, SessionTitle: inst.Snapshot().Title,
 		QuestionID: q.QuestionID, ReplyID: in.replyID, OptionIndex: idx, OptionLabel: label, QuestionToken: q.Token,
-		Listener: facts.refusal.Listener, PeerAddr: facts.refusal.Peer, Host: facts.refusal.Host, Origin: facts.refusal.Origin,
-		UserAgent: facts.userAgent, AuthMode: facts.refusal.AuthMode,
-		PeerLoopback: flagsvc.BoolRef(facts.refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.refusal.Proxied),
+		Listener: facts.Refusal.Listener, PeerAddr: facts.Refusal.Peer, Host: facts.Refusal.Host, Origin: facts.Refusal.Origin,
+		UserAgent: facts.UserAgent, AuthMode: facts.Refusal.AuthMode,
+		PeerLoopback: flagsvc.BoolRef(facts.Refusal.PeerLoopback), Proxied: flagsvc.BoolRef(facts.Refusal.Proxied),
 	}
 }
 
