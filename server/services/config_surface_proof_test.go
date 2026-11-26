@@ -199,6 +199,10 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 		testName:   "TestConfigSurfaceProof_ArtifactScanV2_ChangesReader",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
 	},
+	"flag:goal_mode": {
+		testName:   "TestConfigSurfaceProof_GoalMode_ChangesReader",
+		entrypoint: "FeatureFlagService.UpdateFeatureFlag",
+	},
 	"flag:agent_wake_triggers": {
 		testName:   "TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag",
 		entrypoint: "FeatureFlagService.UpdateFeatureFlag",

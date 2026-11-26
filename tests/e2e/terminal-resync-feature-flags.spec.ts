@@ -24,6 +24,15 @@ async function gotoFeaturesPage(page: import('@playwright/test').Page) {
   await page.waitForSelector('h1', { timeout: 10000 });
 }
 
+/** Waits for the flag's row to render, and returns it with its switch. */
+async function waitForFlagRow(page: import('@playwright/test').Page) {
+  const row = page.getByTestId('feature-flag-row').filter({
+    has: page.getByRole('switch', { name: RESYNC_FLAG_LABEL }),
+  });
+  await expect(row).toBeVisible({ timeout: 10000 });
+  return { row, toggle: row.getByRole('switch', { name: RESYNC_FLAG_LABEL }) };
+}
+
 // Reset the flag to a known state (off) before/after each test so tests don't
 // depend on ordering or leak state to other spec files sharing the isolated
 // test server.
@@ -49,51 +58,35 @@ test.describe('terminal-resync-feature-flags', () => {
     await gotoFeaturesPage(page);
 
     // Step 1: locate the flag row by its readable label (not the raw flag name).
-    const row = page.getByTestId('feature-flag-row').filter({
-      has: page.getByTestId('feature-flag-name').getByText(RESYNC_FLAG_LABEL),
-    });
-    await expect(row).toBeVisible({ timeout: 10000 });
+    const { toggle } = await waitForFlagRow(page);
     const nameTexts = await page.getByTestId('feature-flag-name').allTextContents();
-    expect(nameTexts.some((text) => text.trim() === RESYNC_FLAG)).toBe(false);
+    expect(nameTexts.some((text) => text.trim().startsWith(RESYNC_FLAG))).toBe(false);
 
     // Step 2: click the toggle for that flag.
-    const toggleButton = page.getByRole('button', { name: `Enable ${RESYNC_FLAG_LABEL}` });
-    await expect(toggleButton).toBeVisible({ timeout: 10000 });
-    await expect(toggleButton).toHaveAttribute('aria-pressed', 'false');
-    await toggleButton.click();
-
-    // Toggling flips the accessible name/state — this is the "two steps"
-    // (navigate+locate, then click) the row name documents.
-    const disableButton = page.getByRole('button', { name: `Disable ${RESYNC_FLAG_LABEL}` });
-    await expect(disableButton).toBeVisible({ timeout: 10000 });
-    await expect(disableButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true', { timeout: 10000 });
   });
 
-  // Row 11: toggling reflects the new state in the UI (badge + aria-pressed)
+  // Row 11: toggling reflects the new state in the UI (badge + aria-checked)
   // without a page reload, and a reload preserves the persisted value.
   test('featureFlagsPage_should_ReflectToggleOrShowError_When_FlagToggled', async ({ page }) => {
     await gotoFeaturesPage(page);
 
-    const toggleButton = page.getByRole('button', { name: `Enable ${RESYNC_FLAG_LABEL}` });
-    await expect(toggleButton).toBeVisible({ timeout: 10000 });
-
-    const row = page.getByTestId('feature-flag-row').filter({
-      has: page.getByTestId('feature-flag-name').getByText(RESYNC_FLAG_LABEL),
-    });
+    const { row, toggle } = await waitForFlagRow(page);
     await expect(row.getByTestId('feature-flag-status')).toHaveText('Off');
 
-    await toggleButton.click();
+    await toggle.click();
 
     // Badge flips to "On" and no error is shown.
     await expect(row.getByTestId('feature-flag-status')).toHaveText('On', { timeout: 10000 });
-    // The notification Announcer keeps one empty role=alert region mounted; only a non-empty alert is an error.
-    await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
+    // Scoped to this page's errors: unrelated host alerts (e.g. fork pressure) also use role=alert.
+    await expect(page.getByTestId('feature-flag-row-error')).toHaveCount(0);
+    await expect(page.getByTestId('feature-flags-load-error')).toHaveCount(0);
 
     // Reload — the toggled state must persist (server-backed, not local-only state).
     await gotoFeaturesPage(page);
-    const disableButton = page.getByRole('button', { name: `Disable ${RESYNC_FLAG_LABEL}` });
-    await expect(disableButton).toBeVisible({ timeout: 10000 });
-    await expect(disableButton).toHaveAttribute('aria-pressed', 'true');
+    await expect((await waitForFlagRow(page)).toggle).toHaveAttribute('aria-checked', 'true');
   });
 
   // Row 10: when the UpdateFeatureFlag RPC fails, the page must show an
@@ -106,27 +99,23 @@ test.describe('terminal-resync-feature-flags', () => {
 
     await gotoFeaturesPage(page);
 
-    const toggleButton = page.getByRole('button', { name: `Enable ${RESYNC_FLAG_LABEL}` });
-    await expect(toggleButton).toBeVisible({ timeout: 10000 });
-    await toggleButton.click();
+    const { row, toggle } = await waitForFlagRow(page);
+    await toggle.click();
 
-    // FeatureFlagsContext.setFlag catches the error and surfaces role="alert"
-    // text ending in "Please refresh." (page.tsx's errorMessage paragraph).
-    // Next.js's own route-announcer (#__next-route-announcer__) is also
-    // role="alert" and always present, so scope to the visible one with text.
-    const alert = page.getByRole('alert').filter({ hasText: 'refresh' });
+    // The row surfaces the failure as role="alert" with a Retry action.
+    const alert = row.getByTestId('feature-flag-row-error');
     await expect(alert).toBeVisible({ timeout: 10000 });
-    await expect(alert).toContainText('refresh', { ignoreCase: true });
+    await expect(alert).toContainText(`Couldn't change ${RESYNC_FLAG_LABEL}`);
+    await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
 
-    // The toggle must not have optimistically flipped to "enabled" — the
-    // failed RPC's response never arrived, so local state is unchanged.
-    await expect(toggleButton).toHaveAttribute('aria-pressed', 'false');
+    // The toggle must not have optimistically flipped to "enabled".
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
 
     // Unroute and confirm a normal refresh recovers (the "allow refresh" half
     // of the row's name).
     await page.unroute('**/api/session.v1.SessionService/UpdateFeatureFlag');
     await gotoFeaturesPage(page);
-    await expect(page.getByRole('alert').filter({ hasText: 'refresh' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: `Enable ${RESYNC_FLAG_LABEL}` })).toBeVisible({ timeout: 10000 });
+    await expect((await waitForFlagRow(page)).toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByTestId('feature-flag-row-error')).toHaveCount(0);
   });
 });

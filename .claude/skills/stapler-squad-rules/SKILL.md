@@ -264,7 +264,7 @@ Review weekly or after major workflow changes:
 | `server/services/analytics_store.go` | JSONL analytics storage + aggregation |
 | `server/services/approval_handler.go` | HTTP hook handler + secret scanner + domain checker |
 | `server/services/secretscan/secret_scanner.go` | Regex patterns for plaintext secret detection |
-| `server/services/domain_checker.go` | RDAP-based new-domain escalation |
+| `server/services/domainage/domain_checker.go` | RDAP-based new-domain escalation |
 | `proto/session/v1/types.proto` | Proto definitions (run `make proto-gen` after changes) |
 | `web-app/src/components/sessions/ApprovalAnalyticsPanel.tsx` | Analytics UI |
 | `web-app/src/components/sessions/ApprovalRulesPanel.tsx` | Rules management UI |

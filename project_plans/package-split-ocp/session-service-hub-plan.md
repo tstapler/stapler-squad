@@ -281,7 +281,7 @@ The per-file assignment is [session-service-hub-assignment.csv](session-service-
 | | `questionkit` | 1,826 | `pending_question_store`, `askuserquestion_parser`, `question_delivery_track`, `answer_listener`, `guidance_request_hook_mirror`, `guidance_request_mirror_proto`, `guidance_dialog_*`, `notification_quality_metrics`, `reply_idempotency` (1,716) plus the 3.3.2 symbol files `action_result`, `item_session_lookup`, `question_meta` (imports `secretscan`; its `flagsvc` edge is the `enabled func() bool` port, see 3.3.2) |
 | | `anthropicwire` | 824 | `anthropic_client`, `anthropic_limits_client`, `gemini_limits_client`, `cli_ai_client`, `selecting_ai_client`, `ai_interfaces` (imports `credkit`) |
 | L1 leaves (import kernels and `session*`, never the hub; the L1 graph is a DAG after 3.3.3) | `filesvc` | 8,053 | merge of the old `fileops` and `vcssearch` (82% of the cap) |
-| | `attention` (ships split per Part 3 into `approvals`, `qareply`, `notifyactions`; not re-measured) | 7,908 | `approval_*` (not the store), `hook_*`, `question_*`, `pane_reply_*`, `notification_action*`, `hidden_question_reply`, `hidden_review_steer`, `pi_extension_*`, `claim_checker`, `mcp_proof`, `domain_checker` |
+| | `attention` (2026-11-23 grouping; superseded by the measured split in 6.2) | 7,908 | `approval_*` (not the store), `hook_*`, `question_*`, `pane_reply_*`, `notification_action*`, `hidden_question_reply`, `hidden_review_steer`, `pi_extension_*`, `claim_checker`, `mcp_proof`, `domain_checker` |
 | | `providers` | 6,014 | `github_*`, `capacity_*`, `quota_*`, `jules_*`, `callback_*`, `webhook_*`, `update_check`, `trigger_rate_limiter` |
 | | `adminrpc` (split by role at author time) | 5,888 | `database_service`, `defaults_service`, `config_service`, `utility_service`, `project_service`, `launcher_*`, `remote_service`, `claude_settings_*`, `slash_command`, `client_log`, `log_level`, `circuit_breaker`, `debug_snapshot`, `error_registry`, `diagnostic_service`, `tymux_rollout`, `stream_hub_rollout`, `tmux_version`, `tcc_enrichment`, `capture_tap`, `window_activator` |
 | | `rules` | 4,536 | `rules_*`, `analytics_*`, `tagging_*`, `escape_code_handler` |
@@ -318,7 +318,7 @@ Cost classes: **S** = one author wave plus CI; **M** = author plus two review le
 | 1 | 4 S + 3 M + 2 L | Kernels, in layer order: `fsops`, `secretscan`, `credkit`, `access` (M), `auditkit`, `approvalkit` (S each), `anthropicwire` (M), `flagsvc` (L), `questionkit` (L). The symbol cuts of 3.3.2 are part of these PRs (about 26 relocated symbols, 14 of them into `questionkit`; the 8 steer symbols of the `access` row are deferred to Stage 5, so Stage 1 relocates about 18). | 8,673 (less the deferred steer symbols, a few hundred lines that stay in `server/services` until Stage 5) | 57,134 | Highest symbol-relocation count per PR; exported names become API. Stage 1 was S/M with 6,607 lines in the first draft; it is now 9 PRs and 8,673 lines because the kernels had to absorb their dependencies. | `go test ./server/...`, `make test-delivery-guards`, mutation check per moved branch | revert per PR, no alias to unwind |
 | 2 | 11 S | READY clusters from the ranking (uploads, remote, claude settings, misc handlers, summaries, hook receivers, completion reviewer, forward sync with 1 port, search, 2 singles); federation is done. | 6,715 | 50,419 | `search` at the SC1 cap; `backlog_debug_mutate_handler.go` is path-keyed in 3 places (section 7) | per cluster, mutation checks | revert |
 | 3 | 6 M | Small NEEDS-PORTS: webhooks, quota core, gatestats (needed no port), tagging rules, rollouts, sweepers' non-receiver files. | 4,258 | 46,161 | 10 test files share approval fixtures; 1 to 4 hub methods per cluster (ranking) | as above | revert |
-| 4 | 4 L + 1 M | Attention cluster after kernels: `approvals`, `qareply`, `notifyactions`, `notify` (L each, `notify` takes the text builders and descriptor files), `guidance` (M). 9 receiver files convert. Stage total is 10,457: `attention` 6,996 + `notify` 2,213 + `guidance` 1,248; the first draft's 12,580 for these three packages included 1,045 lines that stage 2 (689) and stage 3 (356) now take. | 10,457 | 35,704 | The 32 L1 cuts of 3.3.3 land here and in stage 5. AskUserQuestion routing (`docs/explanation/askuserquestion-answer-routing.md`) and the `noarchivedrevival` file `question_answer_router.go`. The attention split is not re-measured. | router characterization tests before moving; `make test-delivery-guards` | revert; router has a guard test |
+| 4 | 4 L + 1 M | Attention cluster after kernels (re-measured: section 6.2): `approvals`, `qareply`, `notifyactions`, `notify` (L each, `notify` takes the text builders and descriptor files), `guidance` (M). Receiver files: see 6.2. The line figures in this row are the 2026-11-23 snapshot, before 6.2's regrouping. Stage total is 10,457: `attention` 6,996 + `notify` 2,213 + `guidance` 1,248; the first draft's 12,580 for these three packages included 1,045 lines that stage 2 (689) and stage 3 (356) now take. | 10,457 | 35,704 | The 32 L1 cuts of 3.3.3 land here and in stage 5. AskUserQuestion routing (`docs/explanation/askuserquestion-answer-routing.md`) and the `noarchivedrevival` file `question_answer_router.go`. The attention split is re-measured in 6.2. | router characterization tests before moving; `make test-delivery-guards` | revert; router has a guard test |
 | 5 | 11 M + 3 L | Remaining L1: `providers` (2 M), `rules` (2 M), `adminrpc` (3 M), `filesvc` (3 L, merge of two old packages), `workflows`/`backlogsync`/`autonomous`/`prs` (4 M). 12 receiver files. By package: `filesvc` 6,041, `adminrpc` 4,052, `rules` 3,786, `providers` 3,588, `workflows` 2,053, `autonomous` 1,956, `prs` 626, `backlogsync` 451. | 22,553 | 13,151 | `providers` needs the `access` steer symbols; the ports of 3.3.3 for `rules`, `workflows`, `filesvc`, `adminrpc` | whole-tree golangci, `make test-delivery-guards` | revert |
 | 6a | 1 L | `sessionkit` plus `sessionstream`. 51 receiver methods; `StreamTerminal` is 543 lines in one method. | 2,394 | 10,757 | `terminal_input_sites_scan_test.go` globs the top level only | stream integration tests, e2e terminal specs | revert |
 | 6b | 1 L | `sessioncreate`: the `CreateSession` closure is 38 fields. | 2,112 | **8,645** | `sessioncreate` and `sessionrpc` call each other (5.2) | `session_service_create_test.go`, the 57 constructor tests, `make test-race` | revert |
@@ -335,6 +335,76 @@ PR count 3+9+11+6+5+14+1+1+3+1 = **54** (S 18, M 22, L 14), against Part 3's 41 
 
 - **Agent cost:** stages 2 and 3 are the cheap parallel waves (federation `94acd8ec7`: 37 files, 231 added lines). Stages 1, 4, 5 (3 L) and 6 hold the L work (14 L PRs; each needs a characterization wave before the move and a review wave after). Totals by class: 18 S, 22 M, 14 L, no XL.
 - **Wall-clock blockers (named, not hours of agent work):** CI restarts on every push and the make-only run takes about 2 hours (`.claude/rules/leaf-packages.md`); at most 3 open split PRs (`roadmap.md` "Rules for executing", ADR-010 decision 4) and shared rows (`budget.txt`, `boundaries.txt`, `.golangci.yml`, `tools/bzl/scandata/BUILD.bazel`) force serial rebases, so 54 PRs need at least 18 serial CI rounds. Owner answers to Q1 to Q8 gate stages 1, 4, 5 and 6c. Disk: btrfs metadata and Go cache regrowth need `df` and `btrfs filesystem usage` before each wave (today: 133 GB free, metadata 84%).
+
+### 6.2 Stage 4 attention cluster, re-measured 2026-11-26 (wave 1)
+
+Method: `go run ./tools/bzl/scoping move --dry-run --allow-collisions` per candidate group, plus a go/types listing of every cross-group use (scratch program, not committed). "Back edge" means a candidate's file using something declared in a hub file or in another candidate.
+
+**Before the wave 1 cuts** (groups as the CSV had them: `claim_checker` and `hook_status_service` with approvals, `hidden_review_steer` with questions, `notification_action_wiring` with actions; distinct symbols, fields included):
+
+| From | to hub | to approvals | to questions | to actions |
+|---|---|---|---|---|
+| approvals | 12 | | 2 (`HookReplier`) | 0 |
+| questions and pane reply | 19 | 0 | | 15 |
+| notification actions | 17 | 5 | 27 | |
+
+The actions and questions knot was not in the logic. Most of the 27 symbols from actions to questions came from hub wiring (`SessionService.answerSessions` and `WireAnswerRouter` in `notification_action_adapters.go`, plus `notification_action_wiring.go`); the 15 pointing back were mostly the reply-outcome helpers, which only the router uses but which lived in the adapters file, and `actionFlags`.
+
+**Cuts landed in wave 1** (no file changes package; no behaviour change intended):
+
+| Cut | Removes |
+|---|---|
+| `answerSessions`, `WireAnswerRouter`, `inProcessPeer` into `notification_action_wiring.go` | actions to questions |
+| `pendingQuestionPeeker`, `replyFunc`, `optionDigit`, `mapReplyOutcome`, `mapReplyOutcomeValue` into `question_answer_router.go`; `AnswerRouter` and `hookReplyResolver` take the consumer-side `answerFlags` | questions to actions, except `QuestionAnswer` |
+| `HookReplier` into `hook_classifier.go` (its consumer) | approvals to questions |
+| `ClassificationRecorder` port; `SessionService.ClassificationRecorder()` returns a nil interface, never a typed nil, when there is no store | approvals to `AnalyticsStore` |
+| `riskLevelString` becomes `classifier.RiskLevel.Label()` | approvals to `analytics_store.go` |
+| `liveSessionFinder`, consumer-side | approvals to `workspace_service.go` |
+| `ApprovalService.stampedDecision` | actions reading `ApprovalService.notificationStore` |
+| CSV regrouping: `active_pr_status` to approvals (only they use it); `hook_status_service` to `adminrpc`, `claim_checker` to its own leaf, `hidden_review_steer` to the hub (`hook_status_service` and `claim_checker` have no symbol edge to the approval files; `hidden_review_steer` is the steer chain over the hub's steer authorization, and the question group's one use of it, `SessionService.auditSink`, stays counted under "to hub") | approvals to `SessionService.storage`; the steer receivers |
+
+**After** (same method, new groups):
+
+| From | to hub | to approvals | to questions | to actions |
+|---|---|---|---|---|
+| approvals (11 files, 3,477 lines) | **0** | | 0 | 0 |
+| questions and pane reply (7 files, 1,457 lines) | 12 | 0 | | 7 (`QuestionAnswer` and its fields) |
+| notification actions (6 files, 1,184 lines) | 3 | 4 | 0 | |
+
+**Decision (answers open question 4): three packages.** The remaining edges are one-way (`approvals` <- `notifyactions` <- `qareply`), so there is no cycle to force a merge, all three are far under 10k, and the only code here that types into terminals (`qareply`) stays in its own package. SC1 and SC3 do not all pass yet:
+
+| Package | SC1: top-level symbols staying files use (max 10) | SC3: non-test importers (max 5) |
+|---|---|---|
+| `approvals` | 9: `ApprovalService`, `NewApprovalService`, `ClassificationRecorder`, `HookReplier`, `InjectHookConfig`, `InjectHookConfigRemote`, `RemoteHookTarget`, `RefreshInstanceHookProof`, and `resolutionSourceHuman` (until the actions adapters move). Passes. Counting the 8 methods staying files call, it is 17, over the cap. | `server`, `server/services`, `backlogsvc`, later `notifyactions`: 4. Passes. |
+| `notifyactions` | 18 declarations used by hub wiring (10 constructors and 8 types), plus `QuestionAnswer` while the question files are still in the hub. **Fails** until one constructor takes a `Deps` struct (design below). | `server`, `server/services`, `qareply`: 3 (I) |
+| `qareply` | 11 plus receiver methods. **Fails** until the session classification moves in (design below). | `server`, `server/services`: 2 (I) |
+
+**Wave 2: `server/services/approvals`** (first, nothing blocks it).
+
+- Files: `active_pr_status`, `approval_{handler,question,service,tool_input}`, `hook_{classifier,context_cache,deduper,injector,proof}`, `mcp_proof`. No receivers on `SessionService`.
+- Hand-rename first, because the mover does not rename unexported members that staying files use: `ApprovalService.resolveApproval` (not to `ResolveApproval`, which is the RPC method), `resolutionSource`/`resolutionSourceHuman`, `stampedDecision`.
+- Ports (consumer: approvals): `ClassificationRecorder` (hub `*AnalyticsStore`), `liveSessionFinder` (`*SessionService`), `HookReplier` (hub's lazy resolver), and the existing `ReviewQueueChecker`, `AutoApprovedGate`, `approvalNotificationStamper`, `collapsedApprovalRows`, `autoApprovalLogger`, `headlessPoolApprover`.
+- `isolate_approvals` allow-list, sibling leaves the 11 files import today: `approvalkit`, `domainage`, `flagsvc`, `fsops`, `notify`, `piextension`, `questionkit`, `secretscan` ; the strict list must also name every other import (`config`, `log`, `executor/safeexec`, `internal/hookipc`, the session proto, `pkg/`, `server/events`, `server/notifications`, `session/`), taken from `go list`.
+- Test fixtures: the mover reports twins `readSettings`, `writeSettings`, `stubReplier`, `newSimpleRulesService`, `withoutAntigravityExport`, `newRealStoreMirror`, `blockingMirrorStore`, `mirrorCounts`, `mirrorFlagOn`, `guidanceRowOf`. Approval tests that build a real `AnalyticsStore` or `RulesService` need a fake or an external test package. The reverse direction is larger: staying tests (among them `rules_service_test`, `debug_snapshot_pr_test`, `config_surface_proof_flags_readers_test`, `guidance_mirror_flag_test`, `hook_reply_test`, the `notification_action_*` tests, `question_tabbed_integration_test`) use helpers declared in moving test files (`newQuestionHarness`, `hookPolicyStub`, `hookRequest`, `newTestPendingApproval`, `newTestNotificationStore`, `failingCIInstance` and others) and unexported symbols (`hookProofHeader`, `metaQuestionShape`, `ciConclusionFailure`), so they need copies, exports or a re-home, not only an import.
+- Re-key: `session/legacy_pr_readers_test.go` (`active_pr_status.go`, `approval_service.go`); registry `handlerFile` rows (`make registry-generate`); `server/deliverygate` rows if the guard reports the package; `tools/bzl/go_test.bzl` size and host-coupled rows (`socat` relay tests); `testmain_test.go` calling `svctest.Main` (the `forbidigo` exclusion naming `approval_handler` already matches one subdirectory); budget, `boundaries.txt`, `scandata`, `gazelle`.
+
+**Wave 3: `server/services/notifyactions`.**
+
+- Files: `notification_action_{adapters,backlog,cache,lookups,metrics,service}`. First move `InvokeNotificationAction` and `SetNotificationActionDispatcher` to the hub wiring file (the registry `handlerFile` for `InvokeNotificationAction` changes).
+- SC1 fix: one `NewDispatcher(Deps)` (storage readers, approval service, guidance service, transitioner, merger, cancels, audit sink, registry) plus an action-flags constructor for the hub's hook-reply resolver, and the resolver value the guidance wiring files use.
+- `WithTransitionCaller` (`backlog_ports.go`) is the one non-receiver hub edge: inject a `func(ctx, domain.TransitionCaller) ctx` or move the context key to `session/domain`.
+- Re-key: `workflow_bypass_inventory_test.go`, `workflow_bypass_strict_test.go` (`clsLegacyHandlerForwarders`) and `session/domain/transition_callers.go` (all name `notification_action_backlog.go`), plus the new-leaf rows listed for wave 2 (budget, `boundaries.txt`, isolate row, `scandata`, `gazelle`, `svctest.Main`).
+
+**Wave 4: `server/services/qareply`** (after wave 3: it imports `QuestionAnswer`).
+
+- Files: `hidden_question_reply`, `hook_reply`, `pane_reply_{core,sequence}`, `question_answer_{retry,router,sequence}`.
+- Receiver conversions: the ten methods in `hidden_question_reply.go` and `paneReplyCore` become a reply service built once, with ports `FindInstance`, audit sink getter, reply counter, dialog canary getter, controller-active probe, peer-address resolver (mutable: the router wiring installs the in-process one), the flag service (`wireReplyFlag` registers a controller and a status source) and clocks. `ReplyToPendingQuestion` stays on the hub as a delegator; `PendingQuestions()` must return the same store the router and the approval handler share.
+- SC1 fix: move the session classification (`answerSessions`) into the package behind `FindInstance`, and give `guidance_ack_wiring` and `guidance_runtime_wiring`, which compare phases, predicates or a port, so `answerPhase` and `routedSession` stop being shared with the hub.
+- Re-key: `.claude/rules/noarchivedrevival.md` text and `tools/lint/noarchivedrevival` (`question_answer_router.go`; add the file that receives the classification, since it is what reads `IsArchived`), `terminal_write_ui_exceptions_test.go` (`pane_reply_core.go` rows), sinkguard pins (`make test-delivery-guards`), `terminal_writer_constructors_test.go`, `docs/explanation/askuserquestion-answer-routing.md` paths, `feature_flag_service_test.go` (`dfltKnownLiteralSites` names `hidden_question_reply.go`), the registry `handlerFile` for reply-to-question (`make registry-generate`), plus the new-leaf rows listed for wave 2.
+
+**Outside the three packages:** `claim_checker` (245 lines; importers `backlogsvc`, the root `main` and `session/inttest`; it imports the sibling leaf `federation`) has no symbol edge to the approval files and can move as its own leaf in any wave. `hook_status_service` waits for Stage 5. Test files that use more than one group, so each wave has to split or re-home them: `hook_reply_test`, `question_answer_router_test`, `question_answer_retry_test`, `question_tabbed_integration_test`, `notification_action_service_test`, `notification_action_group_test`, `notification_quality_metrics_test`, `feature_flags_reader_threading_test`, `question_answer_router_precedence_test`. The CSV's `lines` column keeps its 2026-11-23 values, so it does not match the line counts here.
+
+**Characterization tests added in wave 1** (they must move with their packages and keep passing): `approval_precedence_test.go` (which decision source wins; one decision under an allow/deny race; hook dedupe) and `question_answer_router_precedence_test.go` (an archived session that is active or suspended is never typed into; suspended stores on the resume route; one winner when answers or hooks race).
 
 ## 7. Silent-guard inventory (what a move can break without a compile error)
 
@@ -386,7 +456,7 @@ Loud = fails a default `go build`, `go test` or `make lint`. Silent = passes whi
 1. **Go-level facade or proto split?** This plan keeps one proto `SessionService` and splits in Go (verified by the reviewer). A proto split would change wire paths for the web app, mobile app and MCP proxy. Confirm.
 2. **Is stage 6c in scope, or is the size goal enough?** Stages 0 to 6b reach 8,645; 6c only makes the facade thin.
 3. **Kernel packages exported or `internal`?** `server`, `server/mcp` and `wsconn` need `access` and `flagsvc` types, so `internal/` would block them. Default here: exported.
-4. **`attention` split.** Three packages per Part 3 (default) or one at 7,908? The split is not re-measured.
+4. **`attention` split.** Answered by measurement in section 6.2: three packages (`approvals`, `notifyactions`, `qareply`).
 5. **Scope of "every package under 10k".** The owner said it applies to `server/services`. Does it also cover `session`, `session/instance`, `backlogsvc`, `server/mcp`, `server`, `session/tmux`, `session/unfinished` (section 8a)? This decides whether stage 7 is a services-only threshold or a repo-wide check, and whether `server/mcp` (rejected by ADR-010) and `server` need new plans.
 6. **Budget basis.** Which base is authoritative: `wc` (65,807), the `budget.txt` row (65,715, GOOS-tagged files excluded), or t9?
 7. **Does Story 1.3 (backend-di) land before 6c?** Both rewrite the 54 `Set*` calls.

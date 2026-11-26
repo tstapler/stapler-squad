@@ -337,6 +337,7 @@ go_test(
         "server_gatestats_test.go",
         "server_hostguard_test.go",
         "server_hostnames_test.go",
+        "server_info_test.go",
         "server_integration_test.go",
         "server_probeguard_test.go",
         "server_test.go",

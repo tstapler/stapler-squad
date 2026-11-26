@@ -370,9 +370,9 @@ func decisionStringFromInt(d int) string {
 	return decisionString(classifier.ClassificationDecision(d))
 }
 
-// riskLevelStringFromInt delegates to the canonical riskLevelString in analytics_store.go.
+// riskLevelStringFromInt delegates to the canonical classifier.RiskLevel.Label.
 func riskLevelStringFromInt(r int) string {
-	return riskLevelString(classifier.RiskLevel(r))
+	return classifier.RiskLevel(r).Label()
 }
 
 // ── BulkUpsert ────────────────────────────────────────────────────────────────

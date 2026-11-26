@@ -65,11 +65,19 @@ test.describe('android-url-bar-overflow', () => {
     await page.setViewportSize(ANDROID_URL_BAR);
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10_000 });
 
+    // Wait for the client render, or an empty page would pass.
+    await expect(page.getByRole('navigation', { name: 'Bottom navigation' })).toBeVisible();
+
     const overflowingFixed = await page.evaluate((viewportHeight) => {
-      const fixed = Array.from(document.querySelectorAll('*')).filter((el) => {
-        const style = window.getComputedStyle(el);
-        return style.position === 'fixed';
-      });
+      // Closed bottom sheets park below the viewport with translateY(100%); only these two, and only while parked.
+      const isParkedDrawer = (el: Element) => {
+        if (!el.matches('[data-testid="notification-tray"], [aria-label="More navigation"]')) return false;
+        const shiftY = new DOMMatrix(window.getComputedStyle(el).transform).m42;
+        return shiftY >= el.getBoundingClientRect().height - 1;
+      };
+      const fixed = Array.from(document.querySelectorAll('*')).filter(
+        (el) => window.getComputedStyle(el).position === 'fixed' && !isParkedDrawer(el),
+      );
       return fixed
         .map((el) => {
           const r = el.getBoundingClientRect();

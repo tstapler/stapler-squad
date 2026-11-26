@@ -1,12 +1,13 @@
 package notify
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -50,6 +51,7 @@ type approvalResolver interface {
 // at all when cfg.Slack.ApprovalEnabled (server.go, Story 2.1.3).
 type SlackInteractiveHandler struct {
 	resolver approvalResolver
+	replays  *slackReplayGuard
 }
 
 // NewSlackInteractiveHandler constructs a SlackInteractiveHandler. The
@@ -59,14 +61,18 @@ type SlackInteractiveHandler struct {
 // snapshot it" convention (see slack_notifier.go's resolveSlackWebhookURL
 // call sites and hookBaseURLFn's doc comment in server/server.go).
 func NewSlackInteractiveHandler(resolver approvalResolver) *SlackInteractiveHandler {
-	return &SlackInteractiveHandler{resolver: resolver}
+	return &SlackInteractiveHandler{
+		resolver: resolver,
+		replays:  newSlackReplayGuard(time.Now, slackReplayGuardMaxEntries),
+	}
 }
 
-// Handle reads the raw body exactly once and reuses it for both signature
-// verification and payload parsing — never calling r.ParseForm() first,
-// which would verify against a different/already-consumed body than the
-// bytes Slack signed (research/pitfalls.md §5). Any verification failure
-// gets a generic 401; on success it resolves the clicked button's approval.
+// Handle reads the raw body exactly once and uses those bytes for both
+// signature verification and payload parsing. The URL query and Content-Type
+// are not signed, so nothing is read from them (never r.FormValue/r.Form).
+// Any verification failure gets a generic 401. A repeat of a handled request
+// (resolved or refused) is acknowledged without acting again, one still in
+// progress gets 409, and one that hit any other error may be retried.
 func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxSlackInteractiveBodyBytes)
 	rawBody, err := io.ReadAll(r.Body)
@@ -97,21 +103,66 @@ func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Only now, after verification against the exact raw bytes above, restore
-	// the body from that same already-verified buffer so ParseForm reads the
-	// signed bytes rather than re-reading (an already-drained) r.Body.
-	r.Body = io.NopCloser(bytes.NewReader(rawBody))
-	if err := r.ParseForm(); err != nil {
+	payload, err := parseSlackInteractivePayload(rawBody)
+	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
+	key := slackRequestKey{
+		timestamp: r.Header.Get("X-Slack-Request-Timestamp"),
+		signature: r.Header.Get("X-Slack-Signature"),
+	}
+	if claim := h.replays.claim(key); claim != slackClaimGranted {
+		answerUnclaimedSlackRequest(w, claim)
+		return
+	}
+	settled := false
+	defer func() {
+		if settled {
+			h.replays.commit(key)
+		} else {
+			h.replays.release(key)
+		}
+	}()
+	settled = h.resolveActions(r.Context(), payload)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// answerUnclaimedSlackRequest responds to a verified request that must not be
+// acted on.
+func answerUnclaimedSlackRequest(w http.ResponseWriter, claim slackClaim) {
+	switch claim {
+	case slackClaimProcessed:
+		log.Info("SlackInteractiveHandler: ignoring repeat of an already processed request")
+		w.WriteHeader(http.StatusOK)
+	case slackClaimInFlight:
+		http.Error(w, "request already in progress", http.StatusConflict)
+	case slackClaimFull:
+		log.Warn("SlackInteractiveHandler: rejecting request, replay cache is full")
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	default:
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}
+}
+
+// parseSlackInteractivePayload decodes the form field "payload" from the
+// signature-verified body bytes.
+func parseSlackInteractivePayload(rawBody []byte) (SlackInteractivePayload, error) {
 	var payload SlackInteractivePayload
-	if err := json.Unmarshal([]byte(r.FormValue("payload")), &payload); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+	form, err := url.ParseQuery(string(rawBody))
+	if err != nil {
+		return payload, err
 	}
+	err = json.Unmarshal([]byte(form.Get("payload")), &payload)
+	return payload, err
+}
 
+// resolveActions resolves every recognized button in payload. It reports false
+// if the same request may be retried: some resolution failed and none was refused.
+func (h *SlackInteractiveHandler) resolveActions(ctx context.Context, payload SlackInteractivePayload) bool {
+	failed, refused := false, false
 	for _, action := range payload.Actions {
 		approvalID, decision, ok := parseSlackActionValue(action.Value)
 		if !ok {
@@ -121,7 +172,12 @@ func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request)
 			ApprovalId: approvalID,
 			Decision:   decision,
 		})
-		if _, err := h.resolver.ResolveApproval(r.Context(), req); err != nil {
+		if _, err := h.resolver.ResolveApproval(ctx, req); err != nil {
+			if isRefusal(err) {
+				refused = true
+			} else {
+				failed = true
+			}
 			log.Warn("SlackInteractiveHandler: ResolveApproval failed", "approval_id", approvalID, "slack_user", payload.User.Username, "error", err)
 		} else {
 			// Audit trail: this is an internet-facing endpoint granting/denying
@@ -130,8 +186,18 @@ func (h *SlackInteractiveHandler) Handle(w http.ResponseWriter, r *http.Request)
 			log.Info("SlackInteractiveHandler: approval resolved via Slack", "approval_id", approvalID, "decision", decision, "slack_user", payload.User.Username)
 		}
 	}
+	return refused || !failed
+}
 
-	w.WriteHeader(http.StatusOK)
+// isRefusal reports whether the resolver gave a verdict on the click. Replaying
+// a refused click could approve it later without a new click.
+func isRefusal(err error) bool {
+	switch connect.CodeOf(err) {
+	case connect.CodeInvalidArgument, connect.CodeNotFound, connect.CodeFailedPrecondition:
+		return true
+	default:
+		return false
+	}
 }
 
 // parseSlackActionValue splits a button's value ("<approvalID>:allow" or

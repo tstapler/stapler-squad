@@ -115,7 +115,7 @@ func TestSlackInteractiveHandler_Rejects_When_SignatureInvalid(t *testing.T) {
 // returns io.EOF -- i.e. how many separate times the underlying stream was
 // fully drained. A correct handler drains the original request body exactly
 // once (via a single io.ReadAll before verification) and only reads a
-// *different*, already-buffered io.Reader afterward for ParseForm -- so
+// the already-buffered bytes afterward -- so
 // eofCount must be exactly 1 regardless of how many logical parse steps run
 // downstream. This guards against research/pitfalls.md §5's named bug class:
 // calling r.ParseForm() (or any other body-consuming call) before/in
@@ -151,7 +151,7 @@ func TestSlackInteractiveHandler_ReadsBodyExactlyOnce_BeforeParsingForm(t *testi
 	h.Handle(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "handler should reach the success path, proving form-parsing ran")
-	assert.Equal(t, 1, counter.eofCount, "the original request body must be drained to EOF exactly once (read before verification, never re-read for ParseForm)")
+	assert.Equal(t, 1, counter.eofCount, "the original request body must be drained to EOF exactly once (read before verification, never re-read for parsing)")
 	require.NotNil(t, fake.calledWith)
 	assert.Equal(t, "appr-123", fake.calledWith.ApprovalId)
 }

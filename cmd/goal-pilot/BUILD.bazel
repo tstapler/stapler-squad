@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "goal-pilot_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/cmd/goal-pilot",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//config",
+        "//session/goalrunner",
+    ],
+)
+
+go_binary(
+    name = "goal-pilot",
+    embed = [":goal-pilot_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "goal-pilot_test",
+    srcs = ["main_test.go"],
+    embed = [":goal-pilot_lib"],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

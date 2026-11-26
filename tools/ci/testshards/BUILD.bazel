@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "testshards_lib",
+    srcs = [
+        "main.go",
+        "testshards.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/ci/testshards",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "testshards",
+    embed = [":testshards_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "testshards_test",
+    srcs = [
+        "testshards_test.go",
+        "workflow_test.go",
+    ],
+    data = [
+        "//.github:workflows/main-ci.yml",
+        "//:go.mod",
+    ],
+    embed = [":testshards_lib"],
+    deps = [
+        "//internal/reporoot",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

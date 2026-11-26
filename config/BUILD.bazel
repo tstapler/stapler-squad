@@ -10,6 +10,7 @@ go_library(
         "defaults.go",
         "discovery.go",
         "executor.go",
+        "goal_mode_flag.go",
         "inbox_pr_watch.go",
         "launcher_presets.go",
         "llm_backends.go",

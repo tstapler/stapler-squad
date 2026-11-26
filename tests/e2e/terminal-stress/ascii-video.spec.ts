@@ -12,12 +12,18 @@ import {
   assertFrameRate,
 } from './helpers';
 
+// Frame floors depend on the host's CPU, so they are not a correctness signal on shared CI runners.
+// Run them locally; moving them to a dedicated benchmark workflow is follow-on work (issue #1182).
+const PERF_FLOOR_REASON = 'perf floor: needs a dedicated benchmark runner, not a shared CI one';
+
 test.describe('ASCII Video Playback Tests', () => {
   test.beforeEach(async ({ page }) => {
     await setupStressTestPage(page);
   });
 
   test('should render ASCII video at 30 FPS without dropping frames', async ({ page }) => {
+    test.skip(!!process.env.CI, PERF_FLOOR_REASON);
+
     // Select 30 FPS preset
     await selectPreset(page, 'ASCII_30FPS');
 
@@ -50,6 +56,8 @@ test.describe('ASCII Video Playback Tests', () => {
   });
 
   test('should render ASCII video at 60 FPS (Matrix Rain)', async ({ page }) => {
+    test.skip(!!process.env.CI, PERF_FLOOR_REASON);
+
     // Select 60 FPS Matrix Rain preset
     await selectPreset(page, 'ASCII_60FPS');
 
@@ -118,6 +126,8 @@ test.describe('ASCII Video Playback Tests', () => {
   });
 
   test('should handle bouncing ball animation pattern', async ({ page }) => {
+    test.skip(!!process.env.CI, PERF_FLOOR_REASON);
+
     // ASCII_30FPS uses bouncing-ball pattern
     await selectPreset(page, 'ASCII_30FPS');
     await startTest(page);

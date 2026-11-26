@@ -6,3 +6,8 @@ exports_files(
     ],
     visibility = ["//tools/promo:__subpackages__"],
 )
+
+exports_files(
+    ["workflows/main-ci.yml"],
+    visibility = ["//tools/ci/testshards:__pkg__"],
+)

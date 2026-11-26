@@ -1063,7 +1063,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
 	// Wire the classifier and analytics store for auto-approve/deny before manual review
 	approvalHandler.SetClassifier(deps.SessionService.GetClassifier())
-	approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
+	approvalHandler.SetAnalyticsStore(deps.SessionService.ClassificationRecorder())
 	// Wire the domain age checker (enabled by default) for newly-registered domain escalation
 	approvalHandler.SetDomainChecker(domainage.NewDomainAgeChecker(true))
 	// Wire the shared Slack notifier (Epic 1.3, Story 1.3.2) — the same instance
@@ -2020,6 +2020,12 @@ func (s *Server) GetOrigins() []string {
 	return s.origins
 }
 
+// isE2EInstance reports whether this is the Playwright suite's server; it gates
+// every test-only surface (debug seed handlers, the UI's e2e hooks).
+func isE2EInstance() bool {
+	return os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local"
+}
+
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
@@ -2059,6 +2065,8 @@ func (s *Server) registerServerInfoHandler() {
 			// instance layout for why more than one of these can be running
 			// on the same machine at once).
 			BinaryPath string `json:"binary_path,omitempty"`
+			// E2EHooks lets the UI install its test-only triggers; absent in production.
+			E2EHooks bool `json:"e2e_hooks,omitempty"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -2082,6 +2090,7 @@ func (s *Server) registerServerInfoHandler() {
 			Commit:     buildinfo.Commit,
 			Worktree:   buildinfo.Worktree == "true",
 			BinaryPath: binaryPath,
+			E2EHooks:   isE2EInstance(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")

@@ -15,7 +15,8 @@ machine — the existing trust boundary is "localhost only," the same one
 establish for other local-only surfaces. `/api/hooks/slack-interactive` cannot rely on that:
 it is a new, genuinely internet-facing HTTP endpoint. Signature verification
 (`verifySlackSignature`, HMAC-SHA256 over the raw body with your Slack app's signing
-secret, `hmac.Equal` comparison, 5-minute replay window) is necessary, but exposing more of
+secret, `hmac.Equal` comparison, 5-minute replay window, repeats of a handled request ignored
+in memory until restart or expiry) is necessary, but exposing more of
 the app than this one path to get there defeats the point of having it.
 
 ## Do not tunnel the whole port

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 
@@ -47,6 +48,11 @@ type routedSession struct {
 
 type answerSessionFinder func(sessionID string) routedSession
 
+// answerFlags resolves the flag composition that gates an answer on route.
+type answerFlags interface {
+	Answer(route flagsvc.AnswerRoute) bool
+}
+
 // AnswerRouterDeps are the collaborators of the router. Nil members disable
 // what needs them: no Rows means no durable routes and no delivery state.
 type AnswerRouterDeps struct {
@@ -64,7 +70,7 @@ type AnswerRouter struct {
 	hidden    replyFunc
 	visible   func() *PaneReplyCore
 	guard     *access.HumanActiveGuard
-	flags     actionFlags
+	flags     answerFlags
 	rows      questionkit.AnswerRows
 	acks      questionkit.DeliverySink
 }
@@ -304,3 +310,48 @@ func (r *AnswerRouter) alreadyResolved(ctx context.Context, id uuid.UUID) questi
 
 // inProcessPeerAddr stands in for the dispatcher's caller, which it has already verified.
 const inProcessPeerAddr = "127.0.0.1:0"
+
+// pendingQuestionPeeker reads one registered question.
+type pendingQuestionPeeker interface {
+	Peek(questionkit.QuestionKey) (questionkit.PendingQuestion, bool)
+}
+
+// replyFunc is the existing hidden-session reply handler.
+type replyFunc func(context.Context, *connect.Request[sessionv1.ReplyToPendingQuestionRequest]) (*connect.Response[sessionv1.ReplyToPendingQuestionResponse], error)
+
+// optionDigit is the 1-based option number of label as one ASCII digit.
+func optionDigit(labels []string, label string) string {
+	for i, l := range labels {
+		if l == label && i < 9 {
+			return strconv.Itoa(i + 1)
+		}
+	}
+	return ""
+}
+
+func mapReplyOutcome(r *sessionv1.ReplyToPendingQuestionResponse) questionkit.ActionResult {
+	return mapReplyOutcomeValue(r.GetOutcome(), r.GetRetryAfterSeconds())
+}
+
+func mapReplyOutcomeValue(o sessionv1.ReplyOutcome, retryAfter int32) questionkit.ActionResult {
+	switch o {
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT:
+		return questionkit.Applied()
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE:
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_SEND_INDETERMINATE, "")
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING:
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_gone"}
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT:
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "dialog_replaced"}
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_RATE_LIMITED:
+		return questionkit.ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_RATE_LIMITED, RetryAfter: retryAfter}
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED:
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_FLAG_OFF, flagsvc.FlagOffMessage)
+	case sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_SENT,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_HIDDEN,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING,
+		sessionv1.ReplyOutcome_REPLY_OUTCOME_UNSPECIFIED:
+		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+	}
+	return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_NOT_SENT, "")
+}

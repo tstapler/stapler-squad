@@ -46,6 +46,7 @@ on:
       - '!third_party/**'
       - 'scripts/ssq-hook-handler'
       - '.github/workflows/lint.yml'
+      - '.github/workflows/main-ci.yml'  # for the full-suite shard guard step
 
 concurrency:
   group: lint-${{ github.event.pull_request.number || github.ref }}
@@ -82,6 +83,7 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
+        id: go
         uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
@@ -146,6 +148,14 @@ jobs:
       - name: Test tymux pin check
         if: ${{ !cancelled() }}
         run: tools/ci/check-tymux-pin_test.sh
+
+      # main-ci.yml only runs after merge. The second command partitions the real `go list`
+      # output, so a renamed package fails here instead of there.
+      - name: Full-suite shard guard
+        if: ${{ !cancelled() }}
+        run: |
+          go test ./tools/ci/testshards
+          go run ./tools/ci/testshards rest > /dev/null
 
       # Soft-timeout wrapper (16m, below this job's hard timeout-minutes ceiling):
       # golangci-lint-action is a `uses:` step, so it can't be wrapped with the shell
@@ -348,6 +358,15 @@ jobs:
           node_modules/.bin/tsc --noEmit --project tsconfig.node.json
           # 2. Runtime catalog validation — catches features with empty testIds
           bun run validate-catalog
+
+      - name: Save Go cache
+        if: ${{ steps.go.outputs.save == 'true' }}
+        timeout-minutes: 5
+        continue-on-error: true  # a cache problem is not a lint failure
+        uses: ./.github/actions/save-go-cache
+        with:
+          path: ${{ steps.go.outputs.cache-path }}
+          key: ${{ steps.go.outputs.cache-key }}
 
       - name: Runner utilization report
         if: always()

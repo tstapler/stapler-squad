@@ -26,7 +26,6 @@ concurrency:
   cancel-in-progress: true
 
 # Feature specs recorded — excludes:
-#   terminal-flickering.spec.ts  (benchmarks/stress tests)
 #   accessibility.spec.ts        (handled by ux-analysis workflow)
 #   smoke.spec.ts                (too short for meaningful video)
 env:
