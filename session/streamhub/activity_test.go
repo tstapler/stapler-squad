@@ -289,8 +289,11 @@ func TestHub_should_StillRetryTheFinalNormal_After_ManyFailuresWhileOpen(t *test
 		require.Equal(t, qos.ActivityNormal, rig.next(t))
 	}
 
-	rig.retryArmed(t) // the pump is idle again, so teardown's kick is not coalesced away
-	rig.fails.Store(0)
+	rig.retryArmed(t)
+	rig.fails.Store(1)
 	hub.ForceTeardown()
+	require.Equal(t, qos.ActivityNormal, rig.next(t)) // the final Normal fails once
+	rig.retryArmed(t)
+	rig.clock.Advance(2 * time.Second)
 	assert.Equal(t, qos.ActivityNormal, rig.next(t), "failures before close must not consume the final Normal's retries")
 }

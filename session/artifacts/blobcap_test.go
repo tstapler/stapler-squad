@@ -49,7 +49,7 @@ func TestScan_ShouldCapBlobAt128KB_WhenGeneratedHugeTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 600 commits exceed every per-kind cap and the total cap; more only adds regexp time under -race.
+	// 600 exceeds the commit, PR and command record caps and the total cap; more only adds regexp time under -race.
 	for i := 0; i < 600; i++ {
 		id := fmt.Sprintf("t%d", i)
 		cmd := fmt.Sprintf(`git commit -m "change %d %s"`, i, strings.Repeat("x", 200))

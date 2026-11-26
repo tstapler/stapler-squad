@@ -283,7 +283,7 @@ func TestSummaryRPC_Golden(t *testing.T) {
 
 		goldenAwaitReleased(t, gen, "hs-trig")
 		// Existing row title is reused on the second trigger.
-		_, uerr := entClient.HandoffSummary.Update().Where(handoffsummary.SessionID("hs-trig")).SetSessionTitle("persisted handoff title").Save(ctx)
+		_, uerr := entClient.HandoffSummary.Update().Where(handoffsummary.SessionID("hs-trig")).SetSessionTitle("persisted handoff title").SetStatus("ready").Save(ctx) // undo the probe's "generating"
 		require.NoError(t, uerr)
 		resp, err = svc.TriggerHandoffSummary(ctx, connect.NewRequest(&sessionv1.TriggerHandoffSummaryRequest{SessionId: "hs-trig"}))
 		g.err("enabled second", err)

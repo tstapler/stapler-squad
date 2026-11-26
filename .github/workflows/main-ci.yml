@@ -141,7 +141,7 @@ jobs:
           }
           export -f run_test_suite
           timeout 17m bash -c run_test_suite || {
-            if [ -e "$RUNNER_TEMP/tests-failed" ]; then echo "::error::'test-tmux' tests failed (see the first pass above)"; exit 1; fi
+            if [ -e "$RUNNER_TEMP/tests-failed" ] || grep -qE '"Action":"(fail|build-fail)"' "$RUNNER_TEMP/go-test.json" 2>/dev/null; then echo "::error::'test-tmux' tests failed (see the failures above)"; exit 1; fi
             echo "::error::CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget"; echo "CI-BUDGET-EXCEEDED: 'test-tmux' exceeded its 17m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: Upload tmux-group coverage
@@ -217,7 +217,8 @@ jobs:
         run: |
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           run_test_suite() {
-            REST_TEST_PKGS="$(go list ./server/... ./session/... ./config/... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$')"
+            ALL_PKGS="$(go list ./server/... ./session/... ./config/...)" || { echo "::error::go list failed"; touch "$RUNNER_TEMP/tests-failed"; return 1; }
+            REST_TEST_PKGS="$(grep -vE '^github\.com/tstapler/stapler-squad/(session|session/mux|session/tmux)$' <<<"$ALL_PKGS")"
             # REST_TEST_PKGS is deliberately unquoted below: it's a
             # newline/space-separated list of package paths that must
             # word-split into separate `go test` arguments.
@@ -233,7 +234,7 @@ jobs:
           }
           export -f run_test_suite
           timeout 30m bash -c run_test_suite || {
-            if [ -e "$RUNNER_TEMP/tests-failed" ]; then echo "::error::'test-rest' tests failed (see the first pass above)"; exit 1; fi
+            if [ -e "$RUNNER_TEMP/tests-failed" ] || grep -qE '"Action":"(fail|build-fail)"' "$RUNNER_TEMP/go-test.json" 2>/dev/null; then echo "::error::'test-rest' tests failed (see the failures above)"; exit 1; fi
             echo "::error::CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget"; echo "CI-BUDGET-EXCEEDED: 'test-rest' exceeded its 30m budget" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       - name: Upload rest-group coverage
