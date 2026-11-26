@@ -120,7 +120,7 @@ A keystroke answer moves `pending -> sent -> acknowledged`, or ends in `delivery
 conditional update, so a racing writer loses instead of overwriting.
 
 `acknowledged` comes from the first of two signals
-(`server/services/guidance_ack_detector.go`):
+(`server/services/guidance/guidance_ack_detector.go`):
 
 1. A `PostToolUse` receipt for `AskUserQuestion` from that session.
 2. Two consecutive fresh captures 3 s apart that show neither the row's dialog nor any

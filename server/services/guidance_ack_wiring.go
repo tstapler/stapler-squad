@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/hookipc"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -21,12 +22,12 @@ var errAckLeaseBusy = errors.New("terminal write lease is busy")
 
 // wireGuidanceAcks builds the detector over storage and starts its loop; nil
 // storage leaves keystroke answers untracked.
-func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *GuidanceAckDetector {
+func (s *SessionService) wireGuidanceAcks(storage *session.Storage) *guidance.GuidanceAckDetector {
 	if storage == nil {
 		return nil
 	}
 	s.stopGuidanceAcks()
-	d := NewGuidanceAckDetector(storage, s.ackCapture, func(uuid string) bool {
+	d := guidance.NewGuidanceAckDetector(storage, s.ackCapture, func(uuid string) bool {
 		return s.answerSessions()(uuid).phase != phaseLive
 	}, nil)
 	d.SetNotes(historyItemResolver{store: s.GetNotificationStore()})
@@ -50,7 +51,7 @@ func (s *SessionService) stopGuidanceAcks() {
 }
 
 // GuidanceAcks is the detector, or nil before notification actions are wired.
-func (s *SessionService) GuidanceAcks() *GuidanceAckDetector { return s.guidanceAcks }
+func (s *SessionService) GuidanceAcks() *guidance.GuidanceAckDetector { return s.guidanceAcks }
 
 func (s *SessionService) ackCapture(_ context.Context, sessionUUID string, underLease bool) (string, error) {
 	inst := s.findInstance(sessionUUID)
@@ -69,7 +70,7 @@ func (s *SessionService) ackCapture(_ context.Context, sessionUUID string, under
 
 // answerRouterDeps maps the wiring inputs onto the router's. A nil storage or
 // detector stays a nil interface so the router sees "not wired".
-func answerRouterDeps(w NotificationActionWiring, acks *GuidanceAckDetector) AnswerRouterDeps {
+func answerRouterDeps(w NotificationActionWiring, acks *guidance.GuidanceAckDetector) AnswerRouterDeps {
 	d := AnswerRouterDeps{Mirror: w.Mirror}
 	if w.Storage != nil {
 		d.Rows = w.Storage
@@ -86,7 +87,7 @@ func (s *SessionService) ObservePostToolUse(ctx context.Context, sessionID, tool
 	if toolName == questionkit.ScheduleWakeupTool {
 		s.observeScheduleWakeup(ctx, sessionID)
 	}
-	if toolName != askUserQuestion {
+	if toolName != guidance.AskUserQuestionTool {
 		return
 	}
 	inst := s.findInstance(sessionID)
@@ -119,7 +120,7 @@ func (s *SessionService) observeScheduleWakeup(ctx context.Context, sessionID st
 
 // wireHookReply installs the pre-answered-question resolver. It stays inert
 // while stage:hook_reply is closed (spikeS1HookReplyPassed).
-func (s *SessionService) wireHookReply(storage *session.Storage, acks *GuidanceAckDetector) {
+func (s *SessionService) wireHookReply(storage *session.Storage, acks *guidance.GuidanceAckDetector) {
 	if storage == nil {
 		return
 	}

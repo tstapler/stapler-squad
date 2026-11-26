@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/access"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -262,7 +263,7 @@ func answerFitsQuestion(row *domain.GuidanceRequestData, answer string) bool {
 		}
 		return true
 	}
-	if opts := decodeGuidanceOptions(row.Options); len(opts) > 0 {
+	if opts := guidance.DecodeGuidanceOptions(row.Options); len(opts) > 0 {
 		return slices.Contains(opts, answer)
 	}
 	return true

@@ -7,6 +7,7 @@ import (
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
@@ -19,7 +20,7 @@ var (
 	_ servermcp.UserPRSource       = (*githubpkg.UserPRCache)(nil)
 	_ servermcp.BacklogRPC         = (*backlogsvc.BacklogService)(nil)
 	_ servermcp.SessionRPC         = mcpSessionAdapter{}
-	_ servermcp.HelpAnswerer       = (*services.GuidanceRequestService)(nil)
+	_ servermcp.HelpAnswerer       = (*guidance.GuidanceRequestService)(nil)
 	_ servermcp.NudgeGate          = nudgeGateFunc(nil)
 )
 

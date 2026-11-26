@@ -1,4 +1,4 @@
-package services
+package guidance
 
 import (
 	"context"
@@ -70,7 +70,7 @@ func TestAnswerGuidanceRequest_should_PublishDurableNotification_When_ScopeIsSes
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
-	svc := NewGuidanceRequestService(storage, bus, nil)
+	svc := NewGuidanceRequestService(storage, &busNotifier{bus}, nil)
 	ctx := context.Background()
 
 	sessionUUID := "7c1e0000-0000-0000-0000-000000000001"

@@ -441,7 +441,7 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"RestartTmuxServer":    "tmux:restart-server",
 	// Durable guidance-request RPCs (GuidanceRequestService in
 	// guidance_request.proto, #809) -- must match the "// +api:
-	// guidance-request:*" markers in server/services/guidance_request_service.go
+	// guidance-request:*" markers in server/services/guidance/guidance_request_service.go
 	// verbatim, same failure mode as the SearchGitHubRepos comment above.
 	"CreateGuidanceRequest":          "guidance-request:create",
 	"AnswerGuidanceRequest":          "guidance-request:answer",

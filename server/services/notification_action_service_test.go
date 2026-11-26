@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/auditkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -430,7 +431,7 @@ func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBl
 func TestGuidanceAnswerer_ShouldReportAlreadyResolved_WhenAnswerNotApplied(t *testing.T) {
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
-	svc := NewGuidanceRequestService(storage, nil, nil)
+	svc := guidance.NewGuidanceRequestService(storage, nil, nil)
 	created, err := svc.CreateGuidanceRequest(context.Background(), connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
 		Scope: "standalone", QuestionText: "Which target?", QuestionType: "short-answer",
 	}))

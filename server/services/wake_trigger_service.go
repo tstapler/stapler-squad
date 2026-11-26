@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -51,7 +52,7 @@ type WakeOperatorBackend interface {
 type WakeTriggerDeps struct {
 	Store    WakeTriggerStore
 	Owners   wakes.OwnerLookup
-	Guidance *GuidanceRequestService
+	Guidance *guidance.GuidanceRequestService
 	// Titles names a session for display; nil or "" falls back to the uuid.
 	Titles func(sessionUUID string) string
 	// Enabled reports whether agent_wake_triggers lets the dispatcher run.
@@ -308,7 +309,7 @@ func (s *WakeTriggerService) CancelPeerHelp(ctx context.Context, requestID strin
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "not found"), nil
-	case errors.Is(err, ErrNotPeerHelp):
+	case errors.Is(err, guidance.ErrNotPeerHelp):
 		return questionkit.Outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "not a peer help request"), nil
 	case err != nil:
 		return questionkit.ActionResult{}, err

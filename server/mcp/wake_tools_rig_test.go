@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -100,7 +100,7 @@ type toolRig struct {
 	storage  *session.Storage
 	backend  *fakeWakeBackend
 	owners   fakeOwnerLookup
-	svc      *services.GuidanceRequestService
+	svc      *guidance.GuidanceRequestService
 	metrics  *wakes.Metrics
 	server   *mcpserver.MCPServer
 	cfg      *config.Config
@@ -124,7 +124,7 @@ func newToolRigWithGuidance(t *testing.T, wrap func(*session.Storage) GuidanceSt
 		owners: fakeOwnerLookup{facts: map[string]wakes.OwnerFacts{}}, roles: map[string]callerRole{},
 		cfg: &config.Config{FeatureFlags: map[string]bool{config.WakeTriggersFlag: true}},
 	}
-	r.svc = services.NewGuidanceRequestService(storage, nil, nil)
+	r.svc = guidance.NewGuidanceRequestService(storage, nil, nil)
 	r.svc.SetAnswerListener(func(_ context.Context, id string) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
