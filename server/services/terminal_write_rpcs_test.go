@@ -40,6 +40,7 @@ var notTerminalWriteReasons = map[string]string{
 	"GuidanceRequestService.AnswerGuidanceRequest": `stores an answer for the triage pipeline; types into no pane`,
 	"HeadlessService.RunHeadlessCall":              `headless call, no pane`,
 	"TymuxRolloutService.ReplaceTymuxd":            `restarts the tymuxd process; panes are revived by the daemon, nothing is typed`,
+	"BacklogService.CreateEpicIntegrationChild":    `stores an idea item, its dependency edges and the epic's done gate (integration_child_id); types into no pane`,
 }
 
 // notTerminalWriteRPCs lists every other RPC, per service.
@@ -48,7 +49,7 @@ var notTerminalWriteRPCs = map[string][]string{
 	"BacklogService": {
 		"AddBacklogItemDependency", "ApprovePlan", "ArchiveBacklogItem", "AttachSessionToItem",
 		"BulkResetStuckRemediation", "CancelTriage", "CheckCrossHostClaim", "CreateBacklogItem",
-		"CreateBacklogItemFromChat", "CreateItemSource", "CreateLivenessDefinition", "CreatePipelineMode",
+		"CreateBacklogItemFromChat", "CreateEpicIntegrationChild", "CreateItemSource", "CreateLivenessDefinition", "CreatePipelineMode",
 		"CreateStage", "CreateStageTransition", "CreateTransitionGate", "DeleteBacklogItem", "DeleteItemSource",
 		"DeleteLivenessDefinition", "DeletePipelineMode", "DeleteStage", "DeleteStageTransition",
 		"DeleteTransitionGate", "DismissWorkflowSuggestion", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
