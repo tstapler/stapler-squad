@@ -611,7 +611,7 @@ func peakHeapGrowth(fn func()) uint64 {
 // heapCheckpointFS measures heap growth at fixed points inside a search, not on a timer:
 // a timed sample counts everything allocated while its own GC runs, which grows with the
 // process's total heap and CPU load. Every Open, Read and ReadDir takes mu, so while one
-// call measures (scan buffers live), the others stop at their next fs call.
+// call measures (on a Read, with scan buffers live), the others stop at their next fs call.
 type heapCheckpointFS struct {
 	root  fs.FS
 	every int
