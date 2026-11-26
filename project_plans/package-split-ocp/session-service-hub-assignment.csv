@@ -6,7 +6,7 @@ analytics_store.go,rules,L1,5,803
 answer_listener.go,questionkit,L0,1,9
 anthropic_client.go,anthropicwire,L0,1,158
 anthropic_limits_client.go,anthropicwire,L0,1,201
-approval_handler.go,attention,L1,4,1423
+approval_handler.go,attention,L1,4,1353
 approval_question.go,attention,L1,4,208
 approval_service.go,attention,L1,4,338
 approval_store.go,approvalkit,L0,1,460
@@ -165,6 +165,7 @@ notification_priority.go,notify,L1,4,22
 notification_prune.go,notify,L1,4,188
 notification_quality_metrics.go,questionkit,L0,1,142
 notification_service.go,notify,L1,4,462
+notification_text.go,notify,L1,4,70
 pane_reply_core.go,attention,L1,4,417
 pane_reply_sequence.go,attention,L1,4,168
 path_completion_service.go,filesvc,L1,5,289

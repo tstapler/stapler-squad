@@ -426,7 +426,7 @@ func (b *DescriptorBuilder) guidanceDescriptors(r *sessionv1.NotificationHistory
 	if !g.PeerHelp {
 		return []*sessionv1.NotificationActionDescriptor{d}
 	}
-	if peer := r.GetMetadata()[MetaPeerTitle]; peer != "" {
+	if peer := r.GetMetadata()[questionkit.MetaPeerTitle]; peer != "" {
 		d.Label = "Answer for " + peer
 	}
 	cancel := tierADescriptor(sessionv1.ActionKind_ACTION_KIND_CANCEL_PEER_HELP, "Cancel request",

@@ -194,7 +194,7 @@ func (n wakeNotifier) Notify(note wakes.Notification) {
 		sessionID, ntype = note.OwnerSessionUUID, sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED
 		priority = sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH
 		meta[questionkit.MetaGuidanceRequestID] = note.GuidanceRequestID
-		meta[services.MetaPeerTitle] = note.PeerTitle
+		meta[questionkit.MetaPeerTitle] = note.PeerTitle
 		notificationID = "peer-help-stalled:" + note.GuidanceRequestID
 	}
 	n.bus.Publish(events.NewNotificationEvent(

@@ -22,7 +22,7 @@ import (
 
 // maxSlackBlockTextLen caps a single Slack Block Kit text block at 2900 runes,
 // leaving headroom under Slack's hard 3000-character-per-block limit (mirrors
-// approval_handler.go's maxNotificationMessageLen/maxEscalationReasonLen pattern).
+// maxNotificationMessageLen and maxEscalationReasonLen).
 const maxSlackBlockTextLen = 2900
 
 // slackDispatchTimeout bounds each asynchronously-dispatched Slack send. It is
@@ -142,7 +142,7 @@ func escapeSlackMrkdwn(s string) string {
 
 // truncateForSlackBlock caps s at maxRunes runes (rune-safe), appending
 // "... truncated, see dashboard" when truncation occurs. Same shape as
-// truncateString (approval_handler.go:588) but with a dashboard-pointing
+// truncateString (notification_text.go) but with a dashboard-pointing
 // suffix instead of a bare "...".
 func truncateForSlackBlock(s string, maxRunes int) string {
 	const suffix = "... truncated, see dashboard"

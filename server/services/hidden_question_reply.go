@@ -140,7 +140,7 @@ func (s *SessionService) ReplyToPendingQuestion(
 		s.countReply(replyLabelRefused)
 		return nil, err
 	}
-	facts := steerRequestFacts{refusal: refusal, userAgent: req.Header().Get("User-Agent")}
+	facts := access.SteerRequestFacts{Refusal: refusal, UserAgent: req.Header().Get("User-Agent")}
 	if !st.flag.Enabled() {
 		return s.replyEarly(sessionv1.ReplyOutcome_REPLY_OUTCOME_DISABLED), nil
 	}

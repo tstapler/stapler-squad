@@ -50,7 +50,7 @@ func TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIs
 			qid := e.register(tgt.inst, colorDialog)
 			in := replyInput{sessionID: tgt.inst.UUID, sessionUUID: tgt.inst.GetStableID(), questionID: qid, replyID: "core-1", digit: '2'}
 
-			res, cache := e.fix.svc.paneReplyCore().Run(e.localCtx(), tt.target, in, tgt.inst, steerRequestFacts{})
+			res, cache := e.fix.svc.paneReplyCore().Run(e.localCtx(), tt.target, in, tgt.inst, access.SteerRequestFacts{})
 
 			require.NoError(t, res.Err)
 			assert.Equal(t, tt.wantOutcome, res.Outcome)

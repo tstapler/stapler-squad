@@ -79,7 +79,7 @@ func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in Que
 	out := r.visible().RunSequence(ctx, AnswerTargetVisible, sequenceInput{
 		sessionID: in.SessionID, sessionUUID: s.inst.GetStableID(), questionID: in.QuestionID, replyID: in.ReplyID,
 		steps: steps, summary: sequenceSummary(picks), question: qs[0].Text,
-	}, s.inst, steerRequestFacts{refusal: refusal})
+	}, s.inst, access.SteerRequestFacts{Refusal: refusal})
 	if out.Err != nil {
 		track.Finish(ctx, questionkit.ActionResult{}, out.Err, questionkit.SentDelivery{}, "")
 		return questionkit.ActionResult{}, out.Err
