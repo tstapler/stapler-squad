@@ -11,10 +11,10 @@ inputs:
     description: setup-go-cached's cache-key output.
     required: true
   max-build-cache-mb:
-    # `go list -race -deps -test -export ./server/...` is 3100 MB of archives (about 6:1 under zstd).
-    # A cap below the writer's own output makes the trim drop it before it is ever saved.
+    # Race archives for server, session and config are 3838 MB and non-race ./... 3974 MB (about 6:1
+    # under zstd). A cap near the writer's own output makes the trim drop it before it is saved.
     description: Trim GOCACHE to this many MB (oldest first) before saving.
-    default: '4096'
+    default: '5120'
 
 runs:
   using: composite

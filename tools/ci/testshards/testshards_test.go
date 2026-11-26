@@ -76,17 +76,40 @@ func TestMainCI_should_RunEveryShardExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var invoked []string
-	for _, m := range regexp.MustCompile(`go run \./tools/ci/testshards ([a-z-]+)`).FindAllStringSubmatch(string(yml), -1) {
-		invoked = append(invoked, m[1])
-	}
+	got := invokedShards(string(yml))
 	var want []string
 	for _, s := range shards {
 		want = append(want, s.name)
 	}
-	slices.Sort(invoked)
+	slices.Sort(got)
 	slices.Sort(want)
-	if !slices.Equal(invoked, want) {
-		t.Fatalf("main-ci.yml runs shards %v, want each of %v once", invoked, want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("main-ci.yml runs shards %v, want each of %v once", got, want)
+	}
+}
+
+// Only commands count: a line starting with # runs nothing.
+var shardCall = regexp.MustCompile(`(?m)^[^#\n]*?(?:\brun_shard|go run \./tools/ci/testshards) ([a-z][a-z-]*)(?:[\s)|]|$)`)
+
+func invokedShards(workflow string) []string {
+	var out []string
+	for _, m := range shardCall.FindAllStringSubmatch(workflow, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+func TestInvokedShards_should_IgnoreCommentedCalls(t *testing.T) {
+	t.Parallel()
+	yml := `
+          # run_shard tmux
+            true  # go run ./tools/ci/testshards session-slice
+            run_shard session-slice || rc=1
+            X="$(go run ./tools/ci/testshards rest)" || exit 1
+            PKGS="$(go run ./tools/ci/testshards "$1")"
+          export -f run_shard run_test_suite
+`
+	if got, want := invokedShards(yml), []string{"session-slice", "rest"}; !slices.Equal(got, want) {
+		t.Fatalf("invoked = %v, want %v", got, want)
 	}
 }

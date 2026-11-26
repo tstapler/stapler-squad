@@ -120,7 +120,7 @@ jobs:
           # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/webhooktrigger/github_webhook_pr_fix.go
           # On failure only the failed packages rerun, verbosely, for diagnostics: a second full pass
           # did not fit the budget and reported a test failure as CI-BUDGET-EXCEEDED.
-          # A failure in the first shard does not skip the second.
+          # A failure in the first shard does not skip the second, though both share the 17m budget.
           run_shard() {
             PKGS="$(go run ./tools/ci/testshards "$1")" || { echo "::error::testshards $1 failed"; touch "$RUNNER_TEMP/tests-failed"; return 1; }
             # PKGS is deliberately unquoted: one import path per line, each a separate argument.
@@ -135,8 +135,8 @@ jobs:
           }
           run_test_suite() {
             rc=0
-            run_shard tmux || rc=1  # go run ./tools/ci/testshards tmux
-            run_shard session-slice || rc=1  # go run ./tools/ci/testshards session-slice
+            run_shard tmux || rc=1
+            run_shard session-slice || rc=1
             [ "$rc" -eq 0 ] || return 1
             head -n 1 coverage.tmux.part > coverage.tmux.out
             tail -q -n +2 coverage.tmux.part coverage.session-slice.part >> coverage.tmux.out

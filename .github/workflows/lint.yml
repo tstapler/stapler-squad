@@ -357,8 +357,6 @@ jobs:
         with:
           path: ${{ steps.go.outputs.cache-path }}
           key: ${{ steps.go.outputs.cache-key }}
-          # Non-race archives for ./... alone are 3974 MB (docs/reference/ci-job-budget.md, "Size").
-          max-build-cache-mb: '5120'
 
       - name: Runner utilization report
         if: always()
