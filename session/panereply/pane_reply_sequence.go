@@ -48,6 +48,8 @@ type SequenceOptions struct {
 	// StageDialogClosed vs StageDialogStillOpen after the last key.
 	StillOpen       func(capture string) bool
 	BeforeFirstByte func() error
+	// BeforeEachWrite runs last before every key; an error stops the sequence there.
+	BeforeEachWrite func() error
 	SendTimeout     time.Duration
 	PollEvery       time.Duration
 	StepWindow      time.Duration
@@ -173,6 +175,11 @@ func (r *sequenceRun) execute(ctx context.Context) SequenceResult {
 		if i == 0 && r.opts.BeforeFirstByte != nil {
 			if err := r.opts.BeforeFirstByte(); err != nil {
 				return res(StageNotStarted, false, err)
+			}
+		}
+		if r.opts.BeforeEachWrite != nil {
+			if err := r.opts.BeforeEachWrite(); err != nil {
+				return res(r.stageBefore(), false, err)
 			}
 		}
 		if stage, err := r.write(step.Keys); err != nil {

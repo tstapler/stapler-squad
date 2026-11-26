@@ -355,10 +355,7 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim questio
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT, replyStageStalePrompt}
 		}
 		// Last, so an archive during the slower checks above is still seen.
-		if inst.IsArchived() {
-			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, replyStageArchived}
-		}
-		return nil
+		return refuseArchived(inst)()
 	}
 }
 

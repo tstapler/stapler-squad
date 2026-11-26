@@ -406,9 +406,6 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// request (e.g. h.classifier == nil) as safe. See pre-mortem.md Failure #1.
 	var classified bool
 
-	// humanOnly marks an escalation that the autonomous LLM must not decide.
-	var humanOnly bool
-
 	// Domain age check: if a Bash command is contacting a newly-registered domain,
 	// escalate immediately regardless of other rules.
 	if h.domainChecker != nil {
@@ -441,7 +438,6 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 					// Fall through to manual review queue (do NOT return here).
 					escalation = domainEscalation
 					classified = true
-					humanOnly = true
 					goto createApproval
 				}
 			}
@@ -548,12 +544,12 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			result.RuleID = classifier.RuleIDUnexpectedDecision
 			escalation = result
 			classified = true
-			humanOnly = true
 		}
 	}
 
 createApproval:
 
+	humanOnly := classifier.CategorizeEscalationRuleID(escalation.RuleID).HumanOnly()
 	autonomous := h.autonomousChecker != nil && h.autonomousChecker(sessionID)
 	// Deny rather than defer when no person is sure to see a prompt: pi has none, and an
 	// autonomous session may be unattended when a human-only escalation goes undecided.

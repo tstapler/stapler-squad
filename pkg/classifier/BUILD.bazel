@@ -33,6 +33,7 @@ go_test(
         "classifier_test.go",
         "command_parser_test.go",
         "config_file_rules_test.go",
+        "escalation_human_only_test.go",
         "escalation_test.go",
         "permission_request_source_test.go",
         "tagging_test.go",

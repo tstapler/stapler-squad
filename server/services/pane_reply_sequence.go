@@ -53,6 +53,10 @@ type sequenceOutcome struct {
 // RunSequence is the leader's path for a multi-key answer. consumed is true
 // when a key may have reached the pane.
 func (c *PaneReplyCore) RunSequence(ctx context.Context, target AnswerTarget, in sequenceInput, inst *instance.Instance, facts access.SteerRequestFacts) sequenceOutcome {
+	if inst.IsArchived() {
+		c.count(replyOutcomeLabel(sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING))
+		return sequenceOutcome{ReplyOutcomeResult: questionkit.ReplyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING}}
+	}
 	reservation, retryAfter, ok := c.limiters.reserve(in.sessionUUID)
 	if !ok {
 		secs := int32((retryAfter + time.Second - 1) / time.Second)
@@ -106,6 +110,7 @@ func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target Answ
 	res := panereply.SubmitReplySequence(ctx, inst, lease, in.steps, panereply.SequenceOptions{
 		StillOpen:       panereply.TabbedStillOpen,
 		BeforeFirstByte: c.sequenceChecks(target, in, inst),
+		BeforeEachWrite: refuseArchived(inst),
 		After:           c.after,
 	})
 	return mapSequenceResult(res)
@@ -130,6 +135,16 @@ func (c *PaneReplyCore) sequenceChecks(target AnswerTarget, in sequenceInput, in
 	}
 }
 
+// refuseArchived is the archived check of the single-digit path, for every key.
+func refuseArchived(inst *instance.Instance) func() error {
+	return func() error {
+		if inst.IsArchived() {
+			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NO_PENDING, replyStageArchived}
+		}
+		return nil
+	}
+}
+
 // mapSequenceResult turns a driver result into the reply outcome vocabulary:
 // NOT_SENT only when no key was handed over, SEND_INDETERMINATE when a key may
 // have landed, STALE_PROMPT when a frame check failed (Partial when keys were
@@ -148,6 +163,9 @@ func mapSequenceResult(r panereply.SequenceResult) (sequenceOutcome, string, boo
 	case r.Stale && r.Written > 0:
 		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT)
 		return out, replyStageAbortedPartial, true
+	case errors.As(r.Err, &refused) && r.Written > 0:
+		set(refused.outcome)
+		return out, refused.stage, true
 	case r.Stage == panereply.StageWriteEntered:
 		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE)
 		return out, replyStageIndeterminate, true
