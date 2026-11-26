@@ -519,7 +519,7 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 
 // SetSlackNotifier rewires slackConfigSvc onto the given SlackNotifier
 // instance — intended for server/dependencies.go to call with the SAME
-// *services.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
+// *notify.SlackNotifier wired into ReactiveQueueManager/ApprovalHandler,
 // so GetSlackConfig's last_delivery reflects real production sends from
 // those trigger points, not only sends made via TestSlackWebhook. Optional:
 // if never called, slackConfigSvc keeps the private SlackNotifier instance

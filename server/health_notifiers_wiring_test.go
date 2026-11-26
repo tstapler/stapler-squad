@@ -35,7 +35,7 @@ func TestHealthNotifiers_should_BeWiredWithDerivePriority_When_ServerConstructsT
 		return true
 	})
 	require.Equal(t, map[string]string{
-		"healthnotify.NewStaleSessionNotifier":   "DerivePriority:services.DerivePriority",
-		"healthnotify.NewMemoryPressureNotifier": "DerivePriority:services.DerivePriority",
+		"healthnotify.NewStaleSessionNotifier":   "DerivePriority:notify.DerivePriority",
+		"healthnotify.NewMemoryPressureNotifier": "DerivePriority:notify.DerivePriority",
 	}, got)
 }

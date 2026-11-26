@@ -46,7 +46,7 @@ func newTestNotifierPoller(instances ...*instance.Instance) *svctest.MockInstanc
 	return &svctest.MockInstancePoller{Instances: instances}
 }
 
-// testPorts mirrors services.DerivePriority, which the leaf cannot import;
+// testPorts mirrors notify.DerivePriority, which the leaf cannot import;
 // server/health_notifiers_wiring_test.go pins the production wiring.
 func testPorts() Ports {
 	return Ports{DerivePriority: func(urgent, important bool) int32 {

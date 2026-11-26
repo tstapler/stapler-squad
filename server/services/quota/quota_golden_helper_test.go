@@ -13,7 +13,7 @@ func newGoldenGate(cfgFn func() config.QuotaConfig, store tokens.TokenStoreReade
 	return NewQuotaGate(cfgFn, store, poller, ctrl, bus, testPorts)
 }
 
-// testPorts copies services.DerivePriority, which a leaf test cannot import. The
+// testPorts copies notify.DerivePriority, which a leaf test cannot import. The
 // composition root's wiring of the real function is checked in package server.
 var testPorts = Ports{DerivePriority: func(urgent, important bool) int32 {
 	switch {

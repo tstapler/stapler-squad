@@ -42,7 +42,7 @@ import (
 // TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
 // is the regression test for commit 13ad9c260, which fixed a split-brain bug
 // where SessionService's SlackConfigService constructed and used its own
-// private *services.SlackNotifier instead of the shared instance wired into
+// private *notify.SlackNotifier instead of the shared instance wired into
 // ReactiveQueueManager/ApprovalHandler (server.go's wireDepsIntoServer,
 // server/server.go:559/563: approvalHandler.SetSlackNotifier(deps.SlackNotifier)
 // / deps.SessionService.SetSlackNotifier(deps.SlackNotifier)). Left

@@ -37,7 +37,7 @@ type CallbackDispatchWiring interface {
 	Dispatch(eventType string, payload any)
 }
 
-// SlackNotifierWiring is the narrow subset of *services.SlackNotifier that
+// SlackNotifierWiring is the narrow subset of *notify.SlackNotifier that
 // ReactiveQueueManager needs. Defined here — the consumer — per this repo's
 // anti-interface-pollution convention (mirrors OneShotPRCreator above).
 type SlackNotifierWiring interface {
