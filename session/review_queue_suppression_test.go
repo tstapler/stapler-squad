@@ -267,6 +267,29 @@ func TestAckSnooze_Should_KeepInputRequired_When_BypassFixOnAndAckAfterOutput(t 
 	}
 }
 
+// AC4: the bypass only applies when the detector still sees a live blocking prompt
+// (DetectionActionAdd). An acked session that is idle (detector says Skip) stays snoozed.
+func TestAckSnooze_Should_StillRemove_When_BypassFixOnAndDetectorNoLongerAdds(t *testing.T) {
+	t.Parallel()
+	for _, reason := range NeedsHumanReasons() {
+		c := ackedCtx(queue.PriorityMedium, reason, true)
+		c.action = DetectionActionSkip
+		got, decided := ackSnooze(c)
+		if !decided || got != removeDecision("ackSnooze") {
+			t.Errorf("idle acked session with reason %v: ackSnooze = (%+v, %v), want remove", reason, got, decided)
+		}
+	}
+}
+
+func TestAckSnooze_Should_KeepInputRequired_When_BypassFixOnAndNewOutputAfterAck(t *testing.T) {
+	t.Parallel()
+	c := ackedCtx(queue.PriorityMedium, queue.ReasonInputRequired, true)
+	c.ackedAfterOutput = false // new output arrived after the ack
+	if _, decided := ackSnooze(c); decided {
+		t.Error("InputRequired with new output after ack must stay visible")
+	}
+}
+
 func TestAckSnooze_Should_RemoveInputRequired_When_BypassFixOff(t *testing.T) {
 	t.Parallel()
 	got, decided := ackSnooze(ackedCtx(queue.PriorityMedium, queue.ReasonInputRequired, false))

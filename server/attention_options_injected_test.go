@@ -14,11 +14,11 @@ func TestNewAttentionOptionsSource_ShouldResolveThroughInjectedRegistry(t *testi
 	specs := flagsvc.FlagRegistry().Specs()
 	for i := range specs {
 		if specs[i].Name == "attention_ack_bypass_fix" {
-			specs[i].Default = true
+			specs[i].Default = false
 		}
 	}
 	_, r := newAttentionOptionsSource(featureflags.NewRegistry(specs))()
-	assert.True(t, r.AckBypassFix, "injected registry default applies")
+	assert.False(t, r.AckBypassFix, "injected registry default applies")
 	_, r = newAttentionOptionsSource(flagsvc.FlagRegistry())()
-	assert.False(t, r.AckBypassFix)
+	assert.True(t, r.AckBypassFix, "process registry defaults the bypass fix on")
 }
