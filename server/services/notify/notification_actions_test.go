@@ -430,7 +430,7 @@ func BenchmarkBuildDescriptors_300RecordsWith40Sessions(b *testing.B) {
 // 2.8c: every ActionKind has exactly one tier row and remote availability.
 func TestEveryActionKindHasTierAndRemoteAvailability(t *testing.T) {
 	t.Parallel()
-	assert.Empty(t, kindsWithoutPolicy(sessionv1.ActionKind_name), "add a row to actionPolicies for each new ActionKind")
+	assert.Empty(t, kindsWithoutPolicy(sessionv1.ActionKind_name), "add a row to ActionPolicies for each new ActionKind")
 	for kind, p := range ActionPolicies {
 		assert.Equal(t, p.Tier == sessionv1.ActionTier_ACTION_TIER_A, p.RemoteAvailable,
 			"%s: remote availability must follow the tier (Tier B is desktop-only)", kind)

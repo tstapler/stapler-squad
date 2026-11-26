@@ -603,7 +603,7 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 		}
 		// sanitized: "my_project_work", prefixed: "ss-my_project_work"
 		if !notify.MatchesIDData(d, "ss-my_project_work") {
-			t.Error("expected matchesIDData to match computed tmux session name ss-my_project_work")
+			t.Error("expected MatchesIDData to match computed tmux session name ss-my_project_work")
 		}
 	})
 
@@ -616,7 +616,7 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 		}
 		// Without a prefix, "my_project_work" must NOT match via the tmux-name branch.
 		if notify.MatchesIDData(d, "my_project_work") {
-			t.Error("expected matchesIDData NOT to match sanitized title when TmuxPrefix is empty")
+			t.Error("expected MatchesIDData NOT to match sanitized title when TmuxPrefix is empty")
 		}
 	})
 
@@ -628,7 +628,7 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 			UUID:       "aaaabbbb-1111-2222-3333-ffffffffffff",
 		}
 		if !notify.MatchesIDData(d, "my.project:work") {
-			t.Error("expected matchesIDData to still match exact title even without TmuxPrefix")
+			t.Error("expected MatchesIDData to still match exact title even without TmuxPrefix")
 		}
 	})
 }
