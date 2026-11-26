@@ -8,8 +8,13 @@ jest.mock("@/lib/hooks/useBacklogService", () => ({
   useBacklogService: () => ({ getBacklogItem: mockGetBacklogItem }),
 }));
 
-const child = (status: string, acStatus = "pending") =>
-  ({ id: "child-1", status, acCriteria: [{ index: 0, text: "x", status: acStatus }] }) as unknown as BacklogItem;
+const child = (status: string, acStatus = "pending", archivedFrom?: string) =>
+  ({
+    id: "child-1",
+    status,
+    acCriteria: [{ index: 0, text: "x", status: acStatus }],
+    statusEvents: archivedFrom ? [{ fromStatus: archivedFrom, toStatus: "archived" }] : [],
+  }) as unknown as BacklogItem;
 
 describe("IntegrationCheckSection", () => {
   beforeEach(() => mockGetBacklogItem.mockReset());
@@ -39,8 +44,14 @@ describe("IntegrationCheckSection", () => {
     await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Failed"));
   });
 
-  it("shows Integration Passed when the child was archived (epic done gate is open)", async () => {
-    mockGetBacklogItem.mockResolvedValue(child("archived"));
+  it("shows Integration Check Archived when the child was archived without passing", async () => {
+    mockGetBacklogItem.mockResolvedValue(child("archived", "pending", "review"));
+    render(<IntegrationCheckSection item={{ status: "review", integrationChildId: "child-1" }} />);
+    await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Check Archived"));
+  });
+
+  it("shows Integration Passed when the child was archived after passing", async () => {
+    mockGetBacklogItem.mockResolvedValue(child("archived", "pending", "done"));
     render(<IntegrationCheckSection item={{ status: "review", integrationChildId: "child-1" }} />);
     await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Passed"));
   });

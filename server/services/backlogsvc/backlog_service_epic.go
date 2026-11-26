@@ -46,7 +46,7 @@ func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID stri
 		if getErr == nil && existing.Status != string(domain.BacklogStatusArchived) {
 			return existing, nil
 		}
-		// Archived (or missing) child: fall through so the store can replace it.
+		// Archived (or missing) child: fall through; the store replaces one archived without passing.
 	}
 	cmd := backlogstore.ExtractE2ECommand(string(epic.AcceptanceCriteria), s.doneCommandTemplate(ctx, epic.PipelineMode))
 	if cmd == "" {
