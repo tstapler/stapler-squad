@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "streamhubrollout",
+    srcs = ["stream_hub_rollout_service.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/streamhubrollout",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//session/instance",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":streamhubrollout",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "streamhubrollout_test",
+    srcs = [
+        "stream_hub_rollout_service_test.go",
+        "streamhubrollout_golden_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":streamhubrollout"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session/instance",
+        "//session/tmux",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+# Read by the module-walking guard tests via //tools/bzl/scandata:module_go_sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/bzl/scandata:__pkg__"],
+)

@@ -1,4 +1,6 @@
-package services
+// Package streamhubrollout holds the StreamHub staged-rollout RPC handler and the session key that
+// override lookup and terminal streaming must derive identically.
+package streamhubrollout
 
 import (
 	"context"
