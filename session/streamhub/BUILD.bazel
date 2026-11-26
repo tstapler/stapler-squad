@@ -55,6 +55,7 @@ alias(
 go_test(
     name = "streamhub_test",
     srcs = [
+        "activity_close_test.go",
         "activity_test.go",
         "batch_test.go",
         "capture_tap_test.go",

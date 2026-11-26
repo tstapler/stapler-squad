@@ -106,7 +106,7 @@ func TestProbeEndpoint_BrokenSocketPathErrorsMeanNoSocket_NotBusy(t *testing.T) 
 }
 
 func TestProbeDaemon_BrokenSocketPath_ConsultsTCP(t *testing.T) {
-	shrinkProbeTimeouts(t)
+	// No shrinkProbeTimeouts: nothing here waits for a timeout, and a loaded runner can miss a short one.
 	for name, path := range map[string]func() string{
 		"ENOTDIR": func() string { return notDirSocketPath(t) },
 	} {
