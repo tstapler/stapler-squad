@@ -466,10 +466,10 @@ const WindowTabStripInner = forwardRef<
       <div
         ref={containerRef}
         className={windowTabStrip}
-        // Mouse only, on hover-capable devices: taps synthesize mouseenter, and an emulated touch
+        // Mouse only, and only if some input can hover: taps synthesize mouseenter, and an emulated touch
         // browser reports a "mouse" parked at (0,0), on this strip. Touch users get the overview button.
         onPointerEnter={(e) =>
-          e.pointerType === "mouse" && !window.matchMedia("(hover: none)").matches && scheduleHover(true)
+          e.pointerType === "mouse" && !window.matchMedia("(any-hover: none)").matches && scheduleHover(true)
         }
         onPointerLeave={(e) => e.pointerType === "mouse" && scheduleHover(false)}
         onKeyDown={(e) => {
