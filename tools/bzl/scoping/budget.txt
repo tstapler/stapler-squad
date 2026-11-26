@@ -17,7 +17,7 @@ session/shellstore files=2 loc=111 imports=5
 session/projectstore files=2 loc=136 imports=5
 session/rulestore files=2 loc=233 imports=6
 session/analyticsstore files=1 loc=271 imports=5
-session/instancestore files=8 loc=1596 imports=11
+session/instancestore files=8 loc=1623 imports=11
 session/domain files=49 loc=6008 imports=0
 session/sessionpr files=6 loc=1900 imports=14
 session/backlogstore files=33 loc=6358 imports=21
@@ -77,7 +77,7 @@ session/tagpoller files=1 loc=415 imports=5
 session/paneactivity files=1 loc=222 imports=3
 session/registry files=1 loc=344 imports=3
 session/pipelinemode files=3 loc=768 imports=4
-session/claudehistory files=1 loc=408 imports=1
+session/claudehistory files=2 loc=500 imports=1
 session/steertext files=1 loc=146 imports=0
 session/conflictretry files=1 loc=171 imports=0
 session/nudgeoutcomes files=1 loc=224 imports=3
