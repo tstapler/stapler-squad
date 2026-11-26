@@ -146,6 +146,12 @@ type BacklogItemData struct {
 	// replacing (not adding to) the global value. See effectiveReworkCap in
 	// server/services/backlog_service_triage.go.
 	ReworkCapOverride *int
+	// IsIntegrationChild marks the auto-created end-to-end check child of an epic.
+	IsIntegrationChild bool
+	// IntegrationChildID is set on an epic to its integration child's ID ("" = none).
+	IntegrationChildID string
+	// IntegrationFixCount counts fix children spawned for this epic's integration failures.
+	IntegrationFixCount int
 	// CostBudgetThresholdUsd is a per-item, optional soft-budget-warning
 	// threshold in USD. Nil = no threshold configured, no warning ever fires
 	// for this item. Same single-pointer-presence convention as
@@ -323,6 +329,8 @@ type BacklogItemSummary struct {
 	PlanApproved               bool                  `json:"plan_approved"`
 	PlanArtifactsPath          string                `json:"plan_artifacts_path"`
 	PlanRejectionReason        string                `json:"plan_rejection_reason"`
+	IsIntegrationChild         bool                  `json:"is_integration_child"`
+	IntegrationChildID         string                `json:"integration_child_id"`
 }
 
 // ItemSessionBacklogEntry is a lightweight join record linking a tmux session UUID

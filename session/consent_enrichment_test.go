@@ -56,3 +56,16 @@ func TestConsentEnrichmentProbe_ResumesOriginalKeyForEachRoot(t *testing.T) {
 	require.Equal(t, common, info.MainRepoRoot)
 	require.Equal(t, common, info.MainRepoPath)
 }
+
+// A session path with no .git is not a repository, not a failed probe: the
+// consent banner must not report "Enrichment: error" for it.
+func TestConsentEnrichmentProbe_NonRepoPathIsNotAnError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	gate := tcc.NewConsentGate(func(string) tcc.Result { return tcc.Result{} }, nil, nil)
+	info, err := ConsentEnrichmentProbe(gate)(dir)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+	require.False(t, info.IsWorktree)
+	require.Empty(t, info.GitHubOwner)
+}

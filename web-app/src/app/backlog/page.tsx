@@ -24,6 +24,7 @@ import { BlockerChip } from "@/components/backlog/BlockerChip";
 import { ClaimChip } from "@/components/backlog/ClaimChip";
 import { DependencyChip } from "@/components/backlog/DependencyChip";
 import { DuplicatePendingBadge } from "@/components/backlog/DuplicatePendingBadge";
+import { IntegrationCheckBadge } from "@/components/backlog/IntegrationCheckBadge";
 import { TriageLoadingIndicator } from "@/components/backlog/TriageLoadingIndicator";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { groupStuckItemsByItemId, summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
@@ -226,6 +227,7 @@ const BacklogTableRow = memo(function BacklogTableRow({
       <td className={`${styles.tableCell} ${styles.titleCell}`}>
         {item.title}
         <div className={styles.rowWidgets} data-testid="backlog-row-widgets">
+          {item.isIntegrationChild && <IntegrationCheckBadge />}
           {item.duplicatePending && <DuplicatePendingBadge duplicateRef={item.duplicateRef ?? ""} />}
           <VerdictBadge item={item} />
           {item.externalUrl && item.externalId && (

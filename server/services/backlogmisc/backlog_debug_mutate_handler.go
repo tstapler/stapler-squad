@@ -1,4 +1,4 @@
-package services
+package backlogmisc
 
 // backlog_debug_mutate_handler.go — test-only debug endpoints that mutate a
 // backlog item directly through the storage layer, bypassing

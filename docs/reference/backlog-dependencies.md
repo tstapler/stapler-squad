@@ -22,4 +22,4 @@ curl -s -X POST http://127.0.0.1:8543/api/session.v1.BacklogService/AddBacklogIt
 
 ## MCP tools
 
-`add_backlog_item_dependency`, `remove_backlog_item_dependency`, `trigger_triage`, `transition_backlog_item_status` (requires `expected_status`; no override), and an optional `depends_on` list on `create_backlog_item` (validated before the item is created). `get_backlog_item` prints a `## Dependencies` section.
+`add_backlog_item_dependency`, `remove_backlog_item_dependency`, `create_epic_integration_child` (call once after planning an epic, when all children exist: creates the epic's integration child, blocked on every sibling; needs the `epic_integration_child_enabled` flag and an `e2e:` acceptance criterion or the pipeline mode's done command; the epic cannot be marked done until that child is done or archived), `trigger_triage`, `transition_backlog_item_status` (requires `expected_status`; no override), and an optional `depends_on` list on `create_backlog_item` (validated before the item is created). `get_backlog_item` prints a `## Dependencies` section.

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -121,7 +122,7 @@ func TestMergeDatabase_should_notPublishLiveEvents_When_BulkCopyingBacklogItems(
 
 	bus := pkgevents.NewEventBus(10)
 	defer bus.Close()
-	destRepo.SetItemChangePublisher(&BacklogItemEventPublisher{Bus: bus})
+	destRepo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
@@ -180,7 +181,7 @@ func TestMergeDatabase_should_stillPersistCopiedItems_When_EventPublishIsSuppres
 
 	bus := pkgevents.NewEventBus(10)
 	defer bus.Close()
-	destRepo.SetItemChangePublisher(&BacklogItemEventPublisher{Bus: bus})
+	destRepo.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: bus})
 	destItemsBefore := countRows(t, destPath, "backlog_items")
 	destRepo.Close()
 
