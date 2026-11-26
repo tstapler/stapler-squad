@@ -495,6 +495,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 	srv.startLeaseWedgeWatcher(serverCtx, deps)
 	deps.SessionService.StartSearchIndexSync(serverCtx)
+	deps.SessionService.StartArchivedSessionReaper(serverCtx)
 	srv.shutdownHooks = append(srv.shutdownHooks, deps.SessionService.WaitSearchIndexSync)
 
 	// Initialize push notification service.
