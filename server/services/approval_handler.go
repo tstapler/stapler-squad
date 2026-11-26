@@ -503,9 +503,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", approvalDetail(payload.ToolInput))
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", toolCallDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil && (h.autoApprovedGate == nil || h.autoApprovedGate.AllowAutoApprovedRow(sessionID, "allow")) {
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, toolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -514,11 +514,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", approvalDetail(payload.ToolInput))
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", toolCallDetail(payload.ToolInput))
 			// Never gated: a deny row is the only record that a rule blocked a tool
 			// in a background session.
 			if h.autoApprovalLog != nil {
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, approvalDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, toolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return

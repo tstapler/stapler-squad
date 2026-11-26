@@ -22,12 +22,12 @@ func truncateString(s string, maxRunes int) string {
 	return string(r[:maxRunes]) + "..."
 }
 
-// approvalDetail extracts the human-meaningful part of a tool call — the full command
+// toolCallDetail extracts the human-meaningful part of a tool call — the full command
 // (including every sub-command of a compound &&/;/pipe chain, since this is the raw
 // string before classifier.ExtractAllCommands splits it) for Bash/PowerShell, or the
 // target path for file-targeting tools. Returns "" if toolInput has neither, letting the
 // caller supply its own fallback.
-func approvalDetail(toolInput map[string]interface{}) string {
+func toolCallDetail(toolInput map[string]interface{}) string {
 	if cmd, ok := toolInput["command"].(string); ok && cmd != "" {
 		return truncateString(cmd, maxNotificationMessageLen)
 	}
@@ -39,7 +39,7 @@ func approvalDetail(toolInput map[string]interface{}) string {
 
 // buildApprovalMessage builds the human-readable message for an approval notification.
 func buildApprovalMessage(approval *approvalkit.PendingApproval) string {
-	if detail := approvalDetail(approval.ToolInput); detail != "" {
+	if detail := toolCallDetail(approval.ToolInput); detail != "" {
 		return detail
 	}
 	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
