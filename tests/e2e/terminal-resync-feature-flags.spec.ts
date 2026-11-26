@@ -68,7 +68,7 @@ test.describe('terminal-resync-feature-flags', () => {
     await expect(toggle).toHaveAttribute('aria-checked', 'true', { timeout: 10000 });
   });
 
-  // Row 11: toggling reflects the new state in the UI (badge + aria-pressed)
+  // Row 11: toggling reflects the new state in the UI (badge + aria-checked)
   // without a page reload, and a reload preserves the persisted value.
   test('featureFlagsPage_should_ReflectToggleOrShowError_When_FlagToggled', async ({ page }) => {
     await gotoFeaturesPage(page);

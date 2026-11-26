@@ -44,7 +44,7 @@ test.describe('terminal resize', () => {
     test.skip(!opened, 'No session available in test server');
 
     // Wait for connection before triggering resize
-    await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
 
     // Resizing overlay must NOT be visible before clicking
     await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached();
@@ -60,20 +60,20 @@ test.describe('terminal resize', () => {
     const opened = await openTerminalView(page);
     test.skip(!opened, 'No session available in test server');
 
-    await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
 
     await page.getByRole('button', { name: REDRAW_BUTTON }).click();
 
     // After the resize cycle completes the terminal must still be connected
     await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached({ timeout: 10000 });
-    await expect(page.getByText('Connected')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   test('resize via viewport change cycles through RESIZING overlay', async ({ page }) => {
     const opened = await openTerminalView(page);
     test.skip(!opened, 'No session available in test server');
 
-    await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
 
     // Trigger resize by changing the viewport — exercises the browser resize path
     // rather than the manual button path
@@ -81,7 +81,7 @@ test.describe('terminal resize', () => {
 
     // Wait for any RESIZING overlay to clear
     await expect(page.getByRole('status', { name: 'Terminal resizing' })).not.toBeAttached({ timeout: 10000 });
-    await expect(page.getByText('Connected')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   /**
@@ -101,6 +101,8 @@ test.describe('terminal resize', () => {
       'DOM content assertion only runs in chromium-dom project',
     );
 
+    test.slow(); // session start and connect waits exceed the default 30s
+
     const client = new SessionClient(BASE_URL);
     const title = `e2e-resize-${Date.now()}`;
     const session = await client.createIdleSession(title, '/tmp');
@@ -114,7 +116,7 @@ test.describe('terminal resize', () => {
       await expect(toggle).toBeVisible({ timeout: 8000 });
       if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
 
-      await expect(page.getByText('Connected')).toBeVisible({ timeout: 20000 });
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 20000 });
 
       // Print two marker rows, so there is known content the redraw has to bring back.
       const markers = ['ssq-a', 'ssq-b'];
@@ -126,9 +128,9 @@ test.describe('terminal resize', () => {
       await page.keyboard.type("printf 'ssq-a\\nssq-b\\n'\n");
       await expect.poll(markerCounts, { timeout: 10000 }).toEqual([1, 1]);
 
-      // Redraw clears the local buffer and forces a server resize; only this click logs that line. The rows
-      // can also return from another in-flight snapshot, so the forced resize itself is asserted in
-      // TerminalOutput.refit.test.tsx; this test guards the clear-then-repaint result.
+      // Only this click logs the forced-resize line. This test checks each row shows once after a redraw; it
+      // cannot observe the clear or prove a repaint arrived (another snapshot can restore the rows).
+      // Clear-before-resize ordering is asserted in TerminalOutput.test.tsx.
       const forced = page.waitForEvent('console', {
         predicate: (m) => m.text().includes('Forcing resize message to backend'),
         timeout: 10000,

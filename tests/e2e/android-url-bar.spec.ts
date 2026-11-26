@@ -65,6 +65,9 @@ test.describe('android-url-bar-overflow', () => {
     await page.setViewportSize(ANDROID_URL_BAR);
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10_000 });
 
+    // Wait for the client render, or an empty page would pass.
+    await expect(page.getByRole('navigation', { name: 'Bottom navigation' })).toBeVisible();
+
     const overflowingFixed = await page.evaluate((viewportHeight) => {
       // Closed bottom sheets park below the viewport with translateY(100%); only these two, and only while parked.
       const isParkedDrawer = (el: Element) => {

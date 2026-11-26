@@ -122121,7 +122121,7 @@
   },
   {
    "spec": "terminal-resync-feature-flags.spec.ts",
-   "coupling": "Alert found with getByRole('alert') filtered by text 'refresh', to skip Next's announcer.",
+   "coupling": "Save failure found by data-testid=feature-flag-row-error.",
    "state": "neutral"
   },
   {

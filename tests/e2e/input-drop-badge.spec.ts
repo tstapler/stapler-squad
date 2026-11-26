@@ -72,6 +72,9 @@ async function triggerDrop(page: import('@playwright/test').Page, count: number)
 }
 
 test.describe('input-drop-badge', () => {
+  // Session start, toolbar, trigger and connect waits together exceed the default 30s.
+  test.describe.configure({ timeout: 60_000 });
+
   test('badge becomes visible with the correct singular/plural count text', async ({ page }) => {
     const client = new SessionClient(BASE_URL);
     const session = await createActiveSession(client, `e2e-input-drop-${Date.now()}`);
@@ -124,7 +127,7 @@ test.describe('input-drop-badge', () => {
       test.skip(!opened, 'No session available in test server');
 
       await page.setViewportSize({ width: 1200, height: 800 });
-      await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
 
       await waitForTestTrigger(page);
       await triggerDrop(page, 2);
@@ -187,7 +190,7 @@ test.describe('input-drop-badge', () => {
       await waitForTestTrigger(page);
 
       // Focus the terminal input once it is connected, so its own autofocus can't move focus mid-test.
-      await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
       const terminalInput = page.getByRole('textbox', { name: 'Terminal input' });
       await terminalInput.focus();
       await expect(terminalInput).toBeFocused();
@@ -220,7 +223,7 @@ test.describe('input-drop-badge', () => {
       await openTerminalView(page, session.id);
       await answered;
       // A connected terminal has long since run the effect that would install the trigger.
-      await expect(page.getByText('Connected')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 15000 });
 
       expect(await page.evaluate(() => '__e2eTriggerInputDropped' in window)).toBe(false);
     } finally {

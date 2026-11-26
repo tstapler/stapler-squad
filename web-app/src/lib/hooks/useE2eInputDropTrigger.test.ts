@@ -43,6 +43,17 @@ describe("useE2eInputDropTrigger", () => {
     expect(target.__e2eTriggerInputDropped).toBeUndefined();
   });
 
+  it("does not install when unmounted before the server answers", async () => {
+    let answer!: (value: unknown) => void;
+    const { view } = await mountWith(() => new Promise((resolve) => (answer = resolve)));
+    view.unmount();
+    await act(async () => {
+      answer({ json: async () => ({ e2e_hooks: true }) });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(target.__e2eTriggerInputDropped).toBeUndefined();
+  });
+
   it("installs on the e2e server and removes itself on unmount", async () => {
     const { report, view } = await mountWith(serverInfo({ e2e_hooks: true }));
     expect(target.__e2eTriggerInputDropped).toBe(report);

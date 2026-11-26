@@ -127,6 +127,7 @@ export function TerminalStressTest() {
     resizeObserver.observe(terminalRef.current);
 
     return () => {
+      abortControllerRef.current?.abort();
       resizeObserver.disconnect();
       term.dispose();
     };

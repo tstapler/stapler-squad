@@ -15,6 +15,7 @@ func TestServerInfo_should_OfferE2EHooksOnlyOnTheE2EInstance_When_Requested(t *t
 	for name, wantHooks := range map[string]bool{"": false, "shared": false, "e2e-local": true} {
 		t.Run("instance="+name, func(t *testing.T) {
 			t.Setenv("STAPLER_SQUAD_INSTANCE", name)
+			t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir()) // "shared" would otherwise resolve live state
 			srv := &Server{mux: http.NewServeMux()}
 			srv.registerServerInfoHandler()
 
