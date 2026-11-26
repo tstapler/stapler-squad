@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/cdp"
@@ -321,7 +322,7 @@ func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.Reac
 	// SetSharedBacklogConfig below. Wired to both the EntRepository (via
 	// Storage's forwarding setter, for on_session_complete/on_session_stale) and
 	// ReactiveQueueManager (for on_queue_item_created).
-	callbackDispatcher := services.NewCallbackDispatcher(cfg)
+	callbackDispatcher := webhooks.NewCallbackDispatcher(cfg)
 	storage.SetCallbackDispatcher(callbackDispatcher)
 	reactiveQueueMgr.SetCallbackDispatcher(callbackDispatcher)
 	// Share callbackDispatcher's live *config.Config instance (and its guarding

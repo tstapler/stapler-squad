@@ -38,9 +38,10 @@ type InstancePoller interface {
 	GetInstances() []*instance.Instance
 }
 
-// Ports are the hub functions the gate needs; every field must be non-nil.
+// Ports are the hub functions the gate needs.
 type Ports struct {
 	// DerivePriority maps the (urgent, important) axes to a NotificationPriority value.
+	// Nil is a wiring bug: NewQuotaGate logs it and notifies at unspecified priority.
 	DerivePriority func(urgent, important bool) int32
 }
 
@@ -124,6 +125,13 @@ func NewQuotaGate(
 	eventBus *events.EventBus,
 	ports Ports,
 ) *QuotaGate {
+	if ports.DerivePriority == nil {
+		// A nil call would panic mid-pause, under g.mu, and crash the boot-time Reconcile.
+		log.Error("QuotaGate: Ports.DerivePriority is not wired; notifications get unspecified priority")
+		ports.DerivePriority = func(_, _ bool) int32 {
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_UNSPECIFIED)
+		}
+	}
 	return &QuotaGate{
 		cfgFn:       cfgFn,
 		tokenStore:  tokenStore,

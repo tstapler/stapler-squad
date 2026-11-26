@@ -786,3 +786,33 @@ func TestBuildRuntimeDeps_should_WireQuotaGatePorts_When_RateLimitPausesBacklog(
 		}
 	}
 }
+
+// TestBuildRuntimeDeps_should_WireQuotaGateIntoServices_When_Booted pins the three
+// composition-root hookups whose loss is silent: SetQuotaGate (the hard rate-limit
+// signal), the boot-time Reconcile and the "backlog" flag's status detail.
+func TestBuildRuntimeDeps_should_WireQuotaGateIntoServices_When_Booted(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	cfg := config.LoadConfig()
+	cfg.Quota.Enabled = true // no token budget: reactive-only, which the gate reports and logs
+	require.NoError(t, config.SaveConfig(cfg))
+	logs := &logpkg.SyncBuffer{}
+	prev := logpkg.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { logpkg.SetSlogDefaultForTest(prev) })
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+
+	assert.Same(t, deps.QuotaGate, deps.SessionService.QuotaGateForTest(), "SessionService feeds rate limits to the gate")
+	assert.Contains(t, logs.String(), "QuotaGate: observed 5h token usage", "boot-time Reconcile ran")
+	resp, err := deps.SessionService.GetFeatureFlags(context.Background(),
+		connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	details := map[string]string{}
+	for _, f := range resp.Msg.GetFlags() {
+		details[f.GetName()] = f.GetStatusDetail()
+	}
+	assert.Equal(t, deps.QuotaGate.StatusDetail(), details["backlog"])
+	assert.Contains(t, details["backlog"], "Reactive-only mode")
+}

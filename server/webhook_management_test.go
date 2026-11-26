@@ -19,7 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/middleware"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/server/services/webhooktrigger"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -58,7 +58,7 @@ func newWiringHarness(t *testing.T, flags map[string]bool) *wiringHarness {
 	configDir, err := config.GetConfigDir()
 	require.NoError(t, err)
 	h.token, err = repo.IssueIntegrationCredential(context.Background(), domain.IntegrationCredentialInfo{
-		PrincipalID: "wiring", WorkspaceID: services.WebhookWorkspaceID(configDir), AllowedDirRoot: t.TempDir(),
+		PrincipalID: "wiring", WorkspaceID: webhooks.WebhookWorkspaceID(configDir), AllowedDirRoot: t.TempDir(),
 	})
 	require.NoError(t, err)
 	return h
@@ -97,7 +97,7 @@ func TestRegisterWebhookManagement_should_ServeAuthenticatedRoutesAndProvisionKe
 	assert.Equal(t, http.StatusUnauthorized, h.serve(http.MethodGet, mgmtCapabilityPath, "sqi_not-a-real-token", nil).Code)
 	rec := h.serve(http.MethodGet, mgmtCapabilityPath, h.token, nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var capability services.WebhookCapabilityResponse
+	var capability webhooks.WebhookCapabilityResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &capability))
 	assert.True(t, capability.ReceiverEnabled)
 	assert.Contains(t, capability.Operations, "emergency_cleanup")
@@ -110,7 +110,7 @@ func TestRegisterWebhookManagement_should_ReportReceiverDisabled_When_WebhookTri
 
 	rec := h.serve(http.MethodGet, mgmtCapabilityPath, h.token, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	var capability services.WebhookCapabilityResponse
+	var capability webhooks.WebhookCapabilityResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &capability))
 	assert.False(t, capability.ReceiverEnabled)
 }

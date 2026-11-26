@@ -2,6 +2,7 @@ package fsops
 
 import (
 	"errors"
+	"path/filepath"
 
 	"connectrpc.com/connect"
 
@@ -39,6 +40,17 @@ func ReadFull(r interface{ Read([]byte) (int, error) }, buf []byte) (int, error)
 		}
 	}
 	return total, nil
+}
+
+// ValidateTargetDirectory checks that dir is an absolute path with no traversal components.
+func ValidateTargetDirectory(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return errors.New("target_directory must be an absolute path")
+	}
+	if filepath.Clean(dir) != dir {
+		return errors.New("target_directory contains path traversal components")
+	}
+	return nil
 }
 
 // KnownTextExtensions is the allowlist for extensions we know are always text.

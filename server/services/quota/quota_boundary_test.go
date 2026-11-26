@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -50,4 +51,29 @@ func TestQuotaGateReconcile_should_LogThrottleCleared_When_DelayNoLongerExtendsT
 
 	assert.Contains(t, buf.String(), "QuotaGate: foreground throttle cleared")
 	assert.False(t, g.ShouldThrottleForeground())
+}
+
+// Not parallel: captureQuotaSlog swaps the process-global logger.
+func TestNewQuotaGate_should_StillPauseAndNotify_When_PriorityPortIsNil(t *testing.T) {
+	buf := captureQuotaSlog(t)
+	cfg := goldenCfg(0)
+	ctrl := &svctest.CountingFeatureController{Enabled: true}
+	bus := events.NewEventBus(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := bus.Subscribe(ctx)
+	g := NewQuotaGate(func() config.QuotaConfig { return cfg }, &svctest.FakeTokenStore{},
+		&svctest.MockInstancePoller{}, ctrl, bus, Ports{})
+	g.RecordRateLimitEvent(time.Now())
+
+	g.Reconcile(ctx)
+
+	assert.Equal(t, 1, ctrl.DisableCalls)
+	assert.Contains(t, buf.String(), "Ports.DerivePriority is not wired")
+	select {
+	case ev := <-ch:
+		assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_UNSPECIFIED), ev.NotificationPriority)
+	default:
+		t.Fatal("no pause notification published")
+	}
 }

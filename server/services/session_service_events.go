@@ -725,6 +725,9 @@ func (s *SessionService) SetQuotaGate(g *quota.QuotaGate) {
 	s.quotaGate = g
 }
 
+// QuotaGateForTest lets package server check the composition root called SetQuotaGate.
+func (s *SessionService) QuotaGateForTest() *quota.QuotaGate { return s.quotaGate }
+
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.
 func (s *SessionService) GetInstances() []*instance.Instance {
 	return s.allInstances()
