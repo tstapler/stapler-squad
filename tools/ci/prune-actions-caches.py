@@ -3,7 +3,8 @@
 
 Policy (see docs/reference/ci-job-budget.md, "Cache policy"):
   * A cache "family" is its key with the trailing hash/date/run-id stripped.
-  * Default-branch entries: keep the newest KEEP_MAIN per family, never delete the newest one.
+  * Default-branch entries: keep the newest KEEP_MAIN per family (one for the ~1 GB dated go-*
+    families), never delete the newest one.
   * Other refs (PRs): delete once the PR is closed or the entry was last used PR_MAX_AGE_DAYS ago.
   * Anything left over is dropped oldest-used-first until the total is under TARGET_GB, still
     never touching the newest default-branch entry of a family still in use (idle > 7 d it goes too).
@@ -27,6 +28,8 @@ PR_MAX_AGE_DAYS = 3
 MAIN_MAX_AGE_DAYS = 7
 TARGET_GB = 7.5
 PROTECTED_PREFIXES = ("bench-",)
+# Restores take the newest dated go-* entry, so an older one only uses quota the Bazel cache needs.
+SINGLE_ENTRY_PREFIXES = ("go-",)
 
 _FAMILY_STRIPS = (
     re.compile(r"-[0-9a-f]{16,}.*$"),  # content hash, and anything after it
@@ -94,9 +97,10 @@ def plan(
     for fam, rows in main_by_family.items():
         rows.sort(key=lambda c: c.created, reverse=True)
         newest_main.add(rows[0].id)
-        for c in rows[KEEP_MAIN:]:
-            doomed[c.id] = f"{fam}: beyond newest {KEEP_MAIN} on default branch"
-        for c in rows[1:KEEP_MAIN]:
+        keep = 1 if fam.startswith(SINGLE_ENTRY_PREFIXES) else KEEP_MAIN
+        for c in rows[keep:]:
+            doomed[c.id] = f"{fam}: beyond newest {keep} on default branch"
+        for c in rows[1:keep]:
             if now - c.accessed > timedelta(days=MAIN_MAX_AGE_DAYS):
                 doomed[c.id] = f"{fam}: not used for >{MAIN_MAX_AGE_DAYS}d"
 

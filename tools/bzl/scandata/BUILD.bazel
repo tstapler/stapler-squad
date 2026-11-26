@@ -231,6 +231,7 @@ filegroup(
         "//tools/ci/citime:go_sources",
         "//tools/ci/compare-affected:go_sources",
         "//tools/ci/guardpaths:go_sources",
+        "//tools/ci/testshards:go_sources",
         "//tools/docscoverage/cmd/docscoverage:go_sources",
         "//tools/docscoverage/internal/changed:go_sources",
         "//tools/docscoverage/internal/check:go_sources",
