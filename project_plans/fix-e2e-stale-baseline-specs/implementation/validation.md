@@ -41,3 +41,16 @@ resolved (re-review verdict CONCERNS, its guard suggestion adopted); no schema c
 
 Triad check (done inline, not by separate agents): product — restores PR signal on eight specs;
 UX — no user-visible change; engineering — product edits limited to a test hook and a test page.
+
+## Verification results (2026-11-26, local, load average 19-53)
+
+- Before: the eight specs had 51 failures (`--retries=0`, chromium + chromium-dom).
+- After, `CI=1`, seven remaining specs: 0 failed; ascii frame floors (6) and 9 resize tests skipped.
+- Input-drop, resync, resize, mobile overflow: 87 passes over `--repeat-each=3`.
+- New reset test fails against the unfixed stress loop (second run completed after 2993 ms).
+- `make ci` exit 0 (`GOTMPDIR` in `/var/tmp`; `/tmp` tmpfs filled during an earlier link).
+  `lint:duplicates`, `tsc`, eslint pass. `make ci` ran before the later review-note commits,
+  which touch only e2e specs and `TerminalStressTest.tsx` (`tsc`/eslint rerun for the latter).
+- **Limit:** with the server resize call removed, the redraw e2e still passed in some runs because
+  another in-flight snapshot restored the rows. The forced resize is asserted by
+  `TerminalOutput.refit.test.tsx` (13 `TerminalOutput` suites, 209 tests pass).
