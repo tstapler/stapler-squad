@@ -3,7 +3,10 @@ load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "claudehistory",
-    srcs = ["history.go"],
+    srcs = [
+        "history.go",
+        "transcripts.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/session/claudehistory",
     visibility = ["//visibility:public"],
     deps = ["//session/instance"],
@@ -22,6 +25,7 @@ go_test(
         "history_messages_test.go",
         "history_reload_test.go",
         "history_test.go",
+        "transcripts_test.go",
     ],
     embed = [":claudehistory"],
     deps = [
