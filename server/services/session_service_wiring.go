@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/claudesettings"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/autonomous"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -198,7 +199,7 @@ func (s *SessionService) SetRegistry(r *registry.Registry) {
 // never on refcount++ hits, never on Register (CreateSession wires callbacks explicitly).
 func (s *SessionService) WireInstanceCallbacks(inst *instance.LiveInstance) {
 	inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
-	inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
+	inst.SetNotifier(&notify.EventBusNotifier{Bus: s.eventBus})
 	if s.statusManager != nil {
 		inst.SetStatusManager(s.statusManager)
 	}
@@ -523,8 +524,8 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 // those trigger points, not only sends made via TestSlackWebhook. Optional:
 // if never called, slackConfigSvc keeps the private SlackNotifier instance
 // NewSessionService constructed for it.
-func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
-	s.slackConfigSvc = NewSlackConfigService(n)
+func (s *SessionService) SetSlackNotifier(n *notify.SlackNotifier) {
+	s.slackConfigSvc = notify.NewSlackConfigService(n)
 }
 
 // SlackNotifierForTest returns the SlackNotifier instance currently wired
@@ -532,8 +533,8 @@ func (s *SessionService) SetSlackNotifier(n *SlackNotifier) {
 // tests (server package) can assert pointer identity against the other
 // consumers (ReactiveQueueManager, ApprovalHandler) without restructuring
 // production code — not intended for any non-test caller.
-func (s *SessionService) SlackNotifierForTest() *SlackNotifier {
-	return s.slackConfigSvc.slackNotifier
+func (s *SessionService) SlackNotifierForTest() *notify.SlackNotifier {
+	return s.slackConfigSvc.SlackNotifier
 }
 
 // SetJulesConfigDependencies rewires julesConfigSvc onto the real Jules

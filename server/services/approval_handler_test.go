@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -330,7 +331,7 @@ func TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies(t *testing.T) {
 // persisted as just the tool name with zero information about what actually ran.
 func TestToolCallDetail_PrefersCommandOverFilePath(t *testing.T) {
 	t.Parallel()
-	got := toolCallDetail(map[string]interface{}{"command": "ls -la && pwd", "file_path": "/tmp/should-not-win"})
+	got := notify.ToolCallDetail(map[string]interface{}{"command": "ls -la && pwd", "file_path": "/tmp/should-not-win"})
 	if want := "ls -la && pwd"; got != want {
 		t.Errorf("toolCallDetail() = %q, want %q", got, want)
 	}
@@ -338,7 +339,7 @@ func TestToolCallDetail_PrefersCommandOverFilePath(t *testing.T) {
 
 func TestToolCallDetail_FallsBackToFilePath(t *testing.T) {
 	t.Parallel()
-	got := toolCallDetail(map[string]interface{}{"file_path": "/tmp/foo.txt"})
+	got := notify.ToolCallDetail(map[string]interface{}{"file_path": "/tmp/foo.txt"})
 	if want := "/tmp/foo.txt"; got != want {
 		t.Errorf("toolCallDetail() = %q, want %q", got, want)
 	}
@@ -346,7 +347,7 @@ func TestToolCallDetail_FallsBackToFilePath(t *testing.T) {
 
 func TestToolCallDetail_EmptyWhenNeitherPresent(t *testing.T) {
 	t.Parallel()
-	if got := toolCallDetail(map[string]interface{}{"pattern": "TODO"}); got != "" {
+	if got := notify.ToolCallDetail(map[string]interface{}{"pattern": "TODO"}); got != "" {
 		t.Errorf("toolCallDetail() = %q, want empty string", got)
 	}
 }
@@ -690,7 +691,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 	bus := events.NewEventBus(4)
 	defer bus.Close()
 	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
-	h.SetSlackNotifier(NewSlackNotifier())
+	h.SetSlackNotifier(notify.NewSlackNotifier())
 
 	approval := &approvalkit.PendingApproval{
 		ID:        "appr-1",

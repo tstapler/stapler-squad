@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"strconv"
@@ -67,8 +67,8 @@ func (n *EventBusNotifier) NotifyDecision(itemID, title, message string, schema 
 	if n == nil || n.Bus == nil {
 		return
 	}
-	meta := map[string]string{metaItemID: itemID, metaDecisionSchema: EncodeDecisionSchema(schema)}
-	if prNumber > 0 && schemaOffers(schema, choiceMerge) {
+	meta := map[string]string{MetaItemID: itemID, MetaDecisionSchema: EncodeDecisionSchema(schema)}
+	if prNumber > 0 && schemaOffers(schema, ChoiceMerge) {
 		meta[metaPRNumber] = strconv.Itoa(prNumber)
 	}
 	n.Bus.Publish(events.NewNotificationEvent(

@@ -42,6 +42,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/healthnotify"
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/remote"
@@ -1178,7 +1179,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// config.LoadConfig() on every request (see its constructor doc comment),
 	// so only the route's presence/absence is decided here at boot.
 	if config.LoadConfig().Slack.ApprovalEnabled {
-		slackInteractiveHandler := services.NewSlackInteractiveHandler(deps.SessionService)
+		slackInteractiveHandler := notify.NewSlackInteractiveHandler(deps.SessionService)
 		srv.mux.HandleFunc("/api/hooks/slack-interactive", slackInteractiveHandler.Handle)
 		log.Info("Registered Slack interactive-approvals handler at /api/hooks/slack-interactive")
 	} else {
@@ -1408,7 +1409,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 		// Completion reviewer (rollout flag backlog:completion-reviewer, default off): reads the
 		// flag per event, so it is live-togglable from Settings > Feature Flags.
-		completionReviewDone := completionreview.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, completionreview.NewHeadlessCompletionReviewCall(), completionreview.NewFileMemoryStore(), &services.EventBusNotifier{Bus: deps.EventBus})
+		completionReviewDone := completionreview.StartCompletionReviewerSubscriber(serverCtx, deps.EventBus, deps.Storage, completionreview.NewHeadlessCompletionReviewCall(), completionreview.NewFileMemoryStore(), &notify.EventBusNotifier{Bus: deps.EventBus})
 		srv.backgroundTasksWG.Go(func() { <-completionReviewDone })
 	}
 
@@ -1548,7 +1549,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// comment).
 	if deps.ReviewQueuePoller != nil {
 		staleNotifier := healthnotify.NewStaleSessionNotifier(deps.ReviewQueuePoller, deps.EventBus,
-			healthnotify.Ports{DerivePriority: services.DerivePriority})
+			healthnotify.Ports{DerivePriority: notify.DerivePriority})
 		srv.goBackground(func() { staleNotifier.Start(serverCtx) })
 		log.Info("Stale session notifier started",
 			"threshold_minutes", cfg.StaleSession.ThresholdMinutesOrDefault(),
@@ -1580,7 +1581,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// always reports unavailable there).
 	if deps.ReviewQueuePoller != nil {
 		memNotifier := healthnotify.NewMemoryPressureNotifier(deps.ReviewQueuePoller, deps.EventBus,
-			healthnotify.Ports{DerivePriority: services.DerivePriority})
+			healthnotify.Ports{DerivePriority: notify.DerivePriority})
 		srv.goBackground(func() { memNotifier.Start(serverCtx) })
 		log.Info("Memory pressure notifier started")
 	}

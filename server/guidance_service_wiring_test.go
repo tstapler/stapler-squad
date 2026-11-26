@@ -12,9 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -48,7 +48,7 @@ func TestNewGuidanceRequestService_should_NotifyThroughTheEventBus_When_AnAnswer
 		assert.Equal(t, events.EventNotification, ev.Type)
 		assert.Equal(t, item.ID, ev.SessionID)
 		assert.Equal(t, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED), ev.NotificationType)
-		assert.Equal(t, services.DerivePriority(true, true), ev.NotificationPriority)
+		assert.Equal(t, notify.DerivePriority(true, true), ev.NotificationPriority)
 	default:
 		t.Fatal("no notification published")
 	}

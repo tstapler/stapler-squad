@@ -26,7 +26,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -56,7 +56,7 @@ func (s *BacklogService) notifyTriagePersistFailure(ctx context.Context, itemID,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(true, true), // urgent, important — a silent save failure that leaves the item stuck
+		notify.DerivePriority(true, true), // urgent, important — a silent save failure that leaves the item stuck
 		title, body,
 		map[string]string{"item_id": itemID},
 	))

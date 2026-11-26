@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
@@ -1343,7 +1344,7 @@ func (s *BacklogService) warnMissingWorktreeRow(is backlogdto.ItemSessionSummary
 		s.eventBus.Publish(events.NewNotificationEvent(
 			is.BacklogItemID, "", uuid.New().String(),
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-			services.DerivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
+			notify.DerivePriority(true, true), // urgent, important — cleanup silently could not find anything to remove
 			"Worktree row missing during item archival",
 			fmt.Sprintf("Session %s expected a git worktree but has no worktree row, so its on-disk directory (if any) could not be cleaned up.", is.SessionUUID),
 			map[string]string{"item_id": is.BacklogItemID},

@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"bytes"
@@ -22,7 +22,7 @@ import (
 
 // maxSlackBlockTextLen caps a single Slack Block Kit text block at 2900 runes,
 // leaving headroom under Slack's hard 3000-character-per-block limit (mirrors
-// maxNotificationMessageLen and maxEscalationReasonLen).
+// MaxNotificationMessageLen and maxEscalationReasonLen).
 const maxSlackBlockTextLen = 2900
 
 // slackDispatchTimeout bounds each asynchronously-dispatched Slack send. It is
@@ -142,7 +142,7 @@ func escapeSlackMrkdwn(s string) string {
 
 // truncateForSlackBlock caps s at maxRunes runes (rune-safe), appending
 // "... truncated, see dashboard" when truncation occurs. Same shape as
-// truncateString (notification_text.go) but with a dashboard-pointing
+// TruncateString (notification_text.go) but with a dashboard-pointing
 // suffix instead of a bare "...".
 func truncateForSlackBlock(s string, maxRunes int) string {
 	const suffix = "... truncated, see dashboard"
@@ -317,7 +317,7 @@ func (n *SlackNotifier) NotifyApprovalPending(ctx context.Context, cfg *config.C
 			{Type: "section", Text: &slackBlockText{Type: "mrkdwn", Text: primary}},
 		}
 
-		detail := buildApprovalMessage(approval)
+		detail := BuildApprovalMessage(approval)
 		if detail != "" {
 			blocks = append(blocks, slackBlock{
 				Type: "section",

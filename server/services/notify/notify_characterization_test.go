@@ -1,4 +1,4 @@
-package services
+package notify
 
 // Characterization of the notification paths the stage 4 `notify` move touches.
 // The Slack request bytes in testdata/notify_slack_payloads.golden were recorded
@@ -325,27 +325,27 @@ func TestSlackNotifier_ShouldPostByteIdenticalPayloads_WhenNotifying(t *testing.
 
 func TestApprovalAndSessionIDText_ShouldKeepItsShape_WhenBuiltForNotifications(t *testing.T) {
 	t.Parallel()
-	long := strings.Repeat("é", maxNotificationMessageLen+1)
+	long := strings.Repeat("é", MaxNotificationMessageLen+1)
 	const fallback = "Claude needs permission to use T"
 	for _, tc := range []struct {
 		input map[string]interface{}
 		want  string
 	}{
-		{map[string]interface{}{"command": long}, strings.Repeat("é", maxNotificationMessageLen) + "..."},
+		{map[string]interface{}{"command": long}, strings.Repeat("é", MaxNotificationMessageLen) + "..."},
 		{map[string]interface{}{"file_path": long}, long},
 		{map[string]interface{}{"pattern": "x"}, fallback},
 		{nil, fallback},
 	} {
-		assert.Equal(t, tc.want, buildApprovalMessage(&approvalkit.PendingApproval{ToolName: "T", ToolInput: tc.input}))
+		assert.Equal(t, tc.want, BuildApprovalMessage(&approvalkit.PendingApproval{ToolName: "T", ToolInput: tc.input}))
 	}
 
-	assert.Equal(t, "u", stableIDForData(domain.InstanceData{UUID: "u", Title: "t"}))
-	assert.Equal(t, "t", stableIDForData(domain.InstanceData{Title: "t"}))
+	assert.Equal(t, "u", StableIDForData(domain.InstanceData{UUID: "u", Title: "t"}))
+	assert.Equal(t, "t", StableIDForData(domain.InstanceData{Title: "t"}))
 	d := domain.InstanceData{UUID: "u", Title: "t"}
-	assert.True(t, matchesIDData(d, "u"))
-	assert.True(t, matchesIDData(d, "t"))
-	assert.False(t, matchesIDData(d, ""))
-	assert.False(t, matchesIDData(domain.InstanceData{Title: "t"}, "other"))
+	assert.True(t, MatchesIDData(d, "u"))
+	assert.True(t, MatchesIDData(d, "t"))
+	assert.False(t, MatchesIDData(d, ""))
+	assert.False(t, MatchesIDData(domain.InstanceData{Title: "t"}, "other"))
 
 	assert.Equal(t, "peer_title", questionkit.MetaPeerTitle, "stored metadata key")
 }

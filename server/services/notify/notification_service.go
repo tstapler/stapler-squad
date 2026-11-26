@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -166,9 +166,9 @@ func (ns *NotificationService) SendNotification(
 	if !resolved && ns.storage != nil {
 		if instances, err := ns.storage.ListInstanceData(); err == nil {
 			for _, d := range instances {
-				if matchesIDData(d, req.Msg.SessionId) {
+				if MatchesIDData(d, req.Msg.SessionId) {
 					sessionName = d.Title
-					resolvedSessionID = stableIDForData(d)
+					resolvedSessionID = StableIDForData(d)
 					break
 				}
 			}
@@ -447,15 +447,15 @@ func validateLocalhostAddr(addr string) error {
 		host = addr
 	}
 
-	if !isLocalhostIP(host) {
+	if !IsLocalhostIP(host) {
 		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
 	}
 
 	return nil
 }
 
-// isLocalhostIP checks if the given IP string represents localhost.
-func isLocalhostIP(ip string) bool {
+// IsLocalhostIP checks if the given IP string represents localhost.
+func IsLocalhostIP(ip string) bool {
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return false

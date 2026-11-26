@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -60,12 +60,12 @@ func (f *fakeBacklog) DecisionStates(_ context.Context, ids []string) (map[strin
 	return out, nil
 }
 
-type fakeGuidance struct {
+type FakeGuidance struct {
 	open  map[string]OpenGuidance
 	calls atomic.Int32
 }
 
-func (f *fakeGuidance) OpenGuidance(_ context.Context, ids []string) (map[string]OpenGuidance, error) {
+func (f *FakeGuidance) OpenGuidance(_ context.Context, ids []string) (map[string]OpenGuidance, error) {
 	f.calls.Add(1)
 	out := map[string]OpenGuidance{}
 	for _, id := range ids {
@@ -80,16 +80,16 @@ type descriptorFixture struct {
 	approvals *fakeApprovals
 	questions *fakeQuestions
 	backlog   *fakeBacklog
-	guidance  *fakeGuidance
+	guidance  *FakeGuidance
 	flags     map[string]bool
 }
 
-func newDescriptorFixture() *descriptorFixture {
+func NewDescriptorFixture() *descriptorFixture {
 	return &descriptorFixture{
 		approvals: &fakeApprovals{ids: map[string]bool{}},
 		questions: &fakeQuestions{live: map[questionkit.QuestionKey]questionkit.PendingQuestion{}},
 		backlog:   &fakeBacklog{states: map[string]BacklogDecisionState{}},
-		guidance:  &fakeGuidance{open: map[string]OpenGuidance{}},
+		guidance:  &FakeGuidance{open: map[string]OpenGuidance{}},
 		flags:     map[string]bool{},
 	}
 }
@@ -108,17 +108,17 @@ func (f *descriptorFixture) builder() *DescriptorBuilder {
 	return b
 }
 
-func kinds(r interface {
+func Kinds(r interface {
 	GetActions() []*sessionv1.NotificationActionDescriptor
 }) []string {
 	out := make([]string, 0, len(r.GetActions()))
 	for _, d := range r.GetActions() {
-		out = append(out, kindName(d.GetKind()))
+		out = append(out, KindName(d.GetKind()))
 	}
 	return out
 }
 
-func questionRecord(id, session, qid string) *sessionv1.NotificationHistoryRecord {
+func QuestionRecord(id, session, qid string) *sessionv1.NotificationHistoryRecord {
 	return &sessionv1.NotificationHistoryRecord{
 		Id: id, SessionId: session,
 		Metadata: map[string]string{questionkit.MetaQuestionID: qid},
@@ -127,38 +127,38 @@ func questionRecord(id, session, qid string) *sessionv1.NotificationHistoryRecor
 
 func TestBuildDescriptors_ShouldOfferApproveDenyOpen_WhenApprovalPending(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.approvals.ids["a1"] = true
 	rec := &sessionv1.NotificationHistoryRecord{Id: "a1", SessionId: "s1", Metadata: map[string]string{metaApprovalID: "a1"}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
-	assert.Equal(t, []string{"APPROVE", "DENY", "OPEN"}, kinds(rec))
+	assert.Equal(t, []string{"APPROVE", "DENY", "OPEN"}, Kinds(rec))
 	assert.Equal(t, "a1", rec.Actions[0].TargetKey)
 	assert.Equal(t, sessionv1.ActionTargetKey_ACTION_TARGET_KEY_APPROVAL_ID, rec.Actions[0].TargetKeyType)
 }
 
 func TestBuildDescriptors_ShouldOfferOnlyOpen_WhenApprovalAlreadyResolved(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture() // approval no longer in the store
+	f := NewDescriptorFixture() // approval no longer in the store
 	rec := &sessionv1.NotificationHistoryRecord{Id: "a1", Metadata: map[string]string{metaApprovalID: "a1"}}
 	read := &sessionv1.NotificationHistoryRecord{Id: "a2", IsRead: true, Metadata: map[string]string{metaApprovalID: "a2"}}
 	f.approvals.ids["a2"] = true
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec, read}, ListenerClassLocal)
-	assert.Equal(t, []string{"OPEN"}, kinds(rec))
-	assert.Equal(t, []string{"OPEN"}, kinds(read))
+	assert.Equal(t, []string{"OPEN"}, Kinds(rec))
+	assert.Equal(t, []string{"OPEN"}, Kinds(read))
 }
 
 func TestBuildDescriptors_ShouldCarryOptionLabelsTierB_WhenQuestionPendingAndLocal(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
 	q := f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}]
 	q.Dialog.Labels = []string{"Redis", "Memcached"}
 	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = q
 
-	rec := questionRecord("n1", "s1", "q1")
+	rec := QuestionRecord("n1", "s1", "q1")
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
 
-	assert.Equal(t, []string{"ANSWER_QUESTION", "OPEN"}, kinds(rec))
+	assert.Equal(t, []string{"ANSWER_QUESTION", "OPEN"}, Kinds(rec))
 	d := rec.Actions[0]
 	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, d.Tier)
 	assert.True(t, d.Available)
@@ -171,22 +171,22 @@ func TestBuildDescriptors_ShouldCarryOptionLabelsTierB_WhenQuestionPendingAndLoc
 
 func TestBuildDescriptors_ShouldOfferOnlyOpen_WhenQuestionAnsweredOrReplyUnavailable(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture() // store has no q1: answered
-	answered := questionRecord("n1", "s1", "q1")
-	unavailable := questionRecord("n2", "s1", "q2")
+	f := NewDescriptorFixture() // store has no q1: answered
+	answered := QuestionRecord("n1", "s1", "q1")
+	unavailable := QuestionRecord("n2", "s1", "q2")
 	unavailable.Metadata[questionkit.MetaReplyUnavailable] = "true"
 	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q2"}] = questionkit.PendingQuestion{}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{answered, unavailable}, ListenerClassLocal)
-	assert.Equal(t, []string{"OPEN"}, kinds(answered))
-	assert.Equal(t, []string{"OPEN"}, kinds(unavailable))
+	assert.Equal(t, []string{"OPEN"}, Kinds(answered))
+	assert.Equal(t, []string{"OPEN"}, Kinds(unavailable))
 }
 
 func TestBuildDescriptors_ShouldMarkTierBDesktopOnly_WhenListenerRemote(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = questionkit.PendingQuestion{}
 	page := func() []*sessionv1.NotificationHistoryRecord {
-		return []*sessionv1.NotificationHistoryRecord{questionRecord("n1", "s1", "q1")}
+		return []*sessionv1.NotificationHistoryRecord{QuestionRecord("n1", "s1", "q1")}
 	}
 
 	local, remote := page(), page()
@@ -226,12 +226,12 @@ func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTi
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newDescriptorFixture()
+			f := NewDescriptorFixture()
 			f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = questionkit.PendingQuestion{}
 			b := f.builder()
 			b.sources.Routes = tc.routes
 			f.flags[flagsvc.ScopeChannelTierB] = !tc.tierBOff
-			recs := []*sessionv1.NotificationHistoryRecord{questionRecord("n1", "s1", "q1")}
+			recs := []*sessionv1.NotificationHistoryRecord{QuestionRecord("n1", "s1", "q1")}
 			b.Annotate(context.Background(), recs, ListenerClassRemote)
 			d := recs[0].Actions[0]
 			assert.Equal(t, tc.available, d.Available)
@@ -247,20 +247,20 @@ func TestBuildDescriptors_ShouldOfferAnswerRemotely_WhenRouteIsDurableRecordOrTi
 
 func TestBuildDescriptors_ShouldOfferAnswerGuidance_WhenGuidanceOpen(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.guidance.open["g1"] = OpenGuidance{Options: []string{"yes", "no"}}
 	open := &sessionv1.NotificationHistoryRecord{Id: "n1", Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1"}}
 	closed := &sessionv1.NotificationHistoryRecord{Id: "n2", Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g2"}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{open, closed}, ListenerClassRemote)
 
-	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(open))
+	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, Kinds(open))
 	assert.True(t, open.Actions[0].Available, "guidance is Tier A and works remotely")
-	assert.Equal(t, []string{"OPEN"}, kinds(closed))
+	assert.Equal(t, []string{"OPEN"}, Kinds(closed))
 }
 
 func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookSourced(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.guidance.open["hook"] = OpenGuidance{Source: domain.QuestionSourceHook}
 	f.guidance.open["peer"] = OpenGuidance{Source: domain.QuestionSourcePeer, PeerHelp: true}
 	f.guidance.open["agent"] = OpenGuidance{Source: domain.QuestionSourceAgentMCP}
@@ -270,32 +270,32 @@ func TestBuildDescriptors_ShouldNotOfferAnswerGuidance_WhenTheOpenRowIsHookSourc
 	hook, peer, agent := rec("hook"), rec("peer"), rec("agent")
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{hook, peer, agent}, ListenerClassLocal)
 
-	assert.Equal(t, []string{"OPEN"}, kinds(hook), "a hook question is answered through its pane route, never as a stored answer")
-	assert.Equal(t, []string{"ANSWER_GUIDANCE", "CANCEL_PEER_HELP", "OPEN"}, kinds(peer), "the operator may answer for the peer or withdraw the request")
-	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(agent))
+	assert.Equal(t, []string{"OPEN"}, Kinds(hook), "a hook question is answered through its pane route, never as a stored answer")
+	assert.Equal(t, []string{"ANSWER_GUIDANCE", "CANCEL_PEER_HELP", "OPEN"}, Kinds(peer), "the operator may answer for the peer or withdraw the request")
+	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, Kinds(agent))
 }
 
 func TestBuildDescriptors_ShouldOfferDecisionChoices_WhenItemInReviewWithSchema(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.backlog.states["b608ab1e"] = BacklogDecisionState{Status: "review"}
 	f.backlog.states["pr1"] = BacklogDecisionState{Status: "pr_pending"}
 	f.backlog.states["done1"] = BacklogDecisionState{Status: "done"}
 	schema := EncodeDecisionSchema(DefaultDecisionSchema())
 	mk := func(id string) *sessionv1.NotificationHistoryRecord {
-		return &sessionv1.NotificationHistoryRecord{Id: "n-" + id, Metadata: map[string]string{metaItemID: id, metaDecisionSchema: schema}}
+		return &sessionv1.NotificationHistoryRecord{Id: "n-" + id, Metadata: map[string]string{MetaItemID: id, MetaDecisionSchema: schema}}
 	}
 	review, pr, done := mk("b608ab1e"), mk("pr1"), mk("done1")
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{review, pr, done}, ListenerClassRemote)
 
-	assert.Equal(t, []string{"BACKLOG_DECISION", "OPEN"}, kinds(review))
+	assert.Equal(t, []string{"BACKLOG_DECISION", "OPEN"}, Kinds(review))
 	values := make([]string, 0, len(review.Actions[0].Options))
 	for _, o := range review.Actions[0].Options {
 		values = append(values, o.Value)
 	}
 	assert.Equal(t, []string{"accept", "rework", "merge"}, values)
 	assert.Equal(t, []string{"merge"}, optionValues(pr.Actions[0]))
-	assert.Equal(t, []string{"OPEN"}, kinds(done))
+	assert.Equal(t, []string{"OPEN"}, Kinds(done))
 }
 
 func optionValues(d *sessionv1.NotificationActionDescriptor) []string {
@@ -308,17 +308,17 @@ func optionValues(d *sessionv1.NotificationActionDescriptor) []string {
 
 func TestBuildDescriptors_ShouldDropUnknownChoice_WhenSchemaNamesChoiceWithoutRPC(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.backlog.states["i1"] = BacklogDecisionState{Status: "review"}
 	schema := EncodeDecisionSchema(DecisionSchema{Choices: []DecisionChoice{{Value: "accept"}, {Value: "teleport"}}})
-	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaItemID: "i1", metaDecisionSchema: schema}}
+	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{MetaItemID: "i1", MetaDecisionSchema: schema}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
 	assert.Equal(t, []string{"accept"}, optionValues(rec.Actions[0]))
 }
 
 func TestBuildDescriptors_ShouldReduceToOpen_WhenActionFlagOff(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.approvals.ids["a1"] = true
 	f.guidance.open["g1"] = OpenGuidance{}
 	f.flags["action:APPROVE"] = false
@@ -326,21 +326,21 @@ func TestBuildDescriptors_ShouldReduceToOpen_WhenActionFlagOff(t *testing.T) {
 	appr := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaApprovalID: "a1"}}
 	guid := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{questionkit.MetaGuidanceRequestID: "g1"}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{appr, guid}, ListenerClassLocal)
-	assert.Equal(t, []string{"OPEN"}, kinds(appr))
-	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, kinds(guid))
+	assert.Equal(t, []string{"OPEN"}, Kinds(appr))
+	assert.Equal(t, []string{"ANSWER_GUIDANCE", "OPEN"}, Kinds(guid))
 }
 
 func TestBuildDescriptors_ShouldReduceToOpen_WhenRemoteChannelOff(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	f.approvals.ids["a1"] = true
 	f.flags["channel:remote"] = false
 	rec := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaApprovalID: "a1"}}
 	local := &sessionv1.NotificationHistoryRecord{Metadata: map[string]string{metaApprovalID: "a1"}}
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassRemote)
 	f.builder().Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{local}, ListenerClassLocal)
-	assert.Equal(t, []string{"OPEN"}, kinds(rec))
-	assert.Equal(t, []string{"APPROVE", "DENY", "OPEN"}, kinds(local))
+	assert.Equal(t, []string{"OPEN"}, Kinds(rec))
+	assert.Equal(t, []string{"APPROVE", "DENY", "OPEN"}, Kinds(local))
 }
 
 func TestListenerClassFrom_ShouldDeriveFromStampedRequest_WhenLocalRemoteOrUnstamped(t *testing.T) {
@@ -364,13 +364,13 @@ func pageOf(f *descriptorFixture, n, sessions int) []*sessionv1.NotificationHist
 			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{metaApprovalID: id}})
 		case 1:
 			f.questions.live[questionkit.QuestionKey{SessionUUID: sess, QuestionID: id}] = questionkit.PendingQuestion{}
-			out = append(out, questionRecord(id, sess, id))
+			out = append(out, QuestionRecord(id, sess, id))
 		case 2:
 			f.guidance.open[id] = OpenGuidance{}
 			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{questionkit.MetaGuidanceRequestID: id}})
 		default:
 			f.backlog.states[id] = BacklogDecisionState{Status: "review"}
-			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{metaItemID: id, metaDecisionSchema: schema}})
+			out = append(out, &sessionv1.NotificationHistoryRecord{Id: id, SessionId: sess, Metadata: map[string]string{MetaItemID: id, MetaDecisionSchema: schema}})
 		}
 	}
 	return out
@@ -378,7 +378,7 @@ func pageOf(f *descriptorFixture, n, sessions int) []*sessionv1.NotificationHist
 
 func TestBuildDescriptors_ShouldCallEachStoreOncePerPage_When300RecordsOver40Sessions(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	page := pageOf(f, 300, 40)
 	f.builder().Annotate(context.Background(), page, ListenerClassLocal)
 	assert.EqualValues(t, 1, f.approvals.calls.Load())
@@ -392,7 +392,7 @@ func TestBuildDescriptors_ShouldCallEachStoreOncePerPage_When300RecordsOver40Ses
 
 func TestBuildDescriptors_ShouldSkipStores_WhenEveryRecordResolved(t *testing.T) {
 	t.Parallel()
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	page := pageOf(f, 40, 4)
 	for _, r := range page {
 		r.IsRead = true
@@ -400,12 +400,12 @@ func TestBuildDescriptors_ShouldSkipStores_WhenEveryRecordResolved(t *testing.T)
 	f.builder().Annotate(context.Background(), page, ListenerClassLocal)
 	assert.Zero(t, f.approvals.calls.Load()+f.questions.calls.Load()+f.backlog.calls.Load()+f.guidance.calls.Load())
 	for _, r := range page {
-		assert.Equal(t, []string{"OPEN"}, kinds(r))
+		assert.Equal(t, []string{"OPEN"}, Kinds(r))
 	}
 }
 
 func BenchmarkBuildDescriptors_300RecordsWith40Sessions(b *testing.B) {
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	builder := f.builder()
 	ctx := context.Background()
 	durations := make([]time.Duration, 0, b.N)
@@ -431,7 +431,7 @@ func BenchmarkBuildDescriptors_300RecordsWith40Sessions(b *testing.B) {
 func TestEveryActionKindHasTierAndRemoteAvailability(t *testing.T) {
 	t.Parallel()
 	assert.Empty(t, kindsWithoutPolicy(sessionv1.ActionKind_name), "add a row to actionPolicies for each new ActionKind")
-	for kind, p := range actionPolicies {
+	for kind, p := range ActionPolicies {
 		assert.Equal(t, p.Tier == sessionv1.ActionTier_ACTION_TIER_A, p.RemoteAvailable,
 			"%s: remote availability must follow the tier (Tier B is desktop-only)", kind)
 		assert.NotEqual(t, sessionv1.ActionTier_ACTION_TIER_UNSPECIFIED, p.Tier, kind.String())
@@ -456,10 +456,10 @@ func TestControlPolicies_ShouldMakeResumeScheduledLocalOnly(t *testing.T) {
 
 func TestAnswerTier_ShouldBeTierBOnlyForLiveKeystroke(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, answerTier(flagsvc.RouteLiveKeystrokeHidden))
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, answerTier(flagsvc.RouteLiveKeystrokeVisible))
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, answerTier(flagsvc.RouteDurableRecord))
-	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, answerTier(flagsvc.RouteHookReply))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, AnswerTier(flagsvc.RouteLiveKeystrokeHidden))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_B, AnswerTier(flagsvc.RouteLiveKeystrokeVisible))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, AnswerTier(flagsvc.RouteDurableRecord))
+	assert.Equal(t, sessionv1.ActionTier_ACTION_TIER_A, AnswerTier(flagsvc.RouteHookReply))
 }
 
 // kindsWithoutPolicy lists the non-zero kind values of names with no table row.
@@ -469,7 +469,7 @@ func kindsWithoutPolicy(names map[int32]string) []int32 {
 		if v == 0 {
 			continue
 		}
-		if _, ok := actionPolicies[sessionv1.ActionKind(v)]; !ok {
+		if _, ok := ActionPolicies[sessionv1.ActionKind(v)]; !ok {
 			missing = append(missing, v)
 		}
 	}

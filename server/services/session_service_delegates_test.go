@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 )
 
 // T-CT-08: scope and mutation combinations that make no sense are refused
@@ -43,12 +44,23 @@ func TestContractStubs_ShouldReturnUnimplementedOrReject_WhenScopeMutationStatsO
 	// The stats RPC is implemented (PR 2a-2); without a gate it reports
 	// Unavailable rather than an empty answer.
 	t.Run("stats_rpc_without_gate", func(t *testing.T) {
-		svc := &SessionService{notificationSvc: &NotificationService{}}
+		svc := &SessionService{notificationSvc: &notify.NotificationService{}}
 		_, err := svc.GetDeliveryGateStats(context.Background(),
 			connect.NewRequest(&sessionv1.GetDeliveryGateStatsRequest{}))
 		require.Error(t, err)
 		require.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
 	})
+}
+
+func TestPruneDelegate_ShouldForwardToNotificationService(t *testing.T) {
+	t.Parallel()
+	svc := &SessionService{notificationSvc: &notify.NotificationService{}}
+
+	_, err := svc.PruneHiddenSessionNotifications(context.Background(),
+		connect.NewRequest(&sessionv1.PruneHiddenSessionNotificationsRequest{}))
+
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	require.ErrorContains(t, err, "notification history is not configured")
 }
 
 // T-FL-10: a request with neither new field behaves exactly as before.

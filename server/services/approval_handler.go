@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/fsops"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/server/services/secretscan"
@@ -95,7 +96,7 @@ type ApprovalHandler struct {
 	autonomousChecker   func(string) bool                     // optional: returns true if sessionID is an autonomous session
 	pollInterval        time.Duration                         // PRStatusPoller's configured interval; used to bound CI-status staleness. Zero value (bypassing NewApprovalHandler) makes every CI status read as stale — always construct via NewApprovalHandler.
 	liveFinder          LiveInstanceFinder                    // optional: resolves live in-memory Instance for CI status (not persisted — see PRStatusPoller)
-	slackNotifier       *SlackNotifier                        // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
+	slackNotifier       *notify.SlackNotifier                 // optional: notifies a configured Slack webhook about new pending approvals; concrete type (no interface) since both live in this package
 	dashboardBaseURLFn  func() string                         // optional: lazily-read fallback for the Slack dashboard-link base URL, used only when cfg.Slack.DashboardBaseURL is unset. Mirrors ReactiveQueueManager.dashboardBaseURLFn exactly (server.go wires the same hookBaseURLFn into both).
 	piHealthTracker     *piextension.PiExtensionHealthTracker // optional: records pi approval-extension health pings (pi-support Epic 4.2)
 	autoApprovedGate    AutoApprovedGate                      // optional: drops hidden-session auto-allow history rows (nil = append all)
@@ -215,7 +216,7 @@ func (h *ApprovalHandler) SetHeadlessPool(pool headlessPoolApprover) {
 // nil-safe: when never called, h.slackNotifier stays nil and Slack
 // notification is silently skipped — matching every other optional Set*
 // dependency in this file.
-func (h *ApprovalHandler) SetSlackNotifier(n *SlackNotifier) {
+func (h *ApprovalHandler) SetSlackNotifier(n *notify.SlackNotifier) {
 	h.slackNotifier = n
 }
 
@@ -233,7 +234,7 @@ func (h *ApprovalHandler) SetDashboardBaseURLFn(fn func() string) {
 // pointer identity against the other consumers (ReactiveQueueManager,
 // SessionService) without restructuring production code — not intended for
 // any non-test caller.
-func (h *ApprovalHandler) SlackNotifierForTest() *SlackNotifier {
+func (h *ApprovalHandler) SlackNotifierForTest() *notify.SlackNotifier {
 	return h.slackNotifier
 }
 
@@ -503,9 +504,9 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", toolCallDetail(payload.ToolInput))
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID, "detail", notify.ToolCallDetail(payload.ToolInput))
 			if h.autoApprovalLog != nil && (h.autoApprovedGate == nil || h.autoApprovedGate.AllowAutoApprovedRow(sessionID, "allow")) {
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, toolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, notify.ToolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "allow")
 			}
 			h.writeDecision(w, "allow", "")
 			return
@@ -514,11 +515,11 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", toolCallDetail(payload.ToolInput))
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg, "detail", notify.ToolCallDetail(payload.ToolInput))
 			// Never gated: a deny row is the only record that a rule blocked a tool
 			// in a background session.
 			if h.autoApprovalLog != nil {
-				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, toolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, notify.ToolCallDetail(payload.ToolInput), result.RuleID, result.RuleName, result.Source, "deny")
 			}
 			h.writeDecision(w, "deny", msg)
 			return
@@ -762,7 +763,7 @@ func approvalNotificationMetadata(approval *approvalkit.PendingApproval) map[str
 	}
 
 	if toolInputUnrenderable(approval.ToolInput) {
-		metadata[metaToolInputUnrenderable] = boolTrue
+		metadata[metaToolInputUnrenderable] = notify.BoolTrue
 	}
 	return metadata
 }
@@ -773,14 +774,14 @@ func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approv
 	metadata := approvalNotificationMetadata(approval)
 
 	title := approvalNotificationTitle(approval)
-	message := buildApprovalMessage(approval)
+	message := notify.BuildApprovalMessage(approval)
 
 	event := events.NewNotificationEvent(
 		sessionID,
 		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
-		DerivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
+		notify.DerivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
 		title,
 		message,
 		metadata,
@@ -812,10 +813,10 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 	message := "Check the terminal to respond."
 	switch {
 	case asked.Question != "":
-		message = truncateString(asked.Question, maxNotificationMessageLen)
+		message = notify.TruncateString(asked.Question, notify.MaxNotificationMessageLen)
 	default:
 		if prompt, ok := payload.ToolInput["prompt"].(string); ok && prompt != "" {
-			message = truncateString(prompt, maxNotificationMessageLen)
+			message = notify.TruncateString(prompt, notify.MaxNotificationMessageLen)
 		}
 	}
 	message, _ = secretscan.RedactSecrets(message)
@@ -827,7 +828,7 @@ func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payloa
 		h.resolveSessionName(sessionID),
 		newQuestionNotificationID(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		DerivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
+		notify.DerivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
 		meta,
@@ -845,7 +846,7 @@ const maxEscalationReasonLen = 500
 
 // truncateEscalationReason caps s at maxEscalationReasonLen runes.
 func truncateEscalationReason(s string) string {
-	return truncateString(s, maxEscalationReasonLen)
+	return notify.TruncateString(s, maxEscalationReasonLen)
 }
 
 // resolveSessionID returns the stable session ID (UUID) for a given raw header
@@ -863,8 +864,8 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 	}
 	if headerVal != "" {
 		for _, d := range instances {
-			if matchesIDData(d, headerVal) {
-				return stableIDForData(d)
+			if notify.MatchesIDData(d, headerVal) {
+				return notify.StableIDForData(d)
 			}
 		}
 	}
@@ -873,11 +874,11 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 	bestLen := 0
 	for _, d := range instances {
 		if p := d.Path; p != "" && strings.HasPrefix(cwd, p) && len(p) > bestLen {
-			bestID = stableIDForData(d)
+			bestID = notify.StableIDForData(d)
 			bestLen = len(p)
 		}
 		if wd := d.WorkingDir; wd != "" && strings.HasPrefix(cwd, wd) && len(wd) > bestLen {
-			bestID = stableIDForData(d)
+			bestID = notify.StableIDForData(d)
 			bestLen = len(wd)
 		}
 	}

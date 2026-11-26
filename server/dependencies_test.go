@@ -31,7 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	serverevents "github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -392,7 +392,7 @@ func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_Wh
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	notifier := &services.EventBusNotifier{Bus: events.NewEventBus(100)}
+	notifier := &notify.EventBusNotifier{Bus: events.NewEventBus(100)}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

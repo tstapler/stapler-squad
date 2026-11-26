@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -83,7 +84,7 @@ func (s *SessionService) onColdRestoreLostHistory(inst *instance.Instance) {
 	s.eventBus.Publish(events.NewNotificationEvent(
 		inst.UUID, instTitle, notifID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		DerivePriority(false, true), // urgent, important — real context loss, but not a drop-everything alert
+		notify.DerivePriority(false, true), // urgent, important — real context loss, but not a drop-everything alert
 		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", instTitle),
 		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
 		events.SessionScopedMetadata(nil, linkedItemID),
@@ -234,8 +235,8 @@ func (s *SessionService) onRateLimitDetected(inst *instance.Instance, sessionID 
 	notifID := fmt.Sprintf("rl-detect-%s", sessionID)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, instTitle, notifID,
-		int32(8),                   // NotificationType_WARNING
-		DerivePriority(true, true), // urgent, important — the session just stopped making progress right now
+		int32(8),                          // NotificationType_WARNING
+		notify.DerivePriority(true, true), // urgent, important — the session just stopped making progress right now
 		title,
 		fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
 		events.SessionScopedMetadata(nil, linkedItemID),
@@ -267,7 +268,7 @@ func (s *SessionService) onRateLimitRecoverySucceeded(inst *instance.Instance, s
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, instTitle, fmt.Sprintf("rl-recover-%s", sessionID),
 		int32(10), // NotificationType_INFO
-		DerivePriority(false, false),
+		notify.DerivePriority(false, false),
 		fmt.Sprintf("Session \"%s\" resumed after rate limit", instTitle),
 		"Session auto-resumed after rate limit expiry.",
 		events.SessionScopedMetadata(nil, linkedItemID),
@@ -284,7 +285,7 @@ func (s *SessionService) onRateLimitRecoveryFailed(inst *instance.Instance, sess
 	s.eventBus.Publish(events.NewNotificationEvent(
 		sessionID, instTitle, fmt.Sprintf("rl-recover-%s", sessionID),
 		int32(9), // NotificationType_FAILURE
-		DerivePriority(true, true),
+		notify.DerivePriority(true, true),
 		fmt.Sprintf("Session \"%s\" failed to resume after rate limit", instTitle),
 		fmt.Sprintf("Auto-resume failed: %s", errMsg),
 		events.SessionScopedMetadata(nil, linkedItemID),

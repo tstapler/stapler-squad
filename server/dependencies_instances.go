@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -36,7 +37,7 @@ func wireLoadedInstances(svc *ServiceDeps, instances []*instance.Instance, backl
 	// Warren is designed for named scalar setters, not loop iterations. Left unwrapped.
 	for _, inst := range instances {
 		inst.SetReviewQueue(reviewQueue)
-		inst.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
+		inst.SetNotifier(&notify.EventBusNotifier{Bus: eventBus})
 		inst.SetStatusManager(statusManager)
 		backlogLifecycleListener.WireToInstance(inst)
 		if sessionSummaryGenerator != nil {
@@ -297,7 +298,7 @@ func bootResumeDrivers(instances []*instance.Instance) {
 
 // buildReactiveQueue builds the reactive queue manager with its Slack notifier and the
 // shared callback dispatcher.
-func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.ReactiveQueueManager, *services.SlackNotifier) {
+func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.ReactiveQueueManager, *notify.SlackNotifier) {
 	storage, reviewQueue, statusManager, reviewQueuePoller, eventBus, sessionService := svc.Storage, svc.ReviewQueue, svc.StatusManager, svc.ReviewQueuePoller, svc.EventBus, svc.SessionService
 	// Step 8: ReactiveQueueManager
 	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
@@ -311,7 +312,7 @@ func buildReactiveQueue(svc *ServiceDeps, cfg *config.Config) (*reviewqueue.Reac
 	// constructed and wired — self-gating per-call when unconfigured (see
 	// slack_notifier.go's Notify*/MaybeNotify* no-op-when-unconfigured design),
 	// so no conditional construction is needed here.
-	slackNotifier := services.NewSlackNotifier()
+	slackNotifier := notify.NewSlackNotifier()
 	reactiveQueueMgr.SetSlackNotifier(slackNotifier)
 
 	// CallbackDispatcher (webhook-triggers Phase 5, FR7-FR9): a single shared
@@ -355,7 +356,7 @@ func wireExternalSessions(svc *ServiceDeps, historyLinker *importer.HistoryLinke
 		}
 		// Wire dependencies so the external session appears in the review queue
 		instance.SetReviewQueue(reviewQueue)
-		instance.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
+		instance.SetNotifier(&notify.EventBusNotifier{Bus: eventBus})
 		instance.SetStatusManager(statusManager)
 		reviewQueuePoller.AddInstance(instance)
 		svc.PRStatusPoller.AddInstance(instance)
