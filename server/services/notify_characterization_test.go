@@ -6,6 +6,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net/http"
 	"net/http/httptest"
@@ -140,7 +141,7 @@ func TestSlackInteractiveHandler_ShouldAnswerWithFixedStatusAndBody_WhenRequestI
 		{"no signing secret configured", "", click("id:allow"), signedWithEmptySecret, 401, unauthorized, nil},
 		{"no timestamp header", slackInteractiveTestSecret, click("id:allow"), without("X-Slack-Request-Timestamp"), 401, unauthorized, nil},
 		{"no signature header", slackInteractiveTestSecret, click("id:allow"), without("X-Slack-Signature"), 401, unauthorized, nil},
-		{"replayed request", slackInteractiveTestSecret, click("id:allow"), stale, 401, unauthorized, nil},
+		{"stale timestamp", slackInteractiveTestSecret, click("id:allow"), stale, 401, unauthorized, nil},
 		{"oversize body is refused before verification", slackInteractiveTestSecret, oversize, unsignedOversize, 400, badRequest, nil},
 		{"signed but unparsable form", slackInteractiveTestSecret, "payload=%zz", signed, 400, badRequest, nil},
 		{"signed but no payload field", slackInteractiveTestSecret, "other=1", signed, 400, badRequest, nil},
@@ -206,10 +207,70 @@ func TestSendNotification_ShouldRateLimitByRequestedIDAndPublishNothing_WhenBurs
 	assert.Equal(t, []string{"uuid-noisy", "uuid-noisy"}, got)
 }
 
+func TestSendNotification_ShouldRefuseANonLoopbackPeerAndPublishNothing_WhenCalledRemotely(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(8)
+	t.Cleanup(bus.Close)
+	published, _ := bus.Subscribe(t.Context())
+	ns := NewNotificationService(NewNotificationRateLimiter(1, 1), bus)
+
+	const path = "/session.v1.SessionService/SendNotification"
+	handler := connect.NewUnaryHandler(path, ns.SendNotification)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.0.2.9:4000"
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	client := connect.NewClient[sessionv1.SendNotificationRequest, sessionv1.SendNotificationResponse](srv.Client(), srv.URL+path)
+
+	_, err := client.CallUnary(t.Context(), connect.NewRequest(&sessionv1.SendNotificationRequest{SessionId: "s", Title: "t"}))
+
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Empty(t, published)
+}
+
+type recordingApprovalResolver struct {
+	calls []string
+	err   error
+}
+
+func (r *recordingApprovalResolver) ResolveApproval(_ context.Context, req *connect.Request[sessionv1.ResolveApprovalRequest]) (*connect.Response[sessionv1.ResolveApprovalResponse], error) {
+	r.calls = append(r.calls, req.Msg.ApprovalId+":"+req.Msg.Decision)
+	return connect.NewResponse(&sessionv1.ResolveApprovalResponse{}), r.err
+}
+
+// Not parallel: t.Setenv and an isolated state dir. The secret is the stored,
+// encrypted one the settings UI writes, not the env override.
+func TestSlackInteractiveHandler_ShouldResolveEveryActionOnceAndStillAnswer200_WhenSignedWithTheStoredSecret(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	t.Setenv("SLACK_SIGNING_SECRET", "")
+	const stored = "stored-signing-secret"
+	_, err := NewSlackConfigService(NewSlackNotifier()).UpdateSlackConfig(t.Context(),
+		connect.NewRequest(&sessionv1.UpdateSlackConfigRequest{SigningSecret: stored}))
+	require.NoError(t, err)
+
+	// Larger than any small cap, within the 1 MiB one.
+	body := "pad=" + strings.Repeat("a", 900<<10) + "&payload=" +
+		url.QueryEscape(`{"actions":[{"value":"one:allow"},{"value":"two:deny"}]}`)
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	req := httptest.NewRequest(http.MethodPost, "/api/hooks/slack-interactive", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Slack-Request-Timestamp", ts)
+	req.Header.Set("X-Slack-Signature", computeTestSlackSignature(stored, ts, body))
+	resolver := &recordingApprovalResolver{err: errors.New("already resolved")}
+	w := httptest.NewRecorder()
+
+	NewSlackInteractiveHandler(resolver).Handle(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, []string{"one:allow", "two:deny"}, resolver.calls)
+}
+
 // The golden pins the exact bytes POSTed to the webhook, including the escaping
 // and truncation of agent-controlled text.
+// Not parallel: t.Setenv keeps a developer's real webhook out of the config.
 func TestSlackNotifier_ShouldPostByteIdenticalPayloads_WhenNotifying(t *testing.T) {
-	t.Parallel()
+	t.Setenv("SLACK_WEBHOOK_URL", "")
 	srv, requests := startCapturingSlackServer(t)
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	withButtons := slackConfigWithWebhook(t, srv.URL)
@@ -243,6 +304,13 @@ func TestSlackNotifier_ShouldPostByteIdenticalPayloads_WhenNotifying(t *testing.
 	record("approval, no detail, no dashboard")
 	n.NotifyApprovalPending(ctx, withButtons, approval(map[string]interface{}{"command": hostile}), "name", dashboard)
 	record("approval, buttons")
+	wide := strings.Repeat("é<", 2000)
+	n.NotifyReviewQueueItem(ctx, cfg, &queue.ReviewItem{SessionID: "sess-1", SessionName: "name", Reason: queue.ReasonInputRequired, Context: wide}, "")
+	record("review item, oversized multibyte context")
+	n.NotifyApprovalPending(ctx, cfg, &approvalkit.PendingApproval{
+		ID: "appr-1", SessionID: "sess-1", ToolName: hostile, ToolInput: map[string]interface{}{"file_path": wide},
+	}, "name", "")
+	record("approval, hostile tool name and oversized multibyte detail")
 	require.True(t, n.MaybeNotifyQueueDepthThreshold(ctx, cfg, 7, 5, dashboard))
 	record("queue depth digest")
 
@@ -258,15 +326,17 @@ func TestSlackNotifier_ShouldPostByteIdenticalPayloads_WhenNotifying(t *testing.
 func TestApprovalAndSessionIDText_ShouldKeepItsShape_WhenBuiltForNotifications(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("é", maxNotificationMessageLen+1)
-	messages := map[string]map[string]interface{}{
-		strings.Repeat("é", maxNotificationMessageLen) + "...": {"command": long},
-		long:                                {"file_path": long},
-		"Claude needs permission to use T":  {"pattern": "x"},
-		"Claude needs permission to use T ": nil,
-	}
-	for want, input := range messages {
-		got := buildApprovalMessage(&approvalkit.PendingApproval{ToolName: "T", ToolInput: input})
-		assert.Equal(t, strings.TrimSuffix(want, " "), got)
+	const fallback = "Claude needs permission to use T"
+	for _, tc := range []struct {
+		input map[string]interface{}
+		want  string
+	}{
+		{map[string]interface{}{"command": long}, strings.Repeat("é", maxNotificationMessageLen) + "..."},
+		{map[string]interface{}{"file_path": long}, long},
+		{map[string]interface{}{"pattern": "x"}, fallback},
+		{nil, fallback},
+	} {
+		assert.Equal(t, tc.want, buildApprovalMessage(&approvalkit.PendingApproval{ToolName: "T", ToolInput: tc.input}))
 	}
 
 	assert.Equal(t, "u", stableIDForData(domain.InstanceData{UUID: "u", Title: "t"}))
@@ -277,7 +347,6 @@ func TestApprovalAndSessionIDText_ShouldKeepItsShape_WhenBuiltForNotifications(t
 	assert.False(t, matchesIDData(d, ""))
 	assert.False(t, matchesIDData(domain.InstanceData{Title: "t"}, "other"))
 
-	assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), DerivePriority(true, true))
 	assert.Equal(t, "peer_title", questionkit.MetaPeerTitle, "stored metadata key")
 }
 

@@ -48,3 +48,25 @@ func TestRequestFactsOf_ShouldCopyTheStampedRecordAndNeverSetAReason_WhenAChainS
 		})
 	}
 }
+
+func TestRequestFactsOf_ShouldNotReportLoopback_WhenPeerIsRemote(t *testing.T) {
+	t.Parallel()
+	var got SteerRequestFacts
+	const path = "/t.S/M"
+	handler := connect.NewUnaryHandler(path,
+		func(ctx context.Context, req *connect.Request[emptypb.Empty]) (*connect.Response[emptypb.Empty], error) {
+			got = RequestFactsOf(ctx, req)
+			return connect.NewResponse(&emptypb.Empty{}), nil
+		})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "192.0.2.9:4000"
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := connect.NewClient[emptypb.Empty, emptypb.Empty](srv.Client(), srv.URL+path).CallUnary(t.Context(), connect.NewRequest(&emptypb.Empty{}))
+
+	require.NoError(t, err)
+	assert.Equal(t, "192.0.2.9:4000", got.Refusal.Peer)
+	assert.False(t, got.Refusal.PeerLoopback)
+}

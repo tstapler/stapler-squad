@@ -17,7 +17,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
@@ -795,5 +797,21 @@ func TestBroadcastApprovalNotification_ShouldStampRiskLevel_WhenApprovalIsClassi
 		require.Equal(t, "critical", ev.NotificationMetadata["risk_level"])
 	case <-time.After(2 * time.Second):
 		t.Fatal("no notification published")
+	}
+}
+
+func TestApprovalAndQuestionBroadcasts_ShouldPublishAtUrgentPriority(t *testing.T) {
+	t.Parallel()
+	bus := events.NewEventBus(4)
+	t.Cleanup(bus.Close)
+	published, _ := bus.Subscribe(t.Context())
+	h := &ApprovalHandler{eventBus: bus}
+
+	h.BroadcastApprovalNotification("s", &approvalkit.PendingApproval{ID: "a", ToolName: "Bash"})
+	h.BroadcastQuestionNotification("s", classifier.PermissionRequestPayload{}, QuestionAttribution{})
+
+	require.Len(t, published, 2)
+	for range 2 {
+		assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), (<-published).NotificationPriority)
 	}
 }
