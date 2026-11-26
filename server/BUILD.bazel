@@ -110,6 +110,7 @@ go_library(
         "//server/services/anthropicwire",
         "//server/services/approvalkit",
         "//server/services/backlogflow",
+        "//server/services/backlogmisc",
         "//server/services/backlogsvc",
         "//server/services/claudesettings",
         "//server/services/completionreview",

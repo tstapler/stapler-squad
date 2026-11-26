@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
+	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/session"
@@ -172,7 +173,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 	// backlog mutation methods (Phase 2) can publish BacklogItemChanged
 	// events. This is a different struct than backlogLifecycleListener.SetNotifier
 	// above — placed here for readability only, not because it mirrors that call.
-	storage.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: eventBus})
+	storage.SetItemChangePublisher(&backlogmisc.BacklogItemEventPublisher{Bus: eventBus})
 	// Review now always spawns a real, hidden session.Instance (via
 	// SessionService.SpawnReviewSession) instead of an in-process headless LLM
 	// call, so review-queue visibility (idle/error/approval detection) works the
