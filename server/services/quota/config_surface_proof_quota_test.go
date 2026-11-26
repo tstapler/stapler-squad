@@ -1,4 +1,4 @@
-package services
+package quota
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func prfNewQuotaRun(usedTokens int64, poller *svctest.MockInstancePoller) *prfQu
 	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	gate := NewQuotaGate(
 		func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
-		store, poller, ctrl, events.NewEventBus(10))
+		store, poller, ctrl, events.NewEventBus(10), testPorts)
 	return &prfQuotaRun{gate: gate, ctrl: ctrl, store: store}
 }
 
@@ -112,7 +112,7 @@ func TestConfigSurfaceProof_QuotaRateLimitWindowMinutes_ChangesHardOverride(t *t
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		prfSaveQuota(t, &sessionv1.QuotaSettings{RateLimitWindowMinutes: proto.Int32(int32(setting.(int)))})
 		r := prfNewQuotaRun(0, &svctest.MockInstancePoller{})
-		r.gate.recordRateLimitEvent(time.Now().Add(-10 * time.Minute))
+		r.gate.RecordRateLimitEvent(time.Now().Add(-10 * time.Minute))
 		r.reconcile(1)
 		return r.ctrl.DisableCalls
 	}, 5, 30)

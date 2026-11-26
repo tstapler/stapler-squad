@@ -414,7 +414,7 @@ func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_Wh
 // backlogSvc.SetSyncFeatureEnabledCheck (Story 2.3.2) indirectly via
 // TriggerSync — not a reimplementation of the &&. Per plan.md Task 2.3.2b,
 // ShouldThrottleForeground's own sliding-window behavior is covered directly
-// in server/services/quota_gate_test.go; this test only confirms the
+// in server/services/quota/quota_gate_test.go; this test only confirms the
 // composed checker, when unthrottled, still behaves identically to today's
 // bare backlogCtrl.IsEnabled() (i.e. the throttle never fires when nothing
 // foreground is observed).
@@ -749,4 +749,40 @@ func TestWireDepsIntoServer_should_StartSessionPRLinkGC_When_StoragePresent(t *t
 
 	require.NotNil(t, srv.prLinkGC, "wireDepsIntoServer must construct the orphan session-PR link collector")
 	assert.True(t, srv.prLinkGC.Started(), "and start it")
+}
+
+// TestBuildRuntimeDeps_should_WireQuotaGatePorts_When_RateLimitPausesBacklog pins the
+// composition-root port: a quota pause publishes at the hub's urgent priority.
+func TestBuildRuntimeDeps_should_WireQuotaGatePorts_When_RateLimitPausesBacklog(t *testing.T) {
+	envtest.NewIsolatedStateDir(t)
+	t.Setenv("STAPLER_SQUAD_INSTANCE", "shared")
+	cfg := config.LoadConfig()
+	cfg.Quota.Enabled = true
+	require.NoError(t, cfg.SetFeatureFlag("backlog", true))
+
+	deps, err := BuildDependencies()
+	require.NoError(t, err)
+	newShutdownOnCleanupServer(t, "localhost:0", deps)
+	require.True(t, deps.BacklogEnabledCheck(), "precondition: backlog enabled at boot")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := deps.EventBus.Subscribe(ctx)
+	deps.QuotaGate.RecordRateLimitEvent(time.Now())
+	deps.QuotaGate.Reconcile(ctx)
+
+	assert.False(t, deps.BacklogEnabledCheck(), "the gate disables the real BacklogController")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.NotificationTitle != "Backlog Automation Paused" {
+				continue
+			}
+			assert.Equal(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), ev.NotificationPriority)
+			return
+		case <-deadline:
+			t.Fatal("no pause notification published")
+		}
+	}
 }

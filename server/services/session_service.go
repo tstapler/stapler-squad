@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"net/http"
 	"os"
@@ -342,7 +343,7 @@ type SessionService struct {
 	// headroom gate that pauses/resumes backlog automation. Late-wired via
 	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
 	// inside NewSessionService.
-	quotaGate *QuotaGate
+	quotaGate *quota.QuotaGate
 
 	// escapeEventsClient is the ent client for db/escape_events.db (escape analytics RPCs).
 	// May be nil when escape analytics is disabled or in tests that don't need it.

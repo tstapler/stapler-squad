@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/credkit"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -247,7 +248,7 @@ func (s *SessionService) onRateLimitDetected(inst *instance.Instance, sessionID 
 	// gated on inst.Hidden (unlike the notification above) — a rate limit hit
 	// by a hidden/headless session still consumes real account quota.
 	if s.quotaGate != nil {
-		s.quotaGate.recordRateLimitEvent(time.Now())
+		s.quotaGate.RecordRateLimitEvent(time.Now())
 	}
 }
 
@@ -720,7 +721,7 @@ func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 
 // SetQuotaGate wires the account-wide quota gate so onRateLimitDetected can
 // feed it the hard/reactive override signal.
-func (s *SessionService) SetQuotaGate(g *QuotaGate) {
+func (s *SessionService) SetQuotaGate(g *quota.QuotaGate) {
 	s.quotaGate = g
 }
 
