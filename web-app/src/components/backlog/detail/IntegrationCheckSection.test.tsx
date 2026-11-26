@@ -33,15 +33,16 @@ describe("IntegrationCheckSection", () => {
     await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Passed"));
   });
 
-  it("shows Integration Failed when the child failed a criterion or was archived", async () => {
+  it("shows Integration Failed when the child failed a criterion", async () => {
     mockGetBacklogItem.mockResolvedValue(child("review", "fail"));
-    const { unmount } = render(<IntegrationCheckSection item={{ status: "review", integrationChildId: "child-1" }} />);
-    await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Failed"));
-    unmount();
-
-    mockGetBacklogItem.mockResolvedValue(child("archived"));
     render(<IntegrationCheckSection item={{ status: "review", integrationChildId: "child-1" }} />);
     await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Failed"));
+  });
+
+  it("shows Integration Passed when the child was archived (epic done gate is open)", async () => {
+    mockGetBacklogItem.mockResolvedValue(child("archived"));
+    render(<IntegrationCheckSection item={{ status: "review", integrationChildId: "child-1" }} />);
+    await waitFor(() => expect(screen.getByTestId("backlog-integration-check")).toHaveTextContent("Integration Passed"));
   });
 
   it("stays on Awaiting when the child cannot be loaded", async () => {

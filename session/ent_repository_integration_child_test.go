@@ -44,7 +44,7 @@ func TestIntegrationChild_should_CreateOneChildBlockedOnEverySibling_When_Create
 
 	blockedBy, _, err := repo.ListBacklogItemDependencies(ctx, child.ID)
 	require.NoError(t, err)
-	var got []string
+	got := make([]string, 0, len(blockedBy))
 	for _, r := range blockedBy {
 		got = append(got, r.ItemID)
 	}

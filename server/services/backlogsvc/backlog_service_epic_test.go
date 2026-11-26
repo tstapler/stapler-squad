@@ -113,7 +113,7 @@ func TestOnIntegrationChildFailed_should_CreateFixChildForSibling_When_Confident
 	assert.Equal(t, f.sibs[0], blockedBy[0].ItemID, "fix child depends on the attributed sibling")
 	icBlockedBy, _, err := f.svc.storage.ListBacklogItemDependencies(ctx, child.ID)
 	require.NoError(t, err)
-	var ids []string
+	ids := make([]string, 0, len(icBlockedBy))
 	for _, r := range icBlockedBy {
 		ids = append(ids, r.ItemID)
 	}

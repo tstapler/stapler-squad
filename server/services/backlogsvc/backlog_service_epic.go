@@ -35,7 +35,7 @@ type IntegrationOutcome struct {
 // (warns), or an integration child already exists (idempotent).
 func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID string, siblingIDs []string) (*backlogdto.BacklogItemData, error) {
 	if !s.epicIntegrationEnabled() {
-		return nil, nil
+		return nil, nil //nolint:nilnil // documented no-op: flag off
 	}
 	epic, err := s.storage.GetBacklogItem(ctx, epicID)
 	if err != nil {
@@ -51,7 +51,7 @@ func (s *BacklogService) OnEpicPlanningComplete(ctx context.Context, epicID stri
 	cmd := backlogstore.ExtractE2ECommand(string(epic.AcceptanceCriteria), s.doneCommandTemplate(ctx, epic.PipelineMode))
 	if cmd == "" {
 		log.Warn("[EpicIntegration] epic has no e2e: acceptance criterion or done_command_template; integration child not created", "epic", epic.ID)
-		return nil, nil
+		return nil, nil //nolint:nilnil // documented no-op: nothing to create
 	}
 	// Created at idea (ADR-007: only workflow-engine paths may move status); the normal
 	// idea -> ready flow promotes it, and its sibling dependencies hold the dequeue until they resolve.

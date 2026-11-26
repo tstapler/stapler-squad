@@ -8,8 +8,8 @@ describe("integrationCheckState", () => {
   it("is passed only when the child is done", () => {
     expect(integrationCheckState({ status: "done", acCriteria: [] })).toBe("passed");
   });
-  it("is failed when the child was archived without passing", () => {
-    expect(integrationCheckState({ status: "archived", acCriteria: [] })).toBe("failed");
+  it("is passed when the child was archived, matching the backend done gate", () => {
+    expect(integrationCheckState({ status: "archived", acCriteria: [] })).toBe("passed");
   });
   it("is failed when a criterion failed and the child is not resolved", () => {
     expect(

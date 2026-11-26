@@ -104,4 +104,4 @@ func AttributeIntegrationFailure(ctx, epicID, integrationSessionID string) (sibl
 
 ## Reconciliation (review round: PARTIAL)
 
-`integrationGate` previously passed only on `done`, contradicting AC3 and Task 1.3 ("done or archived"). Now it passes on `done` or `archived`; archiving the integration child is the owner's unblock path for a stuck child. The epic UI still labels an archived child "Integration Failed" (not a pass) while the done gate is open.
+`integrationGate` previously passed only on `done`, contradicting AC3 and Task 1.3 ("done or archived"). Now it passes on `done` or `archived`; archiving the integration child is the owner's unblock path for a stuck child. The epic UI mirrors this: an archived child shows "Integration Passed" (resolved), so the label never contradicts the open done gate.
