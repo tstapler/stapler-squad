@@ -1,4 +1,4 @@
-package services
+package quota
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 )
 
 func newTestQuotaGate(cfg config.QuotaConfig, store *svctest.FakeTokenStore, poller *svctest.MockInstancePoller, ctrl *svctest.CountingFeatureController, bus *events.EventBus) *QuotaGate {
-	return NewQuotaGate(func() config.QuotaConfig { return cfg }, store, poller, ctrl, bus)
+	return NewQuotaGate(func() config.QuotaConfig { return cfg }, store, poller, ctrl, bus, testPorts)
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ func TestReconcile_should_DisableBacklogImmediately_When_HardSignalActive(t *tes
 	cfg.Enabled = true
 
 	qg := newTestQuotaGate(cfg, store, poller, ctrl, bus)
-	qg.recordRateLimitEvent(time.Now().Add(-1 * time.Minute))
+	qg.RecordRateLimitEvent(time.Now().Add(-1 * time.Minute))
 
 	qg.Reconcile(context.Background())
 
@@ -170,7 +170,7 @@ func TestReconcile_should_NeverCallEnable_When_HardSignalStillActiveAcrossMultip
 	qg.state.pausedByQuota = true
 	v := false
 	qg.state.lastSetEnabled = &v
-	qg.recordRateLimitEvent(time.Now()) // hard signal active
+	qg.RecordRateLimitEvent(time.Now()) // hard signal active
 
 	for i := 0; i < 5; i++ {
 		qg.Reconcile(context.Background())
@@ -410,7 +410,7 @@ func TestQuotaGate_should_PublishNotificationOnRealEventBus_When_TransitionOccur
 	cfg.Enabled = true
 
 	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, poller, ctrl, bus)
-	qg.recordRateLimitEvent(time.Now())
+	qg.RecordRateLimitEvent(time.Now())
 
 	qg.Reconcile(context.Background())
 
@@ -451,7 +451,7 @@ func TestReconcile_should_OnlyCallFeatureControllerDisable_When_PausingForQuota(
 	cfg.Enabled = true
 
 	qg := newTestQuotaGate(cfg, &svctest.FakeTokenStore{}, poller, ctrl, bus)
-	qg.recordRateLimitEvent(time.Now())
+	qg.RecordRateLimitEvent(time.Now())
 
 	qg.Reconcile(context.Background())
 
@@ -493,7 +493,7 @@ func TestReconcile_should_ResetHysteresisCounters_When_HardOverrideFires(t *test
 
 	// Now the hard signal fires, disabling immediately and — per the fix —
 	// resetting both counters rather than leaving the stale 1 in place.
-	qg.recordRateLimitEvent(time.Now())
+	qg.RecordRateLimitEvent(time.Now())
 	qg.Reconcile(context.Background())
 
 	qg.mu.Lock()
@@ -735,7 +735,7 @@ func TestQuotaGateReconcile_UsesNewBudgetWithoutRestart_WhenConfigUpdatedViaRpc(
 	ctrl := &svctest.CountingFeatureController{Enabled: true}
 	store := &svctest.FakeTokenStore{Results: svctest.FakeResultsWithUsage(4_500_000)} // 10% of a 5M budget remains
 	qg := NewQuotaGate(func() config.QuotaConfig { return config.LoadConfig().Quota.QuotaConfigOrDefault() },
-		store, &svctest.MockInstancePoller{}, ctrl, events.NewEventBus(10))
+		store, &svctest.MockInstancePoller{}, ctrl, events.NewEventBus(10), testPorts)
 	v := true
 	qg.state.lastSetEnabled = &v
 

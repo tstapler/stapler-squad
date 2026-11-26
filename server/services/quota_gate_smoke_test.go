@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -21,7 +22,7 @@ import (
 // same verification through the real code path instead of a fake shortcut:
 // it drives SessionService.onRateLimitDetected (the exact callback
 // wireRateLimitCallbacks registers on every real session.Instance) rather
-// than calling QuotaGate.recordRateLimitEvent directly, then exercises
+// than calling QuotaGate.RecordRateLimitEvent directly, then exercises
 // QuotaGate.Reconcile — the same construction and wiring shape
 // server/dependencies.go uses in production (SessionService as the
 // InstancePoller/quota-gate feed, a real BacklogController, a real
@@ -57,12 +58,13 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 	// clearing its own hysteresis once the hard signal stops blocking it.
 	cfg.AssumedWindowTokenBudget = 1000
 
-	quotaGate := NewQuotaGate(
+	quotaGate := quota.NewQuotaGate(
 		func() config.QuotaConfig { return cfg },
 		&svctest.FakeTokenStore{},
 		&svctest.MockInstancePoller{Instances: []*instance.Instance{inst}},
 		backlogCtrl,
 		eventBus,
+		quota.Ports{DerivePriority: DerivePriority},
 	)
 	svc.SetQuotaGate(quotaGate)
 
@@ -77,12 +79,10 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 	if !quotaGate.IsPausedByQuota() {
 		t.Fatal("smoke test FAILED: IsPausedByQuota() = false after a real rate-limit detection, want true")
 	}
-	t.Log("smoke test PASS (pause half): real onRateLimitDetected -> QuotaGate.recordRateLimitEvent -> Reconcile disabled BacklogController")
+	t.Log("smoke test PASS (pause half): real onRateLimitDetected -> QuotaGate.RecordRateLimitEvent -> Reconcile disabled BacklogController")
 
 	// --- Resume half: clear the hard signal, wait out the window, Reconcile resumes. ---
-	quotaGate.mu.Lock()
-	quotaGate.rateLimits.LastEventAt = time.Now().Add(-time.Hour) // older than RateLimitWindowMinutes
-	quotaGate.mu.Unlock()
+	cfg.RateLimitWindowMinutes = 0 // cfg is re-read each tick: the recorded event is now outside the window
 
 	for i := 0; i < cfg.ConsecutiveTicksToResume; i++ {
 		quotaGate.Reconcile(context.Background())

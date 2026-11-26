@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/hookrecv"
 	"github.com/tstapler/stapler-squad/server/services/importsvc"
 	"github.com/tstapler/stapler-squad/server/services/piextension"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/server/services/remote"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -955,7 +956,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// re-reads config.json each reconcile).
 	{
 		quotaPath, quotaHandler := sessionv1connect.NewQuotaServiceHandler(
-			services.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
+			quota.NewQuotaSettingsService(), ConnectOptions(deps.ErrorRegistry)...)
 		srv.RegisterConnectHandler("/api"+quotaPath, http.StripPrefix("/api", quotaHandler))
 		log.Info("Registered QuotaService handler", "path", "/api"+quotaPath)
 	}

@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/federation"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
+	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -345,7 +346,7 @@ type SessionService struct {
 	// headroom gate that pauses/resumes backlog automation. Late-wired via
 	// SetQuotaGate since QuotaGate needs backlogCtrl, which doesn't exist yet
 	// inside NewSessionService.
-	quotaGate *QuotaGate
+	quotaGate *quota.QuotaGate
 
 	// escapeEventsClient is the ent client for db/escape_events.db (escape analytics RPCs).
 	// May be nil when escape analytics is disabled or in tests that don't need it.

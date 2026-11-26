@@ -1,4 +1,4 @@
-package services
+package quota
 
 import (
 	"context"
@@ -33,9 +33,21 @@ const (
 	reasonSoftThreshold = "soft_threshold"
 )
 
+// InstancePoller is the gate's view of the live sessions.
+type InstancePoller interface {
+	GetInstances() []*instance.Instance
+}
+
+// Ports are the hub functions the gate needs.
+type Ports struct {
+	// DerivePriority maps the (urgent, important) axes to a NotificationPriority value.
+	// Nil is a wiring bug: NewQuotaGate logs it and notifies at unspecified priority.
+	DerivePriority func(urgent, important bool) int32
+}
+
 // RateLimitAggregate tracks the hard/reactive override signal: whether any
 // tracked session has recently hit a rate limit. Always accessed under
-// QuotaGate.mu via the locking wrapper (*QuotaGate).recordRateLimitEvent —
+// QuotaGate.mu via the locking wrapper (*QuotaGate).RecordRateLimitEvent —
 // this is a named, non-embedded field on QuotaGate, so Go does not promote
 // these methods, and callers outside this file cannot reach them directly.
 type RateLimitAggregate struct {
@@ -54,7 +66,7 @@ func (a *RateLimitAggregate) hasRecentRateLimitEvent(now time.Time, window time.
 }
 
 // gateState is QuotaGate's mutex-guarded decision state. Single writer:
-// QuotaGate.Reconcile (plus recordRateLimitEvent for the rateLimits field,
+// QuotaGate.Reconcile (plus RecordRateLimitEvent for the rateLimits field,
 // held on the same QuotaGate.mu).
 type gateState struct {
 	// pausedByQuota is true only when QuotaGate itself most recently called
@@ -96,6 +108,7 @@ type QuotaGate struct {
 	poller      InstancePoller
 	backlogCtrl featureflags.FeatureController
 	eventBus    *events.EventBus
+	ports       Ports
 
 	rateLimits              RateLimitAggregate
 	state                   gateState
@@ -110,21 +123,30 @@ func NewQuotaGate(
 	poller InstancePoller,
 	backlogCtrl featureflags.FeatureController,
 	eventBus *events.EventBus,
+	ports Ports,
 ) *QuotaGate {
+	if ports.DerivePriority == nil {
+		// A nil call would panic mid-pause, under g.mu, and crash the boot-time Reconcile.
+		log.Error("QuotaGate: Ports.DerivePriority is not wired; notifications get unspecified priority")
+		ports.DerivePriority = func(_, _ bool) int32 {
+			return int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_UNSPECIFIED)
+		}
+	}
 	return &QuotaGate{
 		cfgFn:       cfgFn,
 		tokenStore:  tokenStore,
 		poller:      poller,
 		backlogCtrl: backlogCtrl,
 		eventBus:    eventBus,
+		ports:       ports,
 	}
 }
 
-// recordRateLimitEvent is the only sanctioned way to feed the hard signal
-// from outside this file (called from SessionService.onRateLimitDetected,
+// RecordRateLimitEvent is the only sanctioned way to feed the hard signal
+// from outside this package (called from SessionService.onRateLimitDetected,
 // which fires independently per session on potentially-concurrent
 // goroutines).
-func (g *QuotaGate) recordRateLimitEvent(at time.Time) {
+func (g *QuotaGate) RecordRateLimitEvent(at time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.rateLimits.recordRateLimitEvent(at)
@@ -179,7 +201,7 @@ func (g *QuotaGate) StatusDetail() string {
 // control-mode callbacks, RPC handlers, the session driver) — a direct field
 // read here would be a genuine cross-goroutine data race. See
 // session/instance.go's documented Snapshot() contract and
-// capacity_monitor.go's evaluate() for the established precedent.
+// server/services/capacity_monitor.go's evaluate() for the established precedent.
 func foregroundSessionActive(instances []*instance.Instance) bool {
 	for _, inst := range instances {
 		if inst == nil {
@@ -413,7 +435,7 @@ func (g *QuotaGate) notifyPaused(cfg config.QuotaConfig, reason string, estimate
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		DerivePriority(true, true), // urgent, important — automation just stopped dispatching work right now
+		g.ports.DerivePriority(true, true), // urgent, important — automation just stopped dispatching work right now
 		"Backlog Automation Paused", msg,
 		map[string]string{"type": quotaGatePausedType, "reason": reason},
 	))
@@ -432,7 +454,7 @@ func (g *QuotaGate) notifyResumed(cfg config.QuotaConfig, estimate HeadroomEstim
 	g.eventBus.Publish(events.NewNotificationEvent(
 		quotaGateNotifierKey, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
-		DerivePriority(false, false), // urgent, important — good-news recovery, purely informational
+		g.ports.DerivePriority(false, false), // urgent, important — good-news recovery, purely informational
 		"Backlog Automation Resumed", msg,
 		map[string]string{"type": quotaGateResumedType},
 	))
