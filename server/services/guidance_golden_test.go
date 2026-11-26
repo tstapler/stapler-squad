@@ -434,7 +434,7 @@ func (g *guidanceTranscript) waiverAndPeerCancel() {
 		g.logf("waive idx=%d answer=%q applied=%t %s ac=%s,%s resumed=%v", c.idx, c.answer, applied, g.errText(err), cs[0].Status, cs[1].Status, resumed)
 		notes, gerr := storage.ListActivityNotesForItem(ctx, item.ID)
 		require.NoError(t, gerr)
-		var lines []string
+		lines := make([]string, 0, len(notes))
 		for _, n := range notes {
 			lines = append(lines, n.Message)
 		}
@@ -567,14 +567,14 @@ func (g *guidanceTranscript) ackDetector() {
 			det.Sent(questionkit.SentDelivery{RowID: id, SessionUUID: "s1", Dialog: colorDialog, Route: domain.DeliveryRouteLiveKeystroke, Indeterminate: mode == "indeterminate"})
 			g.logf("ack %q %s start unconfirmed=%t", script, mode, det.Unconfirmed(id))
 			for _, step := range strings.Fields(script) {
-				switch {
-				case step == "receipt":
+				switch step {
+				case "receipt":
 					det.Receipt(ctx, "s1", goldenAckTool)
-				case step == "receipt-other":
+				case "receipt-other":
 					det.Receipt(ctx, "s1", "Bash")
-				case step == "receipt-session":
+				case "receipt-session":
 					det.Receipt(ctx, "s2", goldenAckTool)
-				case step == "end":
+				case "end":
 					ended = true
 				default:
 					var secs int
