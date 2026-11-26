@@ -6,6 +6,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -30,7 +31,7 @@ func (s *SessionService) wireDialogCanary() *questionkit.DialogMatchCanary {
 		}
 	}
 	notify := func() {
-		(&EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
+		(&notify.EventBusNotifier{Bus: s.eventBus}).NotifySession(canaryNoticeSession, canaryNoticeTitle, canaryNoticeMessage,
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING), false, true)
 	}
 	c := questionkit.NewDialogMatchCanary(nil, count, notify)

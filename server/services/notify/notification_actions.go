@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -37,8 +37,8 @@ func ListenerClassFrom(ctx context.Context) ListenerClass {
 	return ListenerClassRemote
 }
 
-// unavailableDesktopOnly is the descriptor reason for a Tier B action on the remote listener.
-const unavailableDesktopOnly = "desktop_only"
+// UnavailableDesktopOnly is the descriptor reason for a Tier B action on the remote listener.
+const UnavailableDesktopOnly = "desktop_only"
 
 // unavailableReadOnly is the descriptor reason for a hook-mirrored question
 // whose answer control is withdrawn while the layout-drift canary is tripped.
@@ -47,18 +47,18 @@ const unavailableReadOnly = "read_only"
 // Notification metadata keys read by the builder.
 const (
 	metaApprovalID         = "approval_id"
-	metaItemID             = "item_id"
-	metaDecisionSchema     = "decision_schema"
-	boolTrue               = "true"
-	backlogStatusReview    = "review"
-	backlogStatusPRPending = "pr_pending"
+	MetaItemID             = "item_id"
+	MetaDecisionSchema     = "decision_schema"
+	BoolTrue               = "true"
+	BacklogStatusReview    = "review"
+	BacklogStatusPRPending = "pr_pending"
 )
 
 // Backlog decision choice values (the stable part of decision_schema).
 const (
-	choiceAccept = "accept"
+	ChoiceAccept = "accept"
 	ChoiceRework = "rework"
-	choiceMerge  = "merge"
+	ChoiceMerge  = "merge"
 )
 
 // actionPolicy is the single tier and remote-availability row of an action.
@@ -72,9 +72,9 @@ var (
 	policyTierB = actionPolicy{Tier: sessionv1.ActionTier_ACTION_TIER_B, RemoteAvailable: false}
 )
 
-// actionPolicies has exactly one row per ActionKind. ANSWER_QUESTION is listed
-// at its live_keystroke tier; a durable-record answer is Tier A (answerTier).
-var actionPolicies = map[sessionv1.ActionKind]actionPolicy{
+// ActionPolicies has exactly one row per ActionKind. ANSWER_QUESTION is listed
+// at its live_keystroke tier; a durable-record answer is Tier A (AnswerTier).
+var ActionPolicies = map[sessionv1.ActionKind]actionPolicy{
 	sessionv1.ActionKind_ACTION_KIND_OPEN:             policyTierA,
 	sessionv1.ActionKind_ACTION_KIND_APPROVE:          policyTierA,
 	sessionv1.ActionKind_ACTION_KIND_DENY:             policyTierA,
@@ -101,9 +101,9 @@ var controlPolicies = map[Control]actionPolicy{
 	ControlResumeScheduled: {Tier: sessionv1.ActionTier_ACTION_TIER_A, RemoteAvailable: false},
 }
 
-// answerTier is the tier of an ANSWER_QUESTION on route: only a live keystroke
+// AnswerTier is the tier of an ANSWER_QUESTION on route: only a live keystroke
 // writes into a pane.
-func answerTier(route flagsvc.AnswerRoute) sessionv1.ActionTier {
+func AnswerTier(route flagsvc.AnswerRoute) sessionv1.ActionTier {
 	switch route {
 	case flagsvc.RouteLiveKeystrokeHidden, flagsvc.RouteLiveKeystrokeVisible:
 		return sessionv1.ActionTier_ACTION_TIER_B
@@ -187,6 +187,12 @@ func NewDescriptorBuilder(src DescriptorSources, reg *featureflags.Registry) *De
 	}, hookReplyOn: func() bool { return fr.EffectiveAnswerQuestion(flagsvc.RouteHookReply) }}
 }
 
+// InlineActionEnabledForTest reports the wired builder's flag decision. Exported
+// only for the SessionService wiring test in server/services.
+func (ns *NotificationService) InlineActionEnabledForTest(decisionPoint string) bool {
+	return ns.descriptors.flag(decisionPoint)
+}
+
 // pageKeys are the entity keys of the unresolved records of one page.
 type pageKeys struct {
 	needApprovals bool
@@ -210,7 +216,7 @@ func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 			seenQ[qk] = true
 			k.questions = append(k.questions, qk)
 		}
-		if id := md[metaItemID]; id != "" && md[metaDecisionSchema] != "" && !seenItem[id] {
+		if id := md[MetaItemID]; id != "" && md[MetaDecisionSchema] != "" && !seenItem[id] {
 			seenItem[id] = true
 			k.itemIDs = append(k.itemIDs, id)
 		}
@@ -224,7 +230,7 @@ func collectPageKeys(records []*sessionv1.NotificationHistoryRecord) pageKeys {
 
 func questionKeyOf(r *sessionv1.NotificationHistoryRecord) (questionkit.QuestionKey, bool) {
 	md := r.GetMetadata()
-	if md[questionkit.MetaQuestionID] == "" || md[questionkit.MetaReplyUnavailable] == boolTrue || r.GetSessionId() == "" {
+	if md[questionkit.MetaQuestionID] == "" || md[questionkit.MetaReplyUnavailable] == BoolTrue || r.GetSessionId() == "" {
 		return questionkit.QuestionKey{}, false
 	}
 	return questionkit.QuestionKey{SessionUUID: r.GetSessionId(), QuestionID: md[questionkit.MetaQuestionID]}, true
@@ -291,7 +297,7 @@ func (b *DescriptorBuilder) describe(r *sessionv1.NotificationHistoryRecord, st 
 func (b *DescriptorBuilder) gate(in []*sessionv1.NotificationActionDescriptor, lc ListenerClass) []*sessionv1.NotificationActionDescriptor {
 	out := in[:0:0]
 	for _, d := range in {
-		if !b.flag(flagsvc.ScopePrefixAction + kindName(d.GetKind())) {
+		if !b.flag(flagsvc.ScopePrefixAction + KindName(d.GetKind())) {
 			continue
 		}
 		if lc == ListenerClassRemote && !b.flag(flagsvc.ScopeChannelRemote) {
@@ -302,8 +308,8 @@ func (b *DescriptorBuilder) gate(in []*sessionv1.NotificationActionDescriptor, l
 	return out
 }
 
-// kindName is the scope name of a kind: APPROVE for ACTION_KIND_APPROVE.
-func kindName(k sessionv1.ActionKind) string {
+// KindName is the scope name of a kind: APPROVE for ACTION_KIND_APPROVE.
+func KindName(k sessionv1.ActionKind) string {
 	return strings.TrimPrefix(k.String(), "ACTION_KIND_")
 }
 
@@ -312,7 +318,7 @@ func openDescriptor(r *sessionv1.NotificationHistoryRecord) *sessionv1.Notificat
 		Kind: sessionv1.ActionKind_ACTION_KIND_OPEN, Label: "Open",
 		Tier: sessionv1.ActionTier_ACTION_TIER_A, Available: true, SessionId: r.GetSessionId(),
 	}
-	if id := r.GetMetadata()[metaItemID]; id != "" {
+	if id := r.GetMetadata()[MetaItemID]; id != "" {
 		d.TargetKeyType, d.TargetKey = sessionv1.ActionTargetKey_ACTION_TARGET_KEY_ITEM_ID, id
 	}
 	return d
@@ -346,7 +352,7 @@ func (b *DescriptorBuilder) questionDescriptors(r *sessionv1.NotificationHistory
 	if !live {
 		return b.tabbedQuestionDescriptor(r, st, lc)
 	}
-	tier := answerTier(flagsvc.RouteLiveKeystrokeHidden)
+	tier := AnswerTier(flagsvc.RouteLiveKeystrokeHidden)
 	d := &sessionv1.NotificationActionDescriptor{
 		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: tier, Available: true,
 		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: key.QuestionID,
@@ -365,7 +371,7 @@ func (b *DescriptorBuilder) limitAnswer(d *sessionv1.NotificationActionDescripto
 		d.Available, d.UnavailableReason = false, unavailableReadOnly
 	}
 	if lc == ListenerClassRemote && !b.remoteAnswerAllowed(d) {
-		d.Available, d.UnavailableReason = false, unavailableDesktopOnly
+		d.Available, d.UnavailableReason = false, UnavailableDesktopOnly
 	}
 	return []*sessionv1.NotificationActionDescriptor{d}
 }
@@ -374,7 +380,7 @@ func (b *DescriptorBuilder) limitAnswer(d *sessionv1.NotificationActionDescripto
 // the policy row allows it, the session's answer is a durable record (no
 // keystroke, Tier A), or it is a live keystroke and Tier B is enabled remotely.
 func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionDescriptor) bool {
-	if actionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
+	if ActionPolicies[sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION].RemoteAvailable {
 		return true
 	}
 	if b.sources.Routes == nil {
@@ -384,7 +390,7 @@ func (b *DescriptorBuilder) remoteAnswerAllowed(d *sessionv1.NotificationActionD
 	if !known {
 		return false
 	}
-	d.Tier = answerTier(route)
+	d.Tier = AnswerTier(route)
 	// A live keystroke is Tier B: offered remotely only when channel:remote:tierB is effective,
 	// the same check the dispatcher's tierGate makes.
 	return route == flagsvc.RouteDurableRecord || b.flag(flagsvc.ScopeChannelTierB)
@@ -401,7 +407,7 @@ func (b *DescriptorBuilder) tabbedQuestionDescriptor(r *sessionv1.NotificationHi
 		return nil
 	}
 	d := &sessionv1.NotificationActionDescriptor{
-		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: answerTier(flagsvc.RouteLiveKeystrokeHidden), Available: true,
+		Kind: sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, Label: "Answer", Tier: AnswerTier(flagsvc.RouteLiveKeystrokeHidden), Available: true,
 		TargetKeyType: sessionv1.ActionTargetKey_ACTION_TARGET_KEY_QUESTION_ID, TargetKey: id, SessionId: r.GetSessionId(),
 	}
 	for i, q := range g.Tabbed {
@@ -451,14 +457,14 @@ type DecisionChoice struct {
 // (confirmed against proto/session/v1/backlog.proto and session.proto). A choice
 // with no row here has no RPC and is emitted as OPEN only.
 var backlogChoices = map[string]DecisionChoice{
-	choiceAccept: {Value: choiceAccept, Label: "Mark done", RPC: "TransitionBacklogItemStatus"},
+	ChoiceAccept: {Value: ChoiceAccept, Label: "Mark done", RPC: "TransitionBacklogItemStatus"},
 	ChoiceRework: {Value: ChoiceRework, Label: "Send back", RPC: "TransitionBacklogItemStatus"},
-	choiceMerge:  {Value: choiceMerge, Label: "Merge", RPC: "MergePR"},
+	ChoiceMerge:  {Value: ChoiceMerge, Label: "Merge", RPC: "MergePR"},
 }
 
 // DefaultDecisionSchema is the schema of an item awaiting accept, rework or merge.
 func DefaultDecisionSchema() DecisionSchema {
-	return DecisionSchema{Choices: []DecisionChoice{backlogChoices[choiceAccept], backlogChoices[ChoiceRework], backlogChoices[choiceMerge]}}
+	return DecisionSchema{Choices: []DecisionChoice{backlogChoices[ChoiceAccept], backlogChoices[ChoiceRework], backlogChoices[ChoiceMerge]}}
 }
 
 // EncodeDecisionSchema is the metadata value of decision_schema.
@@ -484,10 +490,10 @@ func choicesFor(status string, schema DecisionSchema) []DecisionChoice {
 
 func allowedChoices(status string) map[string]bool {
 	switch status {
-	case backlogStatusReview:
-		return map[string]bool{choiceAccept: true, ChoiceRework: true, choiceMerge: true}
-	case backlogStatusPRPending:
-		return map[string]bool{choiceMerge: true}
+	case BacklogStatusReview:
+		return map[string]bool{ChoiceAccept: true, ChoiceRework: true, ChoiceMerge: true}
+	case BacklogStatusPRPending:
+		return map[string]bool{ChoiceMerge: true}
 	default:
 		return nil
 	}
@@ -495,7 +501,7 @@ func allowedChoices(status string) map[string]bool {
 
 func (b *DescriptorBuilder) decisionDescriptors(r *sessionv1.NotificationHistoryRecord, st pageState) []*sessionv1.NotificationActionDescriptor {
 	md := r.GetMetadata()
-	id, raw := md[metaItemID], md[metaDecisionSchema]
+	id, raw := md[MetaItemID], md[MetaDecisionSchema]
 	state, known := st.backlog[id]
 	if id == "" || raw == "" || !known {
 		return nil

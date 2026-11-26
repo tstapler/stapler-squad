@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/searchrpc"
 	"github.com/tstapler/stapler-squad/server/services/streamhubrollout"
 	"github.com/tstapler/stapler-squad/server/services/webhooks"
@@ -206,7 +207,7 @@ type SessionService struct {
 	githubSvc       *GitHubService
 	workspaceSvc    *WorkspaceService
 	configSvc       *ConfigService
-	notificationSvc *NotificationService
+	notificationSvc *notify.NotificationService
 	approvalSvc     *ApprovalService
 	utilitySvc      *UtilityService
 	rulesSvc        *RulesService
@@ -264,7 +265,7 @@ type SessionService struct {
 	defaultsSvc *DefaultsService
 
 	// slackConfigSvc handles GetSlackConfig/UpdateSlackConfig/TestSlackWebhook RPCs.
-	slackConfigSvc *SlackConfigService
+	slackConfigSvc *notify.SlackConfigService
 
 	// julesConfigSvc handles GetJulesConfig/UpdateJulesConfig/
 	// TestJulesConnection/ConfirmEgressConsent RPCs (google-jules-integration
@@ -720,7 +721,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 	eventBus.Publish(events.NewNotificationEvent(
 		"", "System", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		DerivePriority(false, false), // urgent, important — informational config-reload notice
+		notify.DerivePriority(false, false), // urgent, important — informational config-reload notice
 		content.title, content.message,
 		map[string]string{"type": "claude_settings_reload", "origin": content.origin},
 	))
@@ -829,7 +830,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 	reviewQueueSvc := NewReviewQueueService(reviewQueue, concStorage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
-	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
+	notificationSvc := notify.NewNotificationService(notify.NewNotificationRateLimiter(10, 20), eventBus)
 	approvalSvc := NewApprovalService(approvalStore)
 	approvalSvc.SetEventBus(eventBus)
 	approvalSvc.SetReviewQueueRemover(reviewQueue)
@@ -1011,7 +1012,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		pathCompletionSvc:           NewPathCompletionService(),
 		slashCommandSvc:             NewSlashCommandService(),
 		defaultsSvc:                 NewDefaultsService(),
-		slackConfigSvc:              NewSlackConfigService(NewSlackNotifier()),
+		slackConfigSvc:              notify.NewSlackConfigService(notify.NewSlackNotifier()),
 		julesConfigSvc:              NewJulesConfigService(nil, nil, nil),
 		callbackConfigSvc:           webhooks.NewCallbackConfigService(),
 		streamHubRolloutSvc:         streamhubrollout.NewStreamHubRolloutService(nil),
@@ -1107,7 +1108,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*instance.Instance, error)
 	// Wire up dependencies on loaded instances
 	for _, inst := range instances {
 		inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
-		inst.SetNotifier(&EventBusNotifier{Bus: s.eventBus})
+		inst.SetNotifier(&notify.EventBusNotifier{Bus: s.eventBus})
 		if s.statusManager != nil {
 			inst.SetStatusManager(s.statusManager)
 		}

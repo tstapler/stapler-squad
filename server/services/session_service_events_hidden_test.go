@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -30,7 +31,7 @@ func TestPermanentlyFailed_ShouldDeliverOneErrorAndResolveHidden_WhenItemIDEqual
 		{UUID: "uuid-hidden-1", Title: "review:abc", TmuxName: "ssq_review_abc", Hidden: true, Kind: deliverygate.KindReview},
 	})
 
-	n := &EventBusNotifier{Bus: e.bus}
+	n := &notify.EventBusNotifier{Bus: e.bus}
 	n.Notify("uuid-hidden-1", "Session gave up after repeated failures", "failed 3 attempts",
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR), true, true)
 	// A routine event from the same hidden session is dropped, proving the

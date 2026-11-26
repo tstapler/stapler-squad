@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -64,7 +65,7 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 		&svctest.MockInstancePoller{Instances: []*instance.Instance{inst}},
 		backlogCtrl,
 		eventBus,
-		quota.Ports{DerivePriority: DerivePriority},
+		quota.Ports{DerivePriority: notify.DerivePriority},
 	)
 	svc.SetQuotaGate(quotaGate)
 

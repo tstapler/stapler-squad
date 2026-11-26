@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -22,7 +23,7 @@ func newGuidanceRequestService(deps *ServerDependencies) *guidance.GuidanceReque
 	if deps.BacklogService != nil {
 		triageRespawner = deps.BacklogService
 	}
-	svc := guidance.NewGuidanceRequestService(deps.Storage, &services.EventBusNotifier{Bus: deps.EventBus}, triageRespawner)
+	svc := guidance.NewGuidanceRequestService(deps.Storage, &notify.EventBusNotifier{Bus: deps.EventBus}, triageRespawner)
 	if deps.BacklogService != nil {
 		svc.SetWaiverResumer(deps.BacklogService.ResumeAfterOwnerWaiver)
 	}

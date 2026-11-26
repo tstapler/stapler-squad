@@ -236,12 +236,13 @@ go_test(
     ],
 )
 
-# Read by server/services tests that scan MCP tool sources.
+# Read by server/services and server/services/notify tests that scan MCP tool sources.
 filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = [
         "//server/services:__pkg__",
+        "//server/services/notify:__pkg__",
         "//session:__pkg__",
         "//session/markerstore:__pkg__",
         "//tools/bzl/scandata:__pkg__",

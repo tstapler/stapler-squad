@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -64,11 +65,11 @@ func decide(t *testing.T, b BacklogDecider, choice string, confirm bool) questio
 
 func TestBacklogDecider_ShouldMarkDone_WhenAcceptedFromReview(t *testing.T) {
 	t.Parallel()
-	w := &itemWorld{status: backlogStatusReview}
-	assert.Equal(t, outApplied, decide(t, w.decider(), choiceAccept, false).Outcome)
+	w := &itemWorld{status: notify.BacklogStatusReview}
+	assert.Equal(t, outApplied, decide(t, w.decider(), notify.ChoiceAccept, false).Outcome)
 	assert.Equal(t, backlogStatusDone, w.lastTarget)
-	assert.Equal(t, backlogStatusReview, w.lastExpect, "the transition is guarded by the status the operator saw")
-	retry := decide(t, w.decider(), choiceAccept, false)
+	assert.Equal(t, notify.BacklogStatusReview, w.lastExpect, "the transition is guarded by the status the operator saw")
+	retry := decide(t, w.decider(), notify.ChoiceAccept, false)
 	assert.Equal(t, outResolved, retry.Outcome, "a retry sees done")
 	assert.Equal(t, backlogStatusDone, retry.Detail, "the value that resolved it")
 	assert.EqualValues(t, 1, w.transitions.Load())
@@ -76,22 +77,22 @@ func TestBacklogDecider_ShouldMarkDone_WhenAcceptedFromReview(t *testing.T) {
 
 func TestBacklogDecider_ShouldSendBackToReady_WhenReworkFromReview(t *testing.T) {
 	t.Parallel()
-	w := &itemWorld{status: backlogStatusReview}
-	assert.Equal(t, outApplied, decide(t, w.decider(), ChoiceRework, false).Outcome)
+	w := &itemWorld{status: notify.BacklogStatusReview}
+	assert.Equal(t, outApplied, decide(t, w.decider(), notify.ChoiceRework, false).Outcome)
 	assert.Equal(t, backlogStatusReady, w.lastTarget)
-	assert.Equal(t, outResolved, decide(t, w.decider(), ChoiceRework, false).Outcome)
+	assert.Equal(t, outResolved, decide(t, w.decider(), notify.ChoiceRework, false).Outcome)
 	assert.EqualValues(t, 1, w.transitions.Load())
 }
 
 func TestBacklogDecider_ShouldReturnAlreadyResolvedWithoutMerging_WhenMergeRetriedAfterRestart(t *testing.T) {
 	t.Parallel()
-	w := &itemWorld{status: backlogStatusReview, sessionID: "work-1"}
+	w := &itemWorld{status: notify.BacklogStatusReview, sessionID: "work-1"}
 	d := NewNotificationActionDispatcher(ActionDelegates{Backlog: w.decider()}, nil, testFlagRegistry())
 	d.flags, d.metrics = fakeActionFlags{off: map[string]bool{}}, &recordingMetrics{}
 	req := func() *sessionv1.InvokeNotificationActionRequest {
 		return &sessionv1.InvokeNotificationActionRequest{
 			ActionKind: sessionv1.ActionKind_ACTION_KIND_BACKLOG_DECISION, TargetKey: "item1", IdempotencyKey: "k1",
-			Params: &sessionv1.NotificationActionParams{Choice: choiceMerge, Confirm: true},
+			Params: &sessionv1.NotificationActionParams{Choice: notify.ChoiceMerge, Confirm: true},
 		}
 	}
 	first, err := d.Invoke(context.Background(), ActionCall{Msg: req()})
@@ -110,38 +111,38 @@ func TestBacklogDecider_ShouldReturnAlreadyResolvedWithoutMerging_WhenMergeRetri
 
 func TestBacklogDecider_ShouldRequireConfirmAndSession_WhenMerging(t *testing.T) {
 	t.Parallel()
-	w := &itemWorld{status: backlogStatusPRPending, sessionID: "work-1"}
-	assert.Equal(t, outInvalid, decide(t, w.decider(), choiceMerge, false).Outcome)
+	w := &itemWorld{status: notify.BacklogStatusPRPending, sessionID: "work-1"}
+	assert.Equal(t, outInvalid, decide(t, w.decider(), notify.ChoiceMerge, false).Outcome)
 	assert.Zero(t, w.merges.Load())
 
-	noSession := &itemWorld{status: backlogStatusReview}
-	assert.Equal(t, outInvalid, decide(t, noSession.decider(), choiceMerge, true).Outcome)
+	noSession := &itemWorld{status: notify.BacklogStatusReview}
+	assert.Equal(t, outInvalid, decide(t, noSession.decider(), notify.ChoiceMerge, true).Outcome)
 	assert.Zero(t, noSession.merges.Load())
 }
 
 func TestBacklogDecider_ShouldReportStale_WhenItemMovedOrGone(t *testing.T) {
 	t.Parallel()
 	moved := &itemWorld{status: "in_progress"}
-	res := decide(t, moved.decider(), choiceAccept, false)
+	res := decide(t, moved.decider(), notify.ChoiceAccept, false)
 	assert.Equal(t, outStale, res.Outcome)
 	assert.Equal(t, "item_moved", res.StaleReason)
 
 	gone := &itemWorld{statusErr: errItemNotFound}
-	res = decide(t, gone.decider(), choiceAccept, false)
+	res = decide(t, gone.decider(), notify.ChoiceAccept, false)
 	assert.Equal(t, outStale, res.Outcome)
 	assert.Equal(t, "item_gone", res.StaleReason)
 }
 
 func TestBacklogDecider_ShouldKeepRPCGuards_WhenTransitionRefused(t *testing.T) {
 	t.Parallel()
-	w := &itemWorld{status: backlogStatusReview, mergeErr: connect.NewError(connect.CodeFailedPrecondition, errors.New("verdict required"))}
-	res := decide(t, w.decider(), choiceAccept, false)
+	w := &itemWorld{status: notify.BacklogStatusReview, mergeErr: connect.NewError(connect.CodeFailedPrecondition, errors.New("verdict required"))}
+	res := decide(t, w.decider(), notify.ChoiceAccept, false)
 	assert.Equal(t, outInvalid, res.Outcome)
 	assert.Contains(t, res.Detail, "verdict required")
 }
 
 func TestBacklogDecider_ShouldRejectUnknownChoice(t *testing.T) {
 	t.Parallel()
-	w := &itemWorld{status: backlogStatusReview}
+	w := &itemWorld{status: notify.BacklogStatusReview}
 	assert.Equal(t, outInvalid, decide(t, w.decider(), "teleport", true).Outcome)
 }

@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -220,7 +221,7 @@ func TestBacklogDecider_Transition_ReachesHandlerAsNotificationActionCaller(t *t
 
 	// "rework" is Review -> Ready under the same operator caller, through the exported entry point.
 	decider := services.NewBacklogDecider(services.BacklogDeciderDeps{Status: services.NewItemStatusReader(storage), Transitions: svc})
-	res, err := decider.Decide(t.Context(), services.BacklogDecision{ItemID: item.ID, Choice: services.ChoiceRework})
+	res, err := decider.Decide(t.Context(), services.BacklogDecision{ItemID: item.ID, Choice: notify.ChoiceRework})
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, res.Outcome, "the operator gate denies the click")
 	assert.Equal(t, before+1, session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, workflowengine.ModeEnforce))

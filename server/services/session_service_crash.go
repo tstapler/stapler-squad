@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -77,12 +78,12 @@ func (c *crashLimiter) admit(title string) crashDecision {
 func NewSessionCrashEvent(uuid, title, exitReason string, exitedAt time.Time) *events.Event {
 	msg := fmt.Sprintf("Session %q crashed", questionkit.SanitizeNotificationText(title))
 	if r := strings.TrimSpace(questionkit.SanitizeNotificationText(exitReason)); r != "" {
-		msg += ": " + truncateString(r, maxCrashReasonRunes)
+		msg += ": " + notify.TruncateString(r, maxCrashReasonRunes)
 	}
 	return events.NewNotificationEvent(
 		uuid, title, fmt.Sprintf("%s%s-%d", crashNotificationIDBase, uuid, exitedAt.Unix()),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE),
-		DerivePriority(true, true),
+		notify.DerivePriority(true, true),
 		"Session crashed", msg,
 		events.SessionScopedMetadata(nil, ""),
 	)
@@ -100,7 +101,7 @@ func newCrashSummaryEvent(d crashDecision) *events.Event {
 	return events.NewNotificationEvent(
 		"", "", fmt.Sprintf("%s%d", crashSummaryIDPrefix, d.WindowStart.Unix()),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE),
-		DerivePriority(true, true),
+		notify.DerivePriority(true, true),
 		"Sessions crashed", msg, nil,
 	)
 }

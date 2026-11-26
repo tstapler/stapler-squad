@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -49,8 +49,14 @@ type pruneHarness struct {
 	client    sessionv1connect.SessionServiceClient
 }
 
-// newPruneHarness serves the real SessionService delegate over httptest behind
-// the request-record chain, so the handler sees a peer address and headers.
+// pruneHandler serves the one procedure SessionService forwards to this service.
+func pruneHandler(ns *NotificationService) (string, http.Handler) {
+	const proc = sessionv1connect.SessionServicePruneHiddenSessionNotificationsProcedure
+	return proc, connect.NewUnaryHandler(proc, ns.PruneHiddenSessionNotifications)
+}
+
+// newPruneHarness serves the prune handler over httptest behind the
+// request-record chain, so the handler sees a peer address and headers.
 func newPruneHarness(t *testing.T, rows []pruneRow, hidden, visible []string) *pruneHarness {
 	t.Helper()
 	dir := t.TempDir()
@@ -80,7 +86,7 @@ func newPruneHarness(t *testing.T, rows []pruneRow, hidden, visible []string) *p
 	h := &pruneHarness{t: t, ns: ns, store: store, gate: gate, mfs: mfs, storePath: storePath}
 	h.seed(entries)
 	mux := http.NewServeMux()
-	path, handler := sessionv1connect.NewSessionServiceHandler(&SessionService{notificationSvc: ns})
+	path, handler := pruneHandler(ns)
 	mux.Handle(path, handler)
 	h.srv = httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(mux))
 	t.Cleanup(h.srv.Close)
@@ -141,7 +147,7 @@ func TestPruneRPC_ShouldReturnFailedPrecondition_WhenIndexUnseeded(t *testing.T)
 	h := newPruneHarness(t, storyRows(), []string{"h1", "h2"}, []string{"v1"})
 	unseeded := &NotificationService{notificationStore: h.store, deliveryGate: deliverygate.NewGate()}
 	mux := http.NewServeMux()
-	path, handler := sessionv1connect.NewSessionServiceHandler(&SessionService{notificationSvc: unseeded})
+	path, handler := pruneHandler(unseeded)
 	mux.Handle(path, handler)
 	srv := httptest.NewServer(access.WithRequestRecord(access.ListenerLocal, false)(mux))
 	defer srv.Close()
@@ -304,7 +310,7 @@ func TestPruneRPC_ShouldRejectUnauthenticatedAndLogRemoteAddrAndHaveNoMCPTool_Wh
 	// The remote chain (auth required) refuses before the handler is reached.
 	reached := false
 	mux := http.NewServeMux()
-	path, handler := sessionv1connect.NewSessionServiceHandler(&SessionService{notificationSvc: h.ns})
+	path, handler := pruneHandler(h.ns)
 	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		handler.ServeHTTP(w, r)
@@ -340,7 +346,7 @@ func TestPruneRPC_ShouldRejectUnauthenticatedAndLogRemoteAddrAndHaveNoMCPTool_Wh
 
 func assertNoMCPToolFor(t *testing.T, names ...string) {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join("..", "mcp", "*.go"))
+	files, err := filepath.Glob(filepath.Join("..", "..", "mcp", "*.go"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	for _, f := range files {

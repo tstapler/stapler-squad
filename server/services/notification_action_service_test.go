@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -302,7 +303,7 @@ func TestInvokeNotificationAction_ShouldRetireDecisionNotifications_WhenBacklogD
 	f := newDispatchFixture()
 	m := &sessionv1.InvokeNotificationActionRequest{
 		ActionKind: sessionv1.ActionKind_ACTION_KIND_BACKLOG_DECISION, TargetKey: "item1", IdempotencyKey: "k1",
-		Params: &sessionv1.NotificationActionParams{Choice: choiceAccept},
+		Params: &sessionv1.NotificationActionParams{Choice: notify.ChoiceAccept},
 	}
 	assert.Equal(t, outApplied, f.invoke(t, localCtx(t), m, nil).Outcome)
 	assert.Equal(t, []string{"item1"}, f.resolver.items)

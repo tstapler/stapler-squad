@@ -8,11 +8,11 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogmisc"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/quota"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
@@ -165,7 +165,7 @@ func newBacklogLifecycleListener(svc *ServiceDeps, llm llmWiring, engines backlo
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
 	backlogLifecycleListener := backlog.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
-	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
+	backlogLifecycleListener.SetNotifier(&notify.EventBusNotifier{Bus: eventBus})
 	if llmClient != nil {
 		backlogLifecycleListener.SetHeadlessClient(llmClient)
 	}
@@ -239,7 +239,7 @@ func startBacklogControl(svc *ServiceDeps, cfg *config.Config, backlogLifecycleL
 		sessionService,
 		backlogCtrl,
 		eventBus,
-		quota.Ports{DerivePriority: services.DerivePriority},
+		quota.Ports{DerivePriority: notify.DerivePriority},
 	)
 	sessionService.SetQuotaGate(quotaGate)
 	quota.LogQuotaEffectiveConfig("Using quota gate config", config.LoadConfig().Quota)
@@ -427,7 +427,7 @@ func wireBacklogLifecycle(svc *ServiceDeps, cfg *config.Config, backlogLifecycle
 	// Prompt cleanup when a done/archived item's last PR goes terminal (bounded worker;
 	// the 60s reconcileTerminalItemWorktrees sweep remains the backstop).
 	svc.PRStatusPoller.SetPRTerminalListener(backlogLifecycleListener)
-	svc.PRStatusPoller.SetOnPRUnknown(newPRUnknownNotifier(storage, &services.EventBusNotifier{Bus: eventBus}))
+	svc.PRStatusPoller.SetOnPRUnknown(newPRUnknownNotifier(storage, &notify.EventBusNotifier{Bus: eventBus}))
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI

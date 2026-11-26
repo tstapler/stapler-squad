@@ -8,7 +8,7 @@
   "handlerFile": "server/services/session_service_delegates.go",
   "tested": true,
   "testIds": [
-    "server/services/notification_prune_test.go",
+    "server/services/notify/notification_prune_test.go",
     "server/services/terminal_write_rpcs_test.go",
     "server/middleware/callerguard_test.go"
   ],

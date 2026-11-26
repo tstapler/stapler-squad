@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/access"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -482,7 +483,7 @@ func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID,
 		s.eventBus.Publish(events.NewNotificationEvent(
 			itemID, "", uuid.New().String(),
 			int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-			services.DerivePriority(false, false), // urgent, important — success path, purely informational
+			notify.DerivePriority(false, false), // urgent, important — success path, purely informational
 			fmt.Sprintf("Steered active session — %s has %s", itemTitle, reasonPhrase),
 			fmt.Sprintf("%s — session %s was steered for %s.", itemTitle, activeSessionUUID, reasonPhrase),
 			map[string]string{"item_id": itemID},
@@ -511,7 +512,7 @@ func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID,
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true), // urgent, important — the only terminal signal the operator gets for this failure, but not time-critical
+		notify.DerivePriority(false, true), // urgent, important — the only terminal signal the operator gets for this failure, but not time-critical
 		fmt.Sprintf("Failed to steer active session — %s needs attention for %s", itemTitle, reasonPhrase),
 		body,
 		map[string]string{"item_id": itemID},

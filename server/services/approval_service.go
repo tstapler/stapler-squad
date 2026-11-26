@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/queue"
 
@@ -331,7 +332,7 @@ func (as *ApprovalService) advanceCollapsedRow(decidedID, sessionID string) bool
 		return false
 	}
 	advanced, err := rows.AdvanceApproval(decidedID, notifications.ApprovalHead{
-		ID: next.ID, Title: approvalNotificationTitle(next), Message: buildApprovalMessage(next), Metadata: approvalNotificationMetadata(next),
+		ID: next.ID, Title: approvalNotificationTitle(next), Message: notify.BuildApprovalMessage(next), Metadata: approvalNotificationMetadata(next),
 	})
 	if err != nil {
 		log.Warn("[ApprovalService] could not hand the collapsed approval row to the next approval", "approval_id", decidedID, "err", err)

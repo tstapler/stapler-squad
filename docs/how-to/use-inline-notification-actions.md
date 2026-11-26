@@ -53,7 +53,7 @@ that is not recorded yet (`server/services/flagsvc/feature_flags_notification_ac
 
 ## Tier A and Tier B actions
 
-Every action has a tier (`actionPolicies` in `server/services/notification_actions.go`;
+Every action has a tier (`ActionPolicies` in `server/services/notify/notification_actions.go`;
 ADR-004).
 
 | Tier | What it does | Actions | On the remote listener (`:8444`) |
@@ -64,7 +64,7 @@ ADR-004).
 Notes:
 
 - Whether an `answer_question` is A or B depends on the session when you answer
-  (`answerTier`, `server/services/notification_actions.go`). A running session means
+  (`AnswerTier`, `server/services/notify/notification_actions.go`). A running session means
   keystrokes (B). A stopped or archived session means a stored answer (A).
 - Resume scheduled prompts writes a flag, so it works on the local listener only. The
   remote listener shows "Resume from desktop".

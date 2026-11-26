@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/flagsvc"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
@@ -198,7 +199,7 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(true, true), // urgent, important — hit the rework cap; left for manual review
+		notify.DerivePriority(true, true), // urgent, important — hit the rework cap; left for manual review
 		"Auto-rework cap reached",
 		fmt.Sprintf("%s — hit the %d-iteration rework cap %s. Left for manual review.", itemTitle, reworkCap, capContext),
 		map[string]string{"item_id": itemID},
@@ -233,7 +234,7 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(true, true), // urgent, important
+		notify.DerivePriority(true, true), // urgent, important
 		"Auto-rework stopped — repeated failure",
 		fmt.Sprintf("%s — the last %d attempts (including one escalated retry) failed the same way, so auto-rework stopped instead of retrying again. Left for manual review.", itemTitle, attemptCount),
 		map[string]string{"item_id": itemID},
@@ -342,7 +343,7 @@ func (s *BacklogService) notifySpawnAndRollbackFailed(ctx context.Context, itemI
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		services.DerivePriority(true, true), // urgent, important — stranded in_progress with no active session, needs manual action
+		notify.DerivePriority(true, true), // urgent, important — stranded in_progress with no active session, needs manual action
 		"Rework failed to start",
 		fmt.Sprintf("%s — a rework session failed to spawn and the automatic rollback also failed. The item is stranded in_progress with no active session; needs manual action.", itemTitle),
 		map[string]string{"item_id": itemID},
@@ -372,7 +373,7 @@ func (s *BacklogService) notifyTransitionFailed(itemID, itemTitle, failureContex
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
-		services.DerivePriority(true, true), // urgent, important — a silent status/reality mismatch is a genuine correctness bug
+		notify.DerivePriority(true, true), // urgent, important — a silent status/reality mismatch is a genuine correctness bug
 		"Status update failed after work completed",
 		fmt.Sprintf("%s — %s: %v. The item's status may not reflect reality; check manually.", itemTitle, failureContext, writeErr),
 		map[string]string{"item_id": itemID},
@@ -394,7 +395,7 @@ func (s *BacklogService) notifyManualOverride(itemID, itemTitle, message string)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE),
-		services.DerivePriority(false, false), // urgent, important — human-initiated success path, purely informational
+		notify.DerivePriority(false, false), // urgent, important — human-initiated success path, purely informational
 		"Manual override applied",
 		fmt.Sprintf("%s — %s", itemTitle, message),
 		map[string]string{"item_id": itemID},
@@ -1293,7 +1294,7 @@ func (s *BacklogService) publishOpenPRWarning(itemID string, warnings []string) 
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true),
+		notify.DerivePriority(false, true),
 		"Stopped sessions with open PRs",
 		strings.Join(warnings, "; "),
 		map[string]string{"item_id": itemID},
@@ -1576,7 +1577,7 @@ func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		services.DerivePriority(false, false), // urgent, important — informational, no action needed
+		notify.DerivePriority(false, false), // urgent, important — informational, no action needed
 		"Auto-respawn skipped — session already active",
 		fmt.Sprintf("%s — automatic respawn (%s) was skipped because a session is already active: %s.", itemTitle, caller, progress),
 		map[string]string{"item_id": itemID},
@@ -1691,7 +1692,7 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	s.eventBus.Publish(events.NewNotificationEvent(
 		itemID, "", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
-		services.DerivePriority(false, true), // urgent, important
+		notify.DerivePriority(false, true), // urgent, important
 		"Rework blocked by a stale-but-alive session",
 		fmt.Sprintf("%s — a failed review can't reopen for another rework attempt because its active work session hasn't produced output in over %s. The session is still running, so it will not be stopped automatically; check it manually, or use \"Reopen for Revision\" once you've confirmed it's actually stuck.", itemTitle, idle.Round(time.Second)),
 		map[string]string{"item_id": itemID},

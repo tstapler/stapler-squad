@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -127,7 +127,7 @@ func TestEventBusNotifier_NotifyDecision_should_StampDecisionSchemaWithChoices_W
 
 func TestEventBusNotifier_NotifyDecision_should_OmitPRNumber_When_NoMergeChoiceOrNoPR(t *testing.T) {
 	t.Parallel()
-	noMerge := DecisionSchema{Choices: []DecisionChoice{backlogChoices[choiceAccept]}}
+	noMerge := DecisionSchema{Choices: []DecisionChoice{backlogChoices[ChoiceAccept]}}
 	tests := []struct {
 		name     string
 		schema   DecisionSchema

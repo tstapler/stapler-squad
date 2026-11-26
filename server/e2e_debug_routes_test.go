@@ -15,7 +15,7 @@ import (
 func TestRegisterE2EDebugRoutes_should_RegisterOnlyForTheE2EInstance(t *testing.T) {
 	t.Parallel()
 	const guidanceRoute = "/api/debug/guidance/seed-question"
-	routes := []string{guidanceRoute, "/api/debug/backlog/seed-stuck", "/api/debug/backlog/seed-queued"}
+	routes := []string{guidanceRoute, "/api/debug/backlog/seed-stuck", "/api/debug/backlog/seed-queued", "/api/debug/backlog/mutate-create"}
 	full := &ServerDependencies{Storage: &session.Storage{}, SessionService: &services.SessionService{}}
 	tests := []struct {
 		name     string

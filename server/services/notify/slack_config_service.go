@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -27,14 +27,14 @@ const slackTestMessageText = "stapler-squad test message — if you can see this
 // second implementation, so a concrete type per
 // the `interface-pollution-checklist` skill.
 type SlackConfigService struct {
-	slackNotifier *SlackNotifier
+	SlackNotifier *SlackNotifier
 }
 
 // NewSlackConfigService creates a SlackConfigService backed by the given
 // SlackNotifier (used for GetDeliveryStatus and, for TestSlackWebhook, the
-// shared postToSlack helper — both types live in package services).
+// shared postToSlack helper — both types live in package notify).
 func NewSlackConfigService(n *SlackNotifier) *SlackConfigService {
-	return &SlackConfigService{slackNotifier: n}
+	return &SlackConfigService{SlackNotifier: n}
 }
 
 // GetSlackConfig returns the current Slack notification configuration.
@@ -150,7 +150,7 @@ func (s *SlackConfigService) TestSlackWebhook(
 	}
 
 	payload := slackWebhookPayload{Text: slackTestMessageText}
-	if err := s.slackNotifier.postToSlack(ctx, webhookURL, payload); err != nil {
+	if err := s.SlackNotifier.postToSlack(ctx, webhookURL, payload); err != nil {
 		return connect.NewResponse(&sessionv1.TestSlackWebhookResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -174,8 +174,8 @@ func (s *SlackConfigService) slackConfigToProto(cfg *config.Config) *sessionv1.S
 		DashboardBaseUrl:    cfg.Slack.DashboardBaseURL,
 	}
 
-	if s.slackNotifier != nil {
-		attempted, success, errMsg, at := s.slackNotifier.GetDeliveryStatus()
+	if s.SlackNotifier != nil {
+		attempted, success, errMsg, at := s.SlackNotifier.GetDeliveryStatus()
 		status := &sessionv1.SlackDeliveryStatus{
 			Attempted: attempted,
 			Success:   success,

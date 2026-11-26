@@ -17,6 +17,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 )
 
 func newStatsRPCGate(t *testing.T, clk *gateTestClock) *deliverygate.Gate {
@@ -40,7 +41,7 @@ func TestGetDeliveryGateStats_ShouldReturnSinceProcessStartTotalsAndBucketsWithA
 	t.Parallel()
 	clk := newGateTestClock()
 	g := newStatsRPCGate(t, clk)
-	ns := &NotificationService{}
+	ns := &notify.NotificationService{}
 	ns.SetDeliveryGate(g)
 	ns.SetGateStatsFileStatus(func() deliverygate.StatsFileStatus {
 		return deliverygate.StatsFileStatus{Loaded: true, Writable: true}
@@ -100,7 +101,7 @@ func TestGetDeliveryGateStats_ShouldReturnSinceProcessStartTotalsAndBucketsWithA
 
 func TestGetDeliveryGateStats_ShouldBeUnavailable_WhenNoGateIsConfigured(t *testing.T) {
 	t.Parallel()
-	_, err := (&NotificationService{}).GetDeliveryGateStats(context.Background(),
+	_, err := (&notify.NotificationService{}).GetDeliveryGateStats(context.Background(),
 		connect.NewRequest(&sessionv1.GetDeliveryGateStatsRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
@@ -139,7 +140,7 @@ func TestStatsResponse_ShouldCarryRoutineEventsWhileOnLastOffFlipAtAndWritableFl
 	g.Flags().Reload()
 	g.Index().Replace([]deliverygate.Entry{{UUID: "u-h1", Title: "review:t", Hidden: true, Kind: deliverygate.KindReview}})
 
-	ns := &NotificationService{}
+	ns := &notify.NotificationService{}
 	ns.SetDeliveryGate(g)
 	writable := false
 	ns.SetGateStatsFileStatus(func() deliverygate.StatsFileStatus {

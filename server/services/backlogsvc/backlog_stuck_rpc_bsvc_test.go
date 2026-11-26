@@ -471,7 +471,7 @@ func TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset(t *
 // notifyBulkResetParked reintroduced (caught in review): NotificationHistoryStore
 // coalesces unread notifications by (sessionID, notificationType) with no time
 // bound (server/notifications/store.go's findUnreadDuplicate), and
-// EventBusNotifier.Notify's doc comment (server/services/backlog_notifier.go)
+// EventBusNotifier.Notify's doc comment (server/services/notify/backlog_notifier.go)
 // documents the exact prior incident this class of bug caused — two different
 // items'/scopes' same-type notifications sharing sessionID="" silently
 // clobbered each other in the persisted history. This test proves

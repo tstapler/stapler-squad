@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/domainage"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -323,31 +324,31 @@ func TestHandlePermissionRequest_PiEnvFileWrite_AutoDenies(t *testing.T) {
 	}
 }
 
-// TestApprovalDetail_PrefersCommandOverFilePath covers the fix for the dominant
+// TestToolCallDetail_PrefersCommandOverFilePath covers the fix for the dominant
 // auto-approval-log bug: AppendAutoApproved's detail param used to be derived only from
 // ToolInput["file_path"], which Bash never sets, so every auto-decided Bash command
 // (including pi's, and every sub-command of a compound &&/;/pipe chain) was logged and
 // persisted as just the tool name with zero information about what actually ran.
-func TestApprovalDetail_PrefersCommandOverFilePath(t *testing.T) {
+func TestToolCallDetail_PrefersCommandOverFilePath(t *testing.T) {
 	t.Parallel()
-	got := approvalDetail(map[string]interface{}{"command": "ls -la && pwd", "file_path": "/tmp/should-not-win"})
+	got := notify.ToolCallDetail(map[string]interface{}{"command": "ls -la && pwd", "file_path": "/tmp/should-not-win"})
 	if want := "ls -la && pwd"; got != want {
-		t.Errorf("approvalDetail() = %q, want %q", got, want)
+		t.Errorf("toolCallDetail() = %q, want %q", got, want)
 	}
 }
 
-func TestApprovalDetail_FallsBackToFilePath(t *testing.T) {
+func TestToolCallDetail_FallsBackToFilePath(t *testing.T) {
 	t.Parallel()
-	got := approvalDetail(map[string]interface{}{"file_path": "/tmp/foo.txt"})
+	got := notify.ToolCallDetail(map[string]interface{}{"file_path": "/tmp/foo.txt"})
 	if want := "/tmp/foo.txt"; got != want {
-		t.Errorf("approvalDetail() = %q, want %q", got, want)
+		t.Errorf("toolCallDetail() = %q, want %q", got, want)
 	}
 }
 
-func TestApprovalDetail_EmptyWhenNeitherPresent(t *testing.T) {
+func TestToolCallDetail_EmptyWhenNeitherPresent(t *testing.T) {
 	t.Parallel()
-	if got := approvalDetail(map[string]interface{}{"pattern": "TODO"}); got != "" {
-		t.Errorf("approvalDetail() = %q, want empty string", got)
+	if got := notify.ToolCallDetail(map[string]interface{}{"pattern": "TODO"}); got != "" {
+		t.Errorf("toolCallDetail() = %q, want empty string", got)
 	}
 }
 
@@ -690,7 +691,7 @@ func TestBroadcastApprovalNotification_InvokesNotifyApprovalPending_When_SlackNo
 	bus := events.NewEventBus(4)
 	defer bus.Close()
 	h := NewApprovalHandler(approvalkit.NewApprovalStore(""), nil, bus)
-	h.SetSlackNotifier(NewSlackNotifier())
+	h.SetSlackNotifier(notify.NewSlackNotifier())
 
 	approval := &approvalkit.PendingApproval{
 		ID:        "appr-1",

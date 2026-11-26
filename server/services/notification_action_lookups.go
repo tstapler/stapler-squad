@@ -5,6 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/approvalkit"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -17,7 +18,7 @@ import (
 type approvalStoreLookup struct{ store *approvalkit.ApprovalStore }
 
 // NewApprovalLookup adapts the approval store to ApprovalLookup.
-func NewApprovalLookup(store *approvalkit.ApprovalStore) ApprovalLookup {
+func NewApprovalLookup(store *approvalkit.ApprovalStore) notify.ApprovalLookup {
 	return approvalStoreLookup{store}
 }
 
@@ -40,9 +41,11 @@ type guidanceLister interface {
 type guidanceStorageLookup struct{ storage guidanceLister }
 
 // NewGuidanceLookup adapts guidance storage to GuidanceLookup.
-func NewGuidanceLookup(storage guidanceLister) GuidanceLookup { return guidanceStorageLookup{storage} }
+func NewGuidanceLookup(storage guidanceLister) notify.GuidanceLookup {
+	return guidanceStorageLookup{storage}
+}
 
-func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (map[string]OpenGuidance, error) {
+func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (map[string]notify.OpenGuidance, error) {
 	rows, err := l.storage.ListAllPendingGuidanceRequests(ctx)
 	if err != nil {
 		return nil, err
@@ -51,10 +54,10 @@ func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (
 	for _, id := range ids {
 		want[id] = true
 	}
-	out := map[string]OpenGuidance{}
+	out := map[string]notify.OpenGuidance{}
 	for _, r := range rows {
 		if want[r.ID] {
-			g := OpenGuidance{Options: guidance.DecodeGuidanceOptions(r.Options), Source: r.Source, PeerHelp: r.Source == domain.QuestionSourcePeer}
+			g := notify.OpenGuidance{Options: guidance.DecodeGuidanceOptions(r.Options), Source: r.Source, PeerHelp: r.Source == domain.QuestionSourcePeer}
 			if qs, ok := questionkit.TabbedFromRow(r); ok {
 				g.Tabbed = qs
 			}
@@ -74,13 +77,13 @@ type backlogStorageLookup struct{ storage backlogLister }
 // NewBacklogDecisionLookup adapts backlog storage to BacklogDecisionLookup. One
 // query lists the items that can be awaiting a decision (review, pr_pending); an
 // item in any other status is absent, which reduces its row to OPEN.
-func NewBacklogDecisionLookup(storage backlogLister) BacklogDecisionLookup {
+func NewBacklogDecisionLookup(storage backlogLister) notify.BacklogDecisionLookup {
 	return backlogStorageLookup{storage}
 }
 
-func (l backlogStorageLookup) DecisionStates(ctx context.Context, ids []string) (map[string]BacklogDecisionState, error) {
+func (l backlogStorageLookup) DecisionStates(ctx context.Context, ids []string) (map[string]notify.BacklogDecisionState, error) {
 	rows, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{backlogStatusReview, backlogStatusPRPending},
+		Statuses: []string{notify.BacklogStatusReview, notify.BacklogStatusPRPending},
 	})
 	if err != nil {
 		return nil, err
@@ -89,10 +92,10 @@ func (l backlogStorageLookup) DecisionStates(ctx context.Context, ids []string) 
 	for _, id := range ids {
 		want[id] = true
 	}
-	out := map[string]BacklogDecisionState{}
+	out := map[string]notify.BacklogDecisionState{}
 	for _, r := range rows {
 		if want[r.ID] {
-			out[r.ID] = BacklogDecisionState{Status: r.Status}
+			out[r.ID] = notify.BacklogDecisionState{Status: r.Status}
 		}
 	}
 	return out, nil

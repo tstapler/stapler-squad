@@ -54,12 +54,6 @@ func TestAskUserQuestionRenderGate_ShouldStayClosed_WhenOnlyTheAnswerStageIsSet(
 	assert.False(t, AskUserQuestionRenderGate(testFlagRegistry())())
 }
 
-func TestNewDescriptorBuilder_ShouldFlagOnInjectedRegistry(t *testing.T) {
-	svctest.WithIsolatedStateDir(t)
-	assert.True(t, NewDescriptorBuilder(DescriptorSources{}, inlineOnRegistry()).flag(inlineApprove))
-	assert.False(t, NewDescriptorBuilder(DescriptorSources{}, testFlagRegistry()).flag(inlineApprove))
-}
-
 func TestNewNotificationActionDispatcher_ShouldUseInjectedRegistry(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
 	assert.True(t, NewNotificationActionDispatcher(ActionDelegates{}, nil, inlineOnRegistry()).flags.Inline(inlineApprove))
@@ -100,7 +94,7 @@ func TestWireNotificationActions_ShouldThreadServiceRegistryIntoBuilderAndDispat
 		t.Run(tc.name, func(t *testing.T) {
 			svc := newGatedSessionService(svctest.CreateTestStorage(t), tc.reg)
 			svc.WireNotificationActions(NotificationActionWiring{})
-			assert.Equal(t, tc.want, svc.notificationSvc.descriptors.flag(inlineApprove), "descriptor builder")
+			assert.Equal(t, tc.want, svc.notificationSvc.InlineActionEnabledForTest(inlineApprove), "descriptor builder")
 			assert.Equal(t, tc.want, svc.actionDispatcher.flags.Inline(inlineApprove), "dispatcher")
 		})
 	}

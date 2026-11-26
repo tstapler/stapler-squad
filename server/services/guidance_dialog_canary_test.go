@@ -1,14 +1,12 @@
 package services
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 )
 
@@ -85,32 +83,4 @@ func TestCanary_should_CountEveryOutcomeByResultAndVersion(t *testing.T) {
 	var nilCanary *questionkit.DialogMatchCanary
 	assert.NotPanics(t, func() { nilCanary.Record(questionkit.DialogMatched) })
 	assert.False(t, nilCanary.Tripped())
-}
-
-func TestBuildDescriptors_ShouldDegradeHookQuestionToReadOnly_WhenCanaryTripped_ExceptWithHookReply(t *testing.T) {
-	t.Parallel()
-	f := newDescriptorFixture()
-	key := questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}
-	f.questions.live[key] = questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
-	canary := newCanaryProbe()
-	canary.record(false, false, false, false, false)
-	require.True(t, canary.canary.Tripped())
-	annotate := func(hookReply bool) *sessionv1.NotificationActionDescriptor {
-		b := NewDescriptorBuilder(DescriptorSources{Questions: f.questions, Canary: canary.canary}, testFlagRegistry())
-		b.flag = func(string) bool { return true }
-		b.hookReplyOn = func() bool { return hookReply }
-		rec := questionRecord("n1", "s1", "q1")
-		b.Annotate(context.Background(), []*sessionv1.NotificationHistoryRecord{rec}, ListenerClassLocal)
-		return rec.Actions[0]
-	}
-
-	degraded := annotate(false)
-	assert.False(t, degraded.Available)
-	assert.Equal(t, "read_only", degraded.UnavailableReason)
-
-	assert.True(t, annotate(true).Available, "the hook_reply route is not keystroke-based and keeps answering")
-
-	canary.record(true, true, true, true, true, true, true, true, true, true, true)
-	require.False(t, canary.canary.Tripped())
-	assert.True(t, annotate(false).Available, "the descriptor returns once the share recovers")
 }

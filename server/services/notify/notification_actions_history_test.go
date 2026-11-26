@@ -1,4 +1,4 @@
-package services
+package notify
 
 import (
 	"context"
@@ -27,7 +27,7 @@ func TestGetNotificationHistory_ShouldMarkTierBDesktopOnlyOnRemoteAndAvailableOn
 		Title: "Question", CreatedAt: time.Now(), Metadata: map[string]string{questionkit.MetaQuestionID: "q1"},
 	}))
 
-	f := newDescriptorFixture()
+	f := NewDescriptorFixture()
 	q := questionkit.PendingQuestion{QuestionID: "q1", SessionUUID: "s1"}
 	q.Dialog.Labels = []string{"Redis", "Memcached"}
 	f.questions.live[questionkit.QuestionKey{SessionUUID: "s1", QuestionID: "q1"}] = q
