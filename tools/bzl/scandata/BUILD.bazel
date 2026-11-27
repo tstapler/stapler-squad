@@ -154,6 +154,7 @@ filegroup(
         "//server/services/notify:go_sources",
         "//server/services/notifyactions:go_sources",
         "//server/services/piextension:go_sources",
+        "//server/services/prs:go_sources",
         "//server/services/qareply:go_sources",
         "//server/services/questionkit:go_sources",
         "//server/services/quota:go_sources",

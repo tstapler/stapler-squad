@@ -127,6 +127,7 @@ server/services/notifyactions !server/web
 server/services/qareply !server/web
 server/services/rules !server/web
 server/services/contentsearch !server/web
+server/services/prs !server/web
 server/services/sessiondefaults !server/web
 server/services/claudeconfig !server/web
 server/services/workspacedb !server/web

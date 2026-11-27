@@ -564,7 +564,7 @@ func TestCleanupPartialCreation_should_ReturnNil_When_NoWorktreeOrTmuxExists(t *
 func TestCleanupPartialCreation_should_RemoveWorktree_When_CreatedBeforeTmuxStartup(t *testing.T) {
 	t.Parallel()
 
-	repoDir := newDraftPRTestRepo(t)
+	repoDir := svctest.NewDraftPRTestRepo(t)
 	wt, _, err := git.NewGitWorktree(repoDir, "cleanup-worktree-test")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
@@ -587,7 +587,7 @@ func TestCleanupPartialCreation_should_RemoveWorktree_When_CreatedBeforeTmuxStar
 func TestCleanupPartialCreation_should_BeIdempotent_When_CalledTwice(t *testing.T) {
 	t.Parallel()
 
-	repoDir := newDraftPRTestRepo(t)
+	repoDir := svctest.NewDraftPRTestRepo(t)
 	wt, _, err := git.NewGitWorktree(repoDir, "cleanup-idempotent-test")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
@@ -620,7 +620,7 @@ func TestCleanupPartialCreation_should_BeIdempotent_When_CalledTwice(t *testing.
 func TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespiteNotStartedStatus(t *testing.T) {
 	t.Parallel()
 
-	repoDir := newDraftPRTestRepo(t)
+	repoDir := svctest.NewDraftPRTestRepo(t)
 	wt, _, err := git.NewGitWorktree(repoDir, "cleanup-alive-worktree-test")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())

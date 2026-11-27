@@ -1,4 +1,6 @@
-package services
+// Package prs holds the pull-request creation RPCs, the PR nudge prompt and
+// signatures, and the PR hold derivation. It never imports server/services.
+package prs
 
 import (
 	"context"

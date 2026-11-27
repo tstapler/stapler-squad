@@ -1,13 +1,13 @@
-package services
+package prs
 
 import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/access"
 )
 
-// PRWatchKind is the services-level kind of PR activity the PR watch steers on.
+// PRWatchKind is this package's kind of PR activity the PR watch steers on.
 // server/prwatch has its own Kind enum; the server adapter maps it onto this one
-// so prwatch never imports services (ADR-001 decision 6).
+// so prwatch never imports it or services (ADR-001 decision 6).
 type PRWatchKind int
 
 const (

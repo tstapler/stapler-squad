@@ -32,6 +32,7 @@ func TestPackageDirection_should_NotImportServicesOrMCP(t *testing.T) {
 		modulePath + "/server/services",
 		modulePath + "/server/services/approvals",
 		modulePath + "/server/services/notify",
+		modulePath + "/server/services/prs",
 		modulePath + "/server/mcp",
 		modulePath + "/server/wakes",
 		modulePath + "/github",
