@@ -47,27 +47,18 @@ interface TrayListProps {
   onFocusAdvanced?: (leftKey: string) => void;
 }
 
-/** Needs-you cards report engagement; every other row is a plain listitem. */
-function RowShell({ cardId, preExpand, children, ...rest }: React.HTMLAttributes<HTMLDivElement> & { cardId?: string; preExpand?: boolean }) {
-  if (!cardId) return <div {...rest}>{children}</div>;
-  return (
-    <EngagedRow cardId={cardId} preExpand={preExpand} {...rest}>
-      {children}
-    </EngagedRow>
-  );
-}
-
 const HEADER_HEIGHT = 44;
 const GROUP_HEIGHT = 140;
 
-function SwipeRow({ onDismiss, disabled, children }: { onDismiss: () => void; disabled: boolean; children: React.ReactNode }) {
+/** Wraps pinned rows too (never swipeable), so a row that unpins keeps its subtree and focus. */
+function SwipeRow({ pinned, onDismiss, disabled, children }: { pinned: boolean; onDismiss: () => void; disabled: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  const view = useSwipeToDismiss(ref, { onDismiss, disabled });
+  const view = useSwipeToDismiss(ref, { onDismiss, disabled: pinned || disabled });
   return (
     <div
       ref={ref}
-      className={swipeRow}
-      data-testid="tray-swipe-row"
+      className={pinned ? undefined : swipeRow}
+      data-testid={pinned ? "needs-attention-row" : "tray-swipe-row"}
       style={{
         transform: view.offset ? `translateX(${view.offset}px)` : undefined,
         transition: view.dragging ? "none" : "transform 0.2s ease-out",
@@ -285,10 +276,8 @@ export function TrayList({
                 }
               />
             );
-            body = row.pinned ? (
-              <div data-testid="needs-attention-row">{item}</div>
-            ) : (
-              <SwipeRow disabled={!!offlineReason} onDismiss={() => onDismissGroup(row.group)}>
+            body = (
+              <SwipeRow pinned={row.pinned} disabled={!!offlineReason} onDismiss={() => onDismissGroup(row.group)}>
                 {item}
               </SwipeRow>
             );
@@ -302,7 +291,7 @@ export function TrayList({
               className={virtualRow}
               style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
             >
-              <RowShell
+              <EngagedRow
                 cardId={isGroup && row.pinned ? row.key : undefined}
                 preExpand={isGroup && row.pinned && row.posInSet === 1}
                 role="listitem"
@@ -312,7 +301,7 @@ export function TrayList({
                 data-testid={isGroup ? "tray-row" : undefined}
               >
                 {body}
-              </RowShell>
+              </EngagedRow>
             </div>
           );
         })}

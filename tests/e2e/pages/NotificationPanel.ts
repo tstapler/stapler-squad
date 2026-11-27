@@ -316,8 +316,8 @@ async function waitForStableBox(control: Locator, quietMs = 400): Promise<void> 
  * 300 ms and the tray drops a press right after a scroll, so `press` scrolls, then waits for both before it clicks.
  */
 export class InlineActionRow {
-  readonly row: Locator;
-  readonly actions: Locator;
+  row: Locator;
+  actions: Locator;
   readonly status: Locator;
   readonly approve: Locator;
   readonly deny: Locator;
@@ -361,7 +361,10 @@ export class InlineActionRow {
   }
 }
 
-/** A question card (session:guidance-structured): the shared form and its one delivery-state line. */
+/**
+ * A question card (session:guidance-structured): the shared form and its one delivery-state line.
+ * `row` is narrowed to the row with the form: the session's own "input required" alert is a second row.
+ */
 export class QuestionCard extends InlineActionRow {
   readonly form: Locator;
   readonly deliveryText: Locator;
@@ -371,6 +374,8 @@ export class QuestionCard extends InlineActionRow {
 
   constructor(page: Page, text: string) {
     super(page, text);
+    this.row = this.row.filter({ has: page.getByTestId(/^guidance-form-/) });
+    this.actions = this.row.getByTestId('action-row');
     this.form = this.row.getByRole('form');
     this.deliveryText = this.row.getByTestId('delivery-text');
     this.chip = this.row.getByTestId('delivery-chip');

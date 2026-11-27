@@ -175,6 +175,7 @@ export interface SeedQuestion {
 export interface SeededQuestionCard {
   rowId: string;
   question: string;
+  sessionUuid: string;
 }
 
 /**
@@ -214,7 +215,7 @@ export async function seedQuestionCard(
     },
   });
   await untilPersisted(request, baseUrl, 'guidance_request_id', id);
-  return { rowId: id, question: first.text };
+  return { rowId: id, question: first.text, sessionUuid };
 }
 
 /** Reads a durable question back, the way the card does. */

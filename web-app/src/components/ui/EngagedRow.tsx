@@ -8,7 +8,8 @@ const INERT_TARGET = "input, textarea, select, [contenteditable], .xterm";
 const DIGIT = /^[1-9]$/;
 
 interface Props extends HTMLAttributes<HTMLDivElement> {
-  cardId: string;
+  /** Set only for a Needs-you card. The element tree is the same without it, so unpinning never remounts. */
+  cardId?: string;
   /** The first Needs-you item on panel open: expanded by the program, never engaged or armed by that. */
   preExpand?: boolean;
   children: ReactNode;
@@ -23,21 +24,24 @@ const hasActions = (el: HTMLElement) => !!el.querySelector('[data-testid="action
  */
 export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...rest }: Props) {
   const { tracker, handlers, card } = useEngagedCard(cardId);
-  const [expansion, setExpansion] = useState(() => tracker?.expansion(cardId) ?? "none");
+  const [expansion, setExpansion] = useState(() => (cardId === undefined ? "none" : (tracker?.expansion(cardId) ?? "none")));
 
   useEffect(() => {
-    if (!tracker || !preExpand) return;
+    if (!tracker || cardId === undefined || !preExpand) return;
     tracker.preExpand(cardId);
     setExpansion(tracker.expansion(cardId));
   }, [tracker, cardId, preExpand]);
 
-  useEffect(() => () => tracker?.forget(cardId), [tracker, cardId]);
+  useEffect(() => {
+    if (cardId === undefined) return;
+    return () => tracker?.forget(cardId);
+  }, [tracker, cardId]);
 
-  const toggle = () => tracker && setExpansion(tracker.toggleExpanded(cardId));
+  const toggle = () => tracker && cardId !== undefined && setExpansion(tracker.toggleExpanded(cardId));
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(e);
-    if (!tracker || e.defaultPrevented) return;
+    if (!tracker || cardId === undefined || e.defaultPrevented) return;
     const target = e.target as HTMLElement;
     if (target.closest(INERT_TARGET) || e.nativeEvent.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
     if ((e.key === "Enter" || e.key === " ") && target === e.currentTarget && hasActions(e.currentTarget)) {
@@ -72,7 +76,7 @@ export function EngagedRow({ cardId, preExpand = false, children, onKeyDown, ...
         onKeyDown={onKey}
         onClick={onClick}
         data-engaged-card={cardId}
-        data-expanded={expansion !== "none" ? expansion : undefined}
+        data-expanded={tracker && expansion !== "none" ? expansion : undefined}
       >
         {children}
       </div>

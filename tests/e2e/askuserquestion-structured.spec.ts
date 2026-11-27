@@ -11,7 +11,7 @@ import fs from 'fs';
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { SessionClient } from './helpers/session-client';
 import { DIALOG_QUESTION, fakePaneSession, postToolUseInTerminal, readGuidanceRow, seedQuestionCard } from './helpers/notification-action-seed';
-import { INLINE_ACTIONS_FLAG, QuestionCard, markAllNotificationsRead, openNotificationTray, setFeatureFlag } from './pages/NotificationPanel';
+import { INLINE_ACTIONS_FLAG, QuestionCard, markAllNotificationsRead, openNotificationTray, sendNotification, setFeatureFlag } from './pages/NotificationPanel';
 import { profiles } from './helpers/viewport-profiles';
 import { baseUrl } from './helpers/base-url';
 
@@ -104,6 +104,26 @@ test.describe('question cards (desktop)', () => {
     await expect(card.deliveryText).toHaveText('Already handled in the session. No action needed.', { timeout: 15_000 });
     await expect(option).toBeFocused();
     await expect(option).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('question_card_should_stay_answerable_when_a_newer_input_required_alert_arrives_for_its_session', async ({ page, request }) => {
+    const client = new SessionClient(BASE_URL);
+    const { title, keyFile } = await fakePaneSession(client, unique('alert-after-question'));
+    const seeded = await seedQuestionCard(request, BASE_URL, { sessionId: title, source: HOOK, questions: [{ ...DIALOG_QUESTION, multiSelect: false }] });
+    await openNotificationTray(page, BASE_URL);
+    const card = new QuestionCard(page, title);
+    await card.reveal();
+    // What the review queue sends once it detects the same dialog on the pane.
+    const alert = 'Selection prompt with numbered options';
+    await sendNotification(request, BASE_URL, { sessionId: seeded.sessionUuid, type: 'INPUT_REQUIRED', title: `Input Required: ${title}`, message: alert });
+    // It is a Needs-you arrival: shown at once, or behind "N new" while something is engaged.
+    const alertRow = page.getByTestId('notification-tray').getByTestId('tray-row').filter({ hasText: alert }).first();
+    await expect(alertRow.or(page.getByTestId('tray-new-pill')).first()).toBeVisible();
+
+    await card.press(card.option('Red'));
+
+    await expect.poll(() => receivedKey(keyFile), { message: 'the fake pane received the digit' }).toBe('1');
+    await expect(card.deliveryText).toHaveText('Answered: Red', { timeout: ACK_TIMEOUT });
   });
 
   test('retry_anyway_should_reverify_the_dialog_and_write_one_more_key_when_the_first_answer_left_it_showing', async ({ page, request }) => {

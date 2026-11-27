@@ -142,6 +142,24 @@ describe("Story 2.6a and 2.10: resolved-row lifecycle and focus advance", () => 
   });
 });
 
+describe("a card resolved elsewhere leaves Needs you without remounting (UX-AC26)", () => {
+  it("keeps the same control mounted and focused when the list unfreezes", () => {
+    panelState.history = pendingQuestions(1);
+    const { container, refreshPanel } = renderPanel();
+    const option = () => container.querySelector('[data-tray-row="q0"] [data-action-option]') as HTMLElement;
+    const before = option();
+    operatorFocus(before);
+
+    panelState.history = [resolvedElsewhere(panelState.history[0])];
+    refreshPanel();
+    advance(GRACE);
+
+    expect(screen.queryByTestId("tray-needs-attention-header")).toBeNull();
+    expect(option()).toBe(before);
+    expect(document.activeElement).toBe(before);
+  });
+});
+
 describe("Story 2.10b: digit and focus guards", () => {
   const rowOf = (container: HTMLElement, key: string) => container.querySelector(`[data-tray-row="${key}"]`) as HTMLElement;
   const press = (key: string, init: KeyboardEventInit = {}, target: Element | null = document.activeElement) =>
