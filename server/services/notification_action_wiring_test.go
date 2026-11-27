@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/fsops/memfs"
 	"github.com/tstapler/stapler-squad/server/services/guidance"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/server/services/notify"
 	"github.com/tstapler/stapler-squad/server/services/questionkit"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -118,7 +119,9 @@ func (e *wiredEnv) seedCards(t *testing.T) {
 	t.Helper()
 	for i, md := range []map[string]string{
 		{"approval_id": "appr-1"},
-		{"item_id": e.itemID, "decision_schema": "backlog_review"},
+		{"item_id": e.itemID, "decision_schema": notify.EncodeDecisionSchema(notify.DecisionSchema{
+			Choices: []notify.DecisionChoice{{Value: notify.ChoiceAccept, Label: "Accept"}},
+		})},
 		{"guidance_request_id": e.gid},
 	} {
 		n := strconv.Itoa(i + 1)
@@ -167,7 +170,7 @@ func (e *wiredEnv) invoke(t *testing.T, kind sessionv1.ActionKind, key, idem, ch
 // action kinds, and the non-question lookups their cards.
 func TestWireNotificationActions_ShouldReachEveryWiredCollaborator(t *testing.T) {
 	e := newWiredEnv(t)
-	assert.Equal(t, "n1 APPROVE,OPEN | n2 OPEN | n3 ANSWER_GUIDANCE,OPEN", e.cards(t))
+	assert.Equal(t, "n1 APPROVE,OPEN | n2 BACKLOG_DECISION,OPEN | n3 ANSWER_GUIDANCE,OPEN", e.cards(t))
 
 	const (
 		approve  = sessionv1.ActionKind_ACTION_KIND_APPROVE
