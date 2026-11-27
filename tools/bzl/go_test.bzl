@@ -15,7 +15,7 @@ _SIZES = {
 _HOST_COUPLED = {
     "server/services": ["exec-host-binary"],
     "server/services/approvals": ["exec-host-binary"],
-    "server/services/prs": ["exec-host-binary"],  # census rows of create_pull_request_test (gh, git)
+    "server/services/prs": ["exec-host-binary"],  # census rows: create_pull_request_test, recorded under server/services (gh, git)
     "session": ["exec-host-binary", "home"],
     "session/vc": ["home"],
 }
