@@ -207,6 +207,82 @@ test.describe("backlog-jump-to-session", () => {
     }
   });
 
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 320, height: 568 },
+  ]) {
+    test(`keeps the role menu on screen and beside its trigger at ${viewport.width}px`, async ({ page, request }) => {
+      const itemTitle = `jump-to-session-menu-${viewport.width}-${Date.now()}`;
+      let itemId: string | undefined;
+
+      try {
+        itemId = await createInProgressItem(request, itemTitle);
+        // The menu never fetches these sessions, so they need not exist.
+        await injectItemSessions(page, itemId, [
+          { id: "e2e-work-session-entity", sessionUuid: "e2e-menu-work", sessionRole: "work" },
+          { id: "e2e-review-session-entity", sessionUuid: "e2e-menu-review", sessionRole: "review" },
+        ]);
+        await page.setViewportSize(viewport);
+        await openDetail(page, itemTitle);
+
+        const trigger = page.getByTestId("jump-to-session-role-menu-trigger");
+        const menu = page.getByTestId("jump-to-session-role-menu");
+        // Trigger on the pane's bottom edge: there is no room for the menu below it.
+        await trigger.evaluate((el) => el.scrollIntoView({ block: "end" }));
+        await trigger.click();
+        await expect(menu).toBeInViewport({ ratio: 1 });
+
+        // Move the trigger with no scroll or resize event, as a header reflow above it does.
+        const distance = async () => {
+          const t = (await trigger.boundingBox())!;
+          const m = (await menu.boundingBox())!;
+          return Math.round(Math.min(Math.abs(m.y - (t.y + t.height)), Math.abs(t.y - (m.y + m.height))));
+        };
+        const before = (await trigger.boundingBox())!.y;
+        await trigger.evaluate((el) => {
+          el.parentElement!.style.position = "relative";
+          el.parentElement!.style.top = "-80px";
+        });
+        expect((await trigger.boundingBox())!.y).toBeLessThan(before);
+        await expect.poll(distance).toBe(4);
+        await expect(menu).toBeInViewport({ ratio: 1 });
+
+        if (viewport.width < 640) {
+          // Room for the menu below the trigger, but only under the bottom nav. Taller, because at
+          // 568px the pane's scroll area is too short for the trigger to get that low.
+          const height = 700;
+          await page.setViewportSize({ width: viewport.width, height });
+          await trigger.evaluate((el) => {
+            el.parentElement!.style.top = "0px";
+          });
+          const nav = page.getByRole("navigation", { name: "Bottom navigation" });
+          // Retried as a unit because the detail header can still reflow and move the trigger.
+          await expect(async () => {
+            await trigger.evaluate((el, targetY) => {
+              let pane = el.parentElement!;
+              while (!/auto|scroll/.test(getComputedStyle(pane).overflowY) || pane.scrollHeight <= pane.clientHeight) {
+                pane = pane.parentElement!;
+              }
+              pane.scrollTop += el.getBoundingClientRect().top - targetY;
+            }, height - 170);
+            const t = (await trigger.boundingBox())!;
+            const navTop = (await nav.boundingBox())!.y;
+            const menuHeight = (await menu.boundingBox())!.height;
+            expect(t.y + t.height + 4 + menuHeight).toBeGreaterThan(navTop);
+            expect(t.y + t.height + 4 + menuHeight).toBeLessThan(height - 8);
+            await expect.poll(distance, { timeout: 1000 }).toBe(4);
+            const m = (await menu.boundingBox())!;
+            expect(m.y + m.height).toBeLessThanOrEqual(navTop);
+            // A trial click runs the hit test: it fails if anything covers the item.
+            await page.getByTestId("jump-to-session-role-item-work").click({ trial: true, timeout: 1000 });
+          }).toPass({ timeout: 10000 });
+        }
+      } finally {
+        if (itemId) await archiveItem(request, itemId);
+      }
+    });
+  }
+
   test("renders a touch-sized jump button at mobile width", async ({ page, request }) => {
     const itemTitle = `jump-to-session-mobile-${Date.now()}`;
     let itemId: string | undefined;
