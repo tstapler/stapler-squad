@@ -37,7 +37,7 @@ func TestNewFileService_ShouldReadFlagsFromDefaultRegistry(t *testing.T) {
 	ctx := t.Context()
 	want := testFlagRegistry().Default(flagsvc.FilesViewerV2FlagName)
 	assert.NotPanics(t, func() {
-		assert.Equal(t, want, svc.search.viewerV2(ctx))
+		assert.Equal(t, want, svc.search.ViewerV2Enabled(ctx))
 		assert.Equal(t, testFlagRegistry().Default(flagsvc.FilesEditingFlagName), svc.ops.policy.Flags.Editing(ctx))
 	})
 }

@@ -70,7 +70,7 @@ func (o *FileOps) Capabilities(ctx context.Context) *sessionv1.FileTransportCapa
 		limits.MaxRangeBytes = maxRangeBytes
 		limits.MaxRangeLines = maxRangeLines
 		limits.PreferredChunkBytes = defaultRangeBytes
-		limits.HashCapBytes = rangeHashCapBytes
+		limits.HashCapBytes = fsops.RangeHashCapBytes
 		limits.MaxConcurrentRanges = maxRangesPerClient
 	}
 	return &sessionv1.FileTransportCapabilities{

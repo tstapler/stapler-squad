@@ -1,0 +1,383 @@
+== search literal
+  src/a.go:2 [3,9) @10 len=13 "// needle one"
+  src/a.go:3 [27,33) @24 len=33 "func Needle() {} // NEEDLE needle"
+  src/emoji.txt:1 [4,10) @0 len=14 "\ufeff😀 needle"
+  src/emoji.txt:2 [7,13) @16 len=14 "second needles"
+  src/long.txt:1 [128,134) @0 len=512 "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  src/many.txt:1 [0,6) @0 len=6 "needle"
+  src/many.txt:10 [0,6) @63 len=6 "needle"
+  src/many.txt:11 [0,6) @70 len=6 "needle"
+  src/many.txt:12 [0,6) @77 len=6 "needle"
+  src/many.txt:13 [0,6) @84 len=6 "needle"
+  src/many.txt:14 [0,6) @91 len=6 "needle"
+  src/many.txt:15 [0,6) @98 len=6 "needle"
+  src/many.txt:16 [0,6) @105 len=6 "needle"
+  src/many.txt:17 [0,6) @112 len=6 "needle"
+  src/many.txt:18 [0,6) @119 len=6 "needle"
+  src/many.txt:19 [0,6) @126 len=6 "needle"
+  src/many.txt:2 [0,6) @7 len=6 "needle"
+  src/many.txt:20 [0,6) @133 len=6 "needle"
+  src/many.txt:21 [0,6) @140 len=6 "needle"
+  src/many.txt:22 [0,6) @147 len=6 "needle"
+  src/many.txt:23 [0,6) @154 len=6 "needle"
+  src/many.txt:24 [0,6) @161 len=6 "needle"
+  src/many.txt:25 [0,6) @168 len=6 "needle"
+  src/many.txt:26 [0,6) @175 len=6 "needle"
+  src/many.txt:27 [0,6) @182 len=6 "needle"
+  src/many.txt:28 [0,6) @189 len=6 "needle"
+  src/many.txt:29 [0,6) @196 len=6 "needle"
+  src/many.txt:3 [0,6) @14 len=6 "needle"
+  src/many.txt:30 [0,6) @203 len=6 "needle"
+  src/many.txt:31 [0,6) @210 len=6 "needle"
+  src/many.txt:32 [0,6) @217 len=6 "needle"
+  src/many.txt:33 [0,6) @224 len=6 "needle"
+  src/many.txt:34 [0,6) @231 len=6 "needle"
+  src/many.txt:35 [0,6) @238 len=6 "needle"
+  src/many.txt:36 [0,6) @245 len=6 "needle"
+  src/many.txt:37 [0,6) @252 len=6 "needle"
+  src/many.txt:38 [0,6) @259 len=6 "needle"
+  src/many.txt:39 [0,6) @266 len=6 "needle"
+  src/many.txt:4 [0,6) @21 len=6 "needle"
+  src/many.txt:40 [0,6) @273 len=6 "needle"
+  src/many.txt:41 [0,6) @280 len=6 "needle"
+  src/many.txt:42 [0,6) @287 len=6 "needle"
+  src/many.txt:43 [0,6) @294 len=6 "needle"
+  src/many.txt:44 [0,6) @301 len=6 "needle"
+  src/many.txt:45 [0,6) @308 len=6 "needle"
+  src/many.txt:46 [0,6) @315 len=6 "needle"
+  src/many.txt:47 [0,6) @322 len=6 "needle"
+  src/many.txt:48 [0,6) @329 len=6 "needle"
+  src/many.txt:49 [0,6) @336 len=6 "needle"
+  src/many.txt:5 [0,6) @28 len=6 "needle"
+  src/many.txt:50 [0,6) @343 len=6 "needle"
+  src/many.txt:6 [0,6) @35 len=6 "needle"
+  src/many.txt:7 [0,6) @42 len=6 "needle"
+  src/many.txt:8 [0,6) @49 len=6 "needle"
+  src/many.txt:9 [0,6) @56 len=6 "needle"
+  sub/keep.log:1 [0,6) @0 len=11 "needle kept"
+  unicode/café needle.txt:1 [0,6) @0 len=12 "needle café"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=10-99 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search include ignored
+  .gradle/g.kts:1 [0,6) @0 len=13 "needle gradle"
+  .tox/t.py:1 [0,6) @0 len=10 "needle tox"
+  __pycache__/p.py:1 [0,6) @0 len=10 "needle pyc"
+  build/b.js:1 [0,6) @0 len=12 "needle build"
+  dist/d.js:1 [0,6) @0 len=11 "needle dist"
+  ignored/x.txt:1 [0,6) @0 len=14 "needle ignored"
+  node_modules/m.js:1 [0,6) @0 len=11 "needle node"
+  src/a.go:2 [3,9) @10 len=13 "// needle one"
+  src/a.go:3 [27,33) @24 len=33 "func Needle() {} // NEEDLE needle"
+  src/emoji.txt:1 [4,10) @0 len=14 "\ufeff😀 needle"
+  src/emoji.txt:2 [7,13) @16 len=14 "second needles"
+  src/long.txt:1 [128,134) @0 len=512 "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  src/many.txt:1 [0,6) @0 len=6 "needle"
+  src/many.txt:10 [0,6) @63 len=6 "needle"
+  src/many.txt:11 [0,6) @70 len=6 "needle"
+  src/many.txt:12 [0,6) @77 len=6 "needle"
+  src/many.txt:13 [0,6) @84 len=6 "needle"
+  src/many.txt:14 [0,6) @91 len=6 "needle"
+  src/many.txt:15 [0,6) @98 len=6 "needle"
+  src/many.txt:16 [0,6) @105 len=6 "needle"
+  src/many.txt:17 [0,6) @112 len=6 "needle"
+  src/many.txt:18 [0,6) @119 len=6 "needle"
+  src/many.txt:19 [0,6) @126 len=6 "needle"
+  src/many.txt:2 [0,6) @7 len=6 "needle"
+  src/many.txt:20 [0,6) @133 len=6 "needle"
+  src/many.txt:21 [0,6) @140 len=6 "needle"
+  src/many.txt:22 [0,6) @147 len=6 "needle"
+  src/many.txt:23 [0,6) @154 len=6 "needle"
+  src/many.txt:24 [0,6) @161 len=6 "needle"
+  src/many.txt:25 [0,6) @168 len=6 "needle"
+  src/many.txt:26 [0,6) @175 len=6 "needle"
+  src/many.txt:27 [0,6) @182 len=6 "needle"
+  src/many.txt:28 [0,6) @189 len=6 "needle"
+  src/many.txt:29 [0,6) @196 len=6 "needle"
+  src/many.txt:3 [0,6) @14 len=6 "needle"
+  src/many.txt:30 [0,6) @203 len=6 "needle"
+  src/many.txt:31 [0,6) @210 len=6 "needle"
+  src/many.txt:32 [0,6) @217 len=6 "needle"
+  src/many.txt:33 [0,6) @224 len=6 "needle"
+  src/many.txt:34 [0,6) @231 len=6 "needle"
+  src/many.txt:35 [0,6) @238 len=6 "needle"
+  src/many.txt:36 [0,6) @245 len=6 "needle"
+  src/many.txt:37 [0,6) @252 len=6 "needle"
+  src/many.txt:38 [0,6) @259 len=6 "needle"
+  src/many.txt:39 [0,6) @266 len=6 "needle"
+  src/many.txt:4 [0,6) @21 len=6 "needle"
+  src/many.txt:40 [0,6) @273 len=6 "needle"
+  src/many.txt:41 [0,6) @280 len=6 "needle"
+  src/many.txt:42 [0,6) @287 len=6 "needle"
+  src/many.txt:43 [0,6) @294 len=6 "needle"
+  src/many.txt:44 [0,6) @301 len=6 "needle"
+  src/many.txt:45 [0,6) @308 len=6 "needle"
+  src/many.txt:46 [0,6) @315 len=6 "needle"
+  src/many.txt:47 [0,6) @322 len=6 "needle"
+  src/many.txt:48 [0,6) @329 len=6 "needle"
+  src/many.txt:49 [0,6) @336 len=6 "needle"
+  src/many.txt:5 [0,6) @28 len=6 "needle"
+  src/many.txt:50 [0,6) @343 len=6 "needle"
+  src/many.txt:6 [0,6) @35 len=6 "needle"
+  src/many.txt:7 [0,6) @42 len=6 "needle"
+  src/many.txt:8 [0,6) @49 len=6 "needle"
+  src/many.txt:9 [0,6) @56 len=6 "needle"
+  sub/keep.log:1 [0,6) @0 len=11 "needle kept"
+  sub/local.txt:1 [0,6) @0 len=12 "needle local"
+  target/t.js:1 [0,6) @0 len=13 "needle target"
+  trace.log:1 [0,6) @0 len=10 "needle log"
+  unicode/café needle.txt:1 [0,6) @0 len=12 "needle café"
+  vendor/v.go:1 [0,6) @0 len=13 "needle vendor"
+  stats scanned=21 binary=1 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=10-99 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search include glob
+  src/a.go:2 [3,9) @10 len=13 "// needle one"
+  src/a.go:3 [27,33) @24 len=33 "func Needle() {} // NEEDLE needle"
+  stats scanned=1 binary=0 truncated=false large_skipped=0
+  telemetry search session=s1 outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search exclude glob
+  sub/keep.log:1 [0,6) @0 len=11 "needle kept"
+  unicode/café needle.txt:1 [0,6) @0 len=12 "needle café"
+  stats scanned=5 binary=0 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search insensitive
+  src/a.go:2 [3,9) @10 len=13 "// needle one"
+  src/a.go:3 [20,26) @24 len=33 "func Needle() {} // NEEDLE needle"
+  src/a.go:3 [27,33) @24 len=33 "func Needle() {} // NEEDLE needle"
+  src/a.go:3 [5,11) @24 len=33 "func Needle() {} // NEEDLE needle"
+  src/emoji.txt:1 [4,10) @0 len=14 "\ufeff😀 needle"
+  src/emoji.txt:2 [7,13) @16 len=14 "second needles"
+  src/long.txt:1 [128,134) @0 len=512 "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  src/many.txt:1 [0,6) @0 len=6 "needle"
+  src/many.txt:10 [0,6) @63 len=6 "needle"
+  src/many.txt:11 [0,6) @70 len=6 "needle"
+  src/many.txt:12 [0,6) @77 len=6 "needle"
+  src/many.txt:13 [0,6) @84 len=6 "needle"
+  src/many.txt:14 [0,6) @91 len=6 "needle"
+  src/many.txt:15 [0,6) @98 len=6 "needle"
+  src/many.txt:16 [0,6) @105 len=6 "needle"
+  src/many.txt:17 [0,6) @112 len=6 "needle"
+  src/many.txt:18 [0,6) @119 len=6 "needle"
+  src/many.txt:19 [0,6) @126 len=6 "needle"
+  src/many.txt:2 [0,6) @7 len=6 "needle"
+  src/many.txt:20 [0,6) @133 len=6 "needle"
+  src/many.txt:21 [0,6) @140 len=6 "needle"
+  src/many.txt:22 [0,6) @147 len=6 "needle"
+  src/many.txt:23 [0,6) @154 len=6 "needle"
+  src/many.txt:24 [0,6) @161 len=6 "needle"
+  src/many.txt:25 [0,6) @168 len=6 "needle"
+  src/many.txt:26 [0,6) @175 len=6 "needle"
+  src/many.txt:27 [0,6) @182 len=6 "needle"
+  src/many.txt:28 [0,6) @189 len=6 "needle"
+  src/many.txt:29 [0,6) @196 len=6 "needle"
+  src/many.txt:3 [0,6) @14 len=6 "needle"
+  src/many.txt:30 [0,6) @203 len=6 "needle"
+  src/many.txt:31 [0,6) @210 len=6 "needle"
+  src/many.txt:32 [0,6) @217 len=6 "needle"
+  src/many.txt:33 [0,6) @224 len=6 "needle"
+  src/many.txt:34 [0,6) @231 len=6 "needle"
+  src/many.txt:35 [0,6) @238 len=6 "needle"
+  src/many.txt:36 [0,6) @245 len=6 "needle"
+  src/many.txt:37 [0,6) @252 len=6 "needle"
+  src/many.txt:38 [0,6) @259 len=6 "needle"
+  src/many.txt:39 [0,6) @266 len=6 "needle"
+  src/many.txt:4 [0,6) @21 len=6 "needle"
+  src/many.txt:40 [0,6) @273 len=6 "needle"
+  src/many.txt:41 [0,6) @280 len=6 "needle"
+  src/many.txt:42 [0,6) @287 len=6 "needle"
+  src/many.txt:43 [0,6) @294 len=6 "needle"
+  src/many.txt:44 [0,6) @301 len=6 "needle"
+  src/many.txt:45 [0,6) @308 len=6 "needle"
+  src/many.txt:46 [0,6) @315 len=6 "needle"
+  src/many.txt:47 [0,6) @322 len=6 "needle"
+  src/many.txt:48 [0,6) @329 len=6 "needle"
+  src/many.txt:49 [0,6) @336 len=6 "needle"
+  src/many.txt:5 [0,6) @28 len=6 "needle"
+  src/many.txt:50 [0,6) @343 len=6 "needle"
+  src/many.txt:6 [0,6) @35 len=6 "needle"
+  src/many.txt:7 [0,6) @42 len=6 "needle"
+  src/many.txt:8 [0,6) @49 len=6 "needle"
+  src/many.txt:9 [0,6) @56 len=6 "needle"
+  sub/keep.log:1 [0,6) @0 len=11 "needle kept"
+  unicode/café needle.txt:1 [0,6) @0 len=12 "needle café"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=10-99 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search whole word
+  src/a.go:2 [3,9) @10 len=13 "// needle one"
+  src/a.go:3 [27,33) @24 len=33 "func Needle() {} // NEEDLE needle"
+  src/emoji.txt:1 [4,10) @0 len=14 "\ufeff😀 needle"
+  src/many.txt:1 [0,6) @0 len=6 "needle"
+  src/many.txt:10 [0,6) @63 len=6 "needle"
+  src/many.txt:11 [0,6) @70 len=6 "needle"
+  src/many.txt:12 [0,6) @77 len=6 "needle"
+  src/many.txt:13 [0,6) @84 len=6 "needle"
+  src/many.txt:14 [0,6) @91 len=6 "needle"
+  src/many.txt:15 [0,6) @98 len=6 "needle"
+  src/many.txt:16 [0,6) @105 len=6 "needle"
+  src/many.txt:17 [0,6) @112 len=6 "needle"
+  src/many.txt:18 [0,6) @119 len=6 "needle"
+  src/many.txt:19 [0,6) @126 len=6 "needle"
+  src/many.txt:2 [0,6) @7 len=6 "needle"
+  src/many.txt:20 [0,6) @133 len=6 "needle"
+  src/many.txt:21 [0,6) @140 len=6 "needle"
+  src/many.txt:22 [0,6) @147 len=6 "needle"
+  src/many.txt:23 [0,6) @154 len=6 "needle"
+  src/many.txt:24 [0,6) @161 len=6 "needle"
+  src/many.txt:25 [0,6) @168 len=6 "needle"
+  src/many.txt:26 [0,6) @175 len=6 "needle"
+  src/many.txt:27 [0,6) @182 len=6 "needle"
+  src/many.txt:28 [0,6) @189 len=6 "needle"
+  src/many.txt:29 [0,6) @196 len=6 "needle"
+  src/many.txt:3 [0,6) @14 len=6 "needle"
+  src/many.txt:30 [0,6) @203 len=6 "needle"
+  src/many.txt:31 [0,6) @210 len=6 "needle"
+  src/many.txt:32 [0,6) @217 len=6 "needle"
+  src/many.txt:33 [0,6) @224 len=6 "needle"
+  src/many.txt:34 [0,6) @231 len=6 "needle"
+  src/many.txt:35 [0,6) @238 len=6 "needle"
+  src/many.txt:36 [0,6) @245 len=6 "needle"
+  src/many.txt:37 [0,6) @252 len=6 "needle"
+  src/many.txt:38 [0,6) @259 len=6 "needle"
+  src/many.txt:39 [0,6) @266 len=6 "needle"
+  src/many.txt:4 [0,6) @21 len=6 "needle"
+  src/many.txt:40 [0,6) @273 len=6 "needle"
+  src/many.txt:41 [0,6) @280 len=6 "needle"
+  src/many.txt:42 [0,6) @287 len=6 "needle"
+  src/many.txt:43 [0,6) @294 len=6 "needle"
+  src/many.txt:44 [0,6) @301 len=6 "needle"
+  src/many.txt:45 [0,6) @308 len=6 "needle"
+  src/many.txt:46 [0,6) @315 len=6 "needle"
+  src/many.txt:47 [0,6) @322 len=6 "needle"
+  src/many.txt:48 [0,6) @329 len=6 "needle"
+  src/many.txt:49 [0,6) @336 len=6 "needle"
+  src/many.txt:5 [0,6) @28 len=6 "needle"
+  src/many.txt:50 [0,6) @343 len=6 "needle"
+  src/many.txt:6 [0,6) @35 len=6 "needle"
+  src/many.txt:7 [0,6) @42 len=6 "needle"
+  src/many.txt:8 [0,6) @49 len=6 "needle"
+  src/many.txt:9 [0,6) @56 len=6 "needle"
+  sub/keep.log:1 [0,6) @0 len=11 "needle kept"
+  unicode/café needle.txt:1 [0,6) @0 len=12 "needle café"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=10-99 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search regex
+  src/a.go:2 [3,13) @10 len=13 "// needle one"
+  unicode/café needle.txt:1 [0,11) @0 len=12 "needle café"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
+  telemetry first session=s1 scale=lt1k
+== search large files
+  huge.txt:130001 [0,11) @2600000 len=27 "needle past the default cap"
+  stats scanned=10 binary=1 truncated=false large_skipped=0
+  telemetry search session=s1 outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=true
+  telemetry first session=s1 scale=lt1k
+== search default cap skips large
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+  telemetry search session=s1 outcome=ok results=0 scale=lt1k queued=false backend=walker large=false
+== search result cap
+  capped matches=5
+  telemetry events=2
+== search too short
+  error invalid_argument: pattern must be at least 2 characters
+  telemetry search session=s1 outcome=invalid results=0 scale=lt1k queued=false backend=walker large=false
+== search too long
+  error invalid_argument: pattern must be at most 1024 bytes
+  telemetry search session=s1 outcome=invalid results=0 scale=lt1k queued=false backend=walker large=false
+== search bad regex
+  error invalid_argument: invalid pattern: error parsing regexp: missing closing ): `(`
+  telemetry search session=s1 outcome=invalid results=0 scale=lt1k queued=false backend=walker large=false
+== search bad glob
+  error invalid_argument: malformed glob "["
+  telemetry search session=s1 outcome=invalid results=0 scale=lt1k queued=false backend=walker large=false
+== search unknown session
+  error not_found: no such session
+  telemetry search session=nope outcome=error results=0 scale=lt1k queued=false backend=walker large=false
+== search workspace failure
+  error unknown: storage offline
+  telemetry search session=broken outcome=error results=0 scale=lt1k queued=false backend=walker large=false
+== search worktree missing
+  error failed_precondition: WorktreeMissing: session worktree is not on disk [session.v1.ReadOnlyReasonDetail 0809]
+  telemetry search session=gone outcome=error results=0 scale=lt1k queued=false backend=walker large=false
+== fourth stream from one host
+  error resource_exhausted: too many searches are running [session.v1.SearchBusyDetail 0a067065725f6970]
+== held streams
+  src/a.go:2 [3,13) @10 len=13 "// needle one"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+-
+  src/a.go:2 [3,13) @10 len=13 "// needle one"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+-
+  src/a.go:2 [3,13) @10 len=13 "// needle one"
+  stats scanned=10 binary=1 truncated=false large_skipped=1
+  telemetry first session=s1-hold scale=lt1k
+  telemetry first session=s1-hold scale=lt1k
+  telemetry first session=s1-hold scale=lt1k
+  telemetry search session=s1 outcome=busy results=0 scale=lt1k queued=false backend=walker large=false
+  telemetry search session=s1-hold outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
+  telemetry search session=s1-hold outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
+  telemetry search session=s1-hold outcome=ok results=1-9 scale=lt1k queued=false backend=walker large=false
+== fifth range from one client
+resource_exhausted: too many range reads are running [session.v1.RangeBusyDetail 0a0a7065725f636c69656e74]
+== ninth range from one ip
+resource_exhausted: too many range reads are running [session.v1.RangeBusyDetail 0a067065725f6970]
+== range after release
+<nil>
+== list ignored=false
+  .gitignore dir=false ignored=false
+  escape_dir dir=false ignored=false
+  escape_link.txt dir=false ignored=false
+  huge.txt dir=false ignored=false
+  inside_dir dir=false ignored=false
+  inside_link.go dir=false ignored=false
+  src dir=true ignored=false
+  sub dir=true ignored=false
+  unicode dir=true ignored=false
+== search files ".js" ignored=false
+  
+== search files ".go" ignored=false
+  src/a.go
+== search files ".t" ignored=false
+  .a.txt.ssq-tmp-abc
+  huge.txt
+  src/emoji.txt
+  src/long.txt
+  src/many.txt
+  unicode/café needle.txt
+== search files "eedle" ignored=false
+  unicode/café needle.txt
+== list ignored=true
+  .gitignore dir=false ignored=false
+  escape_dir dir=false ignored=false
+  escape_link.txt dir=false ignored=false
+  huge.txt dir=false ignored=false
+  ignored dir=true ignored=false
+  inside_dir dir=false ignored=false
+  inside_link.go dir=false ignored=false
+  src dir=true ignored=false
+  sub dir=true ignored=false
+  trace.log dir=false ignored=false
+  unicode dir=true ignored=false
+== search files ".js" ignored=true
+  
+== search files ".go" ignored=true
+  src/a.go
+== search files ".t" ignored=true
+  .a.txt.ssq-tmp-abc
+  huge.txt
+  ignored/x.txt
+  src/emoji.txt
+  src/long.txt
+  src/many.txt
+  sub/local.txt
+  unicode/café needle.txt
+== search files "eedle" ignored=true
+  unicode/café needle.txt
+== limits hash_cap=67108864 max_ranges=4
+== viewer v2 off after rewire
+  error failed_precondition: viewer v2 disabled [session.v1.ReadOnlyReasonDetail 0802]
+  telemetry search session=s1 outcome=disabled results=0 scale=lt1k queued=false backend=walker large=false

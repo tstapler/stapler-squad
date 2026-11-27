@@ -5,10 +5,37 @@ import (
 	"path/filepath"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
+
+// RangeHashCapBytes is the largest file that is hashed by range reads and scanned whole by a large-files search (ADR-036 S-T2).
+const RangeHashCapBytes = 64 << 20
+
+// IsHardSkipDir reports whether directory name is always excluded from listings and searches, whatever gitignore says.
+func IsHardSkipDir(name string) bool { return hardSkipDirs[name] }
+
+var hardSkipDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+	".tox":         true,
+	"__pycache__":  true,
+	"target":       true,
+	".gradle":      true,
+	"dist":         true,
+	"build":        true,
+}
+
+// WithDetail attaches d to ce; a detail that cannot be encoded is dropped.
+func WithDetail(ce *connect.Error, d proto.Message) *connect.Error {
+	if detail, err := connect.NewErrorDetail(d); err == nil {
+		ce.AddDetail(detail)
+	}
+	return ce
+}
 
 // TruncateSize is the soft limit; text files larger than this are served
 // truncated with is_truncated=true.

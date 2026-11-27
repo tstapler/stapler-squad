@@ -101,7 +101,7 @@ func (fs *FileService) ReadFileRange(
 	start := time.Now()
 	release, refused := fs.ranges.Acquire(req.Peer().Addr, req.Msg.SessionId)
 	if refused != "" {
-		err := withDetail(connect.NewError(connect.CodeResourceExhausted, errors.New("too many range reads are running")),
+		err := fsops.WithDetail(connect.NewError(connect.CodeResourceExhausted, errors.New("too many range reads are running")),
 			&sessionv1.RangeBusyDetail{Reason: string(refused)})
 		logRangeCall(ctx, req.Msg, nil, err, time.Since(start))
 		return nil, err

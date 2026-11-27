@@ -70,12 +70,12 @@ func TestFileService_SetFlagRegistry_ShouldRouteOpsAndSearchThroughRegistry(t *t
 	svctest.WithIsolatedStateDir(t)
 	ctx := context.Background()
 	svc := NewFileService(&fakeWorkspaceProvider{existingDir: t.TempDir()})
-	beforeEditing, beforeViewer := svc.ops.policy.Flags.Editing(ctx), svc.search.viewerV2(ctx)
+	beforeEditing, beforeViewer := svc.ops.policy.Flags.Editing(ctx), svc.search.ViewerV2Enabled(ctx)
 
 	svc.SetFlagRegistry(flippedDefaults(flagsvc.FilesEditingFlagName, flagsvc.FilesViewerV2FlagName))
 
 	assert.Equal(t, !beforeEditing, svc.ops.policy.Flags.Editing(ctx))
-	assert.Equal(t, !beforeViewer, svc.search.viewerV2(ctx))
+	assert.Equal(t, !beforeViewer, svc.search.ViewerV2Enabled(ctx))
 }
 
 func TestNewGatedSessionService_ShouldInjectRegistryIntoFileService(t *testing.T) {

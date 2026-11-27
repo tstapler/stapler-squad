@@ -1,4 +1,4 @@
-package services
+package contentsearch
 
 import (
 	"bufio"
@@ -28,6 +28,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/fsops"
 )
 
 // writeTree writes files (slash paths) under a fresh temp dir and returns the dir and a
@@ -402,9 +403,9 @@ func TestIgnoreMatcher_ShouldSkipCommentsBlankLinesAndOverlongLines_And_LetDeepe
 // subprocess, acceptable under prefer-go-git-over-subshells: git itself is the oracle.
 func gitCheckIgnore(t *testing.T, dir string, paths []string) map[string]bool {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
+	// Fail rather than skip: Bazel would cache a skip as a pass.
+	_, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required as the ignore oracle")
 	run := func(stdin string, args ...string) []byte {
 		cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-c", "core.excludesFile=/dev/null"}, args...)...)
 		cmd.Dir = dir
@@ -775,7 +776,7 @@ func TestContentSearch_ShouldFindMatchIn40MbFile_When_LargeFilesTrue_And_ReportS
 
 	t.Run("file past the raised cap is reported", func(t *testing.T) {
 		d := t.TempDir()
-		writeLogFile(t, filepath.Join(d, "over.log"), rangeHashCapBytes+(1<<20), 5_200_000, marker)
+		writeLogFile(t, filepath.Join(d, "over.log"), fsops.RangeHashCapBytes+(1<<20), 5_200_000, marker)
 		opts := literalOpts(marker)
 		opts.LargeFiles = true
 		got, stats := runSearch(t, openRootFS(t, d), opts)
@@ -795,6 +796,29 @@ func TestNewSearchOptions_ShouldCarryLargeFiles_When_RequestSetsIt(t *testing.T)
 	opts, err := NewSearchOptions(&sessionv1.SearchOptions{Pattern: "needle", LargeFiles: true})
 	require.NoError(t, err)
 	assert.True(t, opts.LargeFiles)
-	assert.EqualValues(t, rangeHashCapBytes, opts.fileCap())
+	assert.EqualValues(t, fsops.RangeHashCapBytes, opts.fileCap())
 	assert.EqualValues(t, searchFileCap, literalOpts("needle").fileCap())
+}
+
+func TestContentSearch_ShouldNotMatchAtomicTempFiles(t *testing.T) {
+	_, root := writeTree(t, map[string]string{"a.txt": "needle\n", ".a.txt.ssq-tmp-abc": "needle\n"})
+	got, _ := runSearch(t, root, literalOpts("needle"))
+	assert.Equal(t, []string{"a.txt"}, matchedPaths(got))
+}
+
+func TestContentSearch_ShouldSkipHardSkipDirs_When_NoGitignoreNamesThem(t *testing.T) {
+	names := []string{"node_modules", "vendor", ".tox", "__pycache__", "target", ".gradle", "dist", "build"}
+	files := map[string]string{"src/a.txt": "needle\n"}
+	for _, n := range names {
+		files[n+"/hit.txt"] = "needle\n"
+	}
+	_, root := writeTree(t, files)
+
+	got, _ := runSearch(t, root, literalOpts("needle"))
+	assert.Equal(t, []string{"src/a.txt"}, matchedPaths(got))
+
+	opts := literalOpts("needle")
+	opts.Scope.IncludeIgnored = true
+	got, _ = runSearch(t, root, opts)
+	assert.Len(t, matchedPaths(got), len(names)+1, "IncludeIgnored searches them")
 }
