@@ -201,3 +201,11 @@ func TestCreateEpicIntegrationChildTool_should_ForwardEpicAndSiblings(t *testing
 	assert.Contains(t, toolText(t, empty), ErrInvalidArgument)
 	assert.Len(t, fake.epicChildReqs, 1, "invalid calls never reach the service")
 }
+
+func TestIntegrationChildResultText_should_SayPassed_When_ChildAlreadyPassed(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"done", "archived"} {
+		assert.Contains(t, integrationChildResultText(&sessionv1.BacklogItem{Id: "c", Status: status}, "e", 2), "already passed")
+	}
+	assert.Contains(t, integrationChildResultText(&sessionv1.BacklogItem{Id: "c", Status: "idea"}, "e", 2), "cannot be marked done")
+}

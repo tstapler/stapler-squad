@@ -11,7 +11,7 @@
 
 **Task 1.2** — Add `IntegrationChildID` optional nillable UUID field to `BacklogItem` schema (on the _epic_ item), pointing to its integration child. This allows the epic's gate check and UI to find the integration child in O(1) without scanning dependencies. Alternative: query by `is_integration_child=true` + dependency edges; use the field for performance.
 
-**Task 1.3** — Add `EpicGate` validator: `WorkflowEngine.ValidateGates` reads `IntegrationChildID` on the epic; if set and integration child is not `done`/`archived`, block the `done` transition with `ErrIntegrationCheckPending`.
+**Task 1.3** — Add `EpicGate` validator: `WorkflowEngine.ValidateGates` reads `IntegrationChildID` on the epic; if set and integration child has not passed (reached `done`), block the `done` transition with `ErrIntegrationCheckPending`.
 
 **Wire in `server/dependencies_backlog.go`** after schema generation.
 
@@ -102,6 +102,6 @@ func AttributeIntegrationFailure(ctx, epicID, integrationSessionID string) (sibl
 2. **Fix-child dependency chain**: When a fix child is created and succeeds, should the integration child automatically retry? Or require a manual re-queue? Recommend: auto-retry via `next_workflow_id` chain on fix child `done`.
 3. **Multiple failure rounds**: Cap fix-child creation attempts at `rework_cap_override` to prevent unbounded escalation chains.
 
-## Reconciliation (review round: PARTIAL)
+## Reconciliation: the done gate
 
-`integrationGate` previously passed only on `done`, contradicting AC3 and Task 1.3 ("done or archived"). Now it passes on `done` or `archived`; archiving the integration child is the owner's unblock path for a stuck child. The epic UI mirrors this: an archived child shows "Integration Passed" (resolved), so the label never contradicts the open done gate.
+`integrationGate` follows AC-3: only a passed integration child lets the epic close. Passed means `done`, or archived out of `done` (the `auto_archive_done` sweep archives passed checks after 3 days). A child archived without passing keeps the epic blocked; this supersedes the earlier "done or archived" rule. Ways out: unarchive the child and complete it, re-run `CreateEpicIntegrationChild` to replace it, or delete it (a deleted child no longer gates). The epic UI shows such a child as "Integration Check Archived". Sibling dependencies keep the general rule (`done` or `archived` resolves a blocker).
